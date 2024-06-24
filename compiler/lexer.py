@@ -5,6 +5,8 @@ TOKENS = [
     ('INPUT', r'input'),
     ('OUTPUT', r'output'),
     ('VOID', r'void'),
+    ('MAIN', r'main'),
+    ('VECTOR', r'vec[2-4]'),
     ('IDENTIFIER', r'[a-zA-Z_][a-zA-Z_0-9]*'),
     ('NUMBER', r'\d+(\.\d+)?'),
     ('LBRACE', r'\{'),
@@ -14,7 +16,6 @@ TOKENS = [
     ('SEMICOLON', r';'),
     ('COMMA', r','),
     ('EQUALS', r'='),
-    ('VECTOR', r'vec[2-4]'),
     ('WHITESPACE', r'\s+'),
 ]
 
@@ -52,7 +53,6 @@ class Lexer:
                 raise SyntaxError(f'Illegal character at position {pos}')
         self.tokens.append(('EOF', None))  # End of file token
 
-# Usage example
 if __name__ == "__main__":
     code = "shader main { input vec3 position; output vec4 color; void main() { color = vec4(position, 1.0); } }"
     lexer = Lexer(code)

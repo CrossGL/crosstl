@@ -1,5 +1,6 @@
 import unittest
 from compiler.lexer import Lexer
+from compiler.parser import Parser
 
 class TestLexer(unittest.TestCase):
     def test_tokens(self):
@@ -37,5 +38,8 @@ class TestLexer(unittest.TestCase):
         ]
         for token in lexer.tokens:
             print(token)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+        print(ast)
 if __name__ == "__main__":
     unittest.main()

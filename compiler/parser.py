@@ -1,4 +1,8 @@
-from ast import ShaderNode, FunctionNode, VariableNode, AssignmentNode
+# compiler/parser.py
+
+from .ast import ShaderNode, FunctionNode, VariableNode, AssignmentNode
+
+from .lexer import Lexer
 
 class Parser:
     def __init__(self, tokens):
@@ -18,14 +22,17 @@ class Parser:
 
     def parse_shader(self):
         self.eat('SHADER')
-        name = self.current_token[1]
-        self.eat('IDENTIFIER')
+        if self.current_token[0] in ('IDENTIFIER', 'MAIN'):
+            shader_name = self.current_token[1]
+            self.eat(self.current_token[0])
+        else:
+            raise SyntaxError(f'Expected IDENTIFIER or MAIN, got {self.current_token[0]}')
         self.eat('LBRACE')
         inputs = self.parse_inputs()
         outputs = self.parse_outputs()
         main_function = self.parse_function()
         self.eat('RBRACE')
-        return ShaderNode(name, inputs, outputs, main_function)
+        return ShaderNode(shader_name, inputs, outputs, main_function)
 
     def parse_inputs(self):
         inputs = []
@@ -53,8 +60,11 @@ class Parser:
 
     def parse_function(self):
         self.eat('VOID')
-        fname = self.current_token[1]
-        self.eat('MAIN')
+        if self.current_token[0] == 'MAIN':
+            fname = self.current_token[1]
+            self.eat('MAIN')
+        else:
+            raise SyntaxError(f'Expected MAIN, got {self.current_token[0]}')
         self.eat('LPAREN')
         self.eat('RPAREN')
         self.eat('LBRACE')
@@ -80,9 +90,8 @@ class Parser:
         return AssignmentNode(name, value)
 
     def parse_expression(self):
-        if self.current_token[0] == 'IDENTIFIER':
-            value = self.current_token[1]
-            self.eat('IDENTIFIER')
+        if self.current_token[0] in ('IDENTIFIER', 'VECTOR'):
+            value = self.parse_function_call_or_identifier()
         elif self.current_token[0] == 'NUMBER':
             value = self.current_token[1]
             self.eat('NUMBER')
@@ -90,3 +99,29 @@ class Parser:
             raise SyntaxError(f'Unexpected token in expression {self.current_token[0]}')
         return value
 
+    def parse_function_call_or_identifier(self):
+        if self.current_token[0] == 'VECTOR':
+            func_name = self.current_token[1]
+            self.eat('VECTOR')
+        else:
+            func_name = self.current_token[1]
+            self.eat('IDENTIFIER')
+        
+        if self.current_token[0] == 'LPAREN':
+            self.eat('LPAREN')
+            args = []
+            while self.current_token[0] != 'RPAREN':
+                args.append(self.parse_expression())
+                if self.current_token[0] == 'COMMA':
+                    self.eat('COMMA')
+            self.eat('RPAREN')
+            return f"{func_name}({', '.join(args)})"
+        return func_name
+
+# Usage example
+if __name__ == "__main__":
+    code = "shader main { input vec3 position; output vec4 color; void main() { color = vec4(position, 1.0); } }"
+    lexer = Lexer(code)
+    parser = Parser(lexer.tokens)
+    ast = parser.parse()
+    print(ast)
