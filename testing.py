@@ -1,6 +1,7 @@
 import unittest
 from compiler.lexer import Lexer
 from compiler.parser import Parser
+from compiler.codegen import directx_codegen
 
 class TestLexer(unittest.TestCase):
     def test_tokens(self):
@@ -40,6 +41,9 @@ class TestLexer(unittest.TestCase):
             print(token)
         parser = Parser(lexer.tokens)
         ast = parser.parse()
-        print(ast)
+        #print(ast)
+        codegen = directx_codegen.HLSLCodeGen()
+        hlsl_code = codegen.generate(ast)
+        print(hlsl_code)
 if __name__ == "__main__":
     unittest.main()
