@@ -32,3 +32,6 @@ __pycache__/
 *.exe
 *.out
 *.app
+/venv
+/compiler/codegen/__pycache__
+/compiler/__pycache__
