@@ -1,4 +1,4 @@
-from ..ast import ShaderNode, FunctionNode, AssignmentNode
+from ..ast import ShaderNode, AssignmentNode
 
 
 class SPIRVCodeGen:
@@ -43,9 +43,9 @@ class SPIRVCodeGen:
             code += f"OpDecorate %{name} Location {i}\n"
 
         # Type declarations
-        code += f"%void = OpTypeVoid\n"
+        code += "%void = OpTypeVoid\n"
         code += f"%{self.get_id()} = OpTypeFunction %void\n"
-        code += f"%float = OpTypeFloat 32\n"
+        code += "%float = OpTypeFloat 32\n"
 
         for vtype in set(vtype for vtype, _ in node.inputs + node.outputs):
             components = self.map_type(vtype)
@@ -54,19 +54,19 @@ class SPIRVCodeGen:
 
         # Pointer types and variable declarations
         for vtype, name in node.outputs:
-            ptr_type_id = self.get_id()
+            self.get_id()
             code += f"%_ptr_Output_{vtype} = OpTypePointer Output %{vtype}\n"
             self.variable_ids[name] = self.get_id()
             code += f"%{name} = OpVariable %_ptr_Output_{vtype} Output\n"
 
         for vtype, name in node.inputs:
-            ptr_type_id = self.get_id()
+            self.get_id()
             code += f"%_ptr_Input_{vtype} = OpTypePointer Input %{vtype}\n"
             self.variable_ids[name] = self.get_id()
             code += f"%{name} = OpVariable %_ptr_Input_{vtype} Input\n"
 
         # Constants
-        code += f"%float_1 = OpConstant %float 1\n"
+        code += "%float_1 = OpConstant %float 1\n"
 
         # Main function
         code += self.generate_function(node.main_function)
@@ -74,7 +74,7 @@ class SPIRVCodeGen:
         return code
 
     def generate_function(self, node):
-        code = f"%main = OpFunction %void None %3\n"
+        code = "%main = OpFunction %void None %3\n"
         code += f"%{self.get_id()} = OpLabel\n"
 
         for stmt in node.body:

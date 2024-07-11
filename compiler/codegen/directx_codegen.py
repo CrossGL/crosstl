@@ -1,4 +1,5 @@
-from ..ast import ShaderNode, FunctionNode, AssignmentNode
+from ..ast import ShaderNode, AssignmentNode
+
 
 class HLSLCodeGen:
     def generate(self, ast):
@@ -8,15 +9,15 @@ class HLSLCodeGen:
         return code
 
     def generate_shader(self, node):
-        code = f"struct VS_INPUT {{\n"
+        code = "struct VS_INPUT {\n"
         for vtype, name in node.inputs:
             code += f"    {self.map_type(vtype)} {name} : POSITION;\n"
-        code += f"}};\n\n"
+        code += "};\n\n"
 
-        code += f"struct PS_OUTPUT {{\n"
+        code += "struct PS_OUTPUT {\n"
         for vtype, name in node.outputs:
             code += f"    {self.map_type(vtype)} {name} : SV_TARGET;\n"
-        code += f"}};\n\n"
+        code += "};\n\n"
 
         code += f"{self.generate_function(node.main_function)}\n"
         return code
@@ -35,12 +36,13 @@ class HLSLCodeGen:
 
     def map_type(self, vtype):
         type_mapping = {
-            'void': 'void',
-            'vec2': 'float2',
-            'vec3': 'float3',
-            'vec4': 'float4'
+            "void": "void",
+            "vec2": "float2",
+            "vec3": "float3",
+            "vec4": "float4",
         }
         return type_mapping.get(vtype, vtype)
+
 
 # Usage example
 if __name__ == "__main__":
@@ -51,7 +53,7 @@ if __name__ == "__main__":
     lexer = Lexer(code)
     parser = Parser(lexer.tokens)
     ast = parser.parse()
-    
+
     codegen = HLSLCodeGen()
     hlsl_code = codegen.generate(ast)
     print(hlsl_code)

@@ -1,4 +1,4 @@
-from ..ast import ShaderNode, FunctionNode, AssignmentNode
+from ..ast import ShaderNode, AssignmentNode
 
 
 class GLSLCodeGen:
