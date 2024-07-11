@@ -1,5 +1,5 @@
 # CrossGL-Translator
-Translates CrossGL universal shader language into otherspecified native shader languages
+Translates CrossGL universal shader language into other specified native shader languages
 ## Current implemented backends
 
 
