@@ -1,2 +1,12 @@
-# CrossGL
-CrossGL is a cross-platform shader language that simplifies graphics development across APIs like Vulkan, DirectX, and Metal. Write once and compile to native shader languages, ensuring optimal performance and compatibility.
+# CrossGL-Translator
+Translates CrossGL universal shader language into otherspecified native shader languages
+## Current implemented backends
+
+
+ |Backends                           |
+| ----------------------------------- |
+| Vulkan                           |
+ | Metal |
+| DirectX                  |
+| OpenGL                          |
+
