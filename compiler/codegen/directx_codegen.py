@@ -61,18 +61,3 @@ class HLSLCodeGen:
             'samplerCube': 'TextureCube',
         }
         return type_mapping.get(vtype, vtype)
-
-
-# Usage example
-if __name__ == "__main__":
-    from compiler.lexer import Lexer
-    from compiler.parser import Parser
-
-    code = "shader main { input vec3 position; output vec4 color; void main() { color = vec4(position, 1.0); } }"
-    lexer = Lexer(code)
-    parser = Parser(lexer.tokens)
-    ast = parser.parse()
-
-    codegen = HLSLCodeGen()
-    hlsl_code = codegen.generate(ast)
-    print(hlsl_code)
