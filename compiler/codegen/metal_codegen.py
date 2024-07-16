@@ -12,11 +12,28 @@ from ..ast import (
 )
 
 
+class CharTypeMapper:
+    def map_char_type(self, vtype):
+        char_type_mapping = {
+            "char": "int",
+            "signed char": "int",
+            "unsigned char": "uint",
+            "char2": "int2",
+            "char3": "int3",
+            "char4": "int4",
+            "uchar2": "uint2",
+            "uchar3": "uint3",
+            "uchar4": "uint4",
+        }
+        return char_type_mapping.get(vtype, vtype)
+    
+
 class MetalCodeGen:
+    def __init__(self):
+        self.char_mapper = CharTypeMapper()
     def generate(self, ast):
         if isinstance(ast, ShaderNode):
             return self.generate_shader(ast)
-        return ""
 
     def generate_shader(self, node):
         code = "#include <metal_stdlib>\nusing namespace metal;\n\n"
@@ -127,9 +144,6 @@ class MetalCodeGen:
         type_mapping = {
             # Scalar Types
             "void": "void",
-            "char": "int",
-            "signed char": "int",
-            "unsigned char": "uint",
             "short": "int",
             "signed short": "int",
             "unsigned short": "uint",
@@ -150,12 +164,6 @@ class MetalCodeGen:
             "ivec2": "int2",
             "ivec3": "int3",
             "ivec4": "int4",
-            "char2": "int2",
-            "char3": "int3",
-            "char4": "int4",
-            "uchar2": "uint2",
-            "uchar3": "uint3",
-            "uchar4": "uint4",
             "short2": "int2",
             "short3": "int3",
             "short4": "int4",
@@ -195,6 +203,12 @@ class MetalCodeGen:
             "half3x3": "half3x3",
             "half4x4": "half4x4"
         }
+
+        # Check if the type is a char type and map it
+        mapped_type = self.char_mapper.map_char_type(vtype)
+        if mapped_type != vtype:
+            return mapped_type
+
         return type_mapping.get(vtype, vtype)
 
     def map_operator(self, op):
