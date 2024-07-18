@@ -34,18 +34,16 @@ def print_ast(node, indent=0):
 
 class TestCodeGeneration(unittest.TestCase):
     def setUp(self):
-        self.code = """ 
-                        shader main {
+        self.code = """shader main {
                             input vec3 position;
                             input vec2 texCoord;
                             output vec4 fragColor;
-
                             vec3 customFunction(vec3 random, float factor) {
                                 return random * factor;
                             }
 
                             void main() {
-                                vec3 color = vec3(0.0, 0.0 , 0.0);
+                                vec3 color = vec3(position.x,position.y, 0.0);
                                 float factor = 1.0;
 
                                 if (texCoord.x > 0.5) {
@@ -65,8 +63,7 @@ class TestCodeGeneration(unittest.TestCase):
 
                                 fragColor = vec4(color, 1.0);
                             }
-                        }
-                    """
+                        }"""
         lexer = Lexer(self.code)
         parser = Parser(lexer.tokens)
         self.ast = parser.parse()

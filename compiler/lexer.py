@@ -8,6 +8,8 @@ TOKENS = [
     ("MAIN", r"main"),
     ("VECTOR", r"vec[2-4]"),
     ("MATRIX", r"mat[2-4]"),
+    ("BOOL", r"bool"),
+    # ("INCREMENT_DECREMENT", r"\b[a-zA-Z_][a-zA-Z_0-9]*\s*(\+\+|--)\b"),
     ("FLOAT", r"float"),
     ("INT", r"int"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
@@ -26,6 +28,8 @@ TOKENS = [
     ("RETURN", r"return"),
     ("LESS_THAN", r"<"),
     ("GREATER_THAN", r">"),
+    ("INCREMENT", r"\+\+"),
+    ("DECREMENT", r"--"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("EQUAL", r"=="),
@@ -90,7 +94,7 @@ class Lexer:
 
 
 if __name__ == "__main__":
-    code = "shader main { input vec3 position; output vec4 color; void main() { color = vec4(position, 1.0); } }"
+    code = "shader main { input vec3 position; output vec4 color i++; void main() { color = vec4(position, 1.0); } }"
     lexer = Lexer(code)
     for token in lexer.tokens:
         print(token)
