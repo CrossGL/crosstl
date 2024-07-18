@@ -7,6 +7,7 @@ TOKENS = [
     ("VOID", r"void"),
     ("MAIN", r"main"),
     ("VECTOR", r"vec[2-4]"),
+    ("MATRIX", r"mat[2-4]"),
     ("FLOAT", r"float"),
     ("INT", r"int"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),

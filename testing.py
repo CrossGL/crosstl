@@ -45,7 +45,7 @@ class TestCodeGeneration(unittest.TestCase):
                             }
 
                             void main() {
-                                vec3 color = vec3(0.0, 0.0, 0.0);
+                                vec3 color = vec3(0.0, 0.0 , 0.0);
                                 float factor = 1.0;
 
                                 if (texCoord.x > 0.5) {

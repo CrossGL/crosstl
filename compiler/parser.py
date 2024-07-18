@@ -58,8 +58,11 @@ class Parser:
         inputs = []
         while self.current_token[0] == "INPUT":
             self.eat("INPUT")
-            vtype = self.current_token[1]
-            self.eat("VECTOR")
+            if self.current_token[0] in ["VECTOR", "FLOAT", "INT","MATRIX"]:
+                vtype = self.current_token[1]
+                self.eat(self.current_token[0])
+            else:
+                raise SyntaxError(f"Expected VECTOR, FLOAT, or INT, got {self.current_token[0]}")
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("SEMICOLON")
@@ -70,14 +73,17 @@ class Parser:
         outputs = []
         while self.current_token[0] == "OUTPUT":
             self.eat("OUTPUT")
-            vtype = self.current_token[1]
-            self.eat("VECTOR")
+            if self.current_token[0] in ["VECTOR", "FLOAT", "INT","MATRIX"]:
+                vtype = self.current_token[1]
+                self.eat(self.current_token[0])
+            else:
+                raise SyntaxError(f"Expected VECTOR, FLOAT, or INT, got {self.current_token[0]}")
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("SEMICOLON")
             outputs.append((vtype, name))
         return outputs
-
+    
     def parse_function(self):
         return_type = self.parse_type()
         if self.current_token[0] == "MAIN":
