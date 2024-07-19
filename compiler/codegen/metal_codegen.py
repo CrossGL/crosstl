@@ -55,7 +55,10 @@ class MetalCodeGen:
             return_type = self.map_type(node.return_type)
             is_main = False
 
-        code = f"{return_type} {node.name}({params}) {{\n"
+        if node.name == "main":
+            code = f"{return_type} fr{node.name}({params}) {{\n"
+        else:
+            code = f"{return_type} {node.name}({params}) {{\n"
         if node.name == "main":
             code += "    FragmentOutput output;\n"
         for stmt in node.body:
