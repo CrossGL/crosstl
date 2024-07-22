@@ -1,4 +1,4 @@
-from crosstl import transpiler
+from crosstl import Transpiler
 
 code = """shader main {
                             input vec3 position;
@@ -34,12 +34,16 @@ code = """shader main {
 backend = "metal"
 
 if __name__ == "__main__":
-    metal_transpiler = transpiler(code, backend)
+    metal_transpiler = Transpiler(code, backend)
     print("############ metal ############")
-    print(metal_transpiler)
-    directx_transpiler = transpiler(code, "directx")
+    print(metal_transpiler.transpile())
+    directx_transpiler = Transpiler(code, "directx")
     print("############ directx ############")
     print(directx_transpiler)
-    opengl_transpiler = transpiler(code, "opengl")
+    opengl_transpiler = Transpiler(code, "opengl")
     print("############ opengl ############ ")
     print(opengl_transpiler)
+    print("############# input file ############")
+    file_path = "examples/example_program.cgl"
+    file_transpiler = Transpiler(file_path, backend)
+    print(file_transpiler)
