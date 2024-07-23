@@ -6,9 +6,11 @@ TOKENS = [
     ("OUTPUT", r"output"),
     ("VOID", r"void"),
     ("MAIN", r"main"),
+    ("UNIFORM", r"uniform"),
     ("VECTOR", r"vec[2-4]"),
     ("FLOAT", r"float"),
     ("INT", r"int"),
+    ("SAMPLER2D", r"sampler2D"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
     ("LBRACE", r"\{"),
@@ -17,6 +19,10 @@ TOKENS = [
     ("RPAREN", r"\)"),
     ("SEMICOLON", r";"),
     ("COMMA", r","),
+    ("ASSIGN_ADD", r"\+="),
+    ("ASSIGN_SUB", r"-="),
+    ("ASSIGN_MUL", r"\*="),
+    ("ASSIGN_DIV", r"/="),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
     ("IF", r"if"),
@@ -32,6 +38,8 @@ TOKENS = [
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("NOT", r"!"),
+    ('INCREMENT', r'\+\+'),
+    ('DECREMENT', r'\-\-'),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
@@ -89,7 +97,26 @@ class Lexer:
 
 
 if __name__ == "__main__":
-    code = "shader main { input vec3 position; output vec4 color; void main() { color = vec4(position, 1.0); } }"
+    code =""" shader main() {
+    input vec2 texCoord;
+    output vec4 fragColor;
+
+    uniform sampler2D sceneTexture;
+
+    void main() {
+        vec4 color = vec4(0.0);
+
+        for (float x = -1.0; x <= 1.0; x += 1.0) {
+            for (float y = -1.0; y <= 1.0; y += 1.0) {
+                vec2 offset = vec2(x, y) * 0.01;
+                color += texture(sceneTexture, texCoord + offset);
+            }
+        }
+
+        fragColor = color;
+    }
+}
+"""
     lexer = Lexer(code)
     for token in lexer.tokens:
         print(token)
