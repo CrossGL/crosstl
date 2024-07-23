@@ -30,14 +30,7 @@ class CharTypeMapper:
 
 class MetalCodeGen:
     def __init__(self):
-<<<<<<< HEAD
         self.char_mapper = CharTypeMapper()
-=======
-        self.current_shader = None
-        self.shader_inputs = []
-        self.shader_outputs = []
-
->>>>>>> da9d4dc5a3a6ef70bae7fe103559cbd2c0f227f9
     def generate(self, ast):
         if isinstance(ast, ShaderNode):
             self.current_shader = ast
