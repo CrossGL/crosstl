@@ -2,6 +2,15 @@ class ASTNode:
     pass
 
 
+class UniformNode(ASTNode):
+    def __init__(self, vtype, name):
+        self.vtype = vtype  
+        self.name = name    
+    def __repr__(self):
+        return f"UniformNode(vtype={self.vtype}, name={self.name})"
+    def __str__(self):
+        return f"uniform {self.vtype} {self.name};"
+
 class ShaderNode(ASTNode):
     def __init__(self, name, inputs, outputs, functions):
         self.name = name
@@ -73,3 +82,9 @@ class UnaryOpNode(ASTNode):
     def __init__(self, op, operand):
         self.op = op
         self.operand = operand
+
+    def __repr__(self):
+        return f"UnaryOpNode(operator={self.op}, operand={self.operand})"
+
+    def __str__(self):
+        return f"({self.op}{self.operand})"
