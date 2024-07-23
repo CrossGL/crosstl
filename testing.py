@@ -185,4 +185,16 @@ class TestCodeGeneration(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    metal_transpiler = Transpiler(code, backend)
+    print("############ metal ############")
+    print(metal_transpiler.transpile())
+    directx_transpiler = Transpiler(code, "directx")
+    print("############ directx ############")
+    print(directx_transpiler)
+    opengl_transpiler = Transpiler(code, "opengl")
+    print("############ opengl ############ ")
+    print(opengl_transpiler)
+    print("############# input file ############")
+    file_path = "examples/example_program.cgl"
+    file_transpiler = Transpiler(file_path, backend)
+    print(file_transpiler)
