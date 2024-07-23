@@ -11,6 +11,7 @@ from ..ast import (
     MemberAccessNode,
 )
 
+
 class HLSLCodeGen:
     def __init__(self):
         self.current_shader = None
@@ -27,7 +28,11 @@ class HLSLCodeGen:
 
         code = "struct VS_INPUT {\n"
         for i, (vtype, name) in enumerate(node.inputs):
-            code += f"    {self.map_type(vtype)} {name} : POSITION{i};\n"
+
+            if i >= 1:
+                code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
+            else:
+                code += f"    {self.map_type(vtype)} {name} : POSITION{i};\n"
         code += "};\n\n"
 
         code += "struct PS_OUTPUT {\n"
@@ -105,10 +110,14 @@ class HLSLCodeGen:
         ):
             init = f"{self.map_type(node.init.name.vtype)} {node.init.name.name} = {self.generate_expression(node.init.value, is_vs_input)}"
         else:
-            init = self.generate_statement(node.init, 0, is_vs_input).strip()[:-1]  # Remove trailing semicolon
+            init = self.generate_statement(node.init, 0, is_vs_input).strip()[
+                :-1
+            ]  # Remove trailing semicolon
 
         condition = self.generate_expression(node.condition, is_vs_input)
-        update = self.generate_statement(node.update, 0, is_vs_input).strip()[:-1]  # Remove trailing semicolon
+        update = self.generate_statement(node.update, 0, is_vs_input).strip()[
+            :-1
+        ]  # Remove trailing semicolon
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
@@ -124,7 +133,9 @@ class HLSLCodeGen:
         elif isinstance(expr, BinaryOpNode):
             return f"({self.generate_expression(expr.left, is_vs_input)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, is_vs_input)})"
         elif isinstance(expr, FunctionCallNode):
-            args = ", ".join(self.generate_expression(arg, is_vs_input) for arg in expr.args)
+            args = ", ".join(
+                self.generate_expression(arg, is_vs_input) for arg in expr.args
+            )
             return f"{self.translate_expression(expr.name, is_vs_input)}({args})"
         elif isinstance(expr, MemberAccessNode):
             return f"{self.generate_expression(expr.object, is_vs_input)}.{expr.member}"
@@ -132,15 +143,11 @@ class HLSLCodeGen:
             return str(expr)
 
     def translate_expression(self, expr, is_vs_input):
-        translations = {
-            'vec2': 'float2',
-            'vec3': 'float3',
-            'vec4': 'float4'
-        }
+        translations = {"vec2": "float2", "vec3": "float3", "vec4": "float4"}
         if is_vs_input:
             for _, input_name in self.shader_inputs:
-                translations[input_name] = f'input.{input_name}'
-        
+                translations[input_name] = f"input.{input_name}"
+
         for cglsl, hlsl in translations.items():
             expr = expr.replace(cglsl, hlsl)
         return expr
@@ -176,3 +183,47 @@ class HLSLCodeGen:
         return op_map.get(op, op)
 
 
+# Usage example
+if __name__ == "__main__":
+    from compiler.lexer import Lexer
+    from compiler.parser import Parser
+
+    code = """shader main {
+                            input vec3 position;
+                            input vec2 texCoord;
+                            input mat2 depth;
+                            output vec4 fragColor;
+                            output float depth;
+                            vec3 customFunction(vec3 random, float factor) {
+                                return random * factor;
+                            }
+
+                            void main() {
+                                vec3 color = vec3(position.x,position.y, 0.0);
+                                float factor = 1.0;
+
+                                if (texCoord.x > 0.5) {
+                                    color = vec3(1.0, 0.0, 0.0);
+                                } else {
+                                    color = vec3(0.0, 1.0, 0.0);
+                                }
+
+                                for (int i = 0; i < 3; i = i + 1) {
+                                    factor = factor * 0.5;
+                                    color = customFunction(color, factor);
+                                }
+
+                                if (length(color) > 1.0) {
+                                    color = normalize(color);
+                                }
+
+                                fragColor = vec4(color, 1.0);
+                            }
+                        }"""
+    lexer = Lexer(code)
+    parser = Parser(lexer.tokens)
+    ast = parser.parse()
+
+    codegen = HLSLCodeGen()
+    hlsl_code = codegen.generate(ast)
+    print(hlsl_code)
