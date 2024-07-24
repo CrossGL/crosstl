@@ -1,6 +1,8 @@
 import re
 
 TOKENS = [
+    ("COMMENT_SINGLE", r"//.*"),
+    ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("SHADER", r"shader"),
     ("INPUT", r"input"),
     ("OUTPUT", r"output"),
@@ -50,6 +52,8 @@ TOKENS = [
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
     ("DOT", r"\."),
+    ("QUESTION", r"\?"),
+    ("COLON", r":"),
 ]
 
 KEYWORDS = {
@@ -102,7 +106,27 @@ class Lexer:
 
 
 if __name__ == "__main__":
-    code = "shader main { input vec3 position; output vec4 color i++; void main() { color = vec4(position, 1.0); } }"
+    code = """shader main {
+input vec2 texCoord;
+uniform sampler2D texture;
+uniform float blurAmount;
+output vec4 fragColor;
+
+void main() {
+    vec4 color = vec4(0.0);
+    vec2 texelSize = 1.0 / textureSize(texture, 0); // Assume texture is a 2D texture
+
+    for (int x = -3; x <= 3; ++x) {
+        for (int y = -3; y <= 3; ++y) {
+            vec2 offset = vec2(float(x), float(y)) * texelSize * blurAmount;
+            color += texture2D(texture, texCoord + offset);
+        }
+    }
+
+    fragColor = color / 49.0; // Normalize by the number of samples
+}
+}
+"""
     lexer = Lexer(code)
     for token in lexer.tokens:
         print(token)

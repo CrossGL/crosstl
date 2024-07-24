@@ -33,6 +33,7 @@ class MetalCodeGen:
         self.current_shader = None
         self.shader_inputs = []
         self.shader_outputs = []
+        self.char_mapper = CharTypeMapper() 
 
     def generate(self, ast):
         if isinstance(ast, ShaderNode):
