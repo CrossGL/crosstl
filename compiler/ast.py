@@ -4,18 +4,22 @@ class ASTNode:
 
 class UniformNode(ASTNode):
     def __init__(self, vtype, name):
-        self.vtype = vtype  
-        self.name = name    
+        self.vtype = vtype
+        self.name = name
+
     def __repr__(self):
         return f"UniformNode(vtype={self.vtype}, name={self.name})"
+
     def __str__(self):
         return f"uniform {self.vtype} {self.name};"
-    
+
+
 class TernaryOpNode:
     def __init__(self, condition, true_expr, false_expr):
         self.condition = condition
         self.true_expr = true_expr
         self.false_expr = false_expr
+
 
 class ShaderNode(ASTNode):
     def __init__(self, name, inputs, outputs, functions):

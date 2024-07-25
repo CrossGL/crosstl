@@ -10,8 +10,10 @@ from compiler.codegen import (
 from compiler.ast import ASTNode
 import re
 
+
 def normalize_whitespace(text):
     return re.sub(r"\s+", " ", text).strip()
+
 
 def print_ast(node, indent=0):
     print("  " * indent + node.__class__.__name__)
@@ -26,6 +28,7 @@ def print_ast(node, indent=0):
                     print("  " * (indent + 1) + repr(item))
         else:
             print("  " * (indent + 1) + repr(value))
+
 
 class TestCodeGeneration(unittest.TestCase):
     def setUp(self):
@@ -83,33 +86,29 @@ class TestCodeGeneration(unittest.TestCase):
         self.ast = parser.parse()
         self.hlsl_codegen = directx_codegen.HLSLCodeGen()
         self.metal_codegen = metal_codegen.MetalCodeGen()
-    
-    
+
     def test_opengl_codegen(self):
         codegen = opengl_codegen.GLSLCodeGen()
-        glsl_code = codegen.generate(self.ast)
-        #print(glsl_code)
+        codegen.generate(self.ast)
+        # print(glsl_code)
 
-        
         print("Success: OpenGL codegen test passed")
         print("\n------------------\n")
 
     def test_metal_codegen(self):
         codegen = metal_codegen.MetalCodeGen()
-        metal_code = codegen.generate(self.ast)
-        #print(metal_code)
-
+        codegen.generate(self.ast)
+        # print(metal_code)
 
         print("Success: Metal codegen test passed")
         print("\n------------------\n")
 
     def test_directx_codegen(self):
         codegen = directx_codegen.HLSLCodeGen()
-        hlsl_code = codegen.generate(self.ast)
+        codegen.generate(self.ast)
 
-        #print(hlsl_code)
+        # print(hlsl_code)
 
-    
         print("Success: DirectX codegen test passed")
         print("\n------------------\n")
 
