@@ -1,0 +1,453 @@
+*****************************************EXAMPLES**************************************
+
+1. Perlin Noise Terrain Generation
+shader main {
+    input vec3 position;
+    output vec4 fragColor;
+
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+        vec2 uv = position.xy * 10.0; 
+        float noise = perlinNoise(uv);
+        float height = noise * 10.0;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+        fragColor = vec4(color, 1.0);
+    }
+}
+****************************************************************************************
+2. Real-Time Water Simulation
+shader main {
+    input vec3 position;
+    output vec4 fragColor;
+
+    float waveFunction(vec2 p) {
+        return sin(p.x * 10.0 + iTime) * 0.1;
+    }
+
+    void main() {
+        vec2 uv = position.xy;
+        float wave = waveFunction(uv);
+        vec3 waterColor = vec3(0.0, 0.3, 0.8) * (1.0 - wave);
+        fragColor = vec4(waterColor, 1.0);
+    }
+}
+
+******************************************************************************************
+3. Atmospheric Scattering
+shader main {
+    input vec3 position;
+    output vec4 fragColor;
+
+    vec3 rayleighScattering(float theta) {
+        return vec3(0.5, 0.7, 1.0) * pow(max(0.0, 1.0 - theta * theta), 3.0);
+    }
+
+    void main() {
+        float theta = position.y;
+        vec3 color = rayleighScattering(theta);
+        fragColor = vec4(color, 1.0);
+    }
+}
+******************************************************************************************
+4. Procedural Texturing with Complex Patterns
+shader main {
+    input vec2 texCoord;
+    output vec4 fragColor;
+
+    float marblePattern(vec2 uv) {
+        return 0.5 + 0.5 * sin(10.0 * uv.x + iTime);
+    }
+
+    void main() {
+        vec3 color = vec3(marblePattern(texCoord), 0.0, 0.0);
+        fragColor = vec4(color, 1.0);
+    }
+}
+******************************************************************************************
+5. Advanced Post-Processing Effects (Bloom Example)
+shader main {
+    input vec2 texCoord;
+    output vec4 fragColor;
+
+    float brightness = texture2D(iChannel0, texCoord).r;
+    float bloom = max(0.0, brightness - 0.5);
+    vec3 color = texture2D(iChannel0, texCoord).rgb + vec3(bloom);
+    fragColor = vec4(color, 1.0);
+}
+******************************************************************************************
+6. Realistic Skin Shader (Subsurface Scattering)
+shader main {
+    input vec3 position;
+    output vec4 fragColor;
+
+    float subsurfaceScattering(vec3 position) {
+        return exp(-length(position) * 2.0);
+    }
+
+    void main() {
+        vec3 baseColor = vec3(1.0, 0.8, 0.6);
+        float sss = subsurfaceScattering(position);
+        vec3 color = baseColor * sss;
+        fragColor = vec4(color, 1.0);
+    }
+}
+******************************************************************************************
+7. Dynamic Day-Night Cycle
+shader main {
+    input vec3 position;
+    output vec4 fragColor;
+
+    vec3 dayNightColor(float timeOfDay) {
+        return mix(vec3(0.0, 0.5, 1.0), vec3(0.0, 0.0, 0.2), timeOfDay);
+    }
+
+    void main() {
+        float timeOfDay = mod(iTime / 24.0, 1.0);
+        vec3 color = dayNightColor(timeOfDay);
+        fragColor = vec4(color, 1.0);
+    }
+}
+******************************************************************************************
+8. Fluid Dynamics Simulation
+shader main {
+    input vec3 position;
+    output vec4 fragColor;
+
+    float fluidMotion(vec3 p) {
+        return sin(p.x * 10.0 + iTime) * 0.5 + 0.5;
+    }
+
+    void main() {
+        float motion = fluidMotion(position);
+        vec3 color = vec3(0.0, 0.0, 1.0) * motion;
+        fragColor = vec4(color, 1.0);
+    }
+}
+******************************************************************************************
+9. Dynamic Water Shader
+shader main {
+    input vec2 position;
+    output vec4 fragColor;
+
+    float wave(vec2 p, float time) {
+        return sin(p.x * 10.0 + time * 2.0) * 0.1 + sin(p.y * 10.0 + time * 2.0) * 0.1;
+    }
+    
+
+    void main() {
+        vec2 uv = position;
+        float waterHeight = wave(uv, iTime);
+        vec3 color = vec3(0.0, 0.3, 0.8) * (1.0 + waterHeight);
+
+        fragColor = vec4(color, 1.0);
+    }
+}
+******************************************************************************************
+10. Procedural Terrain Generation
+shader main {
+    input vec2 position;
+    output vec4 fragColor;
+
+    float noise(vec2 p) {
+        return sin(p.x * 10.0) * cos(p.y * 10.0);
+    }
+
+    float heightMap(vec2 p) {
+        float n = noise(p * 10.0);
+        return p.y + n * 0.1;
+    }
+
+    void main() {
+        vec2 uv = position;
+        float height = heightMap(uv);
+        vec3 color = vec3(0.5, 0.5, 0.5) * (1.0 - height * 0.5);
+
+        fragColor = vec4(color, 1.0);
+    }
+}
+******************************************************************************************
+11.random code
+shader complexShader {
+    input vec3 position;
+    input vec2 texCoord;
+    output vec4 fragColor;
+    
+    float calculateLighting(vec3 normal, vec3 lightDir) {
+        float diff = max(dot(normal, lightDir), 0.0);
+        return diff;
+    }
+
+    vec4 textureColor(vec2 coord) {
+        return texture2D(textureSampler, coord);
+    }
+
+    void main() {
+        vec3 normal = normalize(vec3(0.0, 0.0, 1.0));
+        vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+        float lightIntensity = calculateLighting(normal, lightDir);
+        
+        vec4 color = textureColor(texCoord);
+        color *= lightIntensity; //error for color.rgb
+        
+        fragColor = color;
+    }
+}
+******************************************************************************************
+12]
+
+shader complexShader {
+    input vec3 position;
+    input vec2 texCoord;
+    output vec4 fragColor;
+
+    uniform sampler2D textureSampler;
+    uniform float time;
+    uniform vec3 lightColor;
+    uniform mat4 modelMatrix;
+
+    vec3 calculateLighting(vec3 normal, vec3 lightDir, vec3 viewDir) {
+        float ambientStrength = 0.1;
+        vec3 ambient = ambientStrength * lightColor;
+
+        float diff = max(dot(normal, lightDir), 0.0);
+        vec3 diffuse = diff * lightColor;
+
+        float specularStrength = 0.5;
+        vec3 reflectDir = reflect(-lightDir, normal);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+        vec3 specular = specularStrength * spec * lightColor;
+
+        return ambient + diffuse + specular;
+    }
+
+    void main() {
+        vec4 texColor = texture(textureSampler, texCoord);
+        vec3 normal = normalize(cross(dFdx(position), dFdy(position)));
+        vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+        vec3 viewDir = normalize(-position);
+
+        vec3 lighting = calculateLighting(normal, lightDir, viewDir);
+        vec4 color = vec4(lighting, 1.0) * texColor;
+
+        fragColor = color;
+    }
+}
+
+******************************************************************************************
+13]
+
+shader advancedShader {
+    input vec3 position;
+    input vec2 texCoord;
+    output vec4 fragColor;
+
+    uniform sampler2D textureSampler;
+    uniform vec3 ambientColor;
+    uniform vec3 lightPos;
+    uniform vec3 viewPos;
+    uniform float shininess;
+
+    vec3 calculateSpecular(vec3 normal, vec3 lightDir, vec3 viewDir) {
+        vec3 reflectDir = reflect(-lightDir, normal);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        return spec * vec3(1.0, 1.0, 1.0);  // White specular highlight
+    }
+
+    void main() {
+        vec4 texColor = texture(textureSampler, texCoord);
+
+        vec3 norm = normalize(cross(dFdx(position), dFdy(position)));
+        vec3 lightDir = normalize(lightPos - position);
+        vec3 viewDir = normalize(viewPos - position);
+
+        // Ambient component
+        vec3 ambient = ambientColor;
+
+        // Diffuse component
+        float diff = max(dot(norm, lightDir), 0.0);
+        vec3 diffuse = diff * vec3(1.0, 1.0, 1.0);  // White diffuse light
+
+        // Specular component
+        vec3 specular = calculateSpecular(norm, lightDir, viewDir);
+
+        vec3 lighting = ambient + diffuse + specular;
+        vec4 color = vec4(lighting, 1.0) * texColor;
+
+        fragColor = color;
+    }
+}
+
+
+******************************************************************************************
+14]
+shader complexShader {
+    input vec3 position;
+    input vec2 texCoord;
+    input vec3 normal;
+    output vec4 fragColor;
+
+    uniform sampler2D diffuseTexture;
+    uniform sampler2D specularTexture;
+    uniform sampler2D normalMap;
+    uniform vec3 lightPos;
+    uniform vec3 viewPos;
+    uniform vec3 ambientColor;
+    uniform float shininess;
+    uniform float specularIntensity;
+
+    vec3 calculateSpecular(vec3 normal, vec3 lightDir, vec3 viewDir) {
+        vec3 reflectDir = reflect(-lightDir, normal);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        return spec * vec3(1.0, 1.0, 1.0) * specularIntensity;
+    }
+
+    vec3 applyNormalMapping(vec3 normal, vec3 mapNormal) {
+        return normalize(normal * mapNormal);
+    }
+
+    void main() {
+        vec4 diffuseColor = texture(diffuseTexture, texCoord);
+        vec4 specularColor = texture(specularTexture, texCoord);
+        vec4 normalMapColor = texture(normalMap, texCoord);
+
+        vec3 mapNormal = normalize(normalMapColor.rgb * 2.0 - 1.0);
+        vec3 perturbedNormal = applyNormalMapping(normal, mapNormal);
+
+        vec3 lightDir = normalize(lightPos - position);
+        vec3 viewDir = normalize(viewPos - position);
+
+        // Ambient component
+        vec3 ambient = ambientColor;
+
+        // Diffuse component
+        float diff = max(dot(perturbedNormal, lightDir), 0.0);
+        vec3 diffuse = diff * diffuseColor.rgb;
+
+        // Specular component
+        vec3 specular = calculateSpecular(perturbedNormal, lightDir, viewDir);
+
+        vec3 lighting = ambient + diffuse + specular;
+        vec4 color = vec4(lighting, 1.0) * diffuseColor;
+
+        fragColor = color;
+    }
+}
+
+******************************************************************************************
+15]
+shader complexShader {
+    input vec3 position;
+    input vec2 texCoord;
+    input vec3 normal;
+    output vec4 fragColor;
+
+    uniform sampler2D diffuseTexture;
+    uniform sampler2D specularTexture;
+    uniform sampler2D normalMap;
+    uniform vec3 lightPos;
+    uniform vec3 viewPos;
+    uniform vec3 ambientColor;
+    uniform float shininess;
+    uniform float specularIntensity;
+    uniform int iterations;
+
+    vec3 calculateSpecular(vec3 normal, vec3 lightDir, vec3 viewDir) {
+        vec3 reflectDir = reflect(-lightDir, normal);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        return spec * vec3(1.0, 1.0, 1.0) * specularIntensity;
+    }
+
+    vec3 applyNormalMapping(vec3 normal, vec3 mapNormal) {
+        return normalize(normal * mapNormal);
+    }
+
+    void main() {
+        vec4 diffuseColor = texture(diffuseTexture, texCoord);
+        vec4 specularColor = texture(specularTexture, texCoord);
+        vec4 normalMapColor = texture(normalMap, texCoord);
+
+        vec3 mapNormal = normalize(normalMapColor.rgb * 2.0 - 1.0);
+        vec3 perturbedNormal = applyNormalMapping(normal, mapNormal);
+
+        vec3 lightDir = normalize(lightPos - position);
+        vec3 viewDir = normalize(viewPos - position);
+
+        // Ambient component
+        vec3 ambient = ambientColor;
+
+        // Diffuse component
+        float diff = max(dot(perturbedNormal, lightDir), 0.0);
+        vec3 diffuse = diff * diffuseColor.rgb;
+
+        // Specular component
+        vec3 specular = calculateSpecular(perturbedNormal, lightDir, viewDir);
+
+        // Loop to modify lighting based on iterations
+        vec3 lighting = ambient + diffuse + specular;
+        for (int i = 0; i < iterations; i++) {
+            lighting *= 0.9;
+        }
+
+        // Ternary operator to conditionally modify color
+        vec4 color = (diff > 0.5) ? vec4(lighting, 1.0) * diffuseColor : vec4(lighting * 0.5, 1.0) * diffuseColor;
+
+        fragColor = color;
+    }
+}
+
+******************************************************************************************
+16]
+shader nestedLoopsShader {
+    input vec3 position;
+    input vec2 texCoord;
+    input vec3 normal;
+    output vec4 fragColor;
+
+    uniform sampler2D texture;
+    uniform vec3 lightPos;
+    uniform vec3 viewPos;
+    uniform vec3 ambientColor;
+    uniform float shininess;
+    uniform float specularIntensity;
+    uniform int outerIterations;
+    uniform int innerIterations;
+
+    vec3 calculateSpecular(vec3 normal, vec3 lightDir, vec3 viewDir) {
+        vec3 reflectDir = reflect(-lightDir, normal);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        return spec * vec3(1.0, 1.0, 1.0) * specularIntensity;
+    }
+
+    void main() {
+        vec4 texColor = texture(texture, texCoord);
+        vec3 lightDir = normalize(lightPos - position);
+        vec3 viewDir = normalize(viewPos - position);
+
+        vec3 ambient = ambientColor;
+        vec3 diffuse = texColor.rgb;
+        vec3 specular = vec3(0.0);
+
+        // Outer loop
+        for (int i = 0; i < outerIterations; i++) {
+            // Inner loop
+            for (int j = 0; j < innerIterations; j++) {
+                // Compute lighting
+                vec3 tempSpecular = calculateSpecular(normal, lightDirModified, viewDirModified);
+                specular += tempSpecular;
+            }
+
+            // Reduce diffuse intensity progressively
+            diffuse *= 0.9;
+        }
+
+        vec3 lighting = ambient + diffuse + specular;
+        fragColor = vec4(lighting, 1.0);
+    }
+}
+
+******************************************************************************************
+
+******************************************************************************************
