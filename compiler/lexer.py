@@ -12,6 +12,8 @@ TOKENS = [
     ("VECTOR", r"vec[2-4]"),
     ("MATRIX", r"mat[2-4]"),
     ("BOOL", r"bool"),
+    ("VERTEX", r"vertex"),
+    ("FRAGMENT", r"fragment"),
     # ("INCREMENT_DECREMENT", r"\b[a-zA-Z_][a-zA-Z_0-9]*\s*(\+\+|--)\b"),
     ("FLOAT", r"float"),
     ("INT", r"int"),
@@ -62,6 +64,8 @@ KEYWORDS = {
     "output": "OUTPUT",
     "void": "VOID",
     "main": "MAIN",
+    "vertex": "VERTEX",
+    "fragment": "FRAGMENT",
     "if": "IF",
     "else": "ELSE",
     "for": "FOR",
@@ -107,6 +111,7 @@ class Lexer:
 
 if __name__ == "__main__":
     code = """shader main {
+        vertex {
 input vec2 texCoord;
 uniform sampler2D texture;
 uniform float blurAmount;
@@ -124,6 +129,17 @@ void main() {
     }
 
     fragColor = color / 49.0; // Normalize by the number of samples
+}
+}
+
+fragment {
+    input vec4 fragColor;
+    output vec4 outColor;
+    
+    void main() {
+        outColor = fragColor;
+    }
+    
 }
 }
 """

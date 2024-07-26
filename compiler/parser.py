@@ -14,6 +14,8 @@ from compiler.ast import (
     UniformNode,
     UnaryOpNode,
     TernaryOpNode,
+    VERTEXShaderNode,
+    FRAGMENTShaderNode,
 )
 
 from compiler.lexer import Lexer
@@ -79,16 +81,54 @@ class Parser:
                 f"Expected IDENTIFIER or MAIN, got {self.current_token[0]}"
             )
         self.eat("LBRACE")
-        self.skip_comments()
+
+        global_inputs = self.parse_inputs()
+        self.parse_uniforms()
+        global_outputs = self.parse_outputs()
+
+        global_functions = []
+
+        vertex_section = None
+        fragment_section = None
+
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "VERTEX":
+                vertex_section = self.parse_shader_section("VERTEX")
+                self.skip_comments()  # Skip comments while parsing functions
+            elif self.current_token[0] == "FRAGMENT":
+                fragment_section = self.parse_shader_section("FRAGMENT")
+                self.skip_comments()  # Skip comments while parsing functions
+            elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "VOID"]:
+                global_functions.append(self.parse_function())
+                self.skip_comments()  # Skip comments while parsing functions
+            else:
+                raise SyntaxError(f"Unexpected token: {self.current_token[0]}")
+
+        self.eat("RBRACE")
+        return ShaderNode(
+            shader_name,
+            global_inputs,
+            global_outputs,
+            global_functions,
+            vertex_section,
+            fragment_section,
+        )
+
+    def parse_shader_section(self, section_type):
+        self.eat(section_type)
+        self.eat("LBRACE")
         inputs = self.parse_inputs()
+        self.parse_uniforms()
         outputs = self.parse_outputs()
-        uniforms = self.parse_uniforms()  # Parse uniforms
+
         functions = []
         while self.current_token[0] != "RBRACE":
             functions.append(self.parse_function())
-            self.skip_comments()  # Skip comments while parsing functions
         self.eat("RBRACE")
-        return ShaderNode(shader_name, inputs, outputs, functions)
+        if section_type == "VERTEX":
+            return VERTEXShaderNode(inputs, outputs, functions)
+        else:
+            return FRAGMENTShaderNode(inputs, outputs, functions)
 
     def parse_inputs(self):
         inputs = []
@@ -490,35 +530,82 @@ class Parser:
 
 # Usage example
 if __name__ == "__main__":
-    code = """
-  shader main {
-input vec2 texCoord;
-uniform sampler2D texture;
-uniform float blurAmount;
-output vec4 fragColor;
+    code = """shader main {
+        
+                input vec3 position;
+                            input vec2 texCoord;
+                            input mat2 depth;
+                            output vec4 fragColor;
+                            output float depth;
+                            vec3 customFunction(vec3 random, float factor) {
+                                return random * factor;
+                            }
 
-void main() {
-    vec4 color = vec4(0.0);
-    vec2 texelSize = 1.0 / textureSize(texture, 0); // Assume texture is a 2D texture
+                            void main() {
+                                vec3 color = vec3(position.x,position.y, 0.0);
+                                float factor = 1.0;
 
-    for (int x = -3; x <= 3; ++x) {
-        for (int y = -3; y <= 3; ++y) {
-            vec2 offset = vec2(float(x), float(y)) * texelSize * blurAmount;
-            color += texture2D(texture, texCoord + offset);
-        }
-    }
+                                if (texCoord.x > 0.5) {
+                                    color = vec3(1.0, 0.0, 0.0);
+                                } else {
+                                    color = vec3(0.0, 1.0, 0.0);
+                                }
 
-    fragColor = color / 49.0; // Normalize by the number of samples
-}
-}
-"""
+                                for (int i = 0; i < 3; i = i + 1) {
+                                    factor = factor * 0.5;
+                                    color = customFunction(color, factor);
+                                }
+
+                                if (length(color) > 1.0) {
+                                    color = normalize(color);
+                                }
+
+                                fragColor = vec4(color, 1.0);
+                            }
+        
+                vertex {
+                            input vec3 position;
+                            input vec2 texCoord;
+                            input mat2 depth;
+                            output vec4 fragColor;
+                            output float depth;
+                            vec3 customFunction(vec3 random, float factor) {
+                                return random * factor;
+                            }
+
+                            void main() {
+                                vec3 color = vec3(position.x,position.y, 0.0);
+                                float factor = 1.0;
+
+                                if (texCoord.x > 0.5) {
+                                    color = vec3(1.0, 0.0, 0.0);
+                                } else {
+                                    color = vec3(0.0, 1.0, 0.0);
+                                }
+
+                                for (int i = 0; i < 3; i = i + 1) {
+                                    factor = factor * 0.5;
+                                    color = customFunction(color, factor);
+                                }
+
+                                if (length(color) > 1.0) {
+                                    color = normalize(color);
+                                }
+
+                                fragColor = vec4(color, 1.0);
+                            }
+                            }
+                            fragment {
+                                input vec4 fragColor;
+                                output vec4 finalColor;
+                                
+                                void main() {
+                                    finalColor = fragColor;
+                                }
+                                
+                            }
+                        }"""
     lexer = Lexer(code)
     print("Tokens:")
-    for token in lexer.tokens:
-        print(token)
     parser = Parser(lexer.tokens)
-    try:
-        ast = parser.parse()
-        print(ast)
-    except SyntaxError as e:
-        print(f"Syntax error: {e}")
+    print(parser.parse())
