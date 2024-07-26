@@ -7,6 +7,7 @@ from ..ast import (
     IfNode,
     ForNode,
     VariableNode,
+    UnaryOpNode,
     FunctionCallNode,
     MemberAccessNode,
 )
@@ -137,10 +138,12 @@ class MetalCodeGen:
             ]  # Remove trailing semicolon
 
         condition = self.generate_expression(node.condition, is_main)
-        update = self.generate_statement(node.update, 0, is_main).strip()[
-            :-1
-        ]  # Remove trailing semicolon
-
+        if isinstance(node.update, AssignmentNode) and isinstance(
+            node.update.value, UnaryOpNode
+        ):
+            update = f"{node.update.value.operand.name}++"
+        else:
+            update = self.generate_statement(node.update, 0, is_main).strip()[:-1]
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
             code += self.generate_statement(stmt, indent + 1, is_main)
@@ -156,6 +159,9 @@ class MetalCodeGen:
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"({left} {self.map_operator(expr.op)} {right})"
+        elif isinstance(expr, UnaryOpNode):
+            return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, is_main)}"
+            return f"{self.map_operator(expr.op)}{operand}"
         elif isinstance(expr, FunctionCallNode):
             func_name = self.translate_expression(expr.name, is_main)
             args = ", ".join(
@@ -181,8 +187,8 @@ class MetalCodeGen:
                 translations[input_name] = f"input.{input_name}"
 
         # First, replace vector constructors
-        for glsl, metal in translations.items():
-            expr = expr.replace(f"{glsl}(", f"{metal}(")
+        for cglsl, metal in translations.items():
+            expr = expr.replace(f"{cglsl}(", f"{metal}(")
 
         # Then, replace any remaining exact matches
         words = expr.split()

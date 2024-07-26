@@ -9,6 +9,7 @@ from ..ast import (
     VariableNode,
     FunctionCallNode,
     MemberAccessNode,
+    UnaryOpNode,
 )
 
 
@@ -104,6 +105,7 @@ class HLSLCodeGen:
 
     def generate_for(self, node, indent, is_vs_input=False):
         indent_str = "    " * indent
+
         if isinstance(node.init, AssignmentNode) and isinstance(
             node.init.name, VariableNode
         ):
@@ -114,10 +116,14 @@ class HLSLCodeGen:
             ]  # Remove trailing semicolon
 
         condition = self.generate_expression(node.condition, is_vs_input)
-        update = self.generate_statement(node.update, 0, is_vs_input).strip()[
-            :-1
-        ]  # Remove trailing semicolon
-        print(node.update.value.operand.value)
+
+        if isinstance(node.update, AssignmentNode) and isinstance(
+            node.update.value, UnaryOpNode
+        ):
+            update = f"{node.update.value.operand.name}++"
+        else:
+            update = self.generate_statement(node.update, 0, is_vs_input).strip()[:-1]
+
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
             code += self.generate_statement(stmt, indent + 1, is_vs_input)
@@ -131,7 +137,9 @@ class HLSLCodeGen:
             return self.translate_expression(expr.name, is_vs_input)
         elif isinstance(expr, BinaryOpNode):
             return f"({self.generate_expression(expr.left, is_vs_input)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, is_vs_input)})"
-        elif isinstance(expr, FunctionCallNode):
+        elif isinstance(expr, UnaryOpNode):
+            return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, is_vs_input)}"
+        elif isinstance(expr, FunctionCallNode) and expr.args is not None:
             args = ", ".join(
                 self.generate_expression(arg, is_vs_input) for arg in expr.args
             )

@@ -32,52 +32,19 @@ def print_ast(node, indent=0):
 
 class TestCodeGeneration(unittest.TestCase):
     def setUp(self):
-        self.code = """ 
-    shader nestedLoopsShader {
+        self.code = """
+shader main {
     input vec3 position;
-    input vec2 texCoord;
-    input vec3 normal;
     output vec4 fragColor;
 
-    uniform sampler2D texture;
-    uniform vec3 lightPos;
-    uniform vec3 viewPos;
-    uniform vec3 ambientColor;
-    uniform float shininess;
-    uniform float specularIntensity;
-    uniform int outerIterations;
-    uniform int innerIterations;
-
-    vec3 calculateSpecular(vec3 normal, vec3 lightDir, vec3 viewDir) {
-        vec3 reflectDir = reflect(-lightDir, normal);
-        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-        return spec * vec3(1.0, 1.0, 1.0) * specularIntensity;
+    vec3 rayleighScattering(float theta) {
+        return vec3(0.5, 0.7, 1.0) * pow(max(0.0, 1.0 - theta * theta), 3.0);
     }
 
     void main() {
-        vec4 texColor = texture(texture, texCoord);
-        vec3 lightDir = normalize(lightPos - position);
-        vec3 viewDir = normalize(viewPos - position);
-
-        vec3 ambient = ambientColor;
-        vec3 diffuse = texColor.rgb;
-        vec3 specular = vec3(0.0);
-
-        // Outer loop
-        for (int i = 0; i < outerIterations; i++) {
-            // Inner loop
-            for (int j = 0; j < innerIterations; j++) {
-                // Compute lighting
-                vec3 tempSpecular = calculateSpecular(normal, lightDirModified, viewDirModified);
-                specular += tempSpecular;
-            }
-
-            // Reduce diffuse intensity progressively
-            diffuse *= 0.9;
-        }
-
-        vec3 lighting = ambient + diffuse + specular;
-        fragColor = vec4(lighting, 1.0);
+        float theta = position.y;
+        vec3 color = rayleighScattering(theta);
+        fragColor = vec4(color, 1.0);
     }
 }
 """
@@ -87,21 +54,21 @@ class TestCodeGeneration(unittest.TestCase):
         self.hlsl_codegen = directx_codegen.HLSLCodeGen()
         self.metal_codegen = metal_codegen.MetalCodeGen()
 
-    # def test_opengl_codegen(self):
-    #     codegen = opengl_codegen.GLSLCodeGen()
-    #     opengl_code = codegen.generate(self.ast)
-    #     print(opengl_code)
+    def test_opengl_codegen(self):
+        codegen = opengl_codegen.GLSLCodeGen()
+        opengl_code = codegen.generate(self.ast)
+        print(opengl_code)
 
-    #     print("Success: OpenGL codegen test passed")
-    #     print("\n------------------\n")
+        print("Success: OpenGL codegen test passed")
+        print("\n------------------\n")
 
-    # def test_metal_codegen(self):
-    #     codegen = metal_codegen.MetalCodeGen()
-    #     metal_code = codegen.generate(self.ast)
-    #     print(metal_code)
+    def test_metal_codegen(self):
+        codegen = metal_codegen.MetalCodeGen()
+        metal_code = codegen.generate(self.ast)
+        print(metal_code)
 
-    #     print("Success: Metal codegen test passed")
-    #     print("\n------------------\n")
+        print("Success: Metal codegen test passed")
+        print("\n------------------\n")
 
     def test_directx_codegen(self):
         codegen = directx_codegen.HLSLCodeGen()
