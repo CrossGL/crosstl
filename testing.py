@@ -40,12 +40,27 @@ shader main {
     vec3 rayleighScattering(float theta) {
         return vec3(0.5, 0.7, 1.0) * pow(max(0.0, 1.0 - theta * theta), 3.0);
     }
+    
+    vertex {
+        input vec3 position;
+        output vec4 fragColor;
 
     void main() {
         float theta = position.y;
         vec3 color = rayleighScattering(theta);
         fragColor = vec4(color, 1.0);
     }
+    }
+    fragment {
+        input vec4 fragColor;
+        output vec4 outColor;
+        
+        void main() {
+            outColor = fragColor;
+            
+            }
+            }
+    
 }
 """
         lexer = Lexer(self.code)
