@@ -104,7 +104,6 @@ class HLSLCodeGen:
 
     def generate_for(self, node, indent, is_vs_input=False):
         indent_str = "    " * indent
-
         if isinstance(node.init, AssignmentNode) and isinstance(
             node.init.name, VariableNode
         ):
@@ -118,7 +117,7 @@ class HLSLCodeGen:
         update = self.generate_statement(node.update, 0, is_vs_input).strip()[
             :-1
         ]  # Remove trailing semicolon
-
+        print(node.update.value.operand.value)
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
             code += self.generate_statement(stmt, indent + 1, is_vs_input)

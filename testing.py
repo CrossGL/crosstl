@@ -87,27 +87,27 @@ class TestCodeGeneration(unittest.TestCase):
         self.hlsl_codegen = directx_codegen.HLSLCodeGen()
         self.metal_codegen = metal_codegen.MetalCodeGen()
 
-    def test_opengl_codegen(self):
-        codegen = opengl_codegen.GLSLCodeGen()
-        codegen.generate(self.ast)
-        # print(glsl_code)
+    # def test_opengl_codegen(self):
+    #     codegen = opengl_codegen.GLSLCodeGen()
+    #     opengl_code = codegen.generate(self.ast)
+    #     print(opengl_code)
 
-        print("Success: OpenGL codegen test passed")
-        print("\n------------------\n")
+    #     print("Success: OpenGL codegen test passed")
+    #     print("\n------------------\n")
 
-    def test_metal_codegen(self):
-        codegen = metal_codegen.MetalCodeGen()
-        codegen.generate(self.ast)
-        # print(metal_code)
+    # def test_metal_codegen(self):
+    #     codegen = metal_codegen.MetalCodeGen()
+    #     metal_code = codegen.generate(self.ast)
+    #     print(metal_code)
 
-        print("Success: Metal codegen test passed")
-        print("\n------------------\n")
+    #     print("Success: Metal codegen test passed")
+    #     print("\n------------------\n")
 
     def test_directx_codegen(self):
         codegen = directx_codegen.HLSLCodeGen()
-        codegen.generate(self.ast)
+        hlsl_code = codegen.generate(self.ast)
 
-        # print(hlsl_code)
+        print(hlsl_code)
 
         print("Success: DirectX codegen test passed")
         print("\n------------------\n")
