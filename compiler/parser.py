@@ -13,7 +13,8 @@ from compiler.ast import (
     VariableNode,
     UniformNode,
     UnaryOpNode,
-    )
+    TernaryOpNode,
+)
 
 from compiler.lexer import Lexer
 
@@ -25,6 +26,10 @@ class Parser:
         self.pos = 0
         self.current_token = self.tokens[self.pos]
 
+    def skip_comments(self):
+        while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
+            self.eat(self.current_token[0])
+
     def eat(self, token_type):
 
         if self.current_token[0] == token_type:
@@ -32,18 +37,27 @@ class Parser:
             self.current_token = (
                 self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
             )
+            self.skip_comments()  # Skip comments after eating a token
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
-        
+
     def parse_uniforms(self):
         uniforms = []
         while self.current_token[0] == "UNIFORM":
             self.eat("UNIFORM")
-            if self.current_token[0] in ["VECTOR", "FLOAT", "INT", "SAMPLER2D"]:
+            if self.current_token[0] in [
+                "VECTOR",
+                "FLOAT",
+                "INT",
+                "SAMPLER2D",
+                "MATRIX",
+            ]:
                 vtype = self.current_token[1]
                 self.eat(self.current_token[0])
             else:
-                raise SyntaxError(f"Expected VECTOR, FLOAT, INT, or SAMPLER2D, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected VECTOR, FLOAT, INT, or SAMPLER2D, got {self.current_token[0]}"
+                )
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("SEMICOLON")
@@ -55,20 +69,24 @@ class Parser:
 
     def parse_shader(self):
         self.eat("SHADER")
+        self.skip_comments()  # Skip comments after eating SHADER
         if self.current_token[0] in ("IDENTIFIER", "MAIN"):
             shader_name = self.current_token[1]
             self.eat(self.current_token[0])
+            self.skip_comments()
         else:
             raise SyntaxError(
                 f"Expected IDENTIFIER or MAIN, got {self.current_token[0]}"
             )
         self.eat("LBRACE")
+        self.skip_comments()
         inputs = self.parse_inputs()
         outputs = self.parse_outputs()
         uniforms = self.parse_uniforms()  # Parse uniforms
         functions = []
         while self.current_token[0] != "RBRACE":
             functions.append(self.parse_function())
+            self.skip_comments()  # Skip comments while parsing functions
         self.eat("RBRACE")
         return ShaderNode(shader_name, inputs, outputs, functions)
 
@@ -76,11 +94,19 @@ class Parser:
         inputs = []
         while self.current_token[0] == "INPUT":
             self.eat("INPUT")
-            if self.current_token[0] in ["VECTOR", "FLOAT", "INT","MATRIX"]:
+            if self.current_token[0] in [
+                "VECTOR",
+                "FLOAT",
+                "INT",
+                "MATRIX",
+                "SAMPLER2D",
+            ]:
                 vtype = self.current_token[1]
                 self.eat(self.current_token[0])
             else:
-                raise SyntaxError(f"Expected VECTOR, FLOAT, or INT, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected VECTOR, FLOAT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
+                )
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("SEMICOLON")
@@ -91,17 +117,25 @@ class Parser:
         outputs = []
         while self.current_token[0] == "OUTPUT":
             self.eat("OUTPUT")
-            if self.current_token[0] in ["VECTOR", "FLOAT", "INT","MATRIX"]:
+            if self.current_token[0] in [
+                "VECTOR",
+                "FLOAT",
+                "INT",
+                "MATRIX",
+                "SAMPLER2D",
+            ]:
                 vtype = self.current_token[1]
                 self.eat(self.current_token[0])
             else:
-                raise SyntaxError(f"Expected VECTOR, FLOAT, or INT, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected VECTOR, FLOAT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
+                )
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("SEMICOLON")
             outputs.append((vtype, name))
         return outputs
-    
+
     def parse_function(self):
         return_type = self.parse_type()
         if self.current_token[0] == "MAIN":
@@ -129,7 +163,6 @@ class Parser:
             while self.current_token[0] == "COMMA":
                 self.eat("COMMA")
                 params.append(self.parse_parameter())
-
         return params
 
     def parse_parameter(self):
@@ -143,7 +176,7 @@ class Parser:
         if self.current_token[0] == "VOID":
             self.eat("VOID")
             return "void"
-        elif self.current_token[0] in ["VECTOR", "FLOAT", "INT"]:
+        elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX", "SAMPLER2D"]:
             vtype = self.current_token[1]
             self.eat(self.current_token[0])
             return vtype
@@ -195,7 +228,7 @@ class Parser:
 
         condition = self.parse_expression()
         self.eat("SEMICOLON")
-        
+
         update = self.parse_update()
 
         self.eat("RPAREN")
@@ -205,7 +238,7 @@ class Parser:
         self.eat("RBRACE")
 
         return ForNode(init, condition, update, body)
-    
+
     def parse_update(self):
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
@@ -216,8 +249,38 @@ class Parser:
             elif self.current_token[0] == "DECREMENT":
                 self.eat("DECREMENT")
                 return AssignmentNode(name, UnaryOpNode("--", VariableNode("", name)))
+            elif self.current_token[0] in [
+                "EQUALS",
+                "ASSIGN_ADD",
+                "ASSIGN_SUB",
+                "ASSIGN_MUL",
+                "ASSIGN_DIV",
+            ]:
+                op = self.current_token[0]
+                self.eat(op)
+                value = self.parse_expression()
+            if op == "EQUALS":
+                return AssignmentNode(name, value)
+            elif op == "ASSIGN_ADD":
+                return AssignmentNode(
+                    name, BinaryOpNode(VariableNode("", name), "+", value)
+                )
+            elif op == "ASSIGN_SUB":
+                return AssignmentNode(
+                    name, BinaryOpNode(VariableNode("", name), "-", value)
+                )
+            elif op == "ASSIGN_MUL":
+                return AssignmentNode(
+                    name, BinaryOpNode(VariableNode("", name), "*", value)
+                )
+            elif op == "ASSIGN_DIV":
+                return AssignmentNode(
+                    name, BinaryOpNode(VariableNode("", name), "/", value)
+                )
             else:
-                raise SyntaxError(f"Expected INCREMENT or DECREMENT, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected INCREMENT or DECREMENT, got {self.current_token[0]}"
+                )
         else:
             raise SyntaxError(f"Unexpected token in update: {self.current_token[0]}")
 
@@ -229,7 +292,7 @@ class Parser:
 
     def parse_assignment_or_function_call(self):
         type_name = ""
-        if self.current_token[0] in ["VECTOR", "FLOAT", "INT"]:
+        if self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
         if self.current_token[0] == "IDENTIFIER":
@@ -238,7 +301,13 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        if self.current_token[0] in ["EQUALS", "ASSIGN_ADD", "ASSIGN_SUB", "ASSIGN_MUL", "ASSIGN_DIV"]:
+        if self.current_token[0] in [
+            "EQUALS",
+            "ASSIGN_ADD",
+            "ASSIGN_SUB",
+            "ASSIGN_MUL",
+            "ASSIGN_DIV",
+        ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
             self.eat("INCREMENT")
@@ -260,22 +329,29 @@ class Parser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
-        
+
         elif self.current_token[0] == "EQUALS":
             self.eat("EQUALS")
             value = self.parse_expression()
-            
+
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return AssignmentNode(VariableNode(type_name, name), value)
-        
-            #if self.current_token[0] == "RPAREN":
+
+            # if self.current_token[0] == "RPAREN":
             #    self.eat("RPAREN")
 
             else:
-                raise SyntaxError(f"Expected ';' after variable assignment, found: {self.current_token[0]}")
-        
-        elif self.current_token[0] in ("ASSIGN_ADD", "ASSIGN_SUB", "ASSIGN_MUL", "ASSIGN_DIV"):
+                raise SyntaxError(
+                    f"Expected ';' after variable assignment, found: {self.current_token[0]}"
+                )
+
+        elif self.current_token[0] in (
+            "ASSIGN_ADD",
+            "ASSIGN_SUB",
+            "ASSIGN_MUL",
+            "ASSIGN_DIV",
+        ):
             op = self.current_token[0]
             self.eat(op)
             value = self.parse_expression()
@@ -283,16 +359,22 @@ class Parser:
                 self.eat("SEMICOLON")
                 return AssignmentNode(VariableNode(type_name, name), value)
             else:
-                raise SyntaxError(f"Expected ';' after compound assignment, found: {self.current_token[0]}")
-            
+                raise SyntaxError(
+                    f"Expected ';' after compound assignment, found: {self.current_token[0]}"
+                )
+
         else:
-            raise SyntaxError(f"Unexpected token in variable declaration: {self.current_token[0]}")
+            raise SyntaxError(
+                f"Unexpected token in variable declaration: {self.current_token[0]}"
+            )
 
     def parse_assignment(self, name):
         self.eat("EQUALS")
         value = self.parse_expression()
         if self.current_token[0] != "SEMICOLON":
-            raise SyntaxError(f"Expected ';' after assignment, found: {self.current_token[0]}")
+            raise SyntaxError(
+                f"Expected ';' after assignment, found: {self.current_token[0]}"
+            )
         self.eat("SEMICOLON")
         return AssignmentNode(name, value)
 
@@ -321,9 +403,9 @@ class Parser:
         if self.current_token[0] == "MINUS":
             self.eat("MINUS")
             value = self.parse_primary()  # Handle the negation as a unary operation
-            return UnaryOpNode('-', value)
-    
-        if self.current_token[0] in ("IDENTIFIER", "VECTOR"):
+            return UnaryOpNode("-", value)
+
+        if self.current_token[0] in ("IDENTIFIER", "VECTOR", "FLOAT"):
             return self.parse_function_call_or_identifier()
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
@@ -366,6 +448,14 @@ class Parser:
             self.eat(op)
             right = self.parse_additive()
             left = BinaryOpNode(left, op, right)
+
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            true_expr = self.parse_expression()
+            self.eat("COLON")
+            false_expr = self.parse_expression()
+            left = TernaryOpNode(left, true_expr, false_expr)
+
         return left
 
     def parse_function_call_or_identifier(self):
@@ -401,21 +491,25 @@ class Parser:
 # Usage example
 if __name__ == "__main__":
     code = """
-   shader main {
-    input vec3 position;
-    output vec4 fragColor;
+  shader main {
+input vec2 texCoord;
+uniform sampler2D texture;
+uniform float blurAmount;
+output vec4 fragColor;
 
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+void main() {
+    vec4 color = vec4(0.0);
+    vec2 texelSize = 1.0 / textureSize(texture, 0); // Assume texture is a 2D texture
+
+    for (int x = -3; x <= 3; ++x) {
+        for (int y = -3; y <= 3; ++y) {
+            vec2 offset = vec2(float(x), float(y)) * texelSize * blurAmount;
+            color += texture2D(texture, texCoord + offset);
+        }
     }
 
-    void main() {
-        vec2 uv = position.xy * 10.0; 
-        float noise = perlinNoise(uv);
-        float height = noise * 10.0;
-        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
-        fragColor = vec4(color, 1.0);
-    }
+    fragColor = color / 49.0; // Normalize by the number of samples
+}
 }
 """
     lexer = Lexer(code)

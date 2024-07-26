@@ -7,6 +7,7 @@ from ..ast import (
     IfNode,
     ForNode,
     VariableNode,
+    UnaryOpNode,
     FunctionCallNode,
     MemberAccessNode,
 )
@@ -75,20 +76,23 @@ class GLSLCodeGen:
     def generate_for(self, node, indent):
         indent_str = "    " * indent
 
-        # Generate the initialization part
         if isinstance(node.init, AssignmentNode) and isinstance(
             node.init.name, VariableNode
         ):
-            init = f"{node.init.name.vtype} {node.init.name.name} = {self.generate_expression(node.init.value)}"
+            init = f"{self.map_type(node.init.name.vtype)} {node.init.name.name} = {self.generate_expression(node.init.value)}"
         else:
             init = self.generate_statement(node.init, 0).strip()[
                 :-1
             ]  # Remove trailing semicolon
 
         condition = self.generate_expression(node.condition)
-        update = self.generate_statement(node.update, 0).strip()[
-            :-1
-        ]  # Remove trailing semicolon
+
+        if isinstance(node.update, AssignmentNode) and isinstance(
+            node.update.value, UnaryOpNode
+        ):
+            update = f"{node.update.value.operand.name}++"
+        else:
+            update = self.generate_statement(node.update, 0).strip()[:-1]
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
@@ -103,6 +107,10 @@ class GLSLCodeGen:
             return expr.name
         elif isinstance(expr, BinaryOpNode):
             return f"({self.generate_expression(expr.left)} {self.map_operator(expr.op)} {self.generate_expression(expr.right)})"
+        elif isinstance(expr, UnaryOpNode):
+            return (
+                f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand)}"
+            )
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             return f"{expr.name}({args})"

@@ -9,6 +9,7 @@ from ..ast import (
     VariableNode,
     FunctionCallNode,
     MemberAccessNode,
+    UnaryOpNode,
 )
 
 
@@ -115,9 +116,13 @@ class HLSLCodeGen:
             ]  # Remove trailing semicolon
 
         condition = self.generate_expression(node.condition, is_vs_input)
-        update = self.generate_statement(node.update, 0, is_vs_input).strip()[
-            :-1
-        ]  # Remove trailing semicolon
+
+        if isinstance(node.update, AssignmentNode) and isinstance(
+            node.update.value, UnaryOpNode
+        ):
+            update = f"{node.update.value.operand.name}++"
+        else:
+            update = self.generate_statement(node.update, 0, is_vs_input).strip()[:-1]
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
@@ -132,7 +137,9 @@ class HLSLCodeGen:
             return self.translate_expression(expr.name, is_vs_input)
         elif isinstance(expr, BinaryOpNode):
             return f"({self.generate_expression(expr.left, is_vs_input)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, is_vs_input)})"
-        elif isinstance(expr, FunctionCallNode):
+        elif isinstance(expr, UnaryOpNode):
+            return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, is_vs_input)}"
+        elif isinstance(expr, FunctionCallNode) and expr.args is not None:
             args = ", ".join(
                 self.generate_expression(arg, is_vs_input) for arg in expr.args
             )
@@ -154,29 +161,29 @@ class HLSLCodeGen:
 
     def map_type(self, vtype):
         type_mapping = {
-            'void': 'void',
-            'vec2': 'float2',
-            'vec3': 'float3',
-            'vec4': 'float4',
-            'mat2': 'float2x2',
-            'mat3': 'float3x3',
-            'mat4': 'float4x4',
-            'int': 'int',
-            'ivec2': 'int2',
-            'ivec3': 'int3',
-            'ivec4': 'int4',
-            'uint': 'uint',
-            'uvec2': 'uint2',
-            'uvec3': 'uint3',
-            'uvec4': 'uint4',
-            'bool': 'bool',
-            'bvec2': 'bool2',
-            'bvec3': 'bool3',
-            'bvec4': 'bool4',
-            'float': 'float',
-            'double': 'double',
-            'sampler2D': 'Texture2D',
-            'samplerCube': 'TextureCube',
+            "void": "void",
+            "vec2": "float2",
+            "vec3": "float3",
+            "vec4": "float4",
+            "mat2": "float2x2",
+            "mat3": "float3x3",
+            "mat4": "float4x4",
+            "int": "int",
+            "ivec2": "int2",
+            "ivec3": "int3",
+            "ivec4": "int4",
+            "uint": "uint",
+            "uvec2": "uint2",
+            "uvec3": "uint3",
+            "uvec4": "uint4",
+            "bool": "bool",
+            "bvec2": "bool2",
+            "bvec3": "bool3",
+            "bvec4": "bool4",
+            "float": "float",
+            "double": "double",
+            "sampler2D": "Texture2D",
+            "samplerCube": "TextureCube",
         }
         return type_mapping.get(vtype, vtype)
 

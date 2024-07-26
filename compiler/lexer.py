@@ -1,6 +1,8 @@
 import re
 
 TOKENS = [
+    ("COMMENT_SINGLE", r"//.*"),
+    ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("SHADER", r"shader"),
     ("INPUT", r"input"),
     ("OUTPUT", r"output"),
@@ -43,13 +45,15 @@ TOKENS = [
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("NOT", r"!"),
-    ('INCREMENT', r'\+\+'),
-    ('DECREMENT', r'\-\-'),
+    ("INCREMENT", r"\+\+"),
+    ("DECREMENT", r"\-\-"),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
     ("DOT", r"\."),
+    ("QUESTION", r"\?"),
+    ("COLON", r":"),
 ]
 
 KEYWORDS = {
@@ -102,24 +106,25 @@ class Lexer:
 
 
 if __name__ == "__main__":
-    code =""" shader main() {
-    input vec2 texCoord;
-    output vec4 fragColor;
+    code = """shader main {
+input vec2 texCoord;
+uniform sampler2D texture;
+uniform float blurAmount;
+output vec4 fragColor;
 
-    uniform sampler2D sceneTexture;
+void main() {
+    vec4 color = vec4(0.0);
+    vec2 texelSize = 1.0 / textureSize(texture, 0); // Assume texture is a 2D texture
 
-    void main() {
-        vec4 color = vec4(0.0);
-
-        for (float x = -1.0; x <= 1.0; x += 1.0) {
-            for (float y = -1.0; y <= 1.0; y += 1.0) {
-                vec2 offset = vec2(x, y) * 0.01;
-                color += texture(sceneTexture, texCoord + offset);
-            }
+    for (int x = -3; x <= 3; ++x) {
+        for (int y = -3; y <= 3; ++y) {
+            vec2 offset = vec2(float(x), float(y)) * texelSize * blurAmount;
+            color += texture2D(texture, texCoord + offset);
         }
-
-        fragColor = color;
     }
+
+    fragColor = color / 49.0; // Normalize by the number of samples
+}
 }
 """
     lexer = Lexer(code)
