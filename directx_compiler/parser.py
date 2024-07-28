@@ -95,6 +95,8 @@ class HLSLParser:
             self.eat(self.current_token[0])
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+            if self.current_token[0] == "SEMANTIC":
+                self.eat("SEMANTIC")
             params.append(VariableNode(vtype, name))
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
