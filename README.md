@@ -19,6 +19,8 @@ The translator takes CrossGL shader code and processes it through several stages
 4. **Optimization**: Various optimization passes are applied to ensure maximum performance.
 5. **Source output**: The final output is produced and ready for use.
 
+# Examples 
+https://github.com/CrossGL/demos/tree/main
 
  |Backends                           |
 | ----------------------------------- |
