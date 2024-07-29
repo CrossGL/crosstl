@@ -1,6 +1,6 @@
 # compiler/parser.py
 
-from compiler.ast import (
+from .ast import (
     ShaderNode,
     FunctionNode,
     AssignmentNode,
@@ -18,7 +18,7 @@ from compiler.ast import (
     FRAGMENTShaderNode,
 )
 
-from compiler.lexer import Lexer
+from .lexer import Lexer
 
 
 class Parser:
