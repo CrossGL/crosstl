@@ -320,8 +320,8 @@ class HLSLCodeGen:
 
 # Usage example
 if __name__ == "__main__":
-    from compiler.lexer import Lexer
-    from compiler.parser import Parser
+    from ..lexer import Lexer
+    from ..parser import Parser
 
     code = """shader main {
         
