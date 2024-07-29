@@ -1,8 +1,19 @@
-from .ast import *
-from .lexer import HLSLLexer
-
-from .ast import *
-from .lexer import HLSLLexer
+from .DirectxAst import (
+    AssignmentNode,
+    BinaryOpNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+)
+from .DirectxLexer import HLSLLexer
 
 
 class HLSLParser:

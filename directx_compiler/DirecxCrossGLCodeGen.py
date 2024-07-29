@@ -1,6 +1,6 @@
-from .ast import *
-from .parser import *
-from .lexer import *
+from .DirectxAst import *
+from .DirectxParser import *
+from .DirectxLexer import *
 
 
 class HLSLToCrossGLConverter:
