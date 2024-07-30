@@ -1,3 +1,3 @@
 from .DirectxLexer import HLSLLexer
 from .DirectxParser import HLSLParser
-from .DirecxCrossGLCodeGen import HLSLToCrossGLConverter
+from .DirectxCrossGLCodeGen import HLSLToCrossGLConverter

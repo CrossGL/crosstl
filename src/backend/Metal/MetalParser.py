@@ -15,7 +15,6 @@ class MetalParser:
 
     def eat(self, token_type):
         if self.current_token[0] == token_type:
-            print(f"Eating {self.current_token}")
             self.pos += 1
             self.current_token = (
                 self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
@@ -510,70 +509,3 @@ class MetalParser:
         coordinates = self.parse_expression()
         self.eat("RPAREN")
         return TextureSampleNode(texture, sampler, coordinates)
-
-
-# Usage example
-if __name__ == "__main__":
-    metal_code = """
-    // This is a single-line comment
-    /* This is a
-       multi-line comment */
-    #include <metal_stdlib>
-    using namespace metal;
-
-    struct VertexInput {
-        float3 position [[attribute(0)]];
-        float2 texCoord [[attribute(1)]];
-    };
-
-    struct FragmentInput {
-        float4 position [[position]];
-        float2 texCoord;
-    };
-
-    float4 calculateNormal(float3 position, float3 normal)
-    {
-        float4 result = float4(normal, 1.0);
-        return result;
-    }
-
-    vertex FragmentInput vertexShader(VertexInput input [[stage_in]])
-    {
-        FragmentInput output;
-        output.texCoord = input.texCoord;
-        for (int i = 0; i < 10; i = i + 1) {
-            output.position = float4(input.position, 1.0);
-        }
-        
-        if (output.position.x > 0.0) {
-            output.position.y = 0.0;
-        } else {
-            output.position.y = 1.0;
-        }
-        
-        output.position = float4(input.position, 1.0);
-        return output;
-    }
-
-    fragment float4 fragmentShader(FragmentInput input [[stage_in]])
-    {
-        float4 color = input.texCoord;
-        return float4(color.rgb, 1.0);
-    }
-
-    """
-
-    # First, create the lexer
-    lexer = MetalLexer(metal_code)
-
-    # Print all tokens
-    print("Tokens:")
-    for token in lexer.tokens:
-        print(token)
-
-    # Then, create the parser and parse the tokens
-    parser = MetalParser(lexer.tokens)
-    ast = parser.parse()
-
-    print("\nParsing completed successfully!")
-    print(ast)
