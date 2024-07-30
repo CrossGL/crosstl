@@ -117,24 +117,3 @@ class MetalLexer:
                 )
 
         self.tokens.append(("EOF", ""))
-
-
-if __name__ == "__main__":
-    metal_code = """
-    #include <metal_stdlib>
-    using namespace metal;
-
-    struct VertexInput {
-        float3 position [[attribute(0)]];
-        float2 texCoord [[attribute(1)]];
-    };
-
-    vertex float4 vertexShader(VertexInput input [[stage_in]])
-    {
-        return float4(input.position, 1.0);
-    }
-    """
-
-    lexer = MetalLexer(metal_code)
-    for token in lexer.tokens:
-        print(token)

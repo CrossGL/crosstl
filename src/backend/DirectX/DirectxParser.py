@@ -29,7 +29,6 @@ class HLSLParser:
 
     def eat(self, token_type):
         if self.current_token[0] == token_type:
-            print(f"Eating {self.current_token}")
             self.pos += 1
             self.current_token = (
                 self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
@@ -397,68 +396,3 @@ class HLSLParser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
-
-
-# Usage example
-if __name__ == "__main__":
-    hlsl_code = """
-    // This is a single-line comment
-    /* This is a
-       multi-line comment */
-    struct VS_INPUT {
-        float3 position : POSITION;
-        float2 texCoord : TEXCOORD0;
-    };
-
-    float4 calculateNormal(float3 position, float3 normal)
-        {
-            float4 result = float4(normal, 1.0);
-            return result;
-        }
-    
-    struct VS_OUTPUT {
-        float4 position : SV_POSITION;
-        float2 texCoord : TEXCOORD0;
-    };
-
-    VS_OUTPUT VSMain(VS_INPUT input)
-    {
-        VS_OUTPUT output;
-        output.texCoord = input.texCoord;
-        for (int i = 0; i < 10; i=i+1){
-            output.position = float4(input.position, 1.0);
-        }
-        
-        if (output.position.x > 0.0) {
-            output.position.y = 0.0;
-        } else {
-            output.position.y = 1.0;
-        }
-        
-        output.position = float4(input.position, 1.0);
-        return output;
-    }
-    
-    struct PS_OUTPUT {
-        float4 color : SV_TARGET;
-    };
-    
-    PS_OUTPUT PSMain(VS_OUTPUT input) : SV_TARGET
-    {
-        PS_OUTPUT output;
-        output.color = float4(1.0, 0.0, 0.0, 1.0);
-        return output;
-    }
-    
-    
-    
-    """
-
-    lexer = HLSLLexer(hlsl_code)
-    for token in lexer.tokens:
-        print(token)
-    parser = HLSLParser(lexer.tokens)
-    ast = parser.parse()
-
-    print("Parsing completed successfully!")
-    print(ast)

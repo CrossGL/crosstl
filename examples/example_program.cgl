@@ -1,8 +1,0 @@
-shader main {
-    input vec3 position;
-    output vec4 color;
-
-    void main() {
-        color = vec4(position, 1.0);
-    }
-}
