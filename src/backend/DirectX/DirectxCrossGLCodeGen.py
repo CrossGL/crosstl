@@ -1,9 +1,9 @@
-from .MetalAst import *
-from .MetalParser import *
-from .MetalLexer import *
+from .DirectxAst import *
+from .DirectxParser import *
+from .DirectxLexer import *
 
 
-class MetalToCrossGLConverter:
+class HLSLToCrossGLConverter:
     def __init__(self):
         self.vertex_inputs = []
         self.vertex_outputs = []
@@ -17,83 +17,64 @@ class MetalToCrossGLConverter:
             "int": "int",
         }
 
-    def generate(self, ast):
+    def convert(self, ast):
         self.process_structs(ast)
 
         code = "shader main {\n"
 
         # Generate vertex shader
-        vertex_func = next(
-            f
-            for f in ast.functions
-            if isinstance(f, FunctionNode) and f.qualifier == "vertex"
-        )
         code += "    // Vertex Shader\n"
         code += "    vertex {\n"
         code += self.generate_io_declarations("vertex")
         code += "\n"
-        code += self.generate_main_function(vertex_func)
+        code += self.generate_vertex_main(
+            next(f for f in ast.functions if f.name == "VSMain")
+        )
         code += "    }\n\n"
 
         # Generate custom functions
-        code += " \n"
         for func in ast.functions:
-            if isinstance(func, FunctionNode) and func.qualifier is None:
+            if func.name not in ["VSMain", "PSMain"]:
                 code += self.generate_function(func)
 
         # Generate fragment shader
-        fragment_func = next(
-            f
-            for f in ast.functions
-            if isinstance(f, FunctionNode) and f.qualifier == "fragment"
-        )
         code += "    // Fragment Shader\n"
         code += "    fragment {\n"
         code += self.generate_io_declarations("fragment")
         code += "\n"
-        code += self.generate_main_function(fragment_func)
+        code += self.generate_fragment_main(
+            next(f for f in ast.functions if f.name == "PSMain")
+        )
         code += "    }\n"
 
         code += "}\n"
         return code
 
     def process_structs(self, ast):
-        for node in ast.functions:
-            if isinstance(node, StructNode):
-                if node.name == "Vertex_INPUT":
-                    for member in node.members:
-                        self.vertex_inputs.append(
-                            (self.map_type(member.vtype), member.name)
-                        )
-                elif node.name == "Vertex_OUTPUT":
-                    for member in node.members:
-                        if member.name != "position":
-                            self.vertex_outputs.append(
-                                (self.map_type(member.vtype), member.name)
-                            )
-                elif node.name == "Fragment_INPUT":
-                    for member in node.members:
-                        self.fragment_inputs.append(
-                            (self.map_type(member.vtype), member.name)
-                        )
-                elif node.name == "Fragment_OUTPUT":
-                    for member in node.members:
-                        self.fragment_outputs.append(
-                            (self.map_type(member.vtype), member.name)
-                        )
+        if ast.input_struct and ast.input_struct.name == "Vertex_INPUT":
+            for member in ast.input_struct.members:
+                self.vertex_inputs.append((member.vtype, member.name))
+        if ast.output_struct and ast.output_struct.name == "Vertex_OUTPUT":
+            for member in ast.output_struct.members:
+                if member.name != "position":
+                    self.vertex_outputs.append((member.vtype, member.name))
+                    self.fragment_inputs.append((member.vtype, member.name))
+        if ast.output_struct and ast.output_struct.name == "Fragment_OUTPUT":
+            for member in ast.output_struct.members:
+                self.fragment_outputs.append((member.vtype, member.name))
 
     def generate_io_declarations(self, shader_type):
         code = ""
         if shader_type == "vertex":
             for type, name in self.vertex_inputs:
-                code += f"        input {type} {name};\n"
+                code += f"        input {self.map_type(type)} {name};\n"
             for type, name in self.vertex_outputs:
-                code += f"        output {type} {name};\n"
+                code += f"        output {self.map_type(type)} {name};\n"
         elif shader_type == "fragment":
             for type, name in self.fragment_inputs:
-                code += f"        input {type} {name};\n"
+                code += f"        input {self.map_type(type)} {name};\n"
             for type, name in self.fragment_outputs:
-                code += f"        output {type} {name};\n"
+                code += f"        output {self.map_type(type)} {name};\n"
         return code.rstrip()
 
     def generate_function(self, func):
@@ -103,7 +84,13 @@ class MetalToCrossGLConverter:
         code += "    }\n\n"
         return code
 
-    def generate_main_function(self, func):
+    def generate_vertex_main(self, func):
+        code = "        void main() {\n"
+        code += self.generate_function_body(func.body, indent=3, is_main=True)
+        code += "        }\n"
+        return code
+
+    def generate_fragment_main(self, func):
         code = "        void main() {\n"
         code += self.generate_function_body(func.body, indent=3, is_main=True)
         code += "        }\n"
@@ -112,12 +99,10 @@ class MetalToCrossGLConverter:
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""
         for stmt in body:
-            if isinstance(stmt, VariableNode) and stmt.name in ["output", "input"]:
-                continue
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-
-                code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                if not is_main:
+                    code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, ReturnNode):
@@ -132,14 +117,9 @@ class MetalToCrossGLConverter:
             is_main
             and isinstance(node.left, MemberAccessNode)
             and node.left.object == "output"
-            and node.left.member == "position"
         ):
-            return f"gl_Position = {rhs}"
-        if (
-            is_main
-            and isinstance(node.left, MemberAccessNode)
-            and node.left.object == "output"
-        ):
+            if node.left.member == "position":
+                return f"gl_Position = {rhs}"
             return f"{node.left.member} = {rhs}"
         return f"{lhs} = {rhs}"
 
@@ -148,12 +128,13 @@ class MetalToCrossGLConverter:
             return expr
         elif isinstance(expr, VariableNode):
             return f"{expr.vtype} {expr.name}"
-        elif isinstance(expr, AssignmentNode):
-            return self.generate_assignment(expr, is_main)
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
-            return f"{left} {expr.op} {right}"
+            return f"({left} {expr.op} {right})"
+        elif isinstance(expr, UnaryOpNode):
+            operand = self.generate_expression(expr.operand, is_main)
+            return f"({expr.operator}{operand})"
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
@@ -172,30 +153,27 @@ class MetalToCrossGLConverter:
         else:
             return str(expr)
 
-    def map_type(self, metal_type):
-        return self.type_map.get(metal_type, metal_type)
+    def map_type(self, hlsl_type):
+        return self.type_map.get(hlsl_type, hlsl_type)
 
 
 # Usage
 if __name__ == "__main__":
     code = """
-#include <metal_stdlib>
-using namespace metal;
-
 float perlinNoise(float2 p) {
     return fract((sin(dot(p, float2(12.9898, 78.233))) * 43758.5453));
 }
 
 struct Vertex_INPUT {
-    float3 position [[attribute(0)]];
+    float3 position : POSITION;
 };
 
 struct Vertex_OUTPUT {
-    float4 position [[position]];
-    float2 vUV;
+   float4 position : SV_POSITION;
+    float2 vUV : TEXCOORD0;
 };
 
-vertex Vertex_OUTPUT vertex_main(Vertex_INPUT input [[stage_in]]) {
+Vertex_OUTPUT VSMain(Vertex_INPUT input) {
     Vertex_OUTPUT output;
     output.vUV = (input.position.xy * 10.0);
     output.position = float4(input.position, 1.0);
@@ -203,14 +181,14 @@ vertex Vertex_OUTPUT vertex_main(Vertex_INPUT input [[stage_in]]) {
 }
 
 struct Fragment_INPUT {
-    float2 vUV [[stage_in]];
+    float2 vUV : TEXCOORD0;
 };
 
 struct Fragment_OUTPUT {
-    float4 fragColor [[color(0)]];
+    float4 fragColor : SV_TARGET0;
 };
 
-fragment Fragment_OUTPUT fragment_main(Fragment_INPUT input [[stage_in]]) {
+Fragment_OUTPUT PSMain(Fragment_INPUT input) {
     Fragment_OUTPUT output;
     float noise = perlinNoise(input.vUV);
     float height = (noise * 10.0);
@@ -219,13 +197,14 @@ fragment Fragment_OUTPUT fragment_main(Fragment_INPUT input [[stage_in]]) {
     return output;
 }
 
+    
     """
 
-    lexer = MetalLexer(code)
-    parser = MetalParser(lexer.tokens)
+    lexer = HLSLLexer(code)
+    parser = HLSLParser(lexer.tokens)
     ast = parser.parse()
     print("Parsing completed successfully!")
     print(ast)
-    codegen = MetalToCrossGLConverter()
-    metal_code = codegen.generate(ast)
-    print(metal_code)
+    codegen = HLSLToCrossGLConverter()
+    hlsl_code = codegen.convert(ast)
+    print(hlsl_code)
