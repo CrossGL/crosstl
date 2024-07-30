@@ -20,6 +20,7 @@ class HLSLCodeGen:
         self.current_shader = None
         self.vertex_item = None
         self.fragment_item = None
+        self.gl_position = False
         self.type_mapping = {
             "void": "void",
             "vec2": "float2",
@@ -81,6 +82,7 @@ class HLSLCodeGen:
         self.vertex_item = node.vertex_section
         if self.vertex_item:
             shader_type = "vertex"
+            self.check_gl_position(self.vertex_item)
             if self.vertex_item.inputs:
                 code += "struct Vertex_INPUT {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.inputs):
@@ -92,10 +94,9 @@ class HLSLCodeGen:
             if self.vertex_item.outputs:
                 code += "struct Vertex_OUTPUT {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.outputs):
-                    if i >= 1:
-                        code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i-1};\n"
-                    else:
-                        code += f"    {self.map_type(vtype)} {name} : SV_POSITION;\n"
+                    if self.gl_position:
+                        code += f"   float4 position : SV_POSITION;\n"
+                    code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
                 code += "};\n\n"
             code += (
                 f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
@@ -120,6 +121,14 @@ class HLSLCodeGen:
             )
 
         return code
+
+    def check_gl_position(self, node):
+        for function_node in self.vertex_item.functions:
+            for stmt in function_node.body:
+                vb_name = self.generate_statement(stmt)
+                vb_left = vb_name.split("=")[0].strip()
+                if vb_left == "output.position":
+                    self.gl_position = True
 
     def generate_function(self, node, shader_type):
         code = ""
@@ -208,6 +217,8 @@ class HLSLCodeGen:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
         else:
             lhs = self.generate_expression(node.name, shader_type)
+            if lhs == "gl_Position":
+                return f"output.position = {self.generate_expression(node.value, shader_type)}"
             return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
 
     def generate_if(self, node, indent, shader_type=None):

@@ -34,6 +34,7 @@ class MetalCodeGen:
         self.current_shader = None
         self.vertex_item = None
         self.fragment_item = None
+        self.gl_position = False
         self.char_mapper = CharTypeMapper()
         self.type_mapping = {
             # Scalar Types
@@ -127,6 +128,7 @@ class MetalCodeGen:
         self.vertex_item = node.vertex_section
         if self.vertex_item:
             shader_type = "vertex"
+            self.check_gl_position(self.vertex_item)
             if self.vertex_item.inputs:
                 code += "struct Vertex_INPUT {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.inputs):
@@ -135,10 +137,9 @@ class MetalCodeGen:
             if self.vertex_item.outputs:
                 code += "struct Vertex_OUTPUT {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.outputs):
-                    if i == 0:
-                        code += f"    {self.map_type(vtype)} {name} [[position]];\n"
-                    else:
-                        code += f"    {self.map_type(vtype)} {name};\n"
+                    if self.gl_position:
+                        code += f"    float4 position [[position]];\n"
+                    code += f"    {self.map_type(vtype)} {name};\n"
                 code += "};\n\n"
             code += (
                 f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
@@ -167,6 +168,14 @@ class MetalCodeGen:
 
         return code
 
+    def check_gl_position(self, node):
+        for function_node in self.vertex_item.functions:
+            for stmt in function_node.body:
+                vb_name = self.generate_statement(stmt)
+                vb_left = vb_name.split("=")[0].strip()
+                if vb_left == "output.position":
+                    self.gl_position = True
+
     def generate_function(self, node, shader_type):
         code = ""
         if shader_type == "vertex":
@@ -181,7 +190,7 @@ class MetalCodeGen:
                     )
                     return_type = self.map_type(function_node.return_type)
 
-                code += f"{return_type} {function_node.name}({params}) {{\n"
+                code += f"{return_type} vertex_main({params}) {{\n"
                 if function_node.name == "main":
                     code += "    Vertex_OUTPUT output;\n"
                 for stmt in function_node.body:
@@ -201,7 +210,7 @@ class MetalCodeGen:
                     )
                     return_type = self.map_type(function_node.return_type)
 
-                code += f"{return_type} {function_node.name}({params}) {{\n"
+                code += f"{return_type} fragment_main({params}) {{\n"
                 if function_node.name == "main":
                     code += "    Fragment_OUTPUT output;\n"
                 for stmt in function_node.body:
@@ -254,6 +263,8 @@ class MetalCodeGen:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
         else:
             lhs = self.generate_expression(node.name, shader_type)
+            if lhs == "gl_Position":
+                return f"output.position = {self.generate_expression(node.value, shader_type)}"
             return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
 
     def generate_if(self, node, indent, shader_type=None):
