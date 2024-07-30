@@ -46,6 +46,7 @@ class GLSLCodeGen:
         # Generate vertex shader section
         self.vertex_item = node.vertex_section
         if self.vertex_item:
+            code += "// Vertex shader\n\n"
             shader_type = "vertex"
             for i, (vtype, name) in enumerate(self.vertex_item.inputs):
                 code += f"layout(location = {i}) in {self.map_type(vtype)} {name};\n"
@@ -62,6 +63,7 @@ class GLSLCodeGen:
         # Generate fragment shader section
         self.fragment_item = node.fragment_section
         if self.fragment_item:
+            code += "\n// Fragment shader\n\n"
             shader_type = "fragment"
             for i, (vtype, name) in enumerate(self.fragment_item.inputs):
                 if i == 0:
