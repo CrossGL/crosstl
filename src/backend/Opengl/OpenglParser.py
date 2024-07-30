@@ -1,4 +1,4 @@
-from .OpenglParser import (
+from .OpenglAst import (
     LayoutNode,
     ShaderNode,
     FunctionNode,
@@ -17,7 +17,7 @@ from .OpenglParser import (
     FRAGMENTShaderNode,
     VersionDirectiveNode,
 )
-from OpenglLexer import Lexer
+from .OpenglLexer import Lexer
 
 class Parser:
     def __init__(self, tokens):
@@ -28,7 +28,7 @@ class Parser:
 
 
     def skip_comments(self):
-        while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
+        while self.current_token[0] in ["COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
@@ -81,7 +81,6 @@ class Parser:
             
             if self.current_token[0] == "IN":
                 self.eat("IN")
-                current_section = "VERTEX"
                 dtype = self.parse_type()
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
@@ -89,7 +88,6 @@ class Parser:
                 return LayoutNode(section=current_section, location_number=location_number, dtype=dtype, name=name)
             elif self.current_token[0] == "OUT":
                 self.eat("OUT")
-                current_section = "FRAGMENT"
                 dtype = self.parse_type()
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
@@ -108,18 +106,29 @@ class Parser:
         current_section = None
 
         while self.current_token[0] != "EOF":
+            if self.current_token[0] == "COMMENT_SINGLE":
+                comment_content = self.current_token[1].strip().lower()  # Normalize content
+                print(f"Comment content: '{comment_content}'")
+
+                if "vertex shader" in comment_content:
+                    current_section = "VERTEX"
+                    print("Switched to VERTEX section")
+                elif "fragment shader" in comment_content:
+                    current_section = "FRAGMENT"
+                    print("Switched to FRAGMENT section")
+                else:
+                    current_section = "VERTEX"
+                    print("Defaulting to VERTEX section")
+                    
+                self.eat("COMMENT_SINGLE")
 
             if self.current_token[0] == "LAYOUT":
                 self.skip_comments()
                 layout_node = self.parse_layout(current_section)
-                if layout_node.section == "VERTEX":
-                    current_section = "VERTEX"
+                if current_section == "VERTEX":
                     vertex_section.layout_qualifiers.append(layout_node)
-                elif layout_node.section == "FRAGMENT":
-                    current_section = "FRAGMENT"
+                elif current_section == "FRAGMENT":
                     fragment_section.layout_qualifiers.append(layout_node)
-                else:
-                    raise SyntaxError(f"Unknown layout section: {layout_node.section}")
 
             elif self.current_token[0] == "IN":
                 self.skip_comments()
@@ -144,8 +153,11 @@ class Parser:
             elif self.current_token[0] == "UNIFORM":
                 self.skip_comments()
                 uniforms.extend(self.parse_uniforms())
+            
+            elif self.current_token[0] == "VERSION":
+                self.parse_version_directive()
 
-            elif self.current_token[0] == "VOID":
+            elif self.current_token[0] in ["VOID", "FLOAT", "VECTOR"]:
                 self.skip_comments()
                 if current_section:
                     function_node = self.parse_function()
@@ -155,7 +167,6 @@ class Parser:
                         fragment_section.functions.append(function_node)
                 else:
                     raise SyntaxError("Function found outside of shader section")
-
             elif self.current_token[0] == "LBRACE":
                 if current_section is None:
                     raise SyntaxError("LBRACE encountered outside of shader section")
@@ -175,9 +186,9 @@ class Parser:
                     fragment_section.functions.extend(section_content[4])
                 self.eat("RBRACE")
                 current_section = None
-
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
+
         #print(f"Final vertex section: {vertex_section}")
         #print(f"Final fragment section: {fragment_section}")
 
@@ -188,11 +199,9 @@ class Parser:
             uniforms=uniforms,
             vertex_section=vertex_section,
             fragment_section=fragment_section,
-            functions=[]  # No top-level functions in the root shader node
+            functions=[]
         )
 
-
-    
     def parse_shader_section(self, current_section):
         inputs = []
         outputs = []
@@ -203,7 +212,6 @@ class Parser:
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-
             if self.current_token[0] == "LAYOUT":
                 self.skip_comments()
                 layout_node = self.parse_layout(current_section)
@@ -212,23 +220,22 @@ class Parser:
             elif self.current_token[0] == "IN":
                 self.skip_comments()
                 inputs.extend(self.parse_inputs())
+                #print(f"Inputs collected: {inputs}")
 
             elif self.current_token[0] == "OUT":
                 self.skip_comments()
                 outputs.extend(self.parse_outputs())
+                #print(f"Outputs collected: {outputs}")
 
             elif self.current_token[0] == "UNIFORM":
                 self.skip_comments()
                 uniforms.extend(self.parse_uniforms())
+                #print(f"Uniforms collected: {uniforms}")
 
-            elif self.current_token[0] == "VOID":
+            elif self.current_token[0] in ["VOID", "FLOAT", "VECTOR"]:
                 self.skip_comments()
                 functions.append(self.parse_function())
-
-            elif self.current_token[0] == "IDENTIFIER":
-                self.skip_comments()
-                if self.tokens[self.pos + 1][0] == "LPAREN":
-                    functions.append(self.parse_function_call(self.current_token[1]))
+                #print(f"Functions collected: {functions}")
 
             elif self.current_token[0] == "RBRACE":
                 self.eat("RBRACE")
@@ -238,8 +245,6 @@ class Parser:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]} in shader section")
 
         raise SyntaxError("Unexpected end of input in shader section")
-
-
 
 
     def parse_inputs(self):
@@ -414,7 +419,7 @@ class Parser:
         if self.current_token[0] == "VOID":
             self.eat("VOID")
             return "void"
-        elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX", "BOOLEAN"]:
+        elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX", "BOOLEAN","SAMPLER2D"]:
             dtype = self.current_token[1]
             self.eat(self.current_token[0])
             return dtype
@@ -620,21 +625,39 @@ class Parser:
 
 if __name__ == "__main__":
     code = """
-    #version 330 core
+#version 330 core
 
-layout(location = 0) in vec3 position;
-layout(location = 1) in vec3 color;
+// Vertex Shader
+layout (location = 0) in vec3 position;
+layout (location = 1) in vec2 texCoord;
 
-out vec3 fragColor;
+out vec2 fragTexCoord;
 
-void main()
-{
+void main() {
     gl_Position = vec4(position, 1.0);
-    fragColor = color;
+    fragTexCoord = texCoord;
+}
+
+// Fragment Shader
+in vec2 fragTexCoord;
+
+out vec4 color;
+
+uniform sampler2D textureSampler;
+
+void main() {
+    color = texture(textureSampler, fragTexCoord);
 }
 
     """
-    lexer = Lexer(code)
+    lexer = Lexer(code) 
     parser = Parser(lexer.tokens)
+    for token in lexer.tokens:
+        print(token)
+    parser = Parser(lexer.tokens)
+    ast = parser.parse()
+
+    print("Parsing completed successfully!")
+    #print(ast)
     #print("Parsed AST:")
     #print(parser.parse())

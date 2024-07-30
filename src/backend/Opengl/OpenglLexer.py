@@ -122,8 +122,9 @@ if __name__ == "__main__":
     code = """
 #version 330 core
 
-layout(location = 0) in vec3 position;
-layout(location = 1) in vec2 texCoord;
+// Vertex Shader
+layout (location = 0) in vec3 position;
+layout (location = 1) in vec2 texCoord;
 
 out vec2 fragTexCoord;
 
@@ -131,6 +132,18 @@ void main() {
     gl_Position = vec4(position, 1.0);
     fragTexCoord = texCoord;
 }
+
+// Fragment Shader
+in vec2 fragTexCoord;
+
+out vec4 color;
+
+uniform sampler2D textureSampler;
+
+void main() {
+    color = texture(textureSampler, fragTexCoord);
+}
+
 """
     lexer = Lexer(code)
     for token in lexer.tokens:

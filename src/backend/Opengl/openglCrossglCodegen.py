@@ -38,6 +38,8 @@ class CrossglCodeGen:
                 code += f"        input {self.map_type(vtype)} {name};\n"
             for vtype, name in self.vertex_item.outputs:
                 code += f"        output {self.map_type(vtype)} {name};\n"
+                code += "\n"
+            code += self.generate_uniforms() + "\n"
             code += "\n"
             
             # Print the functions to check if they're there
@@ -59,6 +61,8 @@ class CrossglCodeGen:
                 code += f"        input {self.map_type(vtype)} {name};\n"
             for vtype, name in self.fragment_item.outputs:
                 code += f"        output {self.map_type(vtype)} {name};\n"
+                code += "\n"
+            code += self.generate_uniforms() + "\n"
             code += "\n"
             
             # Print the functions to check if they're there
@@ -73,6 +77,12 @@ class CrossglCodeGen:
         code += "}\n"
 
         return code
+
+    def generate_uniforms(self):
+        uniform_lines = []
+        for uniform in self.uniforms:
+            uniform_lines.append(f"        {uniform};")
+        return "\n".join(uniform_lines)
 
 
     def generate_layouts(self, layouts):
@@ -196,5 +206,45 @@ class CrossglCodeGen:
         return op_map.get(op, op)
 
 
+if __name__ == "__main__":
+    code = """
+#version 450
+
+// Vertex Shader
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec2 inTexCoord;
+
+out vec2 fragTexCoord;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+void main() {
+    gl_Position = projection * view * model * vec4(inPosition, 1.0);
+    fragTexCoord = inTexCoord;
+}
+
+// Fragment Shader
+in vec2 fragTexCoord;
+out vec4 color;
+
+uniform sampler2D textureSampler;
+
+void main() {
+    color = texture(textureSampler, fragTexCoord);
+}
+
+
+"""
+
+    lexer = Lexer(code)
+    parser = Parser(lexer.tokens)
+    ast = parser.parse()
+    print("Parsing completed successfully!")
+    #print(ast)
+    codegen = CrossglCodeGen()
+    cross_code = codegen.generate(ast)
+    print(cross_code)
 
 
