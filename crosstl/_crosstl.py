@@ -5,18 +5,17 @@ from .src.translator.codegen import directx_codegen, metal_codegen, opengl_codeg
 from .src.translator.ast import ASTNode
 from .src.backend.DirectX import *
 from .src.backend.Metal import *
-#from .src.backend.Opengl import *
+from .src.backend.Opengl import *
 
-def translate(file_path: str, backend: str = "cgl") -> str:
+
+def translate(file_path: str, backend: str = "crossgl") -> str:
     backend = backend.lower()
 
-    with open(file_path, 'r') as file:
+    with open(file_path, "r") as file:
         shader_code = file.read()
 
     # Determine the input shader type based on the file extension
     if file_path.endswith(".cgl"):
-        from .src.translator.lexer import Lexer
-        from .src.translator.parser import Parser
         lexer = Lexer(shader_code)
         parser = Parser(lexer.tokens)
     elif file_path.endswith(".hlsl"):
@@ -26,9 +25,8 @@ def translate(file_path: str, backend: str = "cgl") -> str:
         lexer = MetalLexer(shader_code)
         parser = MetalParser(lexer.tokens)
     elif file_path.endswith(".glsl"):
-        from .src.backend.Opengl import Lexer , Parser
-        lexer =  Lexer(shader_code)
-        parser = Parser(lexer.tokens)
+        lexer = GLSLLexer(shader_code)
+        parser = GLSLParser(lexer.tokens)
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -53,10 +51,11 @@ def translate(file_path: str, backend: str = "cgl") -> str:
             elif file_path.endswith(".metal"):
                 codegen = MetalToCrossGLConverter()
             elif file_path.endswith(".glsl"):
-                from .src.backend.Opengl import CrossglCodeGen as GLSLToCrossGLConverter
                 codegen = GLSLToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
             return codegen.generate(ast)
         else:
-            raise ValueError(f"Unsupported translation scenario: {file_path} to {backend}")
+            raise ValueError(
+                f"Unsupported translation scenario: {file_path} to {backend}"
+            )

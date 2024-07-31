@@ -17,7 +17,7 @@ class HLSLToCrossGLConverter:
             "int": "int",
         }
 
-    def convert(self, ast):
+    def generate(self, ast):
         self.process_structs(ast)
 
         code = "shader main {\n"

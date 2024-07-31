@@ -17,10 +17,10 @@ from .OpenglAst import (
     FRAGMENTShaderNode,
     VersionDirectiveNode,
 )
-from .OpenglLexer import Lexer
+from .OpenglLexer import *
 
 
-class Parser:
+class GLSLParser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0

@@ -3,7 +3,7 @@ from .OpenglParser import *
 from .OpenglLexer import *
 
 
-class CrossglCodeGen:
+class GLSLToCrossGLConverter:
     def __init__(self):
         self.current_shader = None
         self.vertex_item = None
