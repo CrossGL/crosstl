@@ -1,0 +1,10 @@
+include README.md
+include LICENSE
+include src/backend/DirectX/*.py
+include src/backend/Metal/*.py
+include src/backend/Opengl/*.py
+include src/translator/*.py
+include src/translator/codegen/*.py
+include crosstl.py
+include crosstl
+include corsstl/src/
