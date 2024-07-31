@@ -127,6 +127,7 @@ class Parser:
                 comment_content = (
                     self.current_token[1].strip().lower()
                 )  # Normalize content
+
                 if "vertex shader" in comment_content:
                     current_section = "VERTEX"
                 elif "fragment shader" in comment_content:
