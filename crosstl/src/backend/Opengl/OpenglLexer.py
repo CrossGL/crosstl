@@ -20,9 +20,9 @@ TOKENS = [
     ("INT", r"int"),
     ("SAMPLER2D", r"sampler2D"),
     ("PRE_INCREMENT", r"\+\+(?=\w)"),  # Lookahead to match pre-increment
-    ("PRE_DECREMENT", r"--(?=\w)"),    # Lookahead to match pre-decrement
+    ("PRE_DECREMENT", r"--(?=\w)"),  # Lookahead to match pre-decrement
     ("POST_INCREMENT", r"(?<=\w)\+\+"),  # Lookbehind to match post-increment
-    ("POST_DECREMENT", r"(?<=\w)--"),    # Lookbehind to match post-decrement
+    ("POST_DECREMENT", r"(?<=\w)--"),  # Lookbehind to match post-decrement
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
     ("LBRACE", r"\{"),
     ("RBRACE", r"\}"),
@@ -116,35 +116,3 @@ class Lexer:
                 )
 
         self.tokens.append(("EOF", None))  # End of file token
-
-
-if __name__ == "__main__":
-    code = """
-#version 330 core
-
-// Vertex Shader
-layout (location = 0) in vec3 position;
-layout (location = 1) in vec2 texCoord;
-
-out vec2 fragTexCoord;
-
-void main() {
-    gl_Position = vec4(position, 1.0);
-    fragTexCoord = texCoord;
-}
-
-// Fragment Shader
-in vec2 fragTexCoord;
-
-out vec4 color;
-
-uniform sampler2D textureSampler;
-
-void main() {
-    color = texture(textureSampler, fragTexCoord);
-}
-
-"""
-    lexer = Lexer(code)
-    for token in lexer.tokens:
-        print(token)

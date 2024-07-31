@@ -9,6 +9,7 @@ from ..ast import (
     ForNode,
     VariableNode,
     FunctionCallNode,
+    TernaryOpNode,
     MemberAccessNode,
 )
 
@@ -327,6 +328,12 @@ class MetalCodeGen:
                 )
                 func_name = self.translate_expression(expr.name, shader_type)
                 return f"{func_name}({args})"
+
+        elif isinstance(expr, UnaryOpNode):
+            return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, shader_type)}"
+
+        elif isinstance(expr, TernaryOpNode):
+            return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"
         elif isinstance(expr, MemberAccessNode):
             return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
         else:

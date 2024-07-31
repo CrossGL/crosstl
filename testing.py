@@ -1,4 +1,5 @@
 import unittest
+import os
 from src.translator.lexer import Lexer
 from src.translator.parser import Parser
 from src.translator.codegen import (
@@ -31,50 +32,12 @@ def print_ast(node, indent=0):
 
 
 class TestCodeGeneration(unittest.TestCase):
+    os.makedirs("test", exist_ok=True)
+
     def setUp(self):
-        self.code = """
+        with open("examples/PerlinNoise.cgl", "r") as f:
+            self.code = f.read()
 
-shader PerlinNoise {
-
-// 1. Perlin Noise Terrain Generation.
-
-vertex {
-
-input vec3 position;
-output vec2 vUV;
-
-void main()
-{
-    vUV = position.xy * 10.0;
-    gl_Position = vec4(position, 1.0);
-}
-
-}
-
-float perlinNoise(vec2 p) {
-    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-}
-
-fragment {
-
-input vec2 vUV;
-output vec4 fragColor;
-
-
-void main()
-{
-    float noise = perlinNoise(vUV);
-    float height = noise * 10.0;
-    vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
-    fragColor = vec4(color, 1.0);
-}
-
-
-}
-
-}
-
-"""
         lexer = Lexer(self.code)
         parser = Parser(lexer.tokens)
         self.ast = parser.parse()
@@ -85,7 +48,8 @@ void main()
         codegen = opengl_codegen.GLSLCodeGen()
         opengl_code = codegen.generate(self.ast)
         print(opengl_code)
-
+        with open("test/test.glsl", "w") as f:
+            f.write(opengl_code)
         print("Success: OpenGL codegen test passed")
         print("\n------------------\n")
 
@@ -93,14 +57,16 @@ void main()
         codegen = metal_codegen.MetalCodeGen()
         metal_code = codegen.generate(self.ast)
         print(metal_code)
-
+        with open("test/test.metal", "w") as f:
+            f.write(metal_code)
         print("Success: Metal codegen test passed")
         print("\n------------------\n")
 
     def test_directx_codegen(self):
         codegen = directx_codegen.HLSLCodeGen()
         hlsl_code = codegen.generate(self.ast)
-
+        with open("test/test.hlsl", "w") as f:
+            f.write(hlsl_code)
         print(hlsl_code)
 
         print("Success: DirectX codegen test passed")

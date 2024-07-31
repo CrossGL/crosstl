@@ -133,8 +133,8 @@ class HLSLToCrossGLConverter:
             right = self.generate_expression(expr.right, is_main)
             return f"({left} {expr.op} {right})"
         elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.operand, is_main)
-            return f"({expr.operator}{operand})"
+            operand = self.generate_expression(expr.op, is_main)
+            return f"({expr.op}{operand})"
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
