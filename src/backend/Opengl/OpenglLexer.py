@@ -20,9 +20,9 @@ TOKENS = [
     ("INT", r"int"),
     ("SAMPLER2D", r"sampler2D"),
     ("PRE_INCREMENT", r"\+\+(?=\w)"),  # Lookahead to match pre-increment
-    ("PRE_DECREMENT", r"--(?=\w)"),    # Lookahead to match pre-decrement
+    ("PRE_DECREMENT", r"--(?=\w)"),  # Lookahead to match pre-decrement
     ("POST_INCREMENT", r"(?<=\w)\+\+"),  # Lookbehind to match post-increment
-    ("POST_DECREMENT", r"(?<=\w)--"),    # Lookbehind to match post-decrement
+    ("POST_DECREMENT", r"(?<=\w)--"),  # Lookbehind to match post-decrement
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
     ("LBRACE", r"\{"),
     ("RBRACE", r"\}"),

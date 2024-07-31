@@ -2,6 +2,7 @@ from .OpenglAst import *
 from .OpenglParser import *
 from .OpenglLexer import *
 
+
 class CrossglCodeGen:
     def __init__(self):
         self.current_shader = None
@@ -41,9 +42,9 @@ class CrossglCodeGen:
                 code += "\n"
             code += self.generate_uniforms() + "\n"
             code += "\n"
-            
+
             # Print the functions to check if they're there
-            #print(f"Vertex functions: {self.vertex_item.functions}")
+            # print(f"Vertex functions: {self.vertex_item.functions}")
 
             # Generate functions
             code += self.generate_functions(self.vertex_item.functions, "vertex")
@@ -53,7 +54,9 @@ class CrossglCodeGen:
 
         # Generate fragment shader section if present
         self.fragment_item = node.fragment_section
-        if self.fragment_item and (self.fragment_item.layout_qualifiers or self.fragment_item.functions):
+        if self.fragment_item and (
+            self.fragment_item.layout_qualifiers or self.fragment_item.functions
+        ):
             code += "    fragment {\n"
             code += self.generate_layouts(self.fragment_item.layout_qualifiers)
             # Process inputs and outputs
@@ -64,9 +67,9 @@ class CrossglCodeGen:
                 code += "\n"
             code += self.generate_uniforms() + "\n"
             code += "\n"
-            
+
             # Print the functions to check if they're there
-           # print(f"Fragment functions: {self.fragment_item.functions}")
+            # print(f"Fragment functions: {self.fragment_item.functions}")
 
             # Generate functions
             code += self.generate_functions(self.fragment_item.functions, "fragment")
@@ -84,7 +87,6 @@ class CrossglCodeGen:
             uniform_lines.append(f"        {uniform};")
         return "\n".join(uniform_lines)
 
-
     def generate_layouts(self, layouts):
         code = ""
         for layout in layouts:
@@ -96,7 +98,9 @@ class CrossglCodeGen:
 
         if shader_type in ["vertex", "fragment"]:
             for function_node in functions:
-                print(f"Function: {function_node.name}, Return Type: {function_node.return_type}, Params: {function_node.params}")
+                print(
+                    f"Function: {function_node.name}, Return Type: {function_node.return_type}, Params: {function_node.params}"
+                )
                 # Generate parameter list
                 params = ", ".join(
                     f"{self.map_type(param[0])} {param[1]}"
@@ -112,7 +116,11 @@ class CrossglCodeGen:
 
         return code
 
-    def generate_statement(self, stmt, indent=0,):
+    def generate_statement(
+        self,
+        stmt,
+        indent=0,
+    ):
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
             return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
@@ -180,11 +188,11 @@ class CrossglCodeGen:
 
     def map_type(self, vtype):
         type_map = {
-            'vec3': 'vec3',
-            'vec4': 'vec4',
-            'float': 'float',
-            'int': 'int',
-            'bool': 'bool',
+            "vec3": "vec3",
+            "vec4": "vec4",
+            "float": "float",
+            "int": "int",
+            "bool": "bool",
         }
         return type_map.get(vtype, vtype)
 
@@ -242,9 +250,7 @@ void main() {
     parser = Parser(lexer.tokens)
     ast = parser.parse()
     print("Parsing completed successfully!")
-    #print(ast)
+    # print(ast)
     codegen = CrossglCodeGen()
     cross_code = codegen.generate(ast)
     print(cross_code)
-
-
