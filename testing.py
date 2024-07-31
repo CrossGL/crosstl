@@ -1,14 +1,14 @@
 import unittest
 import os
-from crosstl.src.translator.lexer import Lexer
-from crosstl.src.translator.parser import Parser
-from crosstl.src.translator.codegen import (
+from .src.translator.lexer import Lexer
+from .src.translator.parser import Parser
+from .src.translator.codegen import (
     directx_codegen,
     metal_codegen,
     vulkan_codegen,
     opengl_codegen,
 )
-from crosstl.src.translator.ast import ASTNode
+from .src.translator.ast import ASTNode
 import re
 
 
