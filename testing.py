@@ -1,14 +1,14 @@
 import unittest
 import os
-from src.translator.lexer import Lexer
-from src.translator.parser import Parser
-from src.translator.codegen import (
+from .src.translator.lexer import Lexer
+from .src.translator.parser import Parser
+from .src.translator.codegen import (
     directx_codegen,
     metal_codegen,
     vulkan_codegen,
     opengl_codegen,
 )
-from src.translator.ast import ASTNode
+from .src.translator.ast import ASTNode
 import re
 
 
