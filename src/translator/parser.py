@@ -33,7 +33,7 @@ class Parser:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
-
+        print(f"eat: {self.current_token[0]}, {self.current_token[1]}")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -365,7 +365,9 @@ class Parser:
     def parse_variable_declaration(self, type_name):
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-
+        if self.current_token[0] == "DOT":
+            self.eat("DOT")
+            self.eat("IDENTIFIER")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
