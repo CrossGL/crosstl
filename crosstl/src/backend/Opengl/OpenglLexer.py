@@ -78,7 +78,7 @@ KEYWORDS = {
 }
 
 
-class Lexer:
+class GLSLLexer:
     def __init__(self, code):
         self.code = code
         self.tokens = []

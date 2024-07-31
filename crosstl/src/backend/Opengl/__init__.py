@@ -1,3 +1,3 @@
-from .OpenglLexer import Lexer
-from .OpenglParser import Parser
-from .openglCrossglCodegen import CrossglCodeGen
+from .OpenglLexer import *
+from .OpenglParser import *
+from .openglCrossglCodegen import *
