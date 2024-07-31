@@ -35,7 +35,7 @@ class TestCodeGeneration(unittest.TestCase):
     os.makedirs("test", exist_ok=True)
 
     def setUp(self):
-        with open("test/test.cgl", "r") as f:
+        with open("examples/PerlinNoise.cgl", "r") as f:
             self.code = f.read()
 
         lexer = Lexer(self.code)
