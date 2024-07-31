@@ -1,4 +1,5 @@
 import unittest
+import os
 from src.translator.lexer import Lexer
 from src.translator.parser import Parser
 from src.translator.codegen import (
@@ -31,8 +32,10 @@ def print_ast(node, indent=0):
 
 
 class TestCodeGeneration(unittest.TestCase):
+    os.makedirs("test", exist_ok=True)
+
     def setUp(self):
-        with open("test/test.cgl", "r") as f:
+        with open("examples/PerlinNoise.cgl", "r") as f:
             self.code = f.read()
 
         lexer = Lexer(self.code)
