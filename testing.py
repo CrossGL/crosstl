@@ -1,14 +1,14 @@
 import unittest
 import os
-from src.translator.lexer import Lexer
-from src.translator.parser import Parser
-from src.translator.codegen import (
+from crosstl.src.translator.lexer import Lexer
+from crosstl.src.translator.parser import Parser
+from crosstl.src.translator.codegen import (
     directx_codegen,
     metal_codegen,
     vulkan_codegen,
     opengl_codegen,
 )
-from src.translator.ast import ASTNode
+from crosstl.src.translator.ast import ASTNode
 import re
 
 
@@ -35,7 +35,7 @@ class TestCodeGeneration(unittest.TestCase):
     os.makedirs("test", exist_ok=True)
 
     def setUp(self):
-        with open("examples/PerlinNoise.cgl", "r") as f:
+        with open("test/test.cgl", "r") as f:
             self.code = f.read()
 
         lexer = Lexer(self.code)
