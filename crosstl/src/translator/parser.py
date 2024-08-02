@@ -527,5 +527,3 @@ class Parser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
-
-

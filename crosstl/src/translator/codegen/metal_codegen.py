@@ -385,5 +385,3 @@ class MetalCodeGen:
             "OR": "||",
         }
         return op_map.get(op, op)
-
-

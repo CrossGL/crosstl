@@ -107,4 +107,3 @@ class Lexer:
                 )
 
         self.tokens.append(("EOF", None))  # End of file token
-

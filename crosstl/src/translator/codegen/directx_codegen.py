@@ -336,4 +336,3 @@ class HLSLCodeGen:
             "OR": "||",
         }
         return op_map.get(op, op)
-
