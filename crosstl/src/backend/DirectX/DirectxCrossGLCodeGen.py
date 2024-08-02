@@ -22,6 +22,11 @@ class HLSLToCrossGLConverter:
 
         code = "shader main {\n"
 
+        # Generate custom functions
+        for func in ast.functions:
+            if func.name not in ["VSMain", "PSMain"]:
+                code += self.generate_function(func)
+
         # Generate vertex shader
         code += "    // Vertex Shader\n"
         code += "    vertex {\n"
@@ -31,11 +36,6 @@ class HLSLToCrossGLConverter:
             next(f for f in ast.functions if f.name == "VSMain")
         )
         code += "    }\n\n"
-
-        # Generate custom functions
-        for func in ast.functions:
-            if func.name not in ["VSMain", "PSMain"]:
-                code += self.generate_function(func)
 
         # Generate fragment shader
         code += "    // Fragment Shader\n"
@@ -51,16 +51,19 @@ class HLSLToCrossGLConverter:
         return code
 
     def process_structs(self, ast):
-        if ast.input_struct and ast.input_struct.name == "Vertex_INPUT":
-            for member in ast.input_struct.members:
+        if ast.vsinput_struct:
+            for member in ast.vsinput_struct.members:
                 self.vertex_inputs.append((member.vtype, member.name))
-        if ast.output_struct and ast.output_struct.name == "Vertex_OUTPUT":
-            for member in ast.output_struct.members:
+        if ast.vsoutput_struct:
+            for member in ast.vsoutput_struct.members:
                 if member.name != "position":
                     self.vertex_outputs.append((member.vtype, member.name))
-                    self.fragment_inputs.append((member.vtype, member.name))
-        if ast.output_struct and ast.output_struct.name == "Fragment_OUTPUT":
-            for member in ast.output_struct.members:
+
+        if ast.psinput_struct:
+            for member in ast.psinput_struct.members:
+                self.fragment_inputs.append((member.vtype, member.name))
+        if ast.psoutput_struct:
+            for member in ast.psoutput_struct.members:
                 self.fragment_outputs.append((member.vtype, member.name))
 
     def generate_io_declarations(self, shader_type):
@@ -133,7 +136,7 @@ class HLSLToCrossGLConverter:
             right = self.generate_expression(expr.right, is_main)
             return f"({left} {expr.op} {right})"
         elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.op, is_main)
+            operand = self.generate_expression(expr.operand, is_main)
             return f"({expr.op}{operand})"
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(
@@ -145,6 +148,10 @@ class HLSLToCrossGLConverter:
             if obj == "output" or obj == "input":
                 return expr.member
             return f"{obj}.{expr.member}"
+
+        elif isinstance(expr, TernaryOpNode):
+            return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
+
         elif isinstance(expr, VectorConstructorNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args

@@ -13,6 +13,7 @@ TOKENS = [
     ("HALF", r"half"),
     ("INT", r"int"),
     ("UINT", r"uint"),
+    ("QUESTION", r"\?"),
     ("BOOL", r"bool"),
     ("VOID", r"void"),
     ("RETURN", r"return"),

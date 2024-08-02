@@ -31,6 +31,7 @@ TOKENS = [
     ("SEMICOLON", r";"),
     ("COMMA", r","),
     ("COLON", r":"),
+    ("QUESTION", r"\?"),
     ("EQUALS", r"="),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),

@@ -2,14 +2,33 @@ class ASTNode:
     pass
 
 
+class TernaryOpNode:
+    def __init__(self, condition, true_expr, false_expr):
+        self.condition = condition
+        self.true_expr = true_expr
+        self.false_expr = false_expr
+
+    def __repr__(self):
+        return f"TernaryOpNode(condition={self.condition}, true_expr={self.true_expr}, false_expr={self.false_expr})"
+
+
 class ShaderNode:
-    def __init__(self, input_struct, output_struct, functions):
-        self.input_struct = input_struct
-        self.output_struct = output_struct
+    def __init__(
+        self,
+        vsinput_struct,
+        vsoutput_struct,
+        psinput_struct,
+        psoutput_struct,
+        functions,
+    ):
+        self.vsinput_struct = vsinput_struct
+        self.vsoutput_struct = vsoutput_struct
+        self.psinput_struct = psinput_struct
+        self.psoutput_struct = psoutput_struct
         self.functions = functions
 
     def __repr__(self):
-        return f"ShaderNode(input_struct={self.input_struct}, output_struct={self.output_struct}, functions={self.functions})"
+        return f"ShaderNode(vsinput_struct={self.vsinput_struct}, vsoutput_struct={self.vsoutput_struct}, psinput_struct={self.psinput_struct}, psoutput_struct={self.psoutput_struct}, functions={self.functions})"
 
 
 class StructNode:

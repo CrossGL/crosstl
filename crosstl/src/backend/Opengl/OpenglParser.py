@@ -38,7 +38,9 @@ class GLSLParser:
             )
             self.skip_comments()  # Skip comments after eating a token
         else:
-            raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+            raise SyntaxError(
+                f"Expected {token_type}, got {self.current_token[0]},  {self.current_token[1]}"
+            )
 
     def parse(self):
         self.skip_comments()
