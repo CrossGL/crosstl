@@ -12,7 +12,8 @@ class UniformNode(ASTNode):
 
     def __str__(self):
         return f"uniform {self.vtype} {self.name};"
-    
+
+
 class ConstantNode(ASTNode):
     def __init__(self, value):
         self.value = value
@@ -23,9 +24,9 @@ class ConstantNode(ASTNode):
     def __str__(self):
         return str(self.value)
 
-    
+
 class VersionDirectiveNode(ASTNode):
-    def __init__(self,number, profile):
+    def __init__(self, number, profile):
         self.version_number = number
         self.profile = profile
 
@@ -35,12 +36,12 @@ class VersionDirectiveNode(ASTNode):
     def __str__(self):
         return f"#version {self.version_number} {self.profile}"
 
+
 class LayoutNode:
     def __init__(self, location_number, dtype, name):
         self.location_number = location_number
         self.dtype = dtype
         self.name = name
-
 
     def __repr__(self):
         return f"LayoutNode(location={self.location_number}, dtype={self.dtype})"
@@ -57,9 +58,10 @@ class TernaryOpNode:
 
     def __repr__(self):
         return f"TernaryOpNode(condition={self.condition}, true_expr={self.true_expr}, false_expr={self.false_expr})"
-    
+
+
 class LayoutNode:
-    def __init__(self,section, location_number, dtype, name):
+    def __init__(self, section, location_number, dtype, name):
         self.section = section
         self.location_number = location_number
         self.dtype = dtype
@@ -69,10 +71,17 @@ class LayoutNode:
         return f"LayoutNode(section={self.section}, location_number={self.location_number}, dtype={self.dtype}, name={self.name})"
 
 
-
-
 class ShaderNode:
-    def __init__(self, version, global_inputs, global_outputs, uniforms, vertex_section, fragment_section, functions):
+    def __init__(
+        self,
+        version,
+        global_inputs,
+        global_outputs,
+        uniforms,
+        vertex_section,
+        fragment_section,
+        functions,
+    ):
         self.version = version
         self.global_inputs = global_inputs
         self.global_outputs = global_outputs
@@ -86,7 +95,7 @@ class ShaderNode:
 
 
 class VERTEXShaderNode:
-    def __init__(self, inputs, outputs,uniform, functions, layout_qualifiers=[]):
+    def __init__(self, inputs, outputs, uniform, functions, layout_qualifiers=[]):
         self.inputs = inputs
         self.outputs = outputs
         self.uniform = uniform
@@ -98,7 +107,7 @@ class VERTEXShaderNode:
 
 
 class FRAGMENTShaderNode:
-    def __init__(self, inputs, outputs,uniform,functions,layout_qualifiers = []):
+    def __init__(self, inputs, outputs, uniform, functions, layout_qualifiers=[]):
         self.inputs = inputs
         self.outputs = outputs
         self.uniform = uniform
@@ -106,9 +115,7 @@ class FRAGMENTShaderNode:
         self.layout_qualifiers = layout_qualifiers
 
     def __repr__(self):
-        return (
-            f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r}{self.uniform!r} {self.functions!r}{self.layout_qualifiers!r}"
-        )
+        return f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r}{self.uniform!r} {self.functions!r}{self.layout_qualifiers!r}"
 
 
 class FunctionNode(ASTNode):

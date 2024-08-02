@@ -12,6 +12,7 @@ from .DirectxAst import (
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
+    TernaryOpNode,
 )
 from .DirectxLexer import HLSLLexer
 
@@ -43,30 +44,36 @@ class HLSLParser:
         return shader
 
     def parse_shader(self):
-        input_struct = None
-        output_struct = None
         functions = []
-
+        vsinput_struct = None
+        vsoutput_struct = None
+        psinput_struct = None
+        psoutput_struct = None
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "STRUCT":
                 struct = self.parse_struct()
-                if struct.name == "VS_INPUT":
-                    input_struct = struct
-                elif struct.name == "VS_OUTPUT":
-                    output_struct = struct
+                if struct.name == "VSInput":
+                    vsinput_struct = struct
+                if struct.name == "VSOutput":
+                    vsoutput_struct = struct
+                if struct.name == "PSInput":
+                    psinput_struct = struct
+                if struct.name == "PSOutput":
+                    psoutput_struct = struct
             elif self.current_token[0] in ["VOID", "FLOAT", "FVECTOR", "IDENTIFIER"]:
                 functions.append(self.parse_function())
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
-        return ShaderNode(input_struct, output_struct, functions)
+        return ShaderNode(
+            vsinput_struct, vsoutput_struct, psinput_struct, psoutput_struct, functions
+        )
 
     def parse_struct(self):
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("LBRACE")
-
         members = []
         while self.current_token[0] != "RBRACE":
             vtype = self.current_token[1]
@@ -79,9 +86,6 @@ class HLSLParser:
                 self.eat("SEMANTIC")
             self.eat("SEMICOLON")
             members.append(VariableNode(vtype, var_name, semantic))
-
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
 
         return StructNode(name, members)
 
@@ -249,6 +253,12 @@ class HLSLParser:
             self.eat(self.current_token[0])
             right = self.parse_logical_or()
             left = AssignmentNode(left, right, op)
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            true_expr = self.parse_expression()
+            self.eat("COLON")
+            false_expr = self.parse_expression()
+            left = TernaryOpNode(left, true_expr, false_expr)
         return left
 
     def parse_assignment(self):

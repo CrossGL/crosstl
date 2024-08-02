@@ -61,7 +61,7 @@ class HLSLCodeGen:
 
         # Generate global inputs and outputs
         if self.shader_inputs:
-            code += "struct Global_INPUT {\n"
+            code += "struct VSINPUT {\n"
             for i, (vtype, name) in enumerate(self.shader_inputs):
                 if i >= 1:
                     code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
@@ -70,7 +70,7 @@ class HLSLCodeGen:
             code += "};\n\n"
 
         if self.shader_outputs:
-            code += "struct Global_OUTPUT {\n"
+            code += "struct VSOUTPUT {\n"
             for i, (vtype, name) in enumerate(self.shader_outputs):
                 code += f"    {self.map_type(vtype)} {name} : SV_TARGET{i};\n"
             code += "};\n\n"
@@ -85,7 +85,7 @@ class HLSLCodeGen:
             shader_type = "vertex"
             self.check_gl_position(self.vertex_item)
             if self.vertex_item.inputs:
-                code += "struct Vertex_INPUT {\n"
+                code += "struct VSInput {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.inputs):
                     if i >= 1:
                         code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i-1};\n"
@@ -93,10 +93,11 @@ class HLSLCodeGen:
                         code += f"    {self.map_type(vtype)} {name} : POSITION;\n"
                 code += "};\n\n"
             if self.vertex_item.outputs:
-                code += "struct Vertex_OUTPUT {\n"
+                code += "struct VSOutput {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.outputs):
                     if self.gl_position:
                         code += f"   float4 position : SV_POSITION;\n"
+                        self.gl_position = False
                     code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
                 code += "};\n\n"
             code += (
@@ -108,12 +109,12 @@ class HLSLCodeGen:
         if self.fragment_item:
             shader_type = "fragment"
             if self.fragment_item.inputs:
-                code += "struct Fragment_INPUT {\n"
+                code += "struct PSInput {\n"
                 for i, (vtype, name) in enumerate(self.fragment_item.inputs):
                     code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
                 code += "};\n\n"
             if self.fragment_item.outputs:
-                code += "struct Fragment_OUTPUT {\n"
+                code += "struct PSOutput {\n"
                 for i, (vtype, name) in enumerate(self.fragment_item.outputs):
                     code += f"    {self.map_type(vtype)} {name} : SV_TARGET{i};\n"
                 code += "};\n\n"
@@ -136,18 +137,19 @@ class HLSLCodeGen:
         if shader_type == "vertex":
             for function_node in node:
                 if function_node.name == "main":
-                    params = "Vertex_INPUT input"
-                    return_type = "Vertex_OUTPUT"
+                    params = "VSInput input"
+                    return_type = "VSOutput"
+                    code += f"{return_type} VSMain({params}) {{\n"
                 else:
                     params = ", ".join(
                         f"{self.map_type(param[0])} {param[1]}"
                         for param in function_node.params
                     )
                     return_type = self.map_type(function_node.return_type)
+                    code += f"{return_type} {function_node.name}({params}) {{\n"
 
-                code += f"{return_type} VSMain({params}) {{\n"
                 if function_node.name == "main":
-                    code += "    Vertex_OUTPUT output;\n"
+                    code += "    VSOutput output;\n"
                 for stmt in function_node.body:
                     code += self.generate_statement(stmt, 1, shader_type=shader_type)
                 if function_node.name == "main":
@@ -156,18 +158,18 @@ class HLSLCodeGen:
         elif shader_type == "fragment":
             for function_node in node:
                 if function_node.name == "main":
-                    params = "Fragment_INPUT input"
-                    return_type = "Fragment_OUTPUT"
+                    params = "PSInput input"
+                    return_type = "PSOutput"
+                    code += f"{return_type} PSMain({params}) {{\n"
                 else:
                     params = ", ".join(
                         f"{self.map_type(param[0])} {param[1]}"
                         for param in function_node.params
                     )
                     return_type = self.map_type(function_node.return_type)
-
-                code += f"{return_type} PSMain({params}) {{\n"
+                    code += f"{return_type} {function_node.name}({params}) {{\n"
                 if function_node.name == "main":
-                    code += "    Fragment_OUTPUT output;\n"
+                    code += "    PSOutput output;\n"
                 for stmt in function_node.body:
                     code += self.generate_statement(stmt, 1, shader_type=shader_type)
                 if function_node.name == "main":
@@ -218,7 +220,7 @@ class HLSLCodeGen:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
         else:
             lhs = self.generate_expression(node.name, shader_type)
-            if lhs == "gl_Position":
+            if lhs == "gl_Position" or lhs == "gl_position":
                 return f"output.position = {self.generate_expression(node.value, shader_type)}"
             return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
 
@@ -334,93 +336,3 @@ class HLSLCodeGen:
             "OR": "||",
         }
         return op_map.get(op, op)
-
-
-# Usage example
-if __name__ == "__main__":
-    from ..lexer import Lexer
-    from ..parser import Parser
-
-    code = """shader main {
-        
-                input vec3 position;
-                            input vec2 texCoord;
-                            input mat2 depth;
-                            output vec4 fragColor;
-                            output float depth;
-                            vec3 customFunction(vec3 random, float factor) {
-                                return random * factor;
-                            }
-
-                            void main() {
-                                vec3 color = vec3(position.x,position.y, 0.0);
-                                float factor = 1.0;
-
-                                if (texCoord.x > 0.5) {
-                                    color = vec3(1.0, 0.0, 0.0);
-                                } else {
-                                    color = vec3(0.0, 1.0, 0.0);
-                                }
-
-                                for (int i = 0; i < 3; i = i + 2) {
-                                    factor = factor * 0.5;
-                                    color = customFunction(color, factor);
-                                }
-
-                                if (length(color) > 1.0) {
-                                    color = normalize(color);
-                                }
-
-                                fragColor = vec4(color, 1.0);
-                            }
-        
-                vertex {
-                            input vec3 position;
-                            input vec2 texCoord;
-                            input mat2 depth;
-                            output vec4 fragColor;
-                            output float depth;
-                            vec3 customFunction(vec3 random, float factor) {
-                                return random * factor;
-                            }
-
-                            void main() {
-                                vec3 color = vec3(position.x,position.y, 0.0);
-                                float factor = 1.0;
-
-                                if (texCoord.x > 0.5) {
-                                    color = vec3(1.0, 0.0, 0.0);
-                                } else {
-                                    color = vec3(0.0, 1.0, 0.0);
-                                }
-
-                                for (int i = 0; i < 3; i = i + 1) {
-                                    factor = factor * 0.5;
-                                    color = customFunction(color, factor);
-                                }
-
-                                if (length(color) > 1.0) {
-                                    color = normalize(color);
-                                }
-
-                                fragColor = vec4(color, 1.0);
-                            }
-                            }
-                            fragment {
-                                input vec4 fragColor;
-                                output vec4 finalColor;
-                                
-                                void main() {
-                                    finalColor = fragColor;
-                                }
-                                
-                            }
-                        }"""
-
-    lexer = Lexer(code)
-    parser = Parser(lexer.tokens)
-    ast = parser.parse()
-
-    codegen = HLSLCodeGen()
-    hlsl_code = codegen.generate(ast)
-    print(hlsl_code)

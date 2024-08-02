@@ -346,6 +346,12 @@ class MetalParser:
             self.eat(self.current_token[0])
             right = self.parse_assignment()
             return AssignmentNode(left, right, op)
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            true_expr = self.parse_expression()
+            self.eat("COLON")
+            false_expr = self.parse_expression()
+            left = TernaryOpNode(left, true_expr, false_expr)
         return left
 
     def parse_logical_or(self):

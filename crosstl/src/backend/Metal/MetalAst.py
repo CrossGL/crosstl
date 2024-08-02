@@ -2,6 +2,16 @@ class ASTNode:
     pass
 
 
+class TernaryOpNode:
+    def __init__(self, condition, true_expr, false_expr):
+        self.condition = condition
+        self.true_expr = true_expr
+        self.false_expr = false_expr
+
+    def __repr__(self):
+        return f"TernaryOpNode(condition={self.condition}, true_expr={self.true_expr}, false_expr={self.false_expr})"
+
+
 class ShaderNode(ASTNode):
     def __init__(self, functions):
         self.functions = functions

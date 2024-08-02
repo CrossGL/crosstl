@@ -174,7 +174,11 @@ class GLSLToCrossGLConverter:
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             func_name = self.translate_expression(expr.name)
             return f"{func_name}({args})"
-
+        elif isinstance(expr, UnaryOpNode):
+            operand = self.generate_expression(expr.op)
+            return f"({expr.op}{operand})"
+        elif isinstance(expr, TernaryOpNode):
+            return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
         elif isinstance(expr, MemberAccessNode):
             return f"{self.generate_expression(expr.object)}.{expr.member}"
         else:

@@ -21,7 +21,11 @@ class MetalToCrossGLConverter:
         self.process_structs(ast)
 
         code = "shader main {\n"
-
+        # Generate custom functions
+        code += " \n"
+        for func in ast.functions:
+            if isinstance(func, FunctionNode) and func.qualifier is None:
+                code += self.generate_function(func)
         # Generate vertex shader
         vertex_func = next(
             f
@@ -30,16 +34,11 @@ class MetalToCrossGLConverter:
         )
         code += "    // Vertex Shader\n"
         code += "    vertex {\n"
+
         code += self.generate_io_declarations("vertex")
         code += "\n"
         code += self.generate_main_function(vertex_func)
         code += "    }\n\n"
-
-        # Generate custom functions
-        code += " \n"
-        for func in ast.functions:
-            if isinstance(func, FunctionNode) and func.qualifier is None:
-                code += self.generate_function(func)
 
         # Generate fragment shader
         fragment_func = next(
@@ -164,6 +163,11 @@ class MetalToCrossGLConverter:
             if obj == "output" or obj == "input":
                 return expr.member
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, UnaryOpNode):
+            operand = self.generate_expression(expr.operand, is_main)
+            return f"({expr.op}{operand})"
+        elif isinstance(expr, TernaryOpNode):
+            return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
         elif isinstance(expr, VectorConstructorNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args

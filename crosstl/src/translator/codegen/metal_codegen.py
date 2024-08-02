@@ -140,6 +140,7 @@ class MetalCodeGen:
                 for i, (vtype, name) in enumerate(self.vertex_item.outputs):
                     if self.gl_position:
                         code += f"    float4 position [[position]];\n"
+                        self.gl_position = False
                     code += f"    {self.map_type(vtype)} {name};\n"
                 code += "};\n\n"
             code += (
@@ -184,14 +185,15 @@ class MetalCodeGen:
                 if function_node.name == "main":
                     params = "Vertex_INPUT input [[stage_in]]"
                     return_type = "vertex Vertex_OUTPUT"
+                    code += f"{return_type} vertex_main({params}) {{\n"
                 else:
                     params = ", ".join(
                         f"{self.map_type(param[0])} {param[1]}"
                         for param in function_node.params
                     )
                     return_type = self.map_type(function_node.return_type)
+                    code += f"{return_type} {function_node.name}({params}) {{\n"
 
-                code += f"{return_type} vertex_main({params}) {{\n"
                 if function_node.name == "main":
                     code += "    Vertex_OUTPUT output;\n"
                 for stmt in function_node.body:
@@ -204,14 +206,14 @@ class MetalCodeGen:
                 if function_node.name == "main":
                     params = "Fragment_INPUT input [[stage_in]]"
                     return_type = "fragment Fragment_OUTPUT"
+                    code += f"{return_type} fragment_main({params}) {{\n"
                 else:
                     params = ", ".join(
                         f"{self.map_type(param[0])} {param[1]}"
                         for param in function_node.params
                     )
                     return_type = self.map_type(function_node.return_type)
-
-                code += f"{return_type} fragment_main({params}) {{\n"
+                    code += f"{return_type} {function_node.name}({params}) {{\n"
                 if function_node.name == "main":
                     code += "    Fragment_OUTPUT output;\n"
                 for stmt in function_node.body:
@@ -264,7 +266,7 @@ class MetalCodeGen:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
         else:
             lhs = self.generate_expression(node.name, shader_type)
-            if lhs == "gl_Position":
+            if lhs == "gl_Position" or lhs == "gl_position":
                 return f"output.position = {self.generate_expression(node.value, shader_type)}"
             return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
 
@@ -383,93 +385,3 @@ class MetalCodeGen:
             "OR": "||",
         }
         return op_map.get(op, op)
-
-
-# Usage example
-if __name__ == "__main__":
-    from compiler.lexer import Lexer
-    from compiler.parser import Parser
-
-    code = """shader main {
-        
-                input vec3 position;
-                            input vec2 texCoord;
-                            input mat2 depth;
-                            output vec4 fragColor;
-                            output float depth;
-                            vec3 customFunction(vec3 random, float factor) {
-                                return random * factor;
-                            }
-
-                            void main() {
-                                vec3 color = vec3(position.x,position.y, 0.0);
-                                float factor = 1.0;
-
-                                if (texCoord.x > 0.5) {
-                                    color = vec3(1.0, 0.0, 0.0);
-                                } else {
-                                    color = vec3(0.0, 1.0, 0.0);
-                                }
-
-                                for (int i = 0; i < 3; i = i + 2) {
-                                    factor = factor * 0.5;
-                                    color = customFunction(color, factor);
-                                }
-
-                                if (length(color) > 1.0) {
-                                    color = normalize(color);
-                                }
-
-                                fragColor = vec4(color, 1.0);
-                            }
-        
-                vertex {
-                            input vec3 position;
-                            input vec2 texCoord;
-                            input mat2 depth;
-                            output vec4 fragColor;
-                            output float depth;
-                            vec3 customFunction(vec3 random, float factor) {
-                                return random * factor;
-                            }
-
-                            void main() {
-                                vec3 color = vec3(position.x,position.y, 0.0);
-                                float factor = 1.0;
-
-                                if (texCoord.x > 0.5) {
-                                    color = vec3(1.0, 0.0, 0.0);
-                                } else {
-                                    color = vec3(0.0, 1.0, 0.0);
-                                }
-
-                                for (int i = 0; i < 3; i = i + 1) {
-                                    factor = factor * 0.5;
-                                    color = customFunction(color, factor);
-                                }
-
-                                if (length(color) > 1.0) {
-                                    color = normalize(color);
-                                }
-
-                                fragColor = vec4(color, 1.0);
-                            }
-                            }
-                            fragment {
-                                input vec4 fragColor;
-                                output vec4 finalColor;
-                                
-                                void main() {
-                                    finalColor = fragColor;
-                                }
-                                
-                            }
-                        }"""
-
-    lexer = Lexer(code)
-    parser = Parser(lexer.tokens)
-    ast = parser.parse()
-
-    codegen = MetalCodeGen()
-    metal_code = codegen.generate(ast)
-    print(metal_code)
