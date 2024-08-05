@@ -152,26 +152,27 @@ class HLSLParser:
             "BOOL",
             "IDENTIFIER",
         ]:
-            # This could be a type name or a variable name
             first_token = self.current_token
             self.eat(self.current_token[0])
 
             if self.current_token[0] == "IDENTIFIER":
-                # This is a variable declaration
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
                 if self.current_token[0] == "SEMICOLON":
-                    # Variable declaration without initialization
                     self.eat("SEMICOLON")
                     return VariableNode(first_token[1], name)
                 elif self.current_token[0] == "EQUALS":
-                    # Variable declaration with initialization
                     self.eat("EQUALS")
                     value = self.parse_expression()
                     self.eat("SEMICOLON")
                     return AssignmentNode(VariableNode(first_token[1], name), value)
-            else:
-                # This is an assignment or a more complex expression
+            elif self.current_token[0] == "EQUALS":
+                # This handles cases like "test = float3(1.0, 1.0, 1.0);"
+                self.eat("EQUALS")
+                value = self.parse_expression()
+                self.eat("SEMICOLON")
+                return AssignmentNode(VariableNode("", first_token[1]), value)
+            elif self.current_token[0] == "DOT":
                 left = self.parse_member_access(first_token[1])
                 if self.current_token[0] == "EQUALS":
                     self.eat("EQUALS")
@@ -181,8 +182,11 @@ class HLSLParser:
                 else:
                     self.eat("SEMICOLON")
                     return left
+            else:
+                expr = self.parse_expression()
+                self.eat("SEMICOLON")
+                return expr
         else:
-            # This is an expression statement
             expr = self.parse_expression()
             self.eat("SEMICOLON")
             return expr
@@ -211,7 +215,8 @@ class HLSLParser:
             self.eat("IDENTIFIER")
             self.eat("EQUALS")
             init_value = self.parse_expression()
-            init = VariableNode(type_name, var_name, init_value)
+            init = VariableNode(type_name, var_name)
+            init = AssignmentNode(init, init_value)
         else:
             init = self.parse_expression()
         self.eat("SEMICOLON")

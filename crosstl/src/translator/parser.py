@@ -366,13 +366,15 @@ class Parser:
         self.eat("IDENTIFIER")
         if self.current_token[0] == "DOT":
             self.eat("DOT")
-            self.eat("IDENTIFIER")
+            value = self.parse_expression()
+            name = MemberAccessNode(value, name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
 
         elif self.current_token[0] == "EQUALS":
             self.eat("EQUALS")
+
             value = self.parse_expression()
 
             if self.current_token[0] == "SEMICOLON":
