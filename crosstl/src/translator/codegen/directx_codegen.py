@@ -22,6 +22,7 @@ class HLSLCodeGen:
         self.vertex_item = None
         self.fragment_item = None
         self.gl_position = False
+        self.lhs = None
         self.type_mapping = {
             "void": "void",
             "vec2": "float2",
@@ -58,7 +59,6 @@ class HLSLCodeGen:
         self.shader_inputs = node.global_inputs
         self.shader_outputs = node.global_outputs
         code = "\n"
-
         # Generate global inputs and outputs
         if self.shader_inputs:
             code += "struct VSINPUT {\n"
@@ -219,7 +219,9 @@ class HLSLCodeGen:
         if isinstance(node.name, VariableNode) and node.name.vtype:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
         else:
+            self.lhs = True
             lhs = self.generate_expression(node.name, shader_type)
+            self.lhs = False
             if lhs == "gl_Position" or lhs == "gl_position":
                 return f"output.position = {self.generate_expression(node.value, shader_type)}"
             return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
@@ -269,29 +271,30 @@ class HLSLCodeGen:
         if isinstance(expr, str):
             return self.translate_expression(expr, shader_type)
         elif isinstance(expr, VariableNode):
-            return self.translate_expression(expr.name, shader_type)
+            if isinstance(expr.name, str):
+                return self.translate_expression(expr.name, shader_type)
+            else:
+                return self.generate_expression(expr.name, shader_type)
         elif isinstance(expr, BinaryOpNode):
-            return f"({self.generate_expression(expr.left, shader_type)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, shader_type)})"
+            return f"{self.generate_expression(expr.left, shader_type)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, shader_type)}"
         elif isinstance(expr, FunctionCallNode):
+            args = ", ".join(
+                self.generate_expression(arg, shader_type) for arg in expr.args
+            )
             if expr.name in self.type_mapping.keys():
-                args = ", ".join(
-                    self.generate_expression(arg, shader_type) for arg in expr.args
-                )
                 return f"{self.map_type(expr.name)}({args})"
             else:
-                args = ", ".join(
-                    self.generate_expression(arg, shader_type) for arg in expr.args
-                )
                 func_name = self.translate_expression(expr.name, shader_type)
                 return f"{func_name}({args})"
         elif isinstance(expr, UnaryOpNode):
             return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, shader_type)}"
-
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"
-
         elif isinstance(expr, MemberAccessNode):
-            return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
+            if self.lhs:
+                return f"{expr.member}.{self.generate_expression(expr.object, shader_type)}"
+            else:
+                return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
         else:
             return str(expr)
 

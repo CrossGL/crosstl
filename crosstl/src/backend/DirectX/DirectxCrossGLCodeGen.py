@@ -10,16 +10,33 @@ class HLSLToCrossGLConverter:
         self.fragment_inputs = []
         self.fragment_outputs = []
         self.type_map = {
-            "float": "float",
+            "void": "void",
             "float2": "vec2",
             "float3": "vec3",
             "float4": "vec4",
+            "float2x2": "mat2",
+            "float3x3": "mat3",
+            "float4x4": "mat4",
             "int": "int",
+            "int2": "ivec2",
+            "int3": "ivec3",
+            "int4": "ivec4",
+            "uint": "uint",
+            "uint2": "uvec2",
+            "uint3": "uvec3",
+            "uint4": "uvec4",
+            "bool": "bool",
+            "bool2": "bvec2",
+            "bool3": "bvec3",
+            "bool4": "bvec4",
+            "float": "float",
+            "double": "double",
+            "Texture2D": "sampler2D",
+            "TextureCube": "samplerCube",
         }
 
     def generate(self, ast):
         self.process_structs(ast)
-
         code = "shader main {\n"
 
         # Generate custom functions
@@ -104,13 +121,41 @@ class HLSLToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                if not is_main:
-                    code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
                     code += f"return {self.generate_expression(stmt.value, is_main)};\n"
+            elif isinstance(stmt, ForNode):
+                code += self.generate_for_loop(stmt, indent, is_main)
+            elif isinstance(stmt, IfNode):
+                code += self.generate_if_statement(stmt, indent, is_main)
+        return code
+
+    def generate_for_loop(self, node, indent, is_main):
+        init = self.generate_expression(node.init, is_main)
+        condition = self.generate_expression(node.condition, is_main)
+        update = self.generate_expression(node.update, is_main)
+
+        code = f"for ({init}; {condition}; {update}) {{\n"
+        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + "}\n"
+        return code
+
+    def generate_if_statement(self, node, indent, is_main):
+        condition = self.generate_expression(node.condition, is_main)
+
+        code = f"if ({condition}) {{\n"
+        code += self.generate_function_body(node.if_body, indent + 1, is_main)
+        code += "    " * indent + "}"
+
+        if node.else_body:
+            code += " else {\n"
+            code += self.generate_function_body(node.else_body, indent + 1, is_main)
+            code += "    " * indent + "}"
+
+        code += "\n"
         return code
 
     def generate_assignment(self, node, is_main):
@@ -134,10 +179,16 @@ class HLSLToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
-            return f"({left} {expr.op} {right})"
+            return f"{left} {expr.op} {right}"
+
+        elif isinstance(expr, AssignmentNode):
+            left = self.generate_expression(expr.left, is_main)
+            right = self.generate_expression(expr.right, is_main)
+            return f"{left} {expr.operator} {right}"
+
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
-            return f"({expr.op}{operand})"
+            return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args

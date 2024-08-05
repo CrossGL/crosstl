@@ -1,28 +1,28 @@
-#version 450 core
+#version 450
 
-//vertex shader
+
+// Vertex shader
+
+float perlinNoise(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
 layout(location = 0) in vec3 position;
-layout(location = 1) in vec2 texCoord;
+out vec2 vUV;
 
-out vec2 vTexCoord;
-
-void main()
-{
-    vTexCoord = texCoord;
+void main() {
+    vUV = position.xy * 10.0;
     gl_Position = vec4(position, 1.0);
 }
 
-in vec2 vTexCoord;
-out vec4 fragColor;
+// Fragment shader
 
-// fragment shader 
+in vec2 vUV;
+layout(location = 0) out vec4 fragColor;
 
-float marblePattern(vec2 uv) {
-    return 0.5 + 0.5 * sin(10.0 * uv.x + iTime);
-}
-
-void main()
-{
-    vec3 color = vec3(marblePattern(vTexCoord), 0.0, 0.0);
+void main() {
+    float noise = perlinNoise(vUV);
+    float height = noise * 10.0;
+    vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
     fragColor = vec4(color, 1.0);
 }

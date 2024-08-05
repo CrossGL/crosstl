@@ -1,12 +1,11 @@
 import unittest
-import os
 import crosstl
 
 
 class TestCodeGeneration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.makedirs("test", exist_ok=True)
+        pass
 
     def test_cgl_to_glsl_translation(self):
         result = crosstl.translate("examples/PerlinNoise.cgl", backend="opengl")
