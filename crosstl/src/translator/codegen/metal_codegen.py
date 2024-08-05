@@ -35,6 +35,7 @@ class MetalCodeGen:
         self.current_shader = None
         self.vertex_item = None
         self.fragment_item = None
+        self.lhs = None
         self.gl_position = False
         self.char_mapper = CharTypeMapper()
         self.type_mapping = {
@@ -265,7 +266,9 @@ class MetalCodeGen:
         if isinstance(node.name, VariableNode) and node.name.vtype:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
         else:
+            self.lhs = True
             lhs = self.generate_expression(node.name, shader_type)
+            self.lhs = False
             if lhs == "gl_Position" or lhs == "gl_position":
                 return f"output.position = {self.generate_expression(node.value, shader_type)}"
             return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
@@ -315,9 +318,12 @@ class MetalCodeGen:
         if isinstance(expr, str):
             return self.translate_expression(expr, shader_type)
         elif isinstance(expr, VariableNode):
-            return self.translate_expression(expr.name, shader_type)
+            if isinstance(expr.name, str):
+                return self.translate_expression(expr.name, shader_type)
+            else:
+                return self.generate_expression(expr.name, shader_type)
         elif isinstance(expr, BinaryOpNode):
-            return f"({self.generate_expression(expr.left, shader_type)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, shader_type)})"
+            return f"{self.generate_expression(expr.left, shader_type)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, shader_type)}"
         elif isinstance(expr, FunctionCallNode):
             if expr.name in ["vec2", "vec3", "vec4"]:
                 args = ", ".join(
@@ -336,8 +342,13 @@ class MetalCodeGen:
 
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"
+
         elif isinstance(expr, MemberAccessNode):
-            return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
+            if self.lhs:
+                return f"{expr.member}.{self.generate_expression(expr.object, shader_type)}"
+            else:
+                return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
+
         else:
             return str(expr)
 

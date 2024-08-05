@@ -245,11 +245,10 @@ class MetalParser:
     def parse_variable_declaration_or_assignment(self):
         if self.current_token[0] in [
             "FLOAT",
-            "HALF",
+            "FVECTOR",
             "INT",
             "UINT",
             "BOOL",
-            "VECTOR",
             "IDENTIFIER",
         ]:
             first_token = self.current_token
@@ -266,7 +265,13 @@ class MetalParser:
                     value = self.parse_expression()
                     self.eat("SEMICOLON")
                     return AssignmentNode(VariableNode(first_token[1], name), value)
-            else:
+            elif self.current_token[0] == "EQUALS":
+                # This handles cases like "test = float3(1.0, 1.0, 1.0);"
+                self.eat("EQUALS")
+                value = self.parse_expression()
+                self.eat("SEMICOLON")
+                return AssignmentNode(VariableNode("", first_token[1]), value)
+            elif self.current_token[0] == "DOT":
                 left = self.parse_member_access(first_token[1])
                 if self.current_token[0] == "EQUALS":
                     self.eat("EQUALS")
@@ -276,6 +281,10 @@ class MetalParser:
                 else:
                     self.eat("SEMICOLON")
                     return left
+            else:
+                expr = self.parse_expression()
+                self.eat("SEMICOLON")
+                return expr
         else:
             expr = self.parse_expression()
             self.eat("SEMICOLON")
@@ -304,7 +313,8 @@ class MetalParser:
             self.eat("IDENTIFIER")
             self.eat("EQUALS")
             init_value = self.parse_expression()
-            init = VariableNode(type_name, var_name, init_value)
+            init = VariableNode(type_name, var_name)
+            init = AssignmentNode(init, init_value)
         else:
             init = self.parse_expression()
         self.eat("SEMICOLON")
