@@ -86,8 +86,6 @@ class GLSLParser:
 
             self.eat("RPAREN")
             self.skip_comments()
-            
-        
 
             if self.current_token[0] == "IN":
                 io_type = "input"
@@ -101,7 +99,7 @@ class GLSLParser:
                     location_number=location_number,
                     dtype=dtype,
                     name=name,
-                    io_type=io_type
+                    io_type=io_type,
                 )
             elif self.current_token[0] == "OUT":
                 io_type = "output"
@@ -115,7 +113,7 @@ class GLSLParser:
                     location_number=location_number,
                     dtype=dtype,
                     name=name,
-                    io_type = io_type
+                    io_type=io_type,
                 )
             else:
                 raise SyntaxError("Expected 'IN' or 'OUT' after location in LAYOUT")
@@ -336,11 +334,12 @@ class GLSLParser:
             "ASSIGN_DIV",
         ):
             op = self.current_token[0]
+            op_name = self.current_token[1]
             self.eat(op)
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                return AssignmentNode(VariableNode(type_name, name), value)
+                return BinaryOpNode(VariableNode(type_name, name), op_name, value)
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
@@ -524,7 +523,9 @@ class GLSLParser:
                 self.eat("IDENTIFIER")
                 return UnaryOpNode("++", VariableNode("", name))
             else:
-                raise SyntaxError(f"Expected IDENTIFIER after PRE_INCREMENT, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected IDENTIFIER after PRE_INCREMENT, got {self.current_token[0]}"
+                )
         elif self.current_token[0] == "PRE_DECREMENT":
             self.eat("PRE_DECREMENT")
             if self.current_token[0] == "IDENTIFIER":
@@ -532,11 +533,11 @@ class GLSLParser:
                 self.eat("IDENTIFIER")
                 return UnaryOpNode("--", VariableNode("", name))
             else:
-                raise SyntaxError(f"Expected IDENTIFIER after PRE_DECREMENT, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected IDENTIFIER after PRE_DECREMENT, got {self.current_token[0]}"
+                )
         else:
             raise SyntaxError(f"Unexpected token in update: {self.current_token[0]}")
-
-
 
     def parse_assignment(self):
         var_name = self.current_token[1]
@@ -682,4 +683,3 @@ class GLSLParser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
-    

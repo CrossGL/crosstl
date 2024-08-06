@@ -1,8 +1,6 @@
-from crosstl.crosstl.src.translator.parser import Parser
 from .OpenglAst import *
 from .OpenglParser import *
 from .OpenglLexer import *
-from crosstl.crosstl.src.backend.Opengl import OpenglLexer
 
 
 class GLSLToCrossGLConverter:
@@ -12,6 +10,7 @@ class GLSLToCrossGLConverter:
         self.fragment_item = None
 
     def generate(self, ast):
+        print(ast)
         if isinstance(ast, ShaderNode):
             self.current_shader = ast
             return self.generate_shader(ast)
@@ -91,9 +90,9 @@ class GLSLToCrossGLConverter:
     def generate_layouts(self, layouts):
         code = ""
         for layout in layouts:
-            if layout.io_type == 'input':
+            if layout.io_type == "input":
                 code += f"        input {layout.dtype} {layout.name};\n"
-            elif layout.io_type == 'output':
+            elif layout.io_type == "output":
                 code += f"        output {layout.dtype} {layout.name};\n"
         return code
 
@@ -111,7 +110,7 @@ class GLSLToCrossGLConverter:
                 code += f"        {self.map_type(function_node.return_type)} {function_node.name}({params}) {{\n"
                 # Generate function body
                 for stmt in function_node.body:
-                    code += self.generate_statement(stmt,shader_type, 2)
+                    code += self.generate_statement(stmt, shader_type, 2)
                 # Close function definition
                 code += "        }\n"
 
@@ -129,24 +128,24 @@ class GLSLToCrossGLConverter:
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt,shader_type)};\n"
         elif isinstance(stmt, IfNode):
-            return self.generate_if(stmt,shader_type, indent)
+            return self.generate_if(stmt, shader_type, indent)
         elif isinstance(stmt, ForNode):
-            return self.generate_for(stmt,shader_type, indent)
+            return self.generate_for(stmt, shader_type, indent)
         elif isinstance(stmt, ReturnNode):
             return f"{indent_str}return {self.generate_expression(stmt.value,shader_type)};\n"
         else:
             return f"{indent_str}{self.generate_expression(stmt,shader_type)};\n"
 
-    def generate_assignment(self, node,shader_type):
-        lhs = self.generate_expression(node.name,shader_type)
-        rhs = self.generate_expression(node.value,shader_type)
+    def generate_assignment(self, node, shader_type):
+        lhs = self.generate_expression(node.name, shader_type)
+        rhs = self.generate_expression(node.value, shader_type)
         return f"{lhs} = {rhs}"
 
-    def generate_if(self, node: IfNode,shader_type, indent=0):
+    def generate_if(self, node: IfNode, shader_type, indent=0):
         indent_str = "    " * indent
         code = f"{indent_str}if {self.generate_expression(node.condition,shader_type)} {{\n"
         for stmt in node.if_body:
-            code += self.generate_statement(stmt,shader_type, indent + 1)
+            code += self.generate_statement(stmt, shader_type, indent + 1)
         code += f"{indent_str}}}"
         while isinstance(node.else_body, IfNode):
             node = node.else_body
@@ -164,66 +163,68 @@ class GLSLToCrossGLConverter:
 
         code += "\n"
         return code
-    
+
     def generate_else_if(self, node: IfNode, shader_type, indent):
         code = f" else if {self.generate_expression(node.condition, shader_type)} {{\n"
         for stmt in node.if_body:
             code += self.generate_statement(stmt, shader_type, indent + 1)
-        code += f"{'    ' * indent}}}"  
+        code += f"{'    ' * indent}}}"
         return code
 
     def generate_for(self, node: ForNode, shader_type, indent):
         indent_str = "    " * indent
-        init = self.generate_statement(node.init, shader_type).strip().rstrip(';')
+        init = self.generate_statement(node.init, shader_type).strip().rstrip(";")
         condition = self.generate_expression(node.condition, shader_type).strip()
-        update = self.generate_update(node.update, shader_type).strip().rstrip(';')
+        update = self.generate_update(node.update, shader_type).strip().rstrip(";")
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
             code += self.generate_statement(stmt, shader_type, indent + 1)
         code += f"{indent_str}}}\n"
-        
+
         return code
 
     def generate_update(self, node, shader_type):
         if isinstance(node, AssignmentNode):
             if isinstance(node.value, UnaryOpNode):
-                operand = self.generate_expression(node.value.operand, shader_type).strip()
+                operand = self.generate_expression(
+                    node.value.operand, shader_type
+                ).strip()
                 if node.value.op == "++":
                     print(f"Generating pre-increment: ++{operand}")
-                    return f"++{operand}"  
+                    return f"++{operand}"
                 elif node.value.op == "POST_INCREMENT":
                     print(f"Generating post-increment: {operand}++")
-                    return f"{operand}++"  
+                    return f"{operand}++"
                 elif node.value.op == "--":
-                    return f"--{operand}"  
+                    return f"--{operand}"
                 elif node.value.op == "POST_DECREMENT":
-                    return f"{operand}--"  
+                    return f"{operand}--"
             else:
                 lhs = self.generate_expression(node.name, shader_type).strip()
                 rhs = self.generate_expression(node.value, shader_type).strip()
                 return f"{lhs} = {rhs}"
-        
+
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand, shader_type).strip()
             if node.op == "++":
                 print(f"Generating pre-increment: ++{operand}")
-                return f"++{operand}"  
+                return f"++{operand}"
             elif node.op == "POST_INCREMENT":
                 print(f"Generating post-increment: {operand}++")
-                return f"{operand}++"  
+                return f"{operand}++"
             elif node.op == "--":
-                return f"--{operand}"  
+                return f"--{operand}"
             elif node.op == "POST_DECREMENT":
-                return f"{operand}--"  
+                return f"{operand}--"
             else:
                 return f"{node.op}{operand}"
-        
+
         elif isinstance(node, BinaryOpNode):
             left = self.generate_expression(node.left, shader_type).strip()
             right = self.generate_expression(node.right, shader_type).strip()
             op = self.map_operator(node.op)
             return f"{left} {op} {right}"
-        
+
         else:
             raise ValueError(f"Unsupported update node type: {type(node)}")
 
@@ -231,23 +232,25 @@ class GLSLToCrossGLConverter:
         if isinstance(expr, str):
             return self.translate_expression(expr, shader_type)
         elif isinstance(expr, VariableNode):
-            return self.translate_expression(expr.name, shader_type)
+            return f"{expr.vtype} {self.translate_expression(expr.name, shader_type)}"
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, shader_type)
             right = self.generate_expression(expr.right, shader_type)
             op = self.map_operator(expr.op)
             return f"{left} {op} {right}"
         elif isinstance(expr, FunctionCallNode):
-            args = ", ".join(self.generate_expression(arg, shader_type) for arg in expr.args)
+            args = ", ".join(
+                self.generate_expression(arg, shader_type) for arg in expr.args
+            )
             func_name = self.translate_expression(expr.name, shader_type)
             return f"{func_name}({args})"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, shader_type)
             if expr.op in ["++", "--"]:
                 if expr.op == "++":
-                    return f"++{operand}"  
+                    return f"++{operand}"
                 elif expr.op == "--":
-                    return f"--{operand}"  
+                    return f"--{operand}"
             else:
                 return f"{expr.op}{operand}"
         elif isinstance(expr, TernaryOpNode):
@@ -261,9 +264,6 @@ class GLSLToCrossGLConverter:
             return f"{obj}.{member}"
         else:
             return str(expr)
-
-
-
 
     def translate_expression(self, expr, shader_type):
         if shader_type == "vertex":
