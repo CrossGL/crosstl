@@ -299,26 +299,26 @@ class Parser:
                 "ASSIGN_DIV",
             ]:
                 op = self.current_token[0]
-                op_name = self.current_token[1]
+                self.current_token[1]
                 self.eat(op)
                 value = self.parse_expression()
             if op == "EQUALS":
                 return AssignmentNode(name, value)
             elif op == "ASSIGN_ADD":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), op_name, value)
+                    name, BinaryOpNode(VariableNode("", name), "+", value)
                 )
             elif op == "ASSIGN_SUB":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), op_name, value)
+                    name, BinaryOpNode(VariableNode("", name), "-", value)
                 )
             elif op == "ASSIGN_MUL":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), op_name, value)
+                    name, BinaryOpNode(VariableNode("", name), "*", value)
                 )
             elif op == "ASSIGN_DIV":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), op_name, value)
+                    name, BinaryOpNode(VariableNode("", name), "/", value)
                 )
             else:
                 raise SyntaxError(
