@@ -141,7 +141,7 @@ class BinaryOpNode(ASTNode):
         self.right = right
 
     def __repr__(self):
-        return f"BinaryOpNode(left={self.left}, operator={self.op}, right={self.right})"
+        return f"BinaryOpNode(left={self.left}, op={self.op}, right={self.right})"
 
 
 class MemberAccessNode(ASTNode):

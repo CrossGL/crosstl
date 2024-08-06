@@ -183,9 +183,23 @@ class HLSLParser:
                     self.eat("SEMICOLON")
                     return left
             else:
-                expr = self.parse_expression()
-                self.eat("SEMICOLON")
-                return expr
+                if self.current_token[0] in [
+                    "PLUS_EQUALS",
+                    "MINUS_EQUALS",
+                    "MULTIPLY_EQUALS",
+                    "DIVIDE_EQUALS",
+                    "EQUAL",
+                ]:
+                    op = self.current_token[1]
+                    self.eat(self.current_token[0])
+                    expr = self.parse_expression()
+                    self.eat("SEMICOLON")
+                    return BinaryOpNode(VariableNode("", first_token[1]), op, expr)
+                    # This handles cases like "float3(1.0, 1.0, 1.0);"
+                else:
+                    expr = self.parse_expression()
+                    self.eat("SEMICOLON")
+                    return expr
         else:
             expr = self.parse_expression()
             self.eat("SEMICOLON")

@@ -116,9 +116,12 @@ class Parser:
     def parse_shader_section(self, section_type):
         self.eat(section_type)
         self.eat("LBRACE")
-        inputs = self.parse_inputs()
-        self.parse_uniforms()
-        outputs = self.parse_outputs()
+        if self.current_token[0] == "INPUT":
+            inputs = self.parse_inputs()
+        if self.current_token[0] == "OUTPUT":
+            outputs = self.parse_outputs()
+        if self.current_token[0] == "UNIFORM":
+            self.parse_uniforms()
 
         functions = []
         while self.current_token[0] != "RBRACE":
@@ -296,25 +299,26 @@ class Parser:
                 "ASSIGN_DIV",
             ]:
                 op = self.current_token[0]
+                op_name = self.current_token[1]
                 self.eat(op)
                 value = self.parse_expression()
             if op == "EQUALS":
                 return AssignmentNode(name, value)
             elif op == "ASSIGN_ADD":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "+", value)
+                    name, BinaryOpNode(VariableNode("", name), op_name, value)
                 )
             elif op == "ASSIGN_SUB":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "-", value)
+                    name, BinaryOpNode(VariableNode("", name), op_name, value)
                 )
             elif op == "ASSIGN_MUL":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "*", value)
+                    name, BinaryOpNode(VariableNode("", name), op_name, value)
                 )
             elif op == "ASSIGN_DIV":
                 return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "/", value)
+                    name, BinaryOpNode(VariableNode("", name), op_name, value)
                 )
             else:
                 raise SyntaxError(
@@ -400,7 +404,7 @@ class Parser:
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                return AssignmentNode(VariableNode(type_name, name), value)
+                return BinaryOpNode(VariableNode(type_name, name), op, value)
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"

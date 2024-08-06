@@ -209,9 +209,6 @@ class GLSLParser:
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
 
-        # print(f"Final vertex section: {vertex_section}")
-        # print(f"Final fragment section: {fragment_section}")
-
         return ShaderNode(
             version=version_node,
             global_inputs=global_inputs,
@@ -240,22 +237,18 @@ class GLSLParser:
             elif self.current_token[0] == "IN":
                 self.skip_comments()
                 inputs.extend(self.parse_inputs())
-                # print(f"Inputs collected: {inputs}")
 
             elif self.current_token[0] == "OUT":
                 self.skip_comments()
                 outputs.extend(self.parse_outputs())
-                # print(f"Outputs collected: {outputs}")
 
             elif self.current_token[0] == "UNIFORM":
                 self.skip_comments()
                 uniforms.extend(self.parse_uniforms())
-                # print(f"Uniforms collected: {uniforms}")
 
             elif self.current_token[0] in ["VOID", "FLOAT", "VECTOR"]:
                 self.skip_comments()
                 functions.append(self.parse_function())
-                # print(f"Functions collected: {functions}")
 
             elif self.current_token[0] == "RBRACE":
                 self.eat("RBRACE")
