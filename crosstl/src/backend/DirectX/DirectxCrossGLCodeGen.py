@@ -121,7 +121,10 @@ class HLSLToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                if stmt.vtype not in self.type_map.keys():
+                    continue
+                else:
+                    code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, ReturnNode):
@@ -175,7 +178,7 @@ class HLSLToCrossGLConverter:
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
-            return f"{expr.vtype} {expr.name}"
+            return f"{self.map_type(expr.vtype)} {expr.name}"
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
@@ -212,4 +215,6 @@ class HLSLToCrossGLConverter:
             return str(expr)
 
     def map_type(self, hlsl_type):
-        return self.type_map.get(hlsl_type, hlsl_type)
+        if hlsl_type:
+            return self.type_map.get(hlsl_type)
+        return hlsl_type
