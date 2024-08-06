@@ -281,7 +281,7 @@ find out more info in our [Contributing guide](https://crossgl.github.io/contrib
 
 Join our growing community on a mission to make conversions between frameworks simple and accessible to all!
 Whether you are a seasoned developer or just starting out, you\'ll find a place here! Join the Ivy community on
-our [Discord](https://discord.gg/mMnS8Egy) 👾 server, which is the
+our [Discord](https://discord.com/invite/ZVmTKt5B) 👾 server, which is the
 perfect place to ask questions, share ideas, and get help from both
 fellow developers and the Ivy Team directly.
 
@@ -290,7 +290,7 @@ fellow developers and the Ivy Team directly.
 
 - [Twitter](https://x.com/crossGL_)
 - [LinkedIn](https://www.linkedin.com/company/crossgl/?viewAsMember=true)
-- [Discord Channel](https://discord.gg/mYH45zZ9)
+- [Discord Channel](https://discord.com/invite/ZVmTKt5B)
 - [YouTube](https://www.youtube.com/channel/UCxv7_flRCHp7p0fjMxVSuVQ)
 
 <b> See you there! </b>
