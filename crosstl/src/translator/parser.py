@@ -116,12 +116,9 @@ class Parser:
     def parse_shader_section(self, section_type):
         self.eat(section_type)
         self.eat("LBRACE")
-        if self.current_token[0] == "INPUT":
-            inputs = self.parse_inputs()
-        if self.current_token[0] == "OUTPUT":
-            outputs = self.parse_outputs()
-        if self.current_token[0] == "UNIFORM":
-            self.parse_uniforms()
+        inputs = self.parse_inputs()
+        outputs = self.parse_outputs()
+        self.parse_uniforms()
 
         functions = []
         while self.current_token[0] != "RBRACE":
@@ -299,7 +296,6 @@ class Parser:
                 "ASSIGN_DIV",
             ]:
                 op = self.current_token[0]
-                self.current_token[1]
                 self.eat(op)
                 value = self.parse_expression()
             if op == "EQUALS":
