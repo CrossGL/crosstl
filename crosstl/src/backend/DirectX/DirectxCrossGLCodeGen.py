@@ -36,7 +36,6 @@ class HLSLToCrossGLConverter:
         }
 
     def generate(self, ast):
-        print(ast)
         self.process_structs(ast)
         code = "shader main {\n"
 

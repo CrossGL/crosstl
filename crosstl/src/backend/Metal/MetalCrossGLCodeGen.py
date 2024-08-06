@@ -238,4 +238,6 @@ class MetalToCrossGLConverter:
             return str(expr)
 
     def map_type(self, metal_type):
-        return self.type_map.get(metal_type, metal_type)
+        if metal_type:
+            return self.type_map.get(metal_type)
+        return metal_type
