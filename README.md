@@ -1,13 +1,61 @@
+<div style="display: block;" align="center">
+    <img class="only-dark" width="10%" height="10%" src="https://crossgl.github.io/_static/logo.png#gh-dark-mode-only"/>
+</div>
 
-# CrossGL Translator
 
-The CrossGL Translator is a core component of our platform, enabling the conversion of CrossGL shader code directly into various graphics APIs, such as DirectX, Metal, Vulkan, and OpenGL. This translator simplifies shader development by allowing a single, unified shader language to be used across multiple platforms.
+------------------------------------------------------------------------
+
+<div style="display: block;" align="center">
+    <a href="https://crossgl.net/">
+        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/website_button.svg">
+    </a>
+    <img class="dark-light" width="5%" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/logos/supported/empty.png">
+    <a href="https://crossgl.github.io/language.html">
+        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/docs_button.svg">
+    </a>
+    <img class="dark-light" width="5%" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/logos/supported/empty.png">
+    <a href="https://github.com/CrossGL/demos">
+        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/examples_button.svg">
+    </a>
+    <img class="dark-light" width="5%" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/logos/supported/empty.png">
+    <a href="https://crossgl.github.io/design.html">
+        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/design_button.svg">
+    </a>
+</div>
+
+<br>
+
+<div style="margin-top: 10px; margin-bottom: 10px; display: block;" align="center">
+    <a href="https://github.com/CrossGL/crosstl/issues">
+        <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://img.shields.io/github/issues/CrossGL/crosstl">
+    </a>
+    <a href="https://github.com/CrossGL/crosstl/network/members">
+        <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://img.shields.io/github/forks/CrossGL/crosstl">
+    </a>
+    <a href="https://github.com/CrossGL/crosstl/stargazers">
+        <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://img.shields.io/github/stars/CrossGL/crosstl">
+    </a>
+    <a href="https://github.com/CrossGL/crosstl/pulls">
+        <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg">
+    </a>
+    <a href="https://pypi.org/project/crosstl/">
+        <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://badge.fury.io/py/crosstl.svg">
+    </a>
+    <a href="https://discord.com/invite/ZVmTKt5B">
+        <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://img.shields.io/discord/1240998239206113330?color=blue&label=%20&logo=discord&logoColor=white">
+    </a>
+</div>
+<br clear="all" />
+
+# CrossTL
+
+The CrossTL is a core component of our platform, enabling the conversion of CrossGL shader code directly into various graphics APIs, such as DirectX, Metal, Vulkan, and OpenGL and vice-versa. This translator simplifies shader development by allowing a single, unified shader language to be used across multiple platforms.
 
 ## 🌟 CrossGL: Revolutionizing Shader Development
 
 ### The Universal Shader Language
 
-In the ever-evolving world of graphics programming, **CrossGL** emerges as a game-changing solution, bridging the gap between diverse graphics APIs.
+In the ever-evolving world of graphics programming, **CrossGL** emerges as a solution to, bridging the gap between diverse graphics APIs.
 
 #### 🚀 Write Once, Run Everywhere
 
@@ -19,6 +67,14 @@ Imagine writing a shader _once_ and deploying it across:
 - 🖥️ **Vulkan**
 
 ...all without changing a single line of code!
+
+## Supported Backends
+
+- Vulkan
+- Metal
+- DirectX
+- OpenGL
+
 
 ## 💡 Key Benefits
 
@@ -42,7 +98,7 @@ The translator takes CrossGL shader code and processes it through several stages
 
 CrossGL doesn't just translate from a universal language to platform-specific shaders - it also works in reverse! This powerful feature allows developers to convert existing shaders from various platforms into CrossGL.
 
-## 🌈 CrossGL Shader Example
+## 🌈 CrossGL Shader
 
 ```cpp
 shader main {
@@ -75,56 +131,178 @@ shader main {
 
 ```
 
-## Getting Started
-
-To get started with the CrossGL Translator, check out our [Getting Started Notebook](https://colab.research.google.com/drive/1reF8usj2CA5R6M5JSrBKOQBtU4WW-si2?usp=sharing#scrollTo=D7qkQrpcQ7zF).
-
-## Supported Backends
-
-- Vulkan
-- Metal
-- DirectX
-- OpenGL
-
-## Examples
-
-Explore example projects and demos showcasing the CrossGL Translator's capabilities: [CrossGL Demos](https://github.com/CrossGL/demos/tree/main).
-
-## 📚 Documentation
-
-Comprehensive documentation is available to help you get started and master CrossGL:
-
-- [CrossGL Documentation](https://crossgl.github.io/translator.html)
+# Getting started
 
 
-## Contribution Guidelines
+First, install CrossGL's translation library using pip:
 
-We welcome contributions to the CrossGL Translator. To get started, please read our [Contribution Guidelines](https://crossgl.github.io/contribution.html).
+```bash
+pip install crosstl
+```
 
-### Steps to Contribute:
+#### Using CrossGL
 
-1. Fork the repository.
-2. Create a new branch for your feature or bugfix.
-3. Write your code and tests.
-4. Ensure all tests pass.
-5. Submit a pull request with a detailed description of your changes.
+1. Create a CrossGL shader file (e.g., `shader.cgl`):
 
-For more detailed information, visit the [Contribution Guidelines](https://crossgl.github.io/contribution.html).
+```glsl
+shader main {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
 
-## License
+        void main() {
+            vUV = position.xy * 10.0;
+            gl_Position = vec4(position, 1.0);
+        }
+    }
 
-The CrossGL Translator is open-source and licensed under the [License](https://github.com/CrossGL/crosstl/blob/main/LICENSE).
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
 
----
+        void main() {
+            fragColor = vec4(vUV, 0.0, 1.0);
+        }
+    }
+}
+```
 
-Stay connected and follow our latest updates and announcements:
+2. Translate to your desired backend:
+
+```python
+import crosstl
+
+# Translate to Metal
+metal_code = crosstl.translate('shader.cgl', backend='metal')
+
+# Translate to DirectX (HLSL)
+hlsl_code = crosstl.translate('shader.cgl', backend='directx')
+
+# Translate to OpenGL
+opengl_code = crosstl.translate('shader.cgl', backend='opengl')
+```
+
+#### Converting from HLSL to CrossGL
+
+1. write your HLSL shader (e.g., `shader.hlsl`):
+
+```hlsl
+struct VS_INPUT {
+    float3 position : POSITION;
+};
+
+struct PS_INPUT {
+    float4 position : SV_POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+PS_INPUT VSMain(VS_INPUT input) {
+    PS_INPUT output;
+    output.position = float4(input.position, 1.0);
+    output.uv = input.position.xy * 10.0;
+    return output;
+}
+
+float4 PSMain(PS_INPUT input) : SV_TARGET {
+    return float4(input.uv, 0.0, 1.0);
+}
+```
+
+2. Convert to CrossGL:
+
+```python
+import crosstl
+
+crossgl_code = crosstl.translate('shader.hlsl', backend='cgl')
+print(crossgl_code)
+```
+
+#### Converting from Metal to CrossGL
+
+1. write your Metal shader (e.g., `shader.metal`):
+
+```metal
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexInput {
+    float3 position [[attribute(0)]];
+};
+
+struct VertexOutput {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex VertexOutput vertexShader(VertexInput in [[stage_in]]) {
+    VertexOutput out;
+    out.position = float4(in.position, 1.0);
+    out.uv = in.position.xy * 10.0;
+    return out;
+}
+
+fragment float4 fragmentShader(VertexOutput in [[stage_in]]) {
+    return float4(in.uv, 0.0, 1.0);
+}
+```
+
+2. Convert to CrossGL:
+
+```python
+import crosstl
+
+crossgl_code = crosstl.translate('shader.metal', backend='cgl')
+print(crossgl_code)
+```
+
+With these examples, you can easily get started with CrossGL, translating between different shader languages, and integrating existing shaders into your CrossGL workflow. Happy shader coding! 🚀✨
+
+For more deep dive into crosstl , check out our [Getting Started Notebook](https://colab.research.google.com/drive/1reF8usj2CA5R6M5JSrBKOQBtU4WW-si2?usp=sharing#scrollTo=D7qkQrpcQ7zF).
+
+
+# Contributing
+
+
+We believe that everyone can contribute and make a difference. Whether
+it\'s writing code, fixing bugs, or simply sharing feedback,
+your contributions are definitely welcome and appreciated 🙌
+
+find out more info in our [Contributing guide](https://crossgl.github.io/contribution.html)
+
+<a href="https://github.com/CrossGL/crosstl/graphs/contributors">
+  <img class="dark-light" src="https://contrib.rocks/image?repo=CrossGL/crosstl&anon=0&columns=20&max=100&r=true" />
+</a>
+
+
+
+# Community
+
+
+Join our growing community on a mission to make conversions between frameworks simple and accessible to all!
+Whether you are a seasoned developer or just starting out, you\'ll find a place here! Join the Ivy community on
+our [Discord](https://discord.gg/mMnS8Egy) 👾 server, which is the
+perfect place to ask questions, share ideas, and get help from both
+fellow developers and the Ivy Team directly.
+
+<b> Also Stay connected and follow our latest updates and announcements </b>
+
 
 - [Twitter](https://x.com/crossGL_)
 - [LinkedIn](https://www.linkedin.com/company/crossgl/?viewAsMember=true)
 - [Discord Channel](https://discord.gg/mYH45zZ9)
 - [YouTube](https://www.youtube.com/channel/UCxv7_flRCHp7p0fjMxVSuVQ)
 
----
+<b> See you there! </b>
+<br>
+
+<br>
+
+
+## License
+
+The CrossGL Translator is open-source and licensed under the [License](https://github.com/CrossGL/crosstl/blob/main/LICENSE).
+
+<br>
 
 Thank you for using the CrossGL Translator!
 
