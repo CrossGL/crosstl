@@ -10,7 +10,6 @@ class GLSLToCrossGLConverter:
         self.fragment_item = None
 
     def generate(self, ast):
-        print(ast)
         if isinstance(ast, ShaderNode):
             self.current_shader = ast
             return self.generate_shader(ast)
@@ -28,9 +27,7 @@ class GLSLToCrossGLConverter:
         self.vertex_item = node.vertex_section
         if self.vertex_item:
             code += "    vertex {\n"
-            # Print the vertex section to check its content
             code += self.generate_layouts(self.vertex_item.layout_qualifiers)
-            # Process inputs and outputs
             for vtype, name in self.shader_inputs:
                 code += f"        input {self.map_type(vtype)} {name};\n"
             for vtype, name in self.shader_outputs:
@@ -43,14 +40,11 @@ class GLSLToCrossGLConverter:
             code += self.generate_uniforms() + "\n"
             code += "\n"
 
-            # Print the functions to check if they're there
-            # print(f"Vertex functions: {self.vertex_item.functions}")
-
             # Generate functions
             code += self.generate_functions(self.vertex_item.functions, "vertex")
             code += "    }\n"
         else:
-            print("No vertex shader section to generate.")
+            raise ValueError("No vertex shader section to generate.")
 
         # Generate fragment shader section if present
         self.fragment_item = node.fragment_section
@@ -68,14 +62,11 @@ class GLSLToCrossGLConverter:
             code += self.generate_uniforms() + "\n"
             code += "\n"
 
-            # Print the functions to check if they're there
-            # print(f"Fragment functions: {self.fragment_item.functions}")
-
             # Generate functions
             code += self.generate_functions(self.fragment_item.functions, "fragment")
             code += "    }\n"
         else:
-            print("No fragment shader section to generate.")
+            raise ValueError("No fragment shader section to generate.")
 
         code += "}\n"
 
@@ -190,10 +181,8 @@ class GLSLToCrossGLConverter:
                     node.value.operand, shader_type
                 ).strip()
                 if node.value.op == "++":
-                    print(f"Generating pre-increment: ++{operand}")
                     return f"++{operand}"
                 elif node.value.op == "POST_INCREMENT":
-                    print(f"Generating post-increment: {operand}++")
                     return f"{operand}++"
                 elif node.value.op == "--":
                     return f"--{operand}"
@@ -207,10 +196,8 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand, shader_type).strip()
             if node.op == "++":
-                print(f"Generating pre-increment: ++{operand}")
                 return f"++{operand}"
             elif node.op == "POST_INCREMENT":
-                print(f"Generating post-increment: {operand}++")
                 return f"{operand}++"
             elif node.op == "--":
                 return f"--{operand}"
