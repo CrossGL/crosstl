@@ -4,25 +4,25 @@ import re
 TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
-    ("VERSION", r"#version"),  # Match #version as a separate token
-    ("NUMBER", r"\d+(\.\d+)?"),  # Match version numbers like 330 or 330.0
-    ("CORE", r"core"),  # Match the keyword core
-    ("SHADER", r"shader"),
-    ("INPUT", r"input"),
-    ("OUTPUT", r"output"),
-    ("VOID", r"void"),
-    ("MAIN", r"main"),
-    ("UNIFORM", r"uniform"),
-    ("VECTOR", r"vec[2-4]"),
-    ("MATRIX", r"mat[2-4]"),
-    ("BOOL", r"bool"),
-    ("FLOAT", r"float"),
-    ("INT", r"int"),
-    ("SAMPLER2D", r"sampler2D"),
-    ("PRE_INCREMENT", r"\+\+(?=\w)"),  # Lookahead to match pre-increment
-    ("PRE_DECREMENT", r"--(?=\w)"),  # Lookahead to match pre-decrement
-    ("POST_INCREMENT", r"(?<=\w)\+\+"),  # Lookbehind to match post-increment
-    ("POST_DECREMENT", r"(?<=\w)--"),  # Lookbehind to match post-decrement
+    ("VERSION", r"#version"),
+    ("NUMBER", r"\d+(\.\d+)?"),
+    ("CORE", r"\bcore\b"),
+    ("SHADER", r"\bshader\b"),
+    ("INPUT", r"\binput\b"),
+    ("OUTPUT", r"\boutput\b"),
+    ("VOID", r"\bvoid\b"),
+    ("MAIN", r"\bmain\b"),
+    ("UNIFORM", r"\buniform\b"),
+    ("VECTOR", r"\bvec[2-4]\b"),
+    ("MATRIX", r"\bmat[2-4]\b"),
+    ("BOOL", r"\bbool\b"),
+    ("FLOAT", r"\bfloat\b"),
+    ("INT", r"\bint\b"),
+    ("SAMPLER2D", r"\bsampler2D\b"),
+    ("PRE_INCREMENT", r"\+\+(?=\w)"),
+    ("PRE_DECREMENT", r"--(?=\w)"),
+    ("POST_INCREMENT", r"(?<=\w)\+\+"),
+    ("POST_DECREMENT", r"(?<=\w)--"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
     ("LBRACE", r"\{"),
     ("RBRACE", r"\}"),
@@ -34,19 +34,17 @@ TOKENS = [
     ("ASSIGN_SUB", r"-="),
     ("ASSIGN_MUL", r"\*="),
     ("ASSIGN_DIV", r"/="),
-    ("EQUALS", r"="),
+    ("EQUAL", r"=="),
+    ("NOT_EQUAL", r"!="),
     ("WHITESPACE", r"\s+"),
-    ("IF", r"if"),
-    ("ELSE", r"else"),
-    ("FOR", r"for"),
-    ("RETURN", r"return"),
-    ("LESS_THAN", r"<"),
-    ("GREATER_THAN", r">"),
-    ("INCREMENT", r"\+\+"),
-    ("DECREMENT", r"--"),
+    ("IF", r"\bif\b"),
+    ("ELSE", r"\belse\b"),
+    ("FOR", r"\bfor\b"),
+    ("RETURN", r"\breturn\b"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
-    ("EQUAL", r"=="),
+    ("LESS_THAN", r"<"),
+    ("GREATER_THAN", r">"),
     ("NOT_EQUAL", r"!="),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
@@ -56,11 +54,12 @@ TOKENS = [
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
     ("DOT", r"\."),
+    ("EQUALS", r"="),
     ("QUESTION", r"\?"),
     ("COLON", r":"),
-    ("LAYOUT", r"layout"),
-    ("IN", r"in"),
-    ("OUT", r"out"),
+    ("LAYOUT", r"\blayout\b"),
+    ("IN", r"\bin\b"),
+    ("OUT", r"\bout\b"),
 ]
 
 KEYWORDS = {
@@ -115,4 +114,4 @@ class GLSLLexer:
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
 
-        self.tokens.append(("EOF", None))  # End of file token
+        self.tokens.append(("EOF", None))
