@@ -139,7 +139,7 @@ class MetalToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                if stmt.vtype not in self.type_map.keys():
+                if stmt.vtype in ["Vertex_OUTPUT", "Fragment_OUTPUT"]:
                     continue
                 else:
                     code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
