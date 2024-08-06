@@ -139,7 +139,10 @@ class MetalToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                if stmt.vtype not in self.type_map.keys():
+                    continue
+                else:
+                    code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, ReturnNode):
@@ -198,7 +201,7 @@ class MetalToCrossGLConverter:
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
-            return f"{expr.vtype} {expr.name}"
+            return f"{self.map_type(expr.vtype)} {expr.name}"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr, is_main)
         elif isinstance(expr, BinaryOpNode):
