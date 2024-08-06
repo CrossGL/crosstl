@@ -4,9 +4,9 @@ import re
 TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
-    ("VERSION", r"#version"),  # Match #version as a separate token
-    ("NUMBER", r"\d+(\.\d+)?"),  # Match version numbers like 330 or 330.0
-    ("CORE", r"core"),  # Match the keyword core
+    ("VERSION", r"#version"),  
+    ("NUMBER", r"\d+(\.\d+)?"),  
+    ("CORE", r"core"),  
     ("SHADER", r"shader"),
     ("INPUT", r"input"),
     ("OUTPUT", r"output"),
@@ -19,10 +19,10 @@ TOKENS = [
     ("FLOAT", r"float"),
     ("INT", r"int"),
     ("SAMPLER2D", r"sampler2D"),
-    ("PRE_INCREMENT", r"\+\+(?=\w)"),  # Lookahead to match pre-increment
-    ("PRE_DECREMENT", r"--(?=\w)"),  # Lookahead to match pre-decrement
-    ("POST_INCREMENT", r"(?<=\w)\+\+"),  # Lookbehind to match post-increment
-    ("POST_DECREMENT", r"(?<=\w)--"),  # Lookbehind to match post-decrement
+    ("PRE_INCREMENT", r"\+\+(?=\w)"),  
+    ("PRE_DECREMENT", r"--(?=\w)"),  
+    ("POST_INCREMENT", r"(?<=\w)\+\+"),  
+    ("POST_DECREMENT", r"(?<=\w)--"), 
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
     ("LBRACE", r"\{"),
     ("RBRACE", r"\}"),
@@ -34,6 +34,8 @@ TOKENS = [
     ("ASSIGN_SUB", r"-="),
     ("ASSIGN_MUL", r"\*="),
     ("ASSIGN_DIV", r"/="),
+    ("EQUAL", r"=="),  
+    ("NOT_EQUAL", r"!="),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
     ("IF", r"if"),
@@ -42,11 +44,8 @@ TOKENS = [
     ("RETURN", r"return"),
     ("LESS_THAN", r"<"),
     ("GREATER_THAN", r">"),
-    ("INCREMENT", r"\+\+"),
-    ("DECREMENT", r"--"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
-    ("EQUAL", r"=="),
     ("NOT_EQUAL", r"!="),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
@@ -115,4 +114,5 @@ class GLSLLexer:
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
 
-        self.tokens.append(("EOF", None))  # End of file token
+        self.tokens.append(("EOF", None))
+
