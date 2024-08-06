@@ -6,20 +6,21 @@
 ------------------------------------------------------------------------
 
 <div style="display: block;" align="center">
+    <img class="dark-light" width="5%" >
     <a href="https://crossgl.net/">
-        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/website_button.svg">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/web_icon.png">
     </a>
-    <img class="dark-light" width="5%" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/logos/supported/empty.png">
+    <img class="dark-light" width="5%" >
     <a href="https://crossgl.github.io/language.html">
-        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/docs_button.svg">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/docs.png">
     </a>
-    <img class="dark-light" width="5%" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/logos/supported/empty.png">
+    <img class="dark-light" width="5%" >
     <a href="https://github.com/CrossGL/demos">
-        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/examples_button.svg">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/written.png">
     </a>
-    <img class="dark-light" width="5%" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/logos/supported/empty.png">
+    <img class="dark-light" width="5%" >
     <a href="https://crossgl.github.io/design.html">
-        <img class="dark-light" src="https://raw.githubusercontent.com/unifyai/unifyai.github.io/main/img/externally_linked/design_button.svg">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/strategic-plan.png">
     </a>
 </div>
 
