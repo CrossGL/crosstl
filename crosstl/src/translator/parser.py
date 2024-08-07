@@ -117,8 +117,8 @@ class Parser:
         self.eat(section_type)
         self.eat("LBRACE")
         inputs = self.parse_inputs()
-        self.parse_uniforms()
         outputs = self.parse_outputs()
+        self.parse_uniforms()
 
         functions = []
         while self.current_token[0] != "RBRACE":
@@ -400,7 +400,7 @@ class Parser:
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                return AssignmentNode(VariableNode(type_name, name), value)
+                return BinaryOpNode(VariableNode(type_name, name), op, value)
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
