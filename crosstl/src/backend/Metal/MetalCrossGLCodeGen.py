@@ -139,7 +139,7 @@ class MetalToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                if stmt.vtype not in self.type_map.keys():
+                if stmt.vtype in ["Vertex_OUTPUT", "Fragment_OUTPUT"]:
                     continue
                 else:
                     code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
@@ -148,6 +148,8 @@ class MetalToCrossGLConverter:
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
                     code += f"return {self.generate_expression(stmt.value, is_main)};\n"
+            elif isinstance(stmt, BinaryOpNode):
+                code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):

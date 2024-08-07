@@ -61,14 +61,15 @@ class TernaryOpNode:
 
 
 class LayoutNode:
-    def __init__(self, section, location_number, dtype, name):
+    def __init__(self, section, location_number, dtype, name, io_type):
         self.section = section
         self.location_number = location_number
         self.dtype = dtype
         self.name = name
+        self.io_type = io_type
 
     def __repr__(self):
-        return f"LayoutNode(section={self.section}, location_number={self.location_number}, dtype={self.dtype}, name={self.name})"
+        return f"LayoutNode(section={self.section}, location_number={self.location_number}, dtype={self.dtype}, name={self.name}, io_type={self.io_type})"
 
 
 class ShaderNode:

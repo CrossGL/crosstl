@@ -88,6 +88,7 @@ class GLSLParser:
             self.skip_comments()
 
             if self.current_token[0] == "IN":
+                io_type = "input"
                 self.eat("IN")
                 dtype = self.parse_type()
                 name = self.current_token[1]
@@ -98,8 +99,10 @@ class GLSLParser:
                     location_number=location_number,
                     dtype=dtype,
                     name=name,
+                    io_type=io_type,
                 )
             elif self.current_token[0] == "OUT":
+                io_type = "output"
                 self.eat("OUT")
                 dtype = self.parse_type()
                 name = self.current_token[1]
@@ -110,6 +113,7 @@ class GLSLParser:
                     location_number=location_number,
                     dtype=dtype,
                     name=name,
+                    io_type=io_type,
                 )
             else:
                 raise SyntaxError("Expected 'IN' or 'OUT' after location in LAYOUT")
@@ -205,9 +209,6 @@ class GLSLParser:
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
 
-        # print(f"Final vertex section: {vertex_section}")
-        # print(f"Final fragment section: {fragment_section}")
-
         return ShaderNode(
             version=version_node,
             global_inputs=global_inputs,
@@ -236,22 +237,18 @@ class GLSLParser:
             elif self.current_token[0] == "IN":
                 self.skip_comments()
                 inputs.extend(self.parse_inputs())
-                # print(f"Inputs collected: {inputs}")
 
             elif self.current_token[0] == "OUT":
                 self.skip_comments()
                 outputs.extend(self.parse_outputs())
-                # print(f"Outputs collected: {outputs}")
 
             elif self.current_token[0] == "UNIFORM":
                 self.skip_comments()
                 uniforms.extend(self.parse_uniforms())
-                # print(f"Uniforms collected: {uniforms}")
 
             elif self.current_token[0] in ["VOID", "FLOAT", "VECTOR"]:
                 self.skip_comments()
                 functions.append(self.parse_function())
-                # print(f"Functions collected: {functions}")
 
             elif self.current_token[0] == "RBRACE":
                 self.eat("RBRACE")
@@ -301,6 +298,12 @@ class GLSLParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
+        while self.current_token[0] == "DOT":
+            self.eat("DOT")
+            member_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            name += "." + member_name
+
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
@@ -324,11 +327,12 @@ class GLSLParser:
             "ASSIGN_DIV",
         ):
             op = self.current_token[0]
+            op_name = self.current_token[1]
             self.eat(op)
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                return AssignmentNode(VariableNode(type_name, name), value)
+                return BinaryOpNode(VariableNode(type_name, name), op_name, value)
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
@@ -467,12 +471,12 @@ class GLSLParser:
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if self.current_token[0] == "INCREMENT":
-                self.eat("INCREMENT")
-                return AssignmentNode(name, UnaryOpNode("++", VariableNode("", name)))
-            elif self.current_token[0] == "DECREMENT":
-                self.eat("DECREMENT")
-                return AssignmentNode(name, UnaryOpNode("--", VariableNode("", name)))
+            if self.current_token[0] == "POST_INCREMENT":
+                self.eat("POST_INCREMENT")
+                return UnaryOpNode("POST_INCREMENT", VariableNode("", name))
+            elif self.current_token[0] == "POST_DECREMENT":
+                self.eat("POST_DECREMENT")
+                return UnaryOpNode("POST_DECREMENT", VariableNode("", name))
             elif self.current_token[0] in [
                 "EQUALS",
                 "ASSIGN_ADD",
@@ -483,27 +487,47 @@ class GLSLParser:
                 op = self.current_token[0]
                 self.eat(op)
                 value = self.parse_expression()
-            if op == "EQUALS":
-                return AssignmentNode(name, value)
-            elif op == "ASSIGN_ADD":
-                return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "+", value)
-                )
-            elif op == "ASSIGN_SUB":
-                return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "-", value)
-                )
-            elif op == "ASSIGN_MUL":
-                return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "*", value)
-                )
-            elif op == "ASSIGN_DIV":
-                return AssignmentNode(
-                    name, BinaryOpNode(VariableNode("", name), "/", value)
-                )
+                if op == "EQUALS":
+                    return AssignmentNode(name, value)
+                elif op == "ASSIGN_ADD":
+                    return AssignmentNode(
+                        name, BinaryOpNode(VariableNode("", name), "+", value)
+                    )
+                elif op == "ASSIGN_SUB":
+                    return AssignmentNode(
+                        name, BinaryOpNode(VariableNode("", name), "-", value)
+                    )
+                elif op == "ASSIGN_MUL":
+                    return AssignmentNode(
+                        name, BinaryOpNode(VariableNode("", name), "*", value)
+                    )
+                elif op == "ASSIGN_DIV":
+                    return AssignmentNode(
+                        name, BinaryOpNode(VariableNode("", name), "/", value)
+                    )
+                else:
+                    raise SyntaxError(
+                        f"Expected INCREMENT or DECREMENT, got {self.current_token[0]}"
+                    )
+        elif self.current_token[0] == "PRE_INCREMENT":
+            self.eat("PRE_INCREMENT")
+            if self.current_token[0] == "IDENTIFIER":
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                return UnaryOpNode("++", VariableNode("", name))
             else:
                 raise SyntaxError(
-                    f"Expected INCREMENT or DECREMENT, got {self.current_token[0]}"
+                    f"Expected IDENTIFIER after PRE_INCREMENT, got {self.current_token[0]}"
+                )
+        elif self.current_token[0] == "PRE_DECREMENT":
+            self.eat("PRE_DECREMENT")
+            if self.current_token[0] == "IDENTIFIER":
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                return UnaryOpNode("--", VariableNode("", name))
+            else:
+                raise SyntaxError(
+                    f"Expected IDENTIFIER after PRE_DECREMENT, got {self.current_token[0]}"
                 )
         else:
             raise SyntaxError(f"Unexpected token in update: {self.current_token[0]}")
@@ -610,11 +634,17 @@ class GLSLParser:
         self.eat("LBRACE")
         body = self.parse_body()
         self.eat("RBRACE")
+
+        else_body = None
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            self.eat("LBRACE")
-            else_body = self.parse_body()
-            self.eat("RBRACE")
+            if self.current_token[0] == "IF":
+                # Handle nested if
+                else_body = self.parse_if()
+            else:
+                self.eat("LBRACE")
+                else_body = self.parse_body()
+                self.eat("RBRACE")
             return IfNode(condition, body, else_body)
         else:
             return IfNode(condition, body)

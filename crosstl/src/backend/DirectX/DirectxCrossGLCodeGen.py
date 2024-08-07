@@ -121,12 +121,15 @@ class HLSLToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                if stmt.vtype not in self.type_map.keys():
+                if stmt.vtype in ["VSOutput", "PSOutput"]:
                     continue
                 else:
                     code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
+
+            elif isinstance(stmt, BinaryOpNode):
+                code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
                     code += f"return {self.generate_expression(stmt.value, is_main)};\n"
