@@ -61,7 +61,7 @@ class TernaryOpNode:
 
 
 class LayoutNode:
-    def __init__(self, section, location_number, dtype, name,io_type):
+    def __init__(self, section, location_number, dtype, name, io_type):
         self.section = section
         self.location_number = location_number
         self.dtype = dtype
