@@ -56,7 +56,7 @@ The CrossTL is a core component of our platform, enabling the conversion of Cros
 
 ### The Universal Shader Language
 
-In the ever-evolving world of graphics programming, **CrossGL** emerges as a solution to, bridging the gap between diverse graphics APIs.
+In the ever-evolving world of graphics programming, **CrossGL** emerges as a solution to bridge the gap between diverse graphics APIs.
 
 #### 🚀 Write Once, Run Everywhere
 
