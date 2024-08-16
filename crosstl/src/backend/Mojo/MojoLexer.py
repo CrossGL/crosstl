@@ -2,7 +2,7 @@ import re
 
 # Define the tokens for Mojo syntax
 TOKENS = [
-    ("COMMENT_SINGLE", r"#.*"),  
+    ("COMMENT_SINGLE", r"#.*"),
     ("COMMENT_MULTI", r'"""[\s\S]*?"""'),
     ("STRUCT", r"\bstruct\b"),
     ("LET", r"\blet\b"),
@@ -18,7 +18,7 @@ TOKENS = [
     ("INT", r"\bInt\b"),
     ("FLOAT", r"\bFloat\b"),
     ("BOOL", r"\bBool\b"),
-    ("STRING", r'\bString\b'),
+    ("STRING", r"\bString\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
     ("LBRACE", r"\{"),
@@ -89,13 +89,19 @@ class MojoLexer:
                     text = match.group(0)
                     if token_type == "IDENTIFIER" and text in KEYWORDS:
                         token_type = KEYWORDS[text]
-                    if token_type not in ["WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"]:
+                    if token_type not in [
+                        "WHITESPACE",
+                        "COMMENT_SINGLE",
+                        "COMMENT_MULTI",
+                    ]:
                         token = (token_type, text)
                         self.tokens.append(token)
                     pos = match.end(0)
                     break
             if not match:
-                raise SyntaxError(f"Illegal character '{self.code[pos]}' at position {pos}")
+                raise SyntaxError(
+                    f"Illegal character '{self.code[pos]}' at position {pos}"
+                )
 
         self.tokens.append(("EOF", ""))
 
@@ -112,4 +118,3 @@ struct MyStruct:
 lexer = MojoLexer(code)
 for token in lexer.tokens:
     print(token)
-

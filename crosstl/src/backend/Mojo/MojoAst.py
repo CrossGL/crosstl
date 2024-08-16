@@ -1,5 +1,6 @@
 # Ref from Modular docs.
 
+
 class MojoASTNode:
     pass
 
@@ -249,4 +250,3 @@ class SwitchNode(MojoASTNode):
 
     def __repr__(self):
         return f"SwitchNode(expression={self.expression}, cases={self.cases})"
-

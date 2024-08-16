@@ -51,34 +51,29 @@ class GLSLCodeGen:
             shader_type = "vertex"
             if self.vertex_item.inputs:
                 for i, (vtype, name) in enumerate(self.vertex_item.inputs):
-                    code += f"layout(location = {i}) in {self.map_type(vtype)} {name};\n"
-                
-            if self.vertex_item.outputs:    
+                    code += (
+                        f"layout(location = {i}) in {self.map_type(vtype)} {name};\n"
+                    )
+
+            if self.vertex_item.outputs:
                 for i, (vtype, name) in enumerate(self.vertex_item.outputs):
                     if i == 0:
                         code += f"out {self.map_type(vtype)} {name};\n"
                     else:
-                        code += (
-                            f"layout(location = {i-1}) out {self.map_type(vtype)} {name};\n"
-                        )
+                        code += f"layout(location = {i-1}) out {self.map_type(vtype)} {name};\n"
                 code += "\n"
-            
+
             if self.vertex_item.functions:
-                code += (
-                    f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
-                )
+                code += f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
 
             if self.vertex_item.intermidiate:
-                code += (
-                    f"{self.generate_intermidiate(self.vertex_item.intermidiate, shader_type)}\n"
-                )
-            
+                code += f"{self.generate_intermidiate(self.vertex_item.intermidiate, shader_type)}\n"
+
             if self.vertex_item.functions:
                 for function_node in self.vertex_item.functions:
                     if function_node.name == "main":
                         code += f"{self.generate_main(function_node, shader_type)}\n"
-            
-            
+
         # Generate fragment shader section
         self.fragment_item = node.fragment_section
         if isinstance(self.fragment_item, FRAGMENTShaderNode):
@@ -89,27 +84,22 @@ class GLSLCodeGen:
                     if i == 0:
                         code += f"in {self.map_type(vtype)} {name};\n"
                     else:
-                        code += (
-                            f"layout(location = {i-1}) in {self.map_type(vtype)} {name};\n"
-                        )
+                        code += f"layout(location = {i-1}) in {self.map_type(vtype)} {name};\n"
             if self.fragment_item.outputs:
                 for i, (vtype, name) in enumerate(self.fragment_item.outputs):
-                    code += f"layout(location = {i}) out {self.map_type(vtype)} {name};\n"
+                    code += (
+                        f"layout(location = {i}) out {self.map_type(vtype)} {name};\n"
+                    )
                 code += "\n"
-            
+
             if self.fragment_item.functions:
-                code += (
-                    f"{self.generate_function(self.fragment_item.functions, shader_type)}\n"
-                )
+                code += f"{self.generate_function(self.fragment_item.functions, shader_type)}\n"
             if self.fragment_item.intermidiate:
-                code += (
-                    f"{self.generate_intermidiate(self.fragment_item.intermidiate, shader_type)}\n"
-                )
+                code += f"{self.generate_intermidiate(self.fragment_item.intermidiate, shader_type)}\n"
             if self.fragment_item.functions:
                 for function_node in self.fragment_item.functions:
                     if function_node.name == "main":
                         code += f"{self.generate_main(function_node, shader_type)}\n"
-
 
         return code
 
@@ -124,7 +114,9 @@ class GLSLCodeGen:
                     )
                     code += f"{self.map_type(function_node.return_type)} {function_node.name}({params}) {{\n"
                     for stmt in function_node.body:
-                        code += self.generate_statement(stmt, 1, shader_type=shader_type)
+                        code += self.generate_statement(
+                            stmt, 1, shader_type=shader_type
+                        )
                     code += "}\n"
         elif shader_type == "global":
             params = ", ".join(
@@ -139,14 +131,14 @@ class GLSLCodeGen:
     def generate_main(self, node, shader_type):
         code = ""
         params = ", ".join(
-                    f"{self.map_type(param[0])} {param[1]}"
-                    for param in node.params
-                )
+            f"{self.map_type(param[0])} {param[1]}" for param in node.params
+        )
         code += f"{self.map_type(node.return_type)} {node.name}({params}) {{\n"
         for stmt in node.body:
             code += self.generate_statement(stmt, 1, shader_type=shader_type)
         code += "}\n"
         return code
+
     def generate_statement(self, stmt, indent=0, shader_type=None):
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
@@ -159,7 +151,7 @@ class GLSLCodeGen:
             return self.generate_for(stmt, indent, shader_type)
         elif isinstance(stmt, ReturnNode):
             code = ""
-            for i,return_stmt in enumerate(stmt.value):
+            for i, return_stmt in enumerate(stmt.value):
                 code += f"{self.generate_expression(return_stmt, shader_type)}"
                 if i < len(stmt.value) - 1:
                     code += ", "
@@ -198,12 +190,12 @@ class GLSLCodeGen:
         indent_str = "    " * indent
 
         init = self.generate_statement(node.init, 0, shader_type).strip()[
-                :-1
-            ]  # Remove trailing semicolon
+            :-1
+        ]  # Remove trailing semicolon
 
-        condition = self.generate_statement(node.condition,0, shader_type).strip()[
-                :-1
-            ]  # Remove trailing semicolon
+        condition = self.generate_statement(node.condition, 0, shader_type).strip()[
+            :-1
+        ]  # Remove trailing semicolon
 
         update = self.generate_statement(node.update, 0, shader_type).strip()[:-1]
 

@@ -38,10 +38,10 @@ class Parser:
 
     def skip_comments(self):
         """Skip comments in the token list
-        
-        This method skips comments in the token list by incrementing the position   
+
+        This method skips comments in the token list by incrementing the position
         until the current token is not a comment token.
-                    
+
         """
 
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
@@ -83,7 +83,6 @@ class Parser:
             SyntaxError: If the current token is not "UNIFORM"
 
         """
-
 
         uniforms = []
         while self.current_token[0] == "UNIFORM":
@@ -127,7 +126,7 @@ class Parser:
             ShaderNode: The root node of the AST
 
         Raises:
-            SyntaxError: If the current token is not "SHADER"   
+            SyntaxError: If the current token is not "SHADER"
 
         """
         self.eat("SHADER")
@@ -158,7 +157,7 @@ class Parser:
             elif self.current_token[0] == "FRAGMENT":
                 fragment_section = self.parse_shader_section("FRAGMENT")
                 self.skip_comments()  # Skip comments while parsing functions
-            elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "VOID","MATRIX"]:
+            elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "VOID", "MATRIX"]:
                 global_functions.append(self.parse_function())
                 self.skip_comments()  # Skip comments while parsing functions
             else:
@@ -175,7 +174,6 @@ class Parser:
         )
 
     def parse_shader_section(self, section_type):
-
         """Parse a shader section
 
         This method parses a shader section (VERTEX or FRAGMENT) and generates a VERTEXShaderNode or FRAGMENTShaderNode object.
@@ -203,21 +201,30 @@ class Parser:
                 inputs.extend(self.parse_inputs())
             elif self.current_token[0] == "OUTPUT":
                 outputs.extend(self.parse_outputs())
-            elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "VOID","MATRIX"] and self.peak(2)[0] == "LPAREN":
+            elif (
+                self.current_token[0] in ["VECTOR", "FLOAT", "INT", "VOID", "MATRIX"]
+                and self.peak(2)[0] == "LPAREN"
+            ):
                 functions.append(self.parse_function())
             elif self.current_token[0] == "FOR":
                 intermidiate.append(self.parse_for_loop())
             elif self.current_token[0] == "IF":
                 intermidiate.append(self.parse_if_statement())
-            elif self.current_token[0] in ["VECTOR", "IDENTIFIER", "FLOAT", "INT","MATRIX"]:
+            elif self.current_token[0] in [
+                "VECTOR",
+                "IDENTIFIER",
+                "FLOAT",
+                "INT",
+                "MATRIX",
+            ]:
                 intermidiate.append(self.parse_assignment_or_function_call())
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
         self.eat("RBRACE")
         if section_type == "VERTEX":
-            return VERTEXShaderNode(inputs, outputs, functions,intermidiate)
+            return VERTEXShaderNode(inputs, outputs, functions, intermidiate)
         else:
-            return FRAGMENTShaderNode(inputs, outputs, functions,intermidiate)
+            return FRAGMENTShaderNode(inputs, outputs, functions, intermidiate)
 
     def parse_inputs(self):
         """Parse input declarations
@@ -228,7 +235,7 @@ class Parser:
 
             list: A list of input declarations
 
-            
+
         Raises:
 
             SyntaxError: If the current token is not "INPUT"
@@ -258,7 +265,6 @@ class Parser:
         return inputs
 
     def parse_outputs(self):
-
         """Parse output declarations
 
         This method parses output declarations in the shader code.
@@ -296,13 +302,12 @@ class Parser:
         return outputs
 
     def parse_function(self):
-
         """Parse a function declaration
 
         This method parses a function declaration in the shader code.
 
         Returns:
-            
+
                 FunctionNode: A FunctionNode object representing the function declaration
 
         Raises:
@@ -330,7 +335,6 @@ class Parser:
         return FunctionNode(return_type, fname, params, body)
 
     def parse_parameters(self):
-
         """Parse function parameters
 
         This method parses function parameters in the shader code.
@@ -350,7 +354,6 @@ class Parser:
         return params
 
     def parse_parameter(self):
-
         """Parse a function parameter
 
         This method parses a function parameter in the shader code.
@@ -367,7 +370,6 @@ class Parser:
         return (param_type, param_name)
 
     def parse_type(self):
-
         """Parse a type declaration
 
         This method parses a type declaration in the shader code.
@@ -398,7 +400,6 @@ class Parser:
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
 
     def parse_body(self):
-
         """Parse a function body
 
         This method parses a function body in the shader code.
@@ -423,7 +424,6 @@ class Parser:
         return body
 
     def parse_if_statement(self):
-
         """Parse an if statement
 
         This method parses an if statement in the shader code.
@@ -449,7 +449,6 @@ class Parser:
         return IfNode(condition, if_body, else_body)
 
     def peak(self, n):
-
         """Peek ahead in the token list
 
         This method returns the nth token ahead in the token list.
@@ -459,16 +458,14 @@ class Parser:
             n (int): The number of tokens to peek ahead
 
         Returns:
-            
+
                 tuple: The nth token ahead in the token list
-    
-            """
-        
-        return self.tokens[self.pos + n]    
-    
+
+        """
+
+        return self.tokens[self.pos + n]
 
     def parse_for_loop(self):
-
         """Parse a for loop
 
         This method parses a for loop in the shader code.
@@ -478,7 +475,6 @@ class Parser:
             ForNode: A ForNode object representing the for loop
 
         """
-
 
         self.eat("FOR")
         self.eat("LPAREN")
@@ -501,7 +497,6 @@ class Parser:
         return ForNode(init, condition, update, body)
 
     def parse_update(self):
-
         """Parse an update statement
 
         This method parses an update statement in the shader code.
@@ -517,11 +512,11 @@ class Parser:
             if self.current_token[0] == "INCREMENT":
                 op_name = self.current_token[1]
                 self.eat("INCREMENT")
-                return VariableNode("", name+op_name)
+                return VariableNode("", name + op_name)
             elif self.current_token[0] == "DECREMENT":
                 op_name = self.current_token[1]
                 self.eat("DECREMENT")
-                return VariableNode("", name+op_name)
+                return VariableNode("", name + op_name)
             else:
                 raise SyntaxError(
                     f"Expected INCREMENT or DECREMENT, got {self.current_token[0]}"
@@ -533,12 +528,11 @@ class Parser:
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
-                return VariableNode("", op_name+name)
+                return VariableNode("", op_name + name)
         else:
             raise SyntaxError(f"Unexpected token in update: {self.current_token[0]}")
 
     def parse_return_statement(self):
-
         """Parse a return statement
 
         This method parses a return statement in the shader code.
@@ -556,10 +550,8 @@ class Parser:
             return_value.append(self.parse_expression())
         self.eat("SEMICOLON")
         return ReturnNode(return_value)
-        
 
-    def parse_assignment_or_function_call(self,update_condition=False):
-
+    def parse_assignment_or_function_call(self, update_condition=False):
         """Parse an assignment or function call
 
         This method parses an assignment or function call in the shader code.
@@ -575,15 +567,15 @@ class Parser:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
         if self.current_token[0] == "IDENTIFIER":
-            return self.parse_variable_declaration(type_name,update_condition)
-        if self.current_token[0] in ['INCREMENT', 'DECREMENT']:
+            return self.parse_variable_declaration(type_name, update_condition)
+        if self.current_token[0] in ["INCREMENT", "DECREMENT"]:
             inc_dec = True
             inc_dec_op = self.current_token[1]
             self.eat(self.current_token[0])
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         if inc_dec:
-            name =  VariableNode(type_name,VariableNode("", inc_dec_op+name))
+            name = VariableNode(type_name, VariableNode("", inc_dec_op + name))
         if self.current_token[0] in [
             "EQUALS",
             "ASSIGN_ADD",
@@ -599,11 +591,11 @@ class Parser:
         elif self.current_token[0] == "INCREMENT":
             self.eat("INCREMENT")
             op_name = self.current_token[1]
-            return VariableNode(type_name, VariableNode("", name+op_name))
+            return VariableNode(type_name, VariableNode("", name + op_name))
         elif self.current_token[0] == "DECREMENT":
             self.eat("DECREMENT")
             op_name = self.current_token[1]
-            return VariableNode(type_name,VariableNode("", name+op_name))
+            return VariableNode(type_name, VariableNode("", name + op_name))
         elif self.current_token[0] == "LPAREN":
             return self.parse_function_call(name)
         else:
@@ -611,8 +603,7 @@ class Parser:
                 f"Unexpected token after identifier: {self.current_token[0]}"
             )
 
-    def parse_variable_declaration(self, type_name,update_condition=False):
-
+    def parse_variable_declaration(self, type_name, update_condition=False):
         """Parse a variable declaration
 
         This method parses a variable declaration in the shader code.
@@ -638,7 +629,18 @@ class Parser:
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
 
-        elif self.current_token[0] in ["EQUALS", "ASSIGN_ADD", "ASSIGN_SUB", "ASSIGN_MUL", "ASSIGN_DIV","EQUAL","LESS_THAN","GREATER_THAN","LESS_EQUAL","GREATER_EQUAL"]:
+        elif self.current_token[0] in [
+            "EQUALS",
+            "ASSIGN_ADD",
+            "ASSIGN_SUB",
+            "ASSIGN_MUL",
+            "ASSIGN_DIV",
+            "EQUAL",
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+        ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             value = self.parse_expression()
@@ -646,11 +648,11 @@ class Parser:
                 value = self.parse_member_access(value)
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                return BinaryOpNode(VariableNode(type_name,name),op, value)
-            
+                return BinaryOpNode(VariableNode(type_name, name), op, value)
+
             else:
                 if update_condition:
-                    return BinaryOpNode(VariableNode(type_name, name),op, value)
+                    return BinaryOpNode(VariableNode(type_name, name), op, value)
                 else:
                     raise SyntaxError(
                         f"Expected ';' after variable assignment, found: {self.current_token[0]}"
@@ -685,7 +687,6 @@ class Parser:
             )
 
     def parse_assignment(self, name):
-
         """Parse an assignment statement
 
         This method parses an assignment statement in the shader code.
@@ -704,29 +705,40 @@ class Parser:
 
         """
 
-        if self.current_token[0] in ["EQUALS", "ASSIGN_ADD", "ASSIGN_SUB", "ASSIGN_MUL", "ASSIGN_DIV","EQUAL","LESS_THAN","GREATER_THAN","LESS_EQUAL","GREATER_EQUAL"]:
+        if self.current_token[0] in [
+            "EQUALS",
+            "ASSIGN_ADD",
+            "ASSIGN_SUB",
+            "ASSIGN_MUL",
+            "ASSIGN_DIV",
+            "EQUAL",
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+        ]:
             op = self.current_token[0]
             op_name = self.current_token[1]
             self.eat(op)
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-            return BinaryOpNode(name,op_name, value)
+            return BinaryOpNode(name, op_name, value)
         else:
-            raise SyntaxError(f"Expected assignment operator, found: {self.current_token[0]}")
+            raise SyntaxError(
+                f"Expected assignment operator, found: {self.current_token[0]}"
+            )
 
-   
     def parse_additive(self):
-
         """Parse an additive expression
 
         This method parses an additive expression in the shader code.
 
         Returns:
-            
+
                 ASTNode: An ASTNode object representing the additive expression
-    
-            """
+
+        """
         expr = self.parse_multiplicative()
         while self.current_token[0] in ["PLUS", "MINUS"]:
             op = self.current_token[0]
@@ -736,7 +748,6 @@ class Parser:
         return expr
 
     def parse_multiplicative(self):
-
         """Parse a multiplicative expression
 
         This method parses a multiplicative expression in the shader code.
@@ -755,7 +766,6 @@ class Parser:
         return expr
 
     def parse_unary(self):
-
         """Parse a unary expression
 
         This method parses a unary expression in the shader code.
@@ -773,11 +783,10 @@ class Parser:
         return self.parse_primary()
 
     def parse_primary(self):
-
         """Parse a primary expression
 
         This method parses a primary expression in the shader code.
-        
+
         Returns:
 
 
@@ -797,13 +806,20 @@ class Parser:
             value = self.current_token[1]
             self.eat(self.current_token[0])
             return value
-        elif self.current_token[0] in ["IDENTIFIER", "VECTOR", "FLOAT", "INT", "MATRIX"]:
+        elif self.current_token[0] in [
+            "IDENTIFIER",
+            "VECTOR",
+            "FLOAT",
+            "INT",
+            "MATRIX",
+        ]:
             return self.parse_function_call_or_identifier()
         else:
-            raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
-        
-    def parse_function_call(self, name):
+            raise SyntaxError(
+                f"Unexpected token in expression: {self.current_token[0]}"
+            )
 
+    def parse_function_call(self, name):
         """Parse a function call
 
         This method parses a function call in the shader code.
@@ -812,7 +828,7 @@ class Parser:
 
             name (str): The name of the function being called
 
-        Returns:    
+        Returns:
 
             FunctionCallNode: A FunctionCallNode object representing the function call
 
@@ -828,7 +844,6 @@ class Parser:
         return FunctionCallNode(name, args)
 
     def parse_expression(self):
-
         """Parse an expression
 
         This method parses an expression in the shader code.
@@ -840,8 +855,23 @@ class Parser:
         """
         expr = self.parse_ternary()
         while self.current_token[0] in [
-            "LESS_THAN", "GREATER_THAN", "LESS_EQUAL", "GREATER_EQUAL",
-            "EQUAL", "NOT_EQUAL", "AND", "OR", "PLUS", "MINUS", "MULTIPLY", "DIVIDE","EQUALS","ASSIGN_ADD","ASSIGN_SUB","ASSIGN_MUL","ASSIGN_DIV",
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+            "EQUAL",
+            "NOT_EQUAL",
+            "AND",
+            "OR",
+            "PLUS",
+            "MINUS",
+            "MULTIPLY",
+            "DIVIDE",
+            "EQUALS",
+            "ASSIGN_ADD",
+            "ASSIGN_SUB",
+            "ASSIGN_MUL",
+            "ASSIGN_DIV",
         ]:
             op = self.current_token[0]
             self.eat(op)
@@ -850,7 +880,6 @@ class Parser:
         return expr
 
     def parse_ternary(self):
-
         """Parse a ternary expression
 
         This method parses a ternary expression in the shader code.
@@ -868,11 +897,8 @@ class Parser:
             false_expr = self.parse_expression()
             expr = TernaryOpNode(expr, true_expr, false_expr)
         return expr
-    
-
 
     def parse_function_call_or_identifier(self):
-
         """Parse a function call or identifier
 
         This method parses a function call or identifier in the shader code.
@@ -896,17 +922,16 @@ class Parser:
         return VariableNode("", func_name)
 
     def parse_member_access(self, object):
-
         """Parse a member access
 
         This method parses a member access in the shader code.
 
         Args:
-            
+
                 object (str): The object being accessed
 
         Returns:
-            
+
                 MemberAccessNode: A MemberAccessNode object representing the member access
 
         Raises:

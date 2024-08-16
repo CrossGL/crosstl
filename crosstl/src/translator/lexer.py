@@ -75,13 +75,13 @@ KEYWORDS = {
 
 class Lexer:
     """A simple lexer for the shader language
-    
+
     This lexer tokenizes the input code into a list of tokens.
-    
+
     Attributes:
         code (str): The input code to tokenize
         tokens (list): A list of tokens generated from the input code
-    
+
     """
 
     def __init__(self, code):
@@ -117,4 +117,3 @@ class Lexer:
                 )
 
         self.tokens.append(("EOF", None))  # End of file token
-

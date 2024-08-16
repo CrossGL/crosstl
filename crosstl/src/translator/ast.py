@@ -46,7 +46,7 @@ class ShaderNode:
 
 
 class VERTEXShaderNode:
-    def __init__(self, inputs, outputs, functions,intermidiate):
+    def __init__(self, inputs, outputs, functions, intermidiate):
         self.inputs = inputs
         self.outputs = outputs
         self.functions = functions
@@ -57,16 +57,14 @@ class VERTEXShaderNode:
 
 
 class FRAGMENTShaderNode:
-    def __init__(self, inputs, outputs, functions,intermidiate):
+    def __init__(self, inputs, outputs, functions, intermidiate):
         self.inputs = inputs
         self.outputs = outputs
         self.functions = functions
         self.intermidiate = intermidiate
 
     def __repr__(self):
-        return (
-            f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r} {self.intermidiate!r}"
-        )
+        return f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r} {self.intermidiate!r}"
 
 
 class FunctionNode(ASTNode):

@@ -100,21 +100,17 @@ class HLSLCodeGen:
                         self.gl_position = False
                     code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
                 code += "};\n\n"
-            
+
             if self.vertex_item.functions:
-                code += (
-                    f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
-                )
+                code += f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
 
             if self.vertex_item.intermidiate:
-                code += (
-                    f"{self.generate_intermidiate(self.vertex_item.intermidiate, shader_type)}\n"
-                )
+                code += f"{self.generate_intermidiate(self.vertex_item.intermidiate, shader_type)}\n"
             if self.vertex_item.functions:
                 for function_node in self.vertex_item.functions:
                     if function_node.name == "main":
                         code += f"{self.generate_main(function_node, shader_type)}\n"
-            
+
         # Generate fragment shader section
         self.fragment_item = node.fragment_section
         if isinstance(self.fragment_item, FRAGMENTShaderNode):
@@ -129,15 +125,11 @@ class HLSLCodeGen:
                 for i, (vtype, name) in enumerate(self.fragment_item.outputs):
                     code += f"    {self.map_type(vtype)} {name} : SV_TARGET{i};\n"
                 code += "};\n\n"
-            
+
             if self.fragment_item.functions:
-                code += (
-                    f"{self.generate_function(self.fragment_item.functions, shader_type)}\n"
-                )
+                code += f"{self.generate_function(self.fragment_item.functions, shader_type)}\n"
             if self.fragment_item.intermidiate:
-                code += (
-                    f"{self.generate_intermidiate(self.fragment_item.intermidiate, shader_type)}\n"
-                )
+                code += f"{self.generate_intermidiate(self.fragment_item.intermidiate, shader_type)}\n"
             if self.fragment_item.functions:
                 for function_node in self.fragment_item.functions:
                     if function_node.name == "main":
@@ -151,13 +143,13 @@ class HLSLCodeGen:
                 vb_left = vb_name.split("=")[0].strip()
                 if vb_left == "output.position":
                     self.gl_position = True
-    
+
     def generate_intermidiate(self, node, shader_type):
         code = ""
         for stmt in node:
             code += self.generate_statement(stmt, 0, shader_type=shader_type)
         return code
-    
+
     def generate_function(self, node, shader_type):
         code = ""
         if shader_type == "vertex":
@@ -171,8 +163,10 @@ class HLSLCodeGen:
                     code += f"{return_type} {function_node.name}({params}) {{\n"
 
                     for stmt in function_node.body:
-                        code += self.generate_statement(stmt, 1, shader_type=shader_type)
-                
+                        code += self.generate_statement(
+                            stmt, 1, shader_type=shader_type
+                        )
+
                     code += "}\n"
         elif shader_type == "fragment":
             for function_node in node:
@@ -183,9 +177,11 @@ class HLSLCodeGen:
                     )
                     return_type = self.map_type(function_node.return_type)
                     code += f"{return_type} {function_node.name}({params}) {{\n"
-                
+
                     for stmt in function_node.body:
-                        code += self.generate_statement(stmt, 1, shader_type=shader_type)
+                        code += self.generate_statement(
+                            stmt, 1, shader_type=shader_type
+                        )
                     code += "}\n"
         elif shader_type == "global":
             if node.name == "main":
@@ -207,7 +203,6 @@ class HLSLCodeGen:
             code += "}\n"
         return code
 
-
     def generate_main(self, node, shader_type):
         if shader_type == "vertex":
             code = "VSOutput VSMain(VSInput input) {\n"
@@ -222,7 +217,6 @@ class HLSLCodeGen:
         code += "}\n"
         return code
 
-
     def generate_statement(self, stmt, indent=0, shader_type=None):
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
@@ -230,12 +224,12 @@ class HLSLCodeGen:
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt, shader_type)};\n"
         elif isinstance(stmt, IfNode):
-            return self.generate_if(stmt, indent, shader_type) 
+            return self.generate_if(stmt, indent, shader_type)
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent, shader_type)
         elif isinstance(stmt, ReturnNode):
             code = ""
-            for i,return_stmt in enumerate(stmt.value):
+            for i, return_stmt in enumerate(stmt.value):
                 code += f"{self.generate_expression(return_stmt, shader_type)}"
                 if i < len(stmt.value) - 1:
                     code += ", "
@@ -274,14 +268,13 @@ class HLSLCodeGen:
     def generate_for(self, node, indent, shader_type=None):
         indent_str = "    " * indent
 
-
         init = self.generate_statement(node.init, 0, shader_type).strip()[
-                :-1
-            ]  # Remove trailing semicolon
+            :-1
+        ]  # Remove trailing semicolon
 
-        condition = self.generate_statement(node.condition,0, shader_type).strip()[
-                :-1
-            ]  # Remove trailing semicolon
+        condition = self.generate_statement(node.condition, 0, shader_type).strip()[
+            :-1
+        ]  # Remove trailing semicolon
 
         update = self.generate_statement(node.update, 0, shader_type).strip()[:-1]
 
