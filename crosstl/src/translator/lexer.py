@@ -14,7 +14,7 @@ TOKENS = [
     ("BOOL", r"\bbool\b"),
     ("VERTEX", r"\bvertex\b"),
     ("FRAGMENT", r"\bfragment\b"),
-    # ("INCREMENT_DECREMENT", r"\b[a-zA-Z_][a-zA-Z_0-9]*\s*(\+\+|--)\b"),
+    ("FLOAT_NUMBER", r"\d*\.\d+|\d+\.\d*"),
     ("FLOAT", r"\bfloat\b"),
     ("INT", r"\bint\b"),
     ("SAMPLER2D", r"\bsampler2D\b"),
@@ -37,8 +37,8 @@ TOKENS = [
     ("RETURN", r"\breturn\b"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
-    ("LESS_THAN", r"<"),
     ("GREATER_THAN", r">"),
+    ("LESS_THAN", r"<"),
     ("INCREMENT", r"\+\+"),
     ("DECREMENT", r"--"),
     ("EQUAL", r"=="),
@@ -74,6 +74,16 @@ KEYWORDS = {
 
 
 class Lexer:
+    """A simple lexer for the shader language
+    
+    This lexer tokenizes the input code into a list of tokens.
+    
+    Attributes:
+        code (str): The input code to tokenize
+        tokens (list): A list of tokens generated from the input code
+    
+    """
+
     def __init__(self, code):
         self.code = code
         self.tokens = []
@@ -107,3 +117,4 @@ class Lexer:
                 )
 
         self.tokens.append(("EOF", None))  # End of file token
+

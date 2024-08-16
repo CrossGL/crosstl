@@ -36,3 +36,4 @@ __pycache__/
 /compiler/codegen/__pycache__
 /compiler/__pycache__
 *:Z*
+*workspace
