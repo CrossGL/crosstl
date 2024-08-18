@@ -49,7 +49,6 @@ class HLSLCodeGen:
         }
 
     def generate(self, ast):
-        print(ast)
         if isinstance(ast, ShaderNode):
             self.current_shader = ast
             return self.generate_shader(ast)

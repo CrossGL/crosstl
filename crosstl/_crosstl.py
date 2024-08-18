@@ -8,7 +8,7 @@ from .src.backend.Metal import *
 from .src.backend.Opengl import *
 
 
-def translate(file_path: str, backend: str = "crossgl") -> str:
+def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
     backend = backend.lower()
 
     with open(file_path, "r") as file:
@@ -35,13 +35,10 @@ def translate(file_path: str, backend: str = "crossgl") -> str:
     if file_path.endswith(".cgl"):
         if backend == "metal":
             codegen = metal_codegen.MetalCodeGen()
-            return codegen.generate(ast)
         elif backend == "directx":
             codegen = directx_codegen.HLSLCodeGen()
-            return codegen.generate(ast)
         elif backend == "opengl":
             codegen = opengl_codegen.GLSLCodeGen()
-            return codegen.generate(ast)
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
@@ -54,8 +51,16 @@ def translate(file_path: str, backend: str = "crossgl") -> str:
                 codegen = GLSLToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
-            return codegen.generate(ast)
         else:
             raise ValueError(
                 f"Unsupported translation scenario: {file_path} to {backend}"
             )
+
+    # Generate the code and write to the file
+    generated_code = codegen.generate(ast)
+
+    if save_shader is not None:
+        with open(save_shader, "w") as file:
+            file.write(generated_code)
+
+    return generated_code

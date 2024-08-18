@@ -346,20 +346,17 @@ class MetalCodeGen:
         elif isinstance(expr, BinaryOpNode):
             return f"{self.generate_expression(expr.left, shader_type)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, shader_type)}"
         elif isinstance(expr, FunctionCallNode):
-            if expr.name in ["vec2", "vec3", "vec4"]:
-                args = ", ".join(
-                    self.generate_expression(arg, shader_type) for arg in expr.args
-                )
+            args = ", ".join(
+                self.generate_expression(arg, shader_type) for arg in expr.args
+            )
+            if expr.name in self.type_mapping.keys():
                 return f"{self.map_type(expr.name)}({args})"
             else:
-                args = ", ".join(
-                    self.generate_expression(arg, shader_type) for arg in expr.args
-                )
                 func_name = self.translate_expression(expr.name, shader_type)
                 return f"{func_name}({args})"
 
         elif isinstance(expr, UnaryOpNode):
-            return f"{self.generate_expression(expr.operand, shader_type)}{self.map_operator(expr.op)}"
+            return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, shader_type)}"
 
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"

@@ -199,13 +199,6 @@ class GLSLCodeGen:
 
         update = self.generate_statement(node.update, 0, shader_type).strip()[:-1]
 
-        if isinstance(node.update, AssignmentNode) and isinstance(
-            node.update.value, UnaryOpNode
-        ):
-            update = f"{node.update.value.operand.name}++"
-        else:
-            update = self.generate_statement(node.update, 0, shader_type).strip()[:-1]
-
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
             code += self.generate_statement(stmt, indent + 1, shader_type)
@@ -229,7 +222,7 @@ class GLSLCodeGen:
             func_name = self.translate_expression(expr.name, shader_type)
             return f"{func_name}({args})"
         elif isinstance(expr, UnaryOpNode):
-            return f"{self.generate_expression(expr.operand, shader_type)}{self.map_operator(expr.op)}"
+            return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, shader_type)}"
 
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"
