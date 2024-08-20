@@ -100,8 +100,8 @@ class MetalLexer:
         pos = 0
         while pos < len(self.code):
             match = None
-            #Changes for Else If
-            if self.code[pos:pos + 7] == "else if":
+            # Changes for Else If
+            if self.code[pos : pos + 7] == "else if":
                 self.tokens.append(("ELSE_IF", "else if"))
                 pos += 7
                 continue

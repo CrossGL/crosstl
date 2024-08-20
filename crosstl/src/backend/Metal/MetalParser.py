@@ -310,7 +310,7 @@ class MetalParser:
         condition = self.parse_expression()
         self.eat("RPAREN")
         if_body = self.parse_block()
-    
+
         else_body = None
         elif_conditions = []
         elif_bodies = []
@@ -330,7 +330,6 @@ class MetalParser:
                 break
 
         return IfNode(condition, if_body, elif_conditions, elif_bodies, else_body)
-
 
     def parse_for_statement(self):
         self.eat("FOR")
