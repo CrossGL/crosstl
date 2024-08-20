@@ -80,7 +80,7 @@ class AssignmentNode(ASTNode):
         return f"AssignmentNode(left={self.left}, operator='{self.operator}', right={self.right})"
 
 
-class IfNode:
+class IfNode(ASTNode):
     def __init__(
         self, condition, if_body, elif_conditions=None, elif_bodies=None, else_body=None
     ):

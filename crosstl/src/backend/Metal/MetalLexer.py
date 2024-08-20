@@ -19,6 +19,7 @@ TOKENS = [
     ("RETURN", r"\breturn\b"),
     ("IF", r"\bif\b"),
     ("ELSE", r"\belse\b"),
+    ("ELSE_IF", r"\belif\b")
     ("FOR", r"\bfor\b"),
     ("KERNEL", r"\bkernel\b"),
     ("VERTEX", r"\bvertex\b"),
@@ -77,6 +78,7 @@ KEYWORDS = {
     "return": "RETURN",
     "if": "IF",
     "else": "ELSE",
+    "elif":"ELSE_IF",
     "for": "FOR",
     "kernel": "KERNEL",
     "vertex": "VERTEX",
@@ -100,11 +102,6 @@ class MetalLexer:
         pos = 0
         while pos < len(self.code):
             match = None
-            # Changes for Else If
-            if self.code[pos : pos + 7] == "else if":
-                self.tokens.append(("ELSE_IF", "else if"))
-                pos += 7
-                continue
             for token_type, pattern in TOKENS:
                 regex = re.compile(pattern)
                 match = regex.match(self.code, pos)
