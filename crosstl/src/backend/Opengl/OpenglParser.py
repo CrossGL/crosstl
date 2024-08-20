@@ -625,7 +625,7 @@ class GLSLParser:
         expr = self.parse_expression()
         self.eat("SEMICOLON")
         return ReturnNode(expr)
-        
+
     def parse_else_if_chain(self):
         else_if_chain = []
         else_body = None
@@ -647,9 +647,9 @@ class GLSLParser:
                 else_body = self.parse_body()
                 self.eat("RBRACE")
                 break
-        
+
         return else_if_chain, else_body
-      
+
     def parse_if(self):
         self.eat("IF")
         self.eat("LPAREN")
@@ -660,9 +660,9 @@ class GLSLParser:
         self.eat("RBRACE")
 
         else_if_chain, else_body = self.parse_else_if_chain()
-        
+
         return IfNode(condition, body, else_if_chain, else_body)
-           
+
     def parse_for(self):
         self.eat("FOR")
         self.eat("LPAREN")
