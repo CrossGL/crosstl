@@ -52,7 +52,6 @@ TOKENS = [
     ("MINUS", r"-"),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
-    
 ]
 
 KEYWORDS = {

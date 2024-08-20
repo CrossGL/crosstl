@@ -216,7 +216,7 @@ class HLSLParser:
             self.eat("ELSE")
             else_body = self.parse_block()
         elif self.current_token[0] == "ELSE_IF":
-            else_body = self.parse_else_if_statement() 
+            else_body = self.parse_else_if_statement()
         return IfNode(condition, if_body, else_body)
 
     def parse_else_if_statement(self):
