@@ -19,8 +19,7 @@ TOKENS = [
     ("RETURN", r"\breturn\b"),
     ("IF", r"\bif\b"),
     ("ELSE", r"\belse\b"),
-    ("ELSE_IF", r"\belif\b")
-    ("FOR", r"\bfor\b"),
+    ("ELSE_IF", r"\belif\b")("FOR", r"\bfor\b"),
     ("KERNEL", r"\bkernel\b"),
     ("VERTEX", r"\bvertex\b"),
     ("FRAGMENT", r"\bfragment\b"),
@@ -78,7 +77,7 @@ KEYWORDS = {
     "return": "RETURN",
     "if": "IF",
     "else": "ELSE",
-    "elif":"ELSE_IF",
+    "elif": "ELSE_IF",
     "for": "FOR",
     "kernel": "KERNEL",
     "vertex": "VERTEX",
