@@ -100,6 +100,11 @@ class MetalLexer:
         pos = 0
         while pos < len(self.code):
             match = None
+            #Changes for Else If
+            if self.code[pos:pos + 7] == "else if":
+                self.tokens.append(("ELSE_IF", "else if"))
+                pos += 7
+                continue
             for token_type, pattern in TOKENS:
                 regex = re.compile(pattern)
                 match = regex.match(self.code, pos)
