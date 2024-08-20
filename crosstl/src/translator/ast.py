@@ -46,25 +46,25 @@ class ShaderNode:
 
 
 class VERTEXShaderNode:
-    def __init__(self, inputs, outputs, functions):
+    def __init__(self, inputs, outputs, functions, intermidiate):
         self.inputs = inputs
         self.outputs = outputs
         self.functions = functions
+        self.intermidiate = intermidiate
 
     def __repr__(self):
-        return f"VERTEXShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r}"
+        return f"VERTEXShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r} {self.intermidiate!r}"
 
 
 class FRAGMENTShaderNode:
-    def __init__(self, inputs, outputs, functions):
+    def __init__(self, inputs, outputs, functions, intermidiate):
         self.inputs = inputs
         self.outputs = outputs
         self.functions = functions
+        self.intermidiate = intermidiate
 
     def __repr__(self):
-        return (
-            f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r}"
-        )
+        return f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r} {self.intermidiate!r}"
 
 
 class FunctionNode(ASTNode):
@@ -159,7 +159,4 @@ class UnaryOpNode(ASTNode):
         self.operand = operand
 
     def __repr__(self):
-        return f"UnaryOpNode(operator={self.op}, operand={self.operand})"
-
-    def __str__(self):
-        return f"({self.op}{self.operand})"
+        return f"UnaryOpNode(op={self.op}, operand={self.operand})"

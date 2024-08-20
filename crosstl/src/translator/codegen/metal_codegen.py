@@ -11,6 +11,8 @@ from ..ast import (
     FunctionCallNode,
     TernaryOpNode,
     MemberAccessNode,
+    VERTEXShaderNode,
+    FRAGMENTShaderNode,
 )
 
 
@@ -35,7 +37,6 @@ class MetalCodeGen:
         self.current_shader = None
         self.vertex_item = None
         self.fragment_item = None
-        self.lhs = None
         self.gl_position = False
         self.char_mapper = CharTypeMapper()
         self.type_mapping = {
@@ -128,7 +129,7 @@ class MetalCodeGen:
 
         # Generate vertex shader section
         self.vertex_item = node.vertex_section
-        if self.vertex_item:
+        if isinstance(self.vertex_item, VERTEXShaderNode):
             shader_type = "vertex"
             self.check_gl_position(self.vertex_item)
             if self.vertex_item.inputs:
@@ -144,13 +145,21 @@ class MetalCodeGen:
                         self.gl_position = False
                     code += f"    {self.map_type(vtype)} {name};\n"
                 code += "};\n\n"
-            code += (
-                f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
-            )
+
+            if self.vertex_item.functions:
+                code += f"{self.generate_function(self.vertex_item.functions, shader_type)}\n"
+
+            if self.vertex_item.intermidiate:
+                code += f"{self.generate_intermidiate(self.vertex_item.intermidiate, shader_type)}\n"
+
+            if self.vertex_item.functions:
+                for function_node in self.vertex_item.functions:
+                    if function_node.name == "main":
+                        code += f"{self.generate_main(function_node, shader_type)}\n"
 
         # Generate fragment shader section
         self.fragment_item = node.fragment_section
-        if self.fragment_item:
+        if isinstance(self.fragment_item, FRAGMENTShaderNode):
             shader_type = "fragment"
             if self.fragment_item.inputs:
                 code += "struct Fragment_INPUT {\n"
@@ -165,9 +174,14 @@ class MetalCodeGen:
                 for i, (vtype, name) in enumerate(self.fragment_item.outputs):
                     code += f"    {self.map_type(vtype)} {name} [[color({i})]];\n"
                 code += "};\n\n"
-            code += (
-                f"{self.generate_function(self.fragment_item.functions, shader_type)}\n"
-            )
+            if self.fragment_item.functions:
+                code += f"{self.generate_function(self.fragment_item.functions, shader_type)}\n"
+            if self.fragment_item.intermidiate:
+                code += f"{self.generate_intermidiate(self.fragment_item.intermidiate, shader_type)}\n"
+            if self.fragment_item.functions:
+                for function_node in self.fragment_item.functions:
+                    if function_node.name == "main":
+                        code += f"{self.generate_main(function_node, shader_type)}\n"
 
         return code
 
@@ -179,15 +193,17 @@ class MetalCodeGen:
                 if vb_left == "output.position":
                     self.gl_position = True
 
+    def generate_intermidiate(self, node, shader_type):
+        code = ""
+        for stmt in node:
+            code += self.generate_statement(stmt, 0, shader_type=shader_type)
+        return code
+
     def generate_function(self, node, shader_type):
         code = ""
         if shader_type == "vertex":
             for function_node in node:
-                if function_node.name == "main":
-                    params = "Vertex_INPUT input [[stage_in]]"
-                    return_type = "vertex Vertex_OUTPUT"
-                    code += f"{return_type} vertex_main({params}) {{\n"
-                else:
+                if function_node.name != "main":
                     params = ", ".join(
                         f"{self.map_type(param[0])} {param[1]}"
                         for param in function_node.params
@@ -195,33 +211,27 @@ class MetalCodeGen:
                     return_type = self.map_type(function_node.return_type)
                     code += f"{return_type} {function_node.name}({params}) {{\n"
 
-                if function_node.name == "main":
-                    code += "    Vertex_OUTPUT output;\n"
-                for stmt in function_node.body:
-                    code += self.generate_statement(stmt, 1, shader_type=shader_type)
-                if function_node.name == "main":
-                    code += "    return output;\n"
-                code += "}\n"
+                    for stmt in function_node.body:
+                        code += self.generate_statement(
+                            stmt, 1, shader_type=shader_type
+                        )
+
+                    code += "}\n"
         elif shader_type == "fragment":
             for function_node in node:
-                if function_node.name == "main":
-                    params = "Fragment_INPUT input [[stage_in]]"
-                    return_type = "fragment Fragment_OUTPUT"
-                    code += f"{return_type} fragment_main({params}) {{\n"
-                else:
+                if function_node.name != "main":
                     params = ", ".join(
                         f"{self.map_type(param[0])} {param[1]}"
                         for param in function_node.params
                     )
                     return_type = self.map_type(function_node.return_type)
                     code += f"{return_type} {function_node.name}({params}) {{\n"
-                if function_node.name == "main":
-                    code += "    Fragment_OUTPUT output;\n"
-                for stmt in function_node.body:
-                    code += self.generate_statement(stmt, 1, shader_type=shader_type)
-                if function_node.name == "main":
-                    code += "    return output;\n"
-                code += "}\n"
+                    for stmt in function_node.body:
+                        code += self.generate_statement(
+                            stmt, 1, shader_type=shader_type
+                        )
+
+                    code += "}\n"
         elif shader_type == "global":
             if node.name == "main":
                 params = "Global_INPUT input [[stage_in]]"
@@ -242,6 +252,22 @@ class MetalCodeGen:
             code += "}\n"
         return code
 
+    def generate_main(self, node, shader_type):
+        if shader_type == "vertex":
+            code = "vertex Vertex_OUTPUT main(Vertex_INPUT input [[stage_in]]) {\n"
+            code += "    Vertex_OUTPUT output;\n"
+        if shader_type == "fragment":
+            code = (
+                "fragment Fragment_OUTPUT main(Fragment_INPUT input [[stage_in]]) {\n"
+            )
+            code += "    Fragment_OUTPUT output;\n"
+
+        for stmt in node.body:
+            code += self.generate_statement(stmt, 1, shader_type)
+        code += "    return output;\n"
+        code += "}\n"
+        return code
+
     def generate_statement(self, stmt, indent=0, shader_type=None):
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
@@ -253,7 +279,12 @@ class MetalCodeGen:
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent, shader_type)
         elif isinstance(stmt, ReturnNode):
-            return f"{indent_str}return {self.generate_expression(stmt.value, shader_type)};\n"
+            code = ""
+            for i, return_stmt in enumerate(stmt.value):
+                code += f"{self.generate_expression(return_stmt, shader_type)}"
+                if i < len(stmt.value) - 1:
+                    code += ", "
+            return f"{indent_str}return {code};\n"
         else:
             return f"{indent_str}{self.generate_expression(stmt, shader_type)};\n"
 
@@ -266,9 +297,7 @@ class MetalCodeGen:
         if isinstance(node.name, VariableNode) and node.name.vtype:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
         else:
-            self.lhs = True
             lhs = self.generate_expression(node.name, shader_type)
-            self.lhs = False
             if lhs == "gl_Position" or lhs == "gl_position":
                 return f"output.position = {self.generate_expression(node.value, shader_type)}"
             return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
@@ -290,23 +319,15 @@ class MetalCodeGen:
     def generate_for(self, node, indent, shader_type=None):
         indent_str = "    " * indent
 
-        if isinstance(node.init, AssignmentNode) and isinstance(
-            node.init.name, VariableNode
-        ):
-            init = f"{self.map_type(node.init.name.vtype)} {node.init.name.name} = {self.generate_expression(node.init.value, shader_type)}"
-        else:
-            init = self.generate_statement(node.init, 0, shader_type).strip()[
-                :-1
-            ]  # Remove trailing semicolon
+        init = self.generate_statement(node.init, 0, shader_type).strip()[
+            :-1
+        ]  # Remove trailing semicolon
 
-        condition = self.generate_expression(node.condition, shader_type)
+        condition = self.generate_statement(node.condition, 0, shader_type).strip()[
+            :-1
+        ]  # Remove trailing semicolon
 
-        if isinstance(node.update, AssignmentNode) and isinstance(
-            node.update.value, UnaryOpNode
-        ):
-            update = f"{node.update.value.operand.name}++"
-        else:
-            update = self.generate_statement(node.update, 0, shader_type).strip()[:-1]
+        update = self.generate_statement(node.update, 0, shader_type).strip()[:-1]
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
         for stmt in node.body:
@@ -319,21 +340,18 @@ class MetalCodeGen:
             return self.translate_expression(expr, shader_type)
         elif isinstance(expr, VariableNode):
             if isinstance(expr.name, str):
-                return self.translate_expression(expr.name, shader_type)
+                return f"{self.map_type(expr.vtype)} {self.translate_expression(expr.name, shader_type)}"
             else:
-                return self.generate_expression(expr.name, shader_type)
+                return f"{self.map_type(expr.vtype)} {self.generate_expression(expr.name, shader_type)}"
         elif isinstance(expr, BinaryOpNode):
             return f"{self.generate_expression(expr.left, shader_type)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, shader_type)}"
         elif isinstance(expr, FunctionCallNode):
-            if expr.name in ["vec2", "vec3", "vec4"]:
-                args = ", ".join(
-                    self.generate_expression(arg, shader_type) for arg in expr.args
-                )
+            args = ", ".join(
+                self.generate_expression(arg, shader_type) for arg in expr.args
+            )
+            if expr.name in self.type_mapping.keys():
                 return f"{self.map_type(expr.name)}({args})"
             else:
-                args = ", ".join(
-                    self.generate_expression(arg, shader_type) for arg in expr.args
-                )
                 func_name = self.translate_expression(expr.name, shader_type)
                 return f"{func_name}({args})"
 
@@ -344,10 +362,8 @@ class MetalCodeGen:
             return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"
 
         elif isinstance(expr, MemberAccessNode):
-            if self.lhs:
-                return f"{expr.member}.{self.generate_expression(expr.object, shader_type)}"
-            else:
-                return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
+
+            return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
 
         else:
             return str(expr)
@@ -375,10 +391,13 @@ class MetalCodeGen:
         return self.type_mapping.get(expr, expr)
 
     def map_type(self, vtype):
-        mapped_type = self.char_mapper.map_char_type(vtype)
-        if mapped_type != vtype:
-            return mapped_type
-        return self.type_mapping.get(vtype, vtype)
+        if vtype == "":
+            return ""
+        else:
+            mapped_type = self.char_mapper.map_char_type(vtype)
+            if mapped_type != vtype:
+                return mapped_type
+            return self.type_mapping.get(vtype, vtype)
 
     def map_operator(self, op):
         op_map = {
@@ -398,5 +417,6 @@ class MetalCodeGen:
             "NOT_EQUAL": "!=",
             "AND": "&&",
             "OR": "||",
+            "EQUALS": "=",
         }
         return op_map.get(op, op)
