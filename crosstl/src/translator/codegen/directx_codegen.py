@@ -252,10 +252,18 @@ class HLSLCodeGen:
 
     def generate_if(self, node, indent, shader_type=None):
         indent_str = "    " * indent
-        code = f"{indent_str}if ({self.generate_expression(node.condition, shader_type)}) {{\n"
+        code = f"{indent_str}if ({self.generate_expression(node.if_condition, shader_type)}) {{\n"
         for stmt in node.if_body:
             code += self.generate_statement(stmt, indent + 1, shader_type)
         code += f"{indent_str}}}"
+
+        if node.else_if_body:
+            # code += " else if {\n"
+            code += f" else if ({self.generate_expression(node.else_if_condition, shader_type)}) {{\n"
+            for stmt in node.else_if_body:
+                code += self.generate_statement(stmt, indent + 1, shader_type)
+            code += f"{indent_str}}}"
+
         if node.else_body:
             code += " else {\n"
             for stmt in node.else_body:
