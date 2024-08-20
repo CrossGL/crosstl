@@ -625,7 +625,31 @@ class GLSLParser:
         expr = self.parse_expression()
         self.eat("SEMICOLON")
         return ReturnNode(expr)
+        
+    def parse_else_if_chain(self):
+        else_if_chain = []
+        else_body = None
 
+        while self.current_token[0] == "ELSE":
+            self.eat("ELSE")
+            if self.current_token[0] == "IF":
+                self.eat("IF")
+                self.eat("LPAREN")
+                elif_condition = self.parse_expression()
+                self.eat("RPAREN")
+                self.eat("LBRACE")
+                elif_body = self.parse_body()
+                self.eat("RBRACE")
+                else_if_chain.append((elif_condition, elif_body))
+            else:
+                # Handle `else`
+                self.eat("LBRACE")
+                else_body = self.parse_body()
+                self.eat("RBRACE")
+                break
+        
+        return else_if_chain, else_body
+      
     def parse_if(self):
         self.eat("IF")
         self.eat("LPAREN")
@@ -635,20 +659,10 @@ class GLSLParser:
         body = self.parse_body()
         self.eat("RBRACE")
 
-        else_body = None
-        if self.current_token[0] == "ELSE":
-            self.eat("ELSE")
-            if self.current_token[0] == "IF":
-                # Handle nested if
-                else_body = self.parse_if()
-            else:
-                self.eat("LBRACE")
-                else_body = self.parse_body()
-                self.eat("RBRACE")
-            return IfNode(condition, body, else_body)
-        else:
-            return IfNode(condition, body)
-
+        else_if_chain, else_body = self.parse_else_if_chain()
+        
+        return IfNode(condition, body, else_if_chain, else_body)
+           
     def parse_for(self):
         self.eat("FOR")
         self.eat("LPAREN")

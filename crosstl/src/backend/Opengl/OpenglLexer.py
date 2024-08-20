@@ -4,6 +4,7 @@ import re
 TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
+    ("ELSE_IF", r"\belse\s+if\b"),
     ("VERSION", r"#version"),
     ("NUMBER", r"\d+(\.\d+)?"),
     ("CORE", r"\bcore\b"),
@@ -67,6 +68,7 @@ KEYWORDS = {
     "main": "MAIN",
     "vertex": "VERTEX",
     "fragment": "FRAGMENT",
+    "else if" : "ELSE_IF",
     "if": "IF",
     "else": "ELSE",
     "for": "FOR",
