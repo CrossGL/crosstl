@@ -157,7 +157,7 @@ class HLSLToCrossGLConverter:
         code += "    " * indent + "}"
 
         if node.else_body:
-            if isinstance(node.else_body,IfNode):
+            if isinstance(node.else_body, IfNode):
                 code += " else "
                 code += self.generate_if_statement(node.else_body, indent, is_main)
             else:
