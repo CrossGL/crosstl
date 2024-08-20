@@ -42,7 +42,7 @@
     <a href="https://pypi.org/project/crosstl/">
         <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://badge.fury.io/py/crosstl.svg">
     </a>
-    <a href="https://discord.gg/W9nvd3Kp">
+    <a href="https://discord.com/invite/uyRQKXhcyW">
         <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://img.shields.io/discord/1240998239206113330?color=blue&label=%20&logo=discord&logoColor=white">
     </a>
 </div>
@@ -283,7 +283,7 @@ find out more info in our [Contributing guide](https://crossgl.github.io/contrib
 
 - [Twitter](https://x.com/crossGL_)
 - [LinkedIn](https://www.linkedin.com/company/crossgl/?viewAsMember=true)
-- [Discord Channel](https://discord.gg/W9nvd3Kp)
+- [Discord Channel](https://discord.com/invite/uyRQKXhcyW)
 - [YouTube](https://www.youtube.com/channel/UCxv7_flRCHp7p0fjMxVSuVQ)
 
 <b> See you there! </b>
