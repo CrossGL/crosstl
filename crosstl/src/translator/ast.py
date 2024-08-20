@@ -97,7 +97,14 @@ class AssignmentNode(ASTNode):
 
 
 class IfNode(ASTNode):
-    def __init__(self, if_condition, if_body, else_if_condition=None, else_if_body=None, else_body=None):
+    def __init__(
+        self,
+        if_condition,
+        if_body,
+        else_if_condition=None,
+        else_if_body=None,
+        else_body=None,
+    ):
         self.if_condition = if_condition
         self.if_body = if_body
         self.else_if_condition = else_if_condition
