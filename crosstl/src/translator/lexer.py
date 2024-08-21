@@ -17,6 +17,8 @@ TOKENS = [
     ("FLOAT_NUMBER", r"\d*\.\d+|\d+\.\d*"),
     ("FLOAT", r"\bfloat\b"),
     ("INT", r"\bint\b"),
+    ("UINT", r"\bunsigned\s+int\b"),
+    ("DOUBLE", r"\bdouble\b"),
     ("SAMPLER2D", r"\bsampler2D\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
