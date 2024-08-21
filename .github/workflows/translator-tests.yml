@@ -36,3 +36,4 @@ jobs:
           pytest tests/test_translator/test_lexer.py tests/test_translator/test_parser.py
         else
           pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py
+        fi
