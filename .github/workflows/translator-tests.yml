@@ -1,16 +1,19 @@
 name: Translator Tests
 
 on:
-    push:
-      branches:
-        - main
-    pull_request:
-      branches:
-        - main
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: ['directx', 'metal', 'opengl', 'general']  # ToDo: Add 'mojo' to the list
 
     steps:
     - name: Checkout repository
@@ -28,4 +31,8 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run translator tests
-      run: pytest tests/test_translator
+      run: |
+        if [ "${{ matrix.component }}" == "general" ]; then
+          pytest tests/test_translator/test_lexer.py tests/test_translator/test_parser.py
+        else
+          pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py
