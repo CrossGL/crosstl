@@ -56,6 +56,12 @@ TOKENS = [
     ("EQUALS", r"="),
     ("QUESTION", r"\?"),
     ("COLON", r":"),
+    ("BITWISE_AND", r"&"),
+    ("BITWISE_OR", r"\|"),
+    ("BITWISE_XOR", r"\^"),
+    ("BITWISE_NOT", r"~"),
+    ("BITWISE_SHIFT_LEFT", r"<<"),
+    ("BITWISE_SHIFT_RIGHT", r">>"),
 ]
 
 KEYWORDS = {
