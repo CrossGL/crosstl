@@ -99,3 +99,17 @@ def test_function_call_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_data_types_tokenization():
+    code = """
+    int a;
+    unsigned int b;
+    float c;
+    double d;
+    bool e;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Data types tokenization not implemented.")
