@@ -46,8 +46,18 @@ TOKENS = [
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("NOT", r"!"),
-    ("INCREMENT", r"\+\+"),
-    ("DECREMENT", r"\-\-"),
+    ("BITWISE_AND", r"&"),
+    ("BITWISE_OR", r"\|"),
+    ("BITWISE_XOR", r"\^"),
+    ("BITWISE_NOT", r"~"),
+    ("SHIFT_LEFT", r"<<"),
+    ("SHIFT_RIGHT", r">>"),
+    ("ASSIGN_AND", r"&="),
+    ("ASSIGN_OR", r"\|="),
+    ("ASSIGN_XOR", r"\^="),
+    ("ASSIGN_MOD", r"%="),
+    ("ASSIGN_SHIFT_LEFT", r"<<="),
+    ("ASSIGN_SHIFT_RIGHT", r">>="),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
@@ -56,6 +66,9 @@ TOKENS = [
     ("EQUALS", r"="),
     ("QUESTION", r"\?"),
     ("COLON", r":"),
+    ("DOUBLE", r"\bdouble\b"),
+    ("UNSIGNED_INT", r"\bunsigned\s+int\b"),
+    ("CONST", r"\bconst\b"),
 ]
 
 KEYWORDS = {
@@ -70,6 +83,9 @@ KEYWORDS = {
     "else": "ELSE",
     "for": "FOR",
     "return": "RETURN",
+    "double": "DOUBLE",
+    "unsigned int": "UNSIGNED_INT",
+    "const": "CONST",
 }
 
 

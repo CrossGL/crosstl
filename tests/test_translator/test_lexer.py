@@ -17,7 +17,8 @@ def test_input_output_tokenization():
     output vec4 fragColor;
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert tokens is not None
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
@@ -31,7 +32,8 @@ def test_if_statement_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert tokens is not None
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
@@ -43,7 +45,8 @@ def test_for_statement_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert tokens is not None
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
@@ -57,7 +60,8 @@ def test_else_statement_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert tokens is not None
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
@@ -96,12 +100,10 @@ def test_function_call_tokenization():
 
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert tokens is not None
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
-
-
-# New tests for the additional tokens
 
 
 def test_bitwise_operators_tokenization():
@@ -113,51 +115,54 @@ def test_bitwise_operators_tokenization():
     int e = 5 << 1;
     int f = 5 >> 1;
     """
-    tokens = tokenize_code(code)
-    expected_tokens = [
-        ("INT", "int"),
-        ("IDENTIFIER", "a"),
-        ("EQUALS", "="),
-        ("NUMBER", "5"),
-        ("BITWISE_AND", "&"),
-        ("NUMBER", "3"),
-        ("SEMICOLON", ";"),
-        ("INT", "int"),
-        ("IDENTIFIER", "b"),
-        ("EQUALS", "="),
-        ("NUMBER", "5"),
-        ("BITWISE_OR", "|"),
-        ("NUMBER", "3"),
-        ("SEMICOLON", ";"),
-        ("INT", "int"),
-        ("IDENTIFIER", "c"),
-        ("EQUALS", "="),
-        ("NUMBER", "5"),
-        ("BITWISE_XOR", "^"),
-        ("NUMBER", "3"),
-        ("SEMICOLON", ";"),
-        ("INT", "int"),
-        ("IDENTIFIER", "d"),
-        ("EQUALS", "="),
-        ("BITWISE_NOT", "~"),
-        ("NUMBER", "5"),
-        ("SEMICOLON", ";"),
-        ("INT", "int"),
-        ("IDENTIFIER", "e"),
-        ("EQUALS", "="),
-        ("NUMBER", "5"),
-        ("BITWISE_SHIFT_LEFT", "<<"),
-        ("NUMBER", "1"),
-        ("SEMICOLON", ";"),
-        ("INT", "int"),
-        ("IDENTIFIER", "f"),
-        ("EQUALS", "="),
-        ("NUMBER", "5"),
-        ("BITWISE_SHIFT_RIGHT", ">>"),
-        ("NUMBER", "1"),
-        ("SEMICOLON", ";"),
-    ]
-    assert tokens == expected_tokens
+    try:
+        tokens = tokenize_code(code)
+        expected_tokens = [
+            ("INT", "int"),
+            ("IDENTIFIER", "a"),
+            ("EQUALS", "="),
+            ("NUMBER", "5"),
+            ("BITWISE_AND", "&"),
+            ("NUMBER", "3"),
+            ("SEMICOLON", ";"),
+            ("INT", "int"),
+            ("IDENTIFIER", "b"),
+            ("EQUALS", "="),
+            ("NUMBER", "5"),
+            ("BITWISE_OR", "|"),
+            ("NUMBER", "3"),
+            ("SEMICOLON", ";"),
+            ("INT", "int"),
+            ("IDENTIFIER", "c"),
+            ("EQUALS", "="),
+            ("NUMBER", "5"),
+            ("BITWISE_XOR", "^"),
+            ("NUMBER", "3"),
+            ("SEMICOLON", ";"),
+            ("INT", "int"),
+            ("IDENTIFIER", "d"),
+            ("EQUALS", "="),
+            ("BITWISE_NOT", "~"),
+            ("NUMBER", "5"),
+            ("SEMICOLON", ";"),
+            ("INT", "int"),
+            ("IDENTIFIER", "e"),
+            ("EQUALS", "="),
+            ("NUMBER", "5"),
+            ("SHIFT_LEFT", "<<"),
+            ("NUMBER", "1"),
+            ("SEMICOLON", ";"),
+            ("INT", "int"),
+            ("IDENTIFIER", "f"),
+            ("EQUALS", "="),
+            ("NUMBER", "5"),
+            ("SHIFT_RIGHT", ">>"),
+            ("NUMBER", "1"),
+            ("SEMICOLON", ";"),
+        ]
+        assert tokens == expected_tokens
+    except SyntaxError:
+        pytest.fail("Bitwise operators tokenization failed.")
 
 
 def test_assignment_operators_tokenization():
@@ -170,39 +175,42 @@ def test_assignment_operators_tokenization():
     a <<= 1;
     a >>= 1;
     """
-    tokens = tokenize_code(code)
-    expected_tokens = [
-        ("INT", "int"),
-        ("IDENTIFIER", "a"),
-        ("EQUALS", "="),
-        ("NUMBER", "5"),
-        ("SEMICOLON", ";"),
-        ("IDENTIFIER", "a"),
-        ("ASSIGN_AND", "&="),
-        ("NUMBER", "3"),
-        ("SEMICOLON", ";"),
-        ("IDENTIFIER", "a"),
-        ("ASSIGN_OR", "|="),
-        ("NUMBER", "3"),
-        ("SEMICOLON", ";"),
-        ("IDENTIFIER", "a"),
-        ("ASSIGN_XOR", "^="),
-        ("NUMBER", "3"),
-        ("SEMICOLON", ";"),
-        ("IDENTIFIER", "a"),
-        ("ASSIGN_MOD", "%="),
-        ("NUMBER", "3"),
-        ("SEMICOLON", ";"),
-        ("IDENTIFIER", "a"),
-        ("ASSIGN_SHIFT_LEFT", "<<="),
-        ("NUMBER", "1"),
-        ("SEMICOLON", ";"),
-        ("IDENTIFIER", "a"),
-        ("ASSIGN_SHIFT_RIGHT", ">>="),
-        ("NUMBER", "1"),
-        ("SEMICOLON", ";"),
-    ]
-    assert tokens == expected_tokens
+    try:
+        tokens = tokenize_code(code)
+        expected_tokens = [
+            ("INT", "int"),
+            ("IDENTIFIER", "a"),
+            ("EQUALS", "="),
+            ("NUMBER", "5"),
+            ("SEMICOLON", ";"),
+            ("IDENTIFIER", "a"),
+            ("ASSIGN_AND", "&="),
+            ("NUMBER", "3"),
+            ("SEMICOLON", ";"),
+            ("IDENTIFIER", "a"),
+            ("ASSIGN_OR", "|="),
+            ("NUMBER", "3"),
+            ("SEMICOLON", ";"),
+            ("IDENTIFIER", "a"),
+            ("ASSIGN_XOR", "^="),
+            ("NUMBER", "3"),
+            ("SEMICOLON", ";"),
+            ("IDENTIFIER", "a"),
+            ("ASSIGN_MOD", "%="),
+            ("NUMBER", "3"),
+            ("SEMICOLON", ";"),
+            ("IDENTIFIER", "a"),
+            ("ASSIGN_SHIFT_LEFT", "<<="),
+            ("NUMBER", "1"),
+            ("SEMICOLON", ";"),
+            ("IDENTIFIER", "a"),
+            ("ASSIGN_SHIFT_RIGHT", ">>="),
+            ("NUMBER", "1"),
+            ("SEMICOLON", ";"),
+        ]
+        assert tokens == expected_tokens
+    except SyntaxError:
+        pytest.fail("Assignment operators tokenization failed.")
 
 
 def test_data_types_and_const_tokenization():
@@ -210,18 +218,21 @@ def test_data_types_and_const_tokenization():
     const double pi = 3.14159;
     unsigned int maxVal = 255;
     """
-    tokens = tokenize_code(code)
-    expected_tokens = [
-        ("CONST", "const"),
-        ("DOUBLE", "double"),
-        ("IDENTIFIER", "pi"),
-        ("EQUALS", "="),
-        ("FLOAT_NUMBER", "3.14159"),
-        ("SEMICOLON", ";"),
-        ("UNSIGNED_INT", "unsigned int"),
-        ("IDENTIFIER", "maxVal"),
-        ("EQUALS", "="),
-        ("NUMBER", "255"),
-        ("SEMICOLON", ";"),
-    ]
-    assert tokens == expected_tokens
+    try:
+        tokens = tokenize_code(code)
+        expected_tokens = [
+            ("CONST", "const"),
+            ("DOUBLE", "double"),
+            ("IDENTIFIER", "pi"),
+            ("EQUALS", "="),
+            ("FLOAT_NUMBER", "3.14159"),
+            ("SEMICOLON", ";"),
+            ("UNSIGNED_INT", "unsigned int"),
+            ("IDENTIFIER", "maxVal"),
+            ("EQUALS", "="),
+            ("NUMBER", "255"),
+            ("SEMICOLON", ";"),
+        ]
+        assert tokens == expected_tokens
+    except SyntaxError:
+        pytest.fail("Data types and const tokenization failed.")
