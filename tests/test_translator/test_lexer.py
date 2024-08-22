@@ -113,3 +113,37 @@ def test_data_types_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Data types tokenization not implemented.")
+
+def test_operators_tokenization():
+    code = """
+    int a;
+    a = 2 + 1;
+    a = a -  2;
+    a = a / 1;
+    a = a * 2;
+    a = a % 2;
+    a = a & 1;
+    a = a | 1;
+    a = a ^ 3;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Assignment operators tokenization not implemented.")
+
+def test_assignment_operators_tokenization():
+    code = """
+    int a = 1;
+    a += 1;
+    a *= 2;
+    a /= a;
+    a -= -1;
+    a %= 2;
+    a &= 1;
+    a |= 1;
+    a ^= 1;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Assignment operators tokenization not implemented.")
