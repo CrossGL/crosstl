@@ -215,6 +215,22 @@ class HLSLParser:
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             else_body = self.parse_block()
+        elif self.current_token[0] == "ELSE_IF":
+            else_body = self.parse_else_if_statement()
+        return IfNode(condition, if_body, else_body)
+
+    def parse_else_if_statement(self):
+        self.eat("ELSE_IF")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        if_body = self.parse_block()
+        else_body = None
+        if self.current_token[0] == "ELSE":
+            self.eat("ELSE")
+            else_body = self.parse_block()
+        elif self.current_token[0] == "ELSE_IF":
+            else_body = self.parse_else_if_statement()
         return IfNode(condition, if_body, else_body)
 
     def parse_for_statement(self):
