@@ -188,6 +188,7 @@ def test_else_statement():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_else_if_statement():
     code = """
     shader PerlinNoise {
@@ -234,6 +235,7 @@ def test_else_if_statement():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_function_call():
     code = """
     shader PerlinNoise {
@@ -275,5 +277,6 @@ def test_function_call():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     test_else_if_statement()
