@@ -1,6 +1,7 @@
 from MojoLexer import *
 from MojoAst import *
 
+
 class MojoParser:
     def __init__(self, tokens):
         self.tokens = tokens
@@ -46,7 +47,7 @@ class MojoParser:
             elif self.current_token[0] == "DECORATOR":
                 statements.append(self.parse_decorator())
             else:
-                self.eat(self.current_token[0])  
+                self.eat(self.current_token[0])
 
         return ShaderNode(statements)
 
@@ -71,7 +72,12 @@ class MojoParser:
         self.eat("COLON")
 
         members = []
-        while self.current_token[0] != "EOF" and self.current_token[0] != "FN" and self.current_token[0] != "STRUCT" and self.current_token[0] != "CLASS":
+        while (
+            self.current_token[0] != "EOF"
+            and self.current_token[0] != "FN"
+            and self.current_token[0] != "STRUCT"
+            and self.current_token[0] != "CLASS"
+        ):
             vtype = None
             if self.current_token[0] == "LET" or self.current_token[0] == "VAR":
                 vtype = self.current_token[1]
@@ -170,7 +176,6 @@ class MojoParser:
 
         return FunctionNode(qualifier, return_type, name, params, body, attributes)
 
-
     def parse_parameters(self):
         params = []
         while self.current_token[0] != "RPAREN":
@@ -183,7 +188,9 @@ class MojoParser:
                 # Handle the case where there's a colon indicating a type annotation
                 if self.current_token[0] == "COLON":
                     self.eat("COLON")
-                    vtype = self.current_token[1]  # Update the type to the one after colon
+                    vtype = self.current_token[
+                        1
+                    ]  # Update the type to the one after colon
                     self.eat(self.current_token[0])
 
                 name = ""
@@ -197,7 +204,9 @@ class MojoParser:
                 params.append(VariableNode(vtype, name, attributes))
 
             else:
-                raise SyntaxError(f"Unexpected token in parameter list: {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Unexpected token in parameter list: {self.current_token[0]}"
+                )
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -206,7 +215,9 @@ class MojoParser:
             elif self.current_token[0] == "RPAREN":
                 break
             else:
-                raise SyntaxError(f"Expected comma or closing parenthesis, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected comma or closing parenthesis, got {self.current_token[0]}"
+                )
 
         return params
 
@@ -217,7 +228,7 @@ class MojoParser:
             attr_parts = attr_content.split("(")
             if len(attr_parts) > 1:
                 name = attr_parts[0]
-                args = attr_parts[1][:-1].split(",")  
+                args = attr_parts[1][:-1].split(",")
             else:
                 name = attr_content
                 args = []
@@ -242,13 +253,20 @@ class MojoParser:
 
         return statements
 
-
     def parse_statement(self):
-        if self.current_token[0] in ["FLOAT", "INT", "UINT", "BOOL", "IDENTIFIER", "LET", "VAR"]:
+        if self.current_token[0] in [
+            "FLOAT",
+            "INT",
+            "UINT",
+            "BOOL",
+            "IDENTIFIER",
+            "LET",
+            "VAR",
+        ]:
             return self.parse_variable_declaration_or_assignment()
 
         elif self.current_token[0] == "FN":
-            return self.parse_function() 
+            return self.parse_function()
         elif self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -267,15 +285,14 @@ class MojoParser:
     def parse_variable_declaration_or_assignment(self):
         if self.current_token[0] in ["LET", "VAR"]:
             var_type = self.current_token[0]
-            self.eat(self.current_token[0])  
+            self.eat(self.current_token[0])
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            type_name = None
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
-                type_name = self.current_token[1]
-                self.eat(self.current_token[0])  
+                self.current_token[1]
+                self.eat(self.current_token[0])
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -289,7 +306,6 @@ class MojoParser:
             return VariableDeclarationNode(var_type, name, initial_value)
         else:
             return self.parse_assignment()
-
 
     def parse_if_statement(self):
         self.eat("IF")
@@ -350,7 +366,9 @@ class MojoParser:
             body = self.parse_block()
             return SwitchCaseNode(None, body)
         else:
-            raise SyntaxError(f"Unexpected token in switch case: {self.current_token[0]}")
+            raise SyntaxError(
+                f"Unexpected token in switch case: {self.current_token[0]}"
+            )
 
     def parse_return_statement(self):
         self.eat("RETURN")
@@ -358,9 +376,8 @@ class MojoParser:
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        
-        return ReturnNode(value)
 
+        return ReturnNode(value)
 
     def parse_expression_statement(self):
         expr = self.parse_expression()
@@ -460,7 +477,12 @@ class MojoParser:
 
     def parse_primary(self):
         if self.current_token[0] in [
-            "IDENTIFIER", "NUMBER", "INT", "FLOAT", "BOOL", "STRING"
+            "IDENTIFIER",
+            "NUMBER",
+            "INT",
+            "FLOAT",
+            "BOOL",
+            "STRING",
         ]:
             if self.current_token[0] in ["INT", "FLOAT", "BOOL", "STRING"]:
                 type_name = self.current_token[1]
@@ -480,22 +502,23 @@ class MojoParser:
                 value = self.current_token[1]
                 self.eat("NUMBER")
                 return value
-        
+
             return self.parse_function_call_or_identifier()
-        
+
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
-        
-        # Handle top-level keywords 
+
+        # Handle top-level keywords
         elif self.current_token[0] in ["FN", "STRUCT", "CLASS", "LET", "VAR"]:
             raise SyntaxError(f"Unexpected top-level keyword: {self.current_token[0]}")
 
         else:
-            raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
-
+            raise SyntaxError(
+                f"Unexpected token in expression: {self.current_token[0]}"
+            )
 
     def parse_vector_constructor(self, type_name):
         self.eat("LPAREN")
@@ -522,14 +545,16 @@ class MojoParser:
                 self.eat(self.current_token[0])
                 return VariableNode(type_annotation, name)
             return VariableNode("", name)
-        
+
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
             return value
-        
+
         else:
-            raise SyntaxError(f"Expected IDENTIFIER or NUMBER, got {self.current_token[0]}")
+            raise SyntaxError(
+                f"Expected IDENTIFIER or NUMBER, got {self.current_token[0]}"
+            )
 
     def parse_function_call(self, name):
         self.eat("LPAREN")
@@ -539,24 +564,28 @@ class MojoParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")  # Continue parsing the next argument
             elif self.current_token[0] != "RPAREN":
-                raise SyntaxError(f"Expected COMMA or RPAREN, got {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Expected COMMA or RPAREN, got {self.current_token[0]}"
+                )
         self.eat("RPAREN")
         return FunctionCallNode(name, args)
 
     def parse_member_access(self, object):
         self.eat("DOT")
         if self.current_token[0] != "IDENTIFIER":
-            raise SyntaxError(f"Expected IDENTIFIER after dot, got {self.current_token[0]}")
-        
+            raise SyntaxError(
+                f"Expected IDENTIFIER after dot, got {self.current_token[0]}"
+            )
+
         member = self.current_token[1]
         self.eat("IDENTIFIER")
 
         if self.current_token[0] == "LPAREN":
             return self.parse_function_call(member)
-        
+
         if self.current_token[0] == "DOT":
             return self.parse_member_access(MemberAccessNode(object, member))
-        
+
         return MemberAccessNode(object, member)
 
     def parse_decorator(self):
@@ -571,6 +600,7 @@ class MojoParser:
                     self.eat("COMMA")
             self.eat("RPAREN")
         return DecoratorNode(name, args)
+
 
 # Temp test
 code = """
