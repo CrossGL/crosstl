@@ -170,6 +170,7 @@ def test_else_statement():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_else_if_statement():
     code = """
     #version 450
