@@ -68,7 +68,7 @@ KEYWORDS = {
     "main": "MAIN",
     "vertex": "VERTEX",
     "fragment": "FRAGMENT",
-    "else if" : "ELSE_IF",
+    "else if": "ELSE_IF",
     "if": "IF",
     "else": "ELSE",
     "for": "FOR",
