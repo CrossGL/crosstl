@@ -104,7 +104,7 @@ def test_function_call_tokenization():
 def test_data_types_tokenization():
     code = """
     int a;
-    unsigned int b;
+    uint b;
     float c;
     double d;
     bool e;
