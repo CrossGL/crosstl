@@ -630,10 +630,9 @@ class GLSLParser:
         else_if_chain = []
         else_body = None
 
-        while self.current_token[0] == "ELSE":
-            self.eat("ELSE")
-            if self.current_token[0] == "IF":
-                self.eat("IF")
+        while self.current_token[0] in ["ELSE_IF", "ELSE"]:
+            if self.current_token[0] == "ELSE_IF":
+                self.eat("ELSE_IF")
                 self.eat("LPAREN")
                 elif_condition = self.parse_expression()
                 self.eat("RPAREN")
@@ -642,12 +641,12 @@ class GLSLParser:
                 self.eat("RBRACE")
                 else_if_chain.append((elif_condition, elif_body))
             else:
-                # Handle `else`
+                # Handle `ELSE`
+                self.eat("ELSE")
                 self.eat("LBRACE")
                 else_body = self.parse_body()
                 self.eat("RBRACE")
                 break
-        
         return else_if_chain, else_body
       
     def parse_if(self):
