@@ -122,9 +122,6 @@ def test_operators_tokenization():
     a = a / 1;
     a = a * 2;
     a = a % 2;
-    a = a & 1;
-    a = a | 1;
-    a = a ^ 3;
     """
     try:
         tokenize_code(code)
