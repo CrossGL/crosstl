@@ -43,6 +43,22 @@ def test_if_statement_tokenization():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+def test_if_else_condition_tokenization():
+    code_complex_if_else = """
+    if ((a + b) > (c * d)) {
+        return (a - c) / d;
+    } else if ((a - b) < c) {
+        return a + b;
+    }
+    else {
+        return;
+    }
+    """
+    try:
+        tokens = tokenize_code(code_complex_if_else)
+    except SyntaxError:
+        pytest.fail("Complex if-else condition parsing not implemented.")
+
 
 def test_for_statement_tokenization():
     code = """
