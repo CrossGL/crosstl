@@ -75,8 +75,7 @@ def test_struct():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
-
-def test_if():
+def test_else_if():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -94,6 +93,10 @@ def test_if():
         output.position = float4(input.position, 1.0);
         if (input.position.x == input.position.y) {
             output.vUV = float2(0.0, 0.0);
+        } else if (input.position.x > input.position.y) {
+            output.vUV = float2(1.0, 1.0);
+        } else {
+            output.vUV = float2(0.5, 0.5);
         }
         return output;
     }
@@ -108,9 +111,12 @@ def test_if():
 
     fragment Fragment_OUTPUT fragment_main(Fragment_INPUT input [[stage_in]]) {
         Fragment_OUTPUT output;
-        output.fragColor = float4(1.0, 0.0, 0.0, 1.0);
         if (input.vUV.x == input.vUV.y) {
             output.fragColor = float4(0.0, 1.0, 0.0, 1.0);
+        } else if (input.vUV.x > input.vUV.y) {
+            output.fragColor = float4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            output.fragColor = float4(0.0, 0.0, 1.0, 1.0);
         }
         return output;
     }

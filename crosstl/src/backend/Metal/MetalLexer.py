@@ -19,7 +19,6 @@ TOKENS = [
     ("RETURN", r"\breturn\b"),
     ("IF", r"\bif\b"),
     ("ELSE", r"\belse\b"),
-    ("ELSE_IF", r"\belif\b"),
     ("FOR", r"\bfor\b"),
     ("KERNEL", r"\bkernel\b"),
     ("VERTEX", r"\bvertex\b"),
