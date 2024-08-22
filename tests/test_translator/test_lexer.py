@@ -61,6 +61,7 @@ def test_else_statement_tokenization():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_else_if_statement_tokenization():
     code = """
     if (a > b) {

@@ -257,7 +257,9 @@ class HLSLCodeGen:
             code += self.generate_statement(stmt, indent + 1, shader_type)
         code += f"{indent_str}}}"
 
-        for else_if_condition, else_if_body in zip(node.else_if_conditions, node.else_if_bodies):
+        for else_if_condition, else_if_body in zip(
+            node.else_if_conditions, node.else_if_bodies
+        ):
             code += f" else if ({self.generate_expression(else_if_condition, shader_type)}) {{\n"
             for stmt in else_if_body:
                 code += self.generate_statement(stmt, indent + 1, shader_type)
