@@ -90,6 +90,7 @@ def test_function_call_tokenization():
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
 
+
 def test_else_if_tokenization():
     code = """
     PSOutput PSMain(PSInput input) {
@@ -108,6 +109,7 @@ def test_else_if_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("else_if tokenization not implemented.")
+
 
 if __name__ == "__main__":
 
