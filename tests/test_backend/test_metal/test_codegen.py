@@ -178,6 +178,7 @@ def test_for():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_if():
     code = """
     #include <metal_stdlib>
@@ -224,6 +225,8 @@ def test_if():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
 def test_else():
     code = """
     #include <metal_stdlib>
