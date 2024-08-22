@@ -114,6 +114,7 @@ def test_data_types_tokenization():
     except SyntaxError:
         pytest.fail("Data types tokenization not implemented.")
 
+
 def test_logical_operators_tokenization():
     code = """
     if (0.8 > 0.7 || 0.6 > 0.7) {    
@@ -126,4 +127,3 @@ def test_logical_operators_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Data types tokenization not implemented.")
-

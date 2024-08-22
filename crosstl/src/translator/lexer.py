@@ -49,7 +49,7 @@ TOKENS = [
     ("ASSIGN_OR", r"\|="),
     ("ASSIGN_XOR", r"\^="),
     ("LOGICAL_AND", r"&&"),
-    ("LOGICAL_OR", r"\|\|"),    
+    ("LOGICAL_OR", r"\|\|"),
     ("XOR", r"\^"),
     ("NOT", r"!"),
     ("ASSIGN_MOD", r"%="),
