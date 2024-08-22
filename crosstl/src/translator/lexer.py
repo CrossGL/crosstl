@@ -47,7 +47,7 @@ TOKENS = [
     ("NOT_EQUAL", r"!="),
     ("ASSIGN_AND", r"&="),
     ("ASSIGN_OR", r"\|="),
-    ("ASSIGN_XOR",r"\^="),
+    ("ASSIGN_XOR", r"\^="),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("XOR", r"\^"),
