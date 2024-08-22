@@ -443,7 +443,7 @@ class Parser:
         else_if_condition = None
         else_if_body = None
         else_body = None
-        if self.current_token[0] == "ELSE_IF":
+        while self.current_token[0] == "ELSE_IF":
             self.eat("ELSE_IF")
             self.eat("LPAREN")
             else_if_condition = self.parse_expression()
