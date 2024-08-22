@@ -64,6 +64,7 @@ TOKENS = [
     ("EQUALS", r"="),
     ("QUESTION", r"\?"),
     ("COLON", r":"),
+    ("CONST", r"\bconst\b")
 ]
 
 KEYWORDS = {
@@ -78,6 +79,7 @@ KEYWORDS = {
     "else": "ELSE",
     "for": "FOR",
     "return": "RETURN",
+    "const" : "CONST",
 }
 
 
