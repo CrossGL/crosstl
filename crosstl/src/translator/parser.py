@@ -440,17 +440,20 @@ class Parser:
         self.eat("LBRACE")
         if_body = self.parse_body()
         self.eat("RBRACE")
-        else_if_condition = None
-        else_if_body = None
+        else_if_condition = []
+        else_if_body = []
         else_body = None
-        while self.current_token[0] == "ELSE_IF":
-            self.eat("ELSE_IF")
+
+        while self.current_token[0] == "ELSE" and self.peak(1)[0] == "IF":
+            self.eat("ELSE")
+            self.eat("IF")
             self.eat("LPAREN")
-            else_if_condition = self.parse_expression()
+            else_if_condition.append(self.parse_expression())
             self.eat("RPAREN")
             self.eat("LBRACE")
-            else_if_body = self.parse_body()
+            else_if_body.append(self.parse_body())
             self.eat("RBRACE")
+
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             self.eat("LBRACE")

@@ -101,18 +101,18 @@ class IfNode(ASTNode):
         self,
         if_condition,
         if_body,
-        else_if_condition=None,
-        else_if_body=None,
+        else_if_conditions=None,
+        else_if_bodies=None,
         else_body=None,
     ):
         self.if_condition = if_condition
         self.if_body = if_body
-        self.else_if_condition = else_if_condition
-        self.else_if_body = else_if_body
+        self.else_if_conditions = else_if_conditions or []
+        self.else_if_bodies = else_if_bodies or []
         self.else_body = else_body
 
     def __repr__(self):
-        return f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, else_if_condition={self.else_if_condition}, else_if_body={self.else_if_body}, else_body={self.else_body})"
+        return f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, else_if_conditions={self.else_if_conditions}, else_if_bodies={self.else_if_bodies}, else_body={self.else_body})"
 
 
 class ForNode(ASTNode):
