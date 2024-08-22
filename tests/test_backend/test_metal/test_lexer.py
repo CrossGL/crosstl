@@ -69,6 +69,7 @@ def test_else_tokenization():
     except SyntaxError:
         pytest.fail("Else statement tokenization not implemented.")
 
+
 def test_if_else_tokenization():
     code = """
     float perlinNoise(float2 p) {
@@ -84,7 +85,6 @@ def test_if_else_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("If-else statement tokenization not implemented.")
-
 
 
 def test_function_call_tokenization():

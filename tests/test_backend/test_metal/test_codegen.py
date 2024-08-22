@@ -75,6 +75,7 @@ def test_struct():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_else_if():
     code = """
     #include <metal_stdlib>

@@ -70,6 +70,8 @@ def test_for():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
 def test_if_else():
     code = """
     float perlinNoise(float2 p) {
