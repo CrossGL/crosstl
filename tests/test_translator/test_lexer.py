@@ -126,4 +126,15 @@ def test_logical_operators_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Data types tokenization not implemented.")
+        pytest.fail("Logical Operators tokenization not implemented.")
+
+
+def test_const_tokenization():
+    code = """
+    cosnt int a;
+    """
+
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Const keyword tokenization failed")
