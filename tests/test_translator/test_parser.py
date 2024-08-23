@@ -210,38 +210,32 @@ def test_function_call():
 
 def test_logical_operators():
     code = """
-        shader PerlinNoise {
+        shader LightControl {
         vertex {
             input vec3 position;
-            output vec2 vUV;
+            output float isLightOn;
 
             void main() {
-                // Scale UV coordinates
-                vUV = position.xy * 10.0;
-
-                // Use position-based conditions to modify vUV.x
-                if (position.x > 0.5 || position.y > 0.5) {
-                    vUV.x = 0.5;
+                if (position.x > 0.3 && position.z < 0.7) {
+                    isLightOn = 1.0;
                 } else {
-                    vUV.x = 0.0;
+                    isLightOn = 0.0;
                 }
-                
+
                 // Set the vertex position
                 gl_Position = vec4(position, 1.0);
             }
         }
 
-        // Fragment Shader
         fragment {
-            input vec2 vUV;
+            input float isLightOn;
             output vec4 fragColor;
 
             void main() {
-                // Use vUV-based conditions to determine fragColor
-                if (vUV.x > 0.5 && vUV.y > 5.0) {
-                    fragColor = vec4(1.0, 1.0, 1.0, 1.0); // White
+                if (isLightOn == 1.0) {
+                    fragColor = vec4(1.0, 1.0, 0.0, 1.0);
                 } else {
-                    fragColor = vec4(0.0, 0.0, 0.0, 1.0); // Black
+                    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
                 }
             }
         }
