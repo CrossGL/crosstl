@@ -208,6 +208,7 @@ def test_function_call():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_logical_operators():
     code = """
         shader LightControl {
@@ -246,4 +247,3 @@ def test_logical_operators():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
-
