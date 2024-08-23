@@ -207,3 +207,17 @@ def test_function_call():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_assign_shift_right():
+    code = """
+    int x = 16;
+    x >>= 2;
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError as e:
+        pytest.fail(f"Failed to parse ASSIGN_SHIFT_RIGHT token: {e}")
+
