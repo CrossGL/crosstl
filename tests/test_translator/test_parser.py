@@ -207,3 +207,49 @@ def test_function_call():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+def test_logical_operators():
+    code = """
+        shader PerlinNoise {
+        vertex {
+            input vec3 position;
+            output vec2 vUV;
+
+            void main() {
+                // Scale UV coordinates
+                vUV = position.xy * 10.0;
+
+                // Use position-based conditions to modify vUV.x
+                if (position.x > 0.5 || position.y > 0.5) {
+                    vUV.x = 0.5;
+                } else {
+                    vUV.x = 0.0;
+                }
+                
+                // Set the vertex position
+                gl_Position = vec4(position, 1.0);
+            }
+        }
+
+        // Fragment Shader
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+
+            void main() {
+                // Use vUV-based conditions to determine fragColor
+                if (vUV.x > 0.5 && vUV.y > 5.0) {
+                    fragColor = vec4(1.0, 1.0, 1.0, 1.0); // White
+                } else {
+                    fragColor = vec4(0.0, 0.0, 0.0, 1.0); // Black
+                }
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
