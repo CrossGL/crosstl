@@ -953,7 +953,3 @@ class Parser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
-
-lexer = Lexer("name %= 90")
-parser = Parser(lexer.tokens())
-parser.parse()
