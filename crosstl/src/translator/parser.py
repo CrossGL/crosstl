@@ -954,6 +954,7 @@ class Parser:
 
         return MemberAccessNode(object, member)
 
+
 lexer = Lexer("name %= 90")
 parser = Parser(lexer.tokens())
 parser.parse()
