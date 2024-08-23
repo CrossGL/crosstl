@@ -76,6 +76,7 @@ Imagine writing a shader _once_ and deploying it across:
 - Metal
 - DirectX
 - OpenGL
+- Mojo
 
 
 ## 💡 Key Benefits
