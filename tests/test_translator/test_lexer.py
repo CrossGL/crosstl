@@ -139,6 +139,7 @@ def test_const_tokenization():
     except SyntaxError:
         pytest.fail("Const keyword tokenization failed")
 
+
 def test_shift_operators():
     code = """
     >> << >>= <<=
