@@ -131,7 +131,7 @@ def test_logical_operators_tokenization():
 
 def test_const_tokenization():
     code = """
-    cosnt int a;
+    const int a;
     """
 
     try:

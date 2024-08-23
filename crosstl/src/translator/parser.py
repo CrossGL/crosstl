@@ -586,6 +586,7 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_MOD",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -952,3 +953,7 @@ class Parser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
+
+lexer = Lexer("name %= 90")
+parser = Parser(lexer.tokens())
+parser.parse()
