@@ -220,4 +220,3 @@ def test_assign_shift_right():
         parse_code(tokens)
     except SyntaxError as e:
         pytest.fail(f"Failed to parse ASSIGN_SHIFT_RIGHT token: {e}")
-
