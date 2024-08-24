@@ -97,6 +97,7 @@ class IfNode(ASTNode):
             f"elif_bodies={self.elif_bodies}, else_body={self.else_body})"
         )
 
+
 class ForNode(ASTNode):
     def __init__(self, init, condition, update, body):
         self.init = init
