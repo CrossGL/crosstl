@@ -75,7 +75,6 @@ def test_struct():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
-
 def test_else_if():
     code = """
     #include <metal_stdlib>
@@ -94,7 +93,8 @@ def test_else_if():
         output.position = float4(input.position, 1.0);
         if (input.position.x == input.position.y) {
             output.vUV = float2(0.0, 0.0);
-        } else if (input.position.x > input.position.y) {
+        } 
+        else if (input.position.x > input.position.y) {
             output.vUV = float2(1.0, 1.0);
         } else {
             output.vUV = float2(0.5, 0.5);
@@ -122,13 +122,11 @@ def test_else_if():
         return output;
     }
     """
-    try:
-        tokens = tokenize_code(code)
-        ast = parse_code(tokens)
-        code = generate_code(ast)
-        print(code)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+    
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    print(generated_code)
 
 
 def test_for():
