@@ -16,6 +16,7 @@ TOKENS = [
     ("VOID", r"\bvoid\b"),
     ("RETURN", r"\breturn\b"),
     ("IF", r"\bif\b"),
+    ("ELSE_IF", r"\belse\sif\b"),
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),
     ("REGISTER", r"\bregister\b"),

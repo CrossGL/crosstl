@@ -112,8 +112,37 @@ def test_bitwise_operator_tokenization():
     c = ~a; // -61 = 1100 0011
     c = a << 2; // 240 = 1111 0000
     c = a >> 2; // 15 = 0000 1111
+      """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+      pytest.fail("Bitwise operator tokenization not implemented.")
+
+      
+def test_data_types_tokenization():
+    code = """
+    int a;
+    uint b;
+    float c;
+    double d;
+    bool e;
     """
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Bitwise operator tokenization not implemented.")
+        pytest.fail("Data types tokenization not implemented.")
+
+
+def test_logical_operators_tokenization():
+    code = """
+    if (0.8 > 0.7 || 0.6 > 0.7) {    
+        return 0;
+    } else if(0.8 > 0.7 && 0.8> 0.7) {        
+        return 1;  
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Data types tokenization not implemented.")
+
