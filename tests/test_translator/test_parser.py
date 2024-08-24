@@ -215,28 +215,25 @@ def test_logical_operators():
         vertex {
             input vec3 position;
             output float isLightOn;
-
             void main() {
-                if (position.x > 0.3 && position.z < 0.7) {
+                // Using logical AND and logical OR operators
+                if ((position.x > 0.3 && position.z < 0.7) || position.y > 0.5) {
                     isLightOn = 1.0;
                 } else {
                     isLightOn = 0.0;
                 }
-
                 // Set the vertex position
                 gl_Position = vec4(position, 1.0);
             }
         }
-
         fragment {
             input float isLightOn;
             output vec4 fragColor;
-
             void main() {
                 if (isLightOn == 1.0) {
-                    fragColor = vec4(1.0, 1.0, 0.0, 1.0);
+                    fragColor = vec4(1.0, 1.0, 0.0, 1.0);  // Light is on
                 } else {
-                    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    fragColor = vec4(0.0, 0.0, 0.0, 1.0);  // Light is off
                 }
             }
         }
@@ -247,3 +244,4 @@ def test_logical_operators():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
