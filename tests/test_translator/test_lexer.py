@@ -116,9 +116,9 @@ def test_bitwise_operator_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-      pytest.fail("Bitwise operator tokenization not implemented.")
+        pytest.fail("Bitwise operator tokenization not implemented.")
 
-      
+
 def test_data_types_tokenization():
     code = """
     int a;
@@ -145,4 +145,3 @@ def test_logical_operators_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Data types tokenization not implemented.")
-
