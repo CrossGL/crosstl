@@ -82,12 +82,20 @@ def test_if_statement():
     code = """
     #version 450
     // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
     layout(location = 0) in vec3 position;
     out vec2 vUV;
 
     void main() {
+        vUV = position.xy * 10.0;
         if (vUV.x > vUV.y) {
             vUV = vec2(0.0, 0.0);
+        }
+        else {
+            vUV = vec2(1.0, 1.0);
         }
     }
     // Fragment shader
@@ -95,8 +103,15 @@ def test_if_statement():
     layout(location = 0) out vec4 fragColor;
 
     void main() {
-        if (noise > 0.5) {
-            fragColor = vec4(1.0, 1.0, 1.0, 1.0);
+        float noise = perlinNoise(vUV);
+        if (noise > 0.75) {
+            fragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        }
+        else if (noise > 0.5) {
+            fragColor = vec4(0.0, 1.0, 0.0, 1.0);
+        }
+        else {
+            fragColor = vec4(0.0, 0.0, 1.0, 1.0);
         }
     }
     """
