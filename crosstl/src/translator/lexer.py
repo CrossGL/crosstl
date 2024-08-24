@@ -35,6 +35,8 @@ TOKENS = [
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),
     ("RETURN", r"\breturn\b"),
+    ("BITWISE_SHIFT_LEFT", r"<<"),
+    ("BITWISE_SHIFT_RIGHT", r">>"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("GREATER_THAN", r">"),
@@ -60,8 +62,6 @@ TOKENS = [
     ("BITWISE_OR", r"\|"),
     ("BITWISE_XOR", r"\^"),
     ("BITWISE_NOT", r"~"),
-    ("BITWISE_SHIFT_LEFT", r"<<"),
-    ("BITWISE_SHIFT_RIGHT", r">>"),
 ]
 
 KEYWORDS = {
