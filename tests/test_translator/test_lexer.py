@@ -6,7 +6,7 @@ from typing import List
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
-    return lexer.tokenize()
+    return lexer.tokens
 
 
 def test_input_output_tokenization():
@@ -99,6 +99,24 @@ def test_function_call_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_bitwise_operator_tokenization():
+    code = """
+    int a = 60; // 60 = 0011 1100
+    int b = 13; // 13 = 0000 1101
+    int c = 0;
+    c = a & b; // 12 = 0000 1100
+    c = a | b; // 61 = 0011 1101
+    c = a ^ b; // 49 = 0011 0001
+    c = ~a; // -61 = 1100 0011
+    c = a << 2; // 240 = 1111 0000
+    c = a >> 2; // 15 = 0000 1111
+      """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operator tokenization not implemented.")
 
 
 def test_data_types_tokenization():
