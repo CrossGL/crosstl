@@ -66,6 +66,7 @@ TOKENS = [
     ("EQUALS", r"="),
     ("QUESTION", r"\?"),
     ("COLON", r":"),
+    ("CONST", r"\bconst\b"),
     ("BITWISE_AND", r"&"),
     ("BITWISE_OR", r"\|"),
     ("BITWISE_XOR", r"\^"),
@@ -84,6 +85,7 @@ KEYWORDS = {
     "else": "ELSE",
     "for": "FOR",
     "return": "RETURN",
+    "const": "CONST",
 }
 
 
