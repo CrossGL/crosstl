@@ -75,6 +75,7 @@ def test_struct():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_else_if():
     code = """
     #include <metal_stdlib>
@@ -122,7 +123,7 @@ def test_else_if():
         return output;
     }
     """
-    
+
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated_code = generate_code(ast)

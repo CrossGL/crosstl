@@ -303,7 +303,7 @@ class MetalParser:
             expr = self.parse_expression()
             self.eat("SEMICOLON")
             return expr
- 
+
     def parse_if_statement(self):
         self.eat("IF")
         self.eat("LPAREN")
@@ -311,7 +311,7 @@ class MetalParser:
         self.eat("RPAREN")
         if_body = self.parse_block()
         elif_conditions = []
-  
+
         else_body = None
 
         while self.current_token[0] == "ELSE":
@@ -326,9 +326,8 @@ class MetalParser:
             else:
                 else_body = self.parse_block()
                 break
-  
-        return IfNode(condition, if_body, elif_conditions, else_body)
 
+        return IfNode(condition, if_body, elif_conditions, else_body)
 
     def parse_for_statement(self):
         self.eat("FOR")

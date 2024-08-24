@@ -165,6 +165,7 @@ class MetalToCrossGLConverter:
         code += self.generate_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
         return code
+
     def generate_if_statement(self, node, indent, is_main):
         condition = self.generate_expression(node.condition, is_main)
 
