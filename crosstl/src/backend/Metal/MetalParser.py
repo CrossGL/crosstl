@@ -314,7 +314,7 @@ class MetalParser:
 
         else_body = None
 
-        while self.current_token[0] == "ELSE":
+        if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             if self.current_token[0] == "IF":
                 self.eat("IF")
@@ -325,7 +325,6 @@ class MetalParser:
                 elif_conditions.append((elif_condition, elif_body))
             else:
                 else_body = self.parse_block()
-                break
 
         return IfNode(condition, if_body, elif_conditions, else_body)
 
