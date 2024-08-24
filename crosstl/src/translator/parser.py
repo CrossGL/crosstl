@@ -586,7 +586,6 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
-            "ASSIGN_MOD",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
