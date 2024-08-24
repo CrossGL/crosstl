@@ -6,7 +6,7 @@ from typing import List
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
-    return lexer.tokenize()
+    return lexer.tokens
 
 
 def test_input_output_tokenization():
@@ -99,3 +99,60 @@ def test_function_call_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_bitwise_operator_tokenization():
+    code = """
+    int a = 60; // 60 = 0011 1100
+    int b = 13; // 13 = 0000 1101
+    int c = 0;
+    c = a & b; // 12 = 0000 1100
+    c = a | b; // 61 = 0011 1101
+    c = a ^ b; // 49 = 0011 0001
+    c = ~a; // -61 = 1100 0011
+    c = a << 2; // 240 = 1111 0000
+    c = a >> 2; // 15 = 0000 1111
+      """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operator tokenization not implemented.")
+
+
+def test_data_types_tokenization():
+    code = """
+    int a;
+    uint b;
+    float c;
+    double d;
+    bool e;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Data types tokenization not implemented.")
+
+
+def test_logical_operators_tokenization():
+    code = """
+    if (0.8 > 0.7 || 0.6 > 0.7) {    
+        return 0;
+    } else if(0.8 > 0.7 && 0.8> 0.7) {        
+        return 1;  
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Logical Operators tokenization not implemented.")
+
+
+def test_const_tokenization():
+    code = """
+    const int a;
+    """
+
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Const keyword tokenization failed")

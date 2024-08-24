@@ -262,6 +262,59 @@ def test_function_call_codegen():
         pytest.fail("Function call parsing or code generation not implemented.")
 
 
+def test_else_if_codegen():
+    code = """
+    struct VSInput {
+    float4 position : POSITION;
+    float4 color : TEXCOORD0;
+    };
+
+    struct VSOutput {
+        float4 out_position : TEXCOORD0;
+    };
+
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        output.out_position =  input.position;
+        if (input.color.r > 0.5) {
+            output.out_position = input.color;
+        }
+        else {
+            output.out_position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        return output;
+    }
+
+    struct PSInput {
+        float4 in_position : TEXCOORD0;
+    };
+
+    struct PSOutput {
+        float4 out_color : SV_TARGET0;
+    };
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        if (input.in_position.r > 0.5) {
+            output.out_color = input.in_position;
+        } else if (input.in_position.r == 0.5){
+            output.out_color = float4(1.0, 1.0, 1.0, 1.0);
+        } else {
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print("############## else if code ##############")
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Else_if statement parsing or code generation not implemented.")
+
+
 # Run all tests
 if __name__ == "__main__":
     pytest.main()

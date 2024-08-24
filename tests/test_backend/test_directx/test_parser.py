@@ -55,7 +55,7 @@ def test_if_parsing():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("if parsing not implemented.")
 
 
 def test_for_parsing():
@@ -72,7 +72,7 @@ def test_for_parsing():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("for parsing not implemented.")
 
 
 def test_else_parsing():
@@ -91,7 +91,7 @@ def test_else_parsing():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("else parsing not implemented.")
 
 
 def test_function_call_parsing():
@@ -106,7 +106,28 @@ def test_function_call_parsing():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("function call parsing not implemented.")
+
+
+def test_else_if_parsing():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        if (input.in_position.r > 0.5) {
+            output.out_color = input.in_position;
+        } else if (input.in_position.r == 0.5){
+            output.out_color = float4(1.0, 1.0, 1.0, 1.0);
+        } else {
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("else_if parsing not implemented.")
 
 
 # Run all tests

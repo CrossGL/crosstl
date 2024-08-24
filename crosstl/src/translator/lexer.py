@@ -17,6 +17,8 @@ TOKENS = [
     ("FLOAT_NUMBER", r"\d*\.\d+|\d+\.\d*"),
     ("FLOAT", r"\bfloat\b"),
     ("INT", r"\bint\b"),
+    ("UINT", r"\buint\b"),
+    ("DOUBLE", r"\bdouble\b"),
     ("SAMPLER2D", r"\bsampler2D\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
@@ -35,6 +37,8 @@ TOKENS = [
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),
     ("RETURN", r"\breturn\b"),
+    ("BITWISE_SHIFT_LEFT", r"<<"),
+    ("BITWISE_SHIFT_RIGHT", r">>"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("GREATER_THAN", r">"),
@@ -43,9 +47,15 @@ TOKENS = [
     ("DECREMENT", r"--"),
     ("EQUAL", r"=="),
     ("NOT_EQUAL", r"!="),
-    ("AND", r"&&"),
-    ("OR", r"\|\|"),
+    ("ASSIGN_AND", r"&="),
+    ("ASSIGN_OR", r"\|="),
+    ("ASSIGN_XOR", r"\^="),
+    ("LOGICAL_AND", r"&&"),
+    ("LOGICAL_OR", r"\|\|"),
+    ("XOR", r"\^"),
     ("NOT", r"!"),
+    ("ASSIGN_MOD", r"%="),
+    ("MOD", r"%"),
     ("INCREMENT", r"\+\+"),
     ("DECREMENT", r"\-\-"),
     ("PLUS", r"\+"),
@@ -56,6 +66,11 @@ TOKENS = [
     ("EQUALS", r"="),
     ("QUESTION", r"\?"),
     ("COLON", r":"),
+    ("CONST", r"\bconst\b"),
+    ("BITWISE_AND", r"&"),
+    ("BITWISE_OR", r"\|"),
+    ("BITWISE_XOR", r"\^"),
+    ("BITWISE_NOT", r"~"),
 ]
 
 KEYWORDS = {
@@ -70,6 +85,7 @@ KEYWORDS = {
     "else": "ELSE",
     "for": "FOR",
     "return": "RETURN",
+    "const": "CONST",
 }
 
 

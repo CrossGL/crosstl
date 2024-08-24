@@ -20,8 +20,10 @@ def test_struct_tokenization():
         float4 out_position : TEXCOORD0;
     };
     """
-    tokens = tokenize_code(code)
-    print(tokens)
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("struct tokenization not implemented.")
 
 
 def test_if_tokenization():
@@ -38,7 +40,7 @@ def test_if_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Function call tokenization not implemented.")
+        pytest.fail("if tokenization not implemented.")
 
 
 def test_for_tokenization():
@@ -54,7 +56,7 @@ def test_for_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Function call tokenization not implemented.")
+        pytest.fail("for tokenization not implemented.")
 
 
 def test_else_tokenization():
@@ -72,7 +74,7 @@ def test_else_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Function call tokenization not implemented.")
+        pytest.fail("else tokenization not implemented.")
 
 
 def test_function_call_tokenization():
@@ -87,6 +89,26 @@ def test_function_call_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_else_if_tokenization():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        if (input.in_position.r > 0.5) {
+            output.out_color = input.in_position;
+        } else if (input.in_position.r == 0.5){
+            output.out_color = float4(1.0, 1.0, 1.0, 1.0);
+        } else {
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        return output;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("else_if tokenization not implemented.")
 
 
 if __name__ == "__main__":
