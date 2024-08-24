@@ -306,28 +306,28 @@ class MetalParser:
 
     def parse_if_statement(self):
         self.eat("IF")
-        self.eat("LPAREN")
         condition = self.parse_expression()
-        self.eat("RPAREN")
         if_body = self.parse_block()
+
+    # Handle `else if`
         elif_conditions = []
-
-        else_body = None
-
-        if self.current_token[0] == "ELSE":
+        while self.current_token[0] == "ELSE":
             self.eat("ELSE")
             if self.current_token[0] == "IF":
                 self.eat("IF")
-                self.eat("LPAREN")
-                elif_condition = self.parse_if_statement()
-                self.eat("RPAREN")
+                elif_condition = self.parse_expression()
                 elif_body = self.parse_block()
                 elif_conditions.append((elif_condition, elif_body))
             else:
                 else_body = self.parse_block()
+                return IfNode(condition, if_body, elif_conditions, else_body)
+        else_body = None
+        if self.current_token[0] == "ELSE":
+            self.eat("ELSE")
+            else_body = self.parse_block()
 
         return IfNode(condition, if_body, elif_conditions, else_body)
-
+    
     def parse_for_statement(self):
         self.eat("FOR")
         self.eat("LPAREN")
