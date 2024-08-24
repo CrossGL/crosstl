@@ -35,8 +35,6 @@ TOKENS = [
     ("ASSIGN_MUL", r"\*="),
     ("ASSIGN_DIV", r"/="),
     ("WHITESPACE", r"\s+"),
-    ("SHIFT_RIGHT", r">>"),
-    ("SHIFT_LEFT", r"<<"),
     ("IF", r"\bif\b"),
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),

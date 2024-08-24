@@ -141,7 +141,7 @@ def test_const_tokenization():
 
 def test_shift_operators():
     code = """
-    >> << >>= <<=
+    >>= <<=
     """
 
     try:
