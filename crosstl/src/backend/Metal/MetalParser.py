@@ -309,7 +309,7 @@ class MetalParser:
         condition = self.parse_expression()
         if_body = self.parse_block()
 
-    # Handle `else if`
+        # Handle `else if`
         elif_conditions = []
         while self.current_token[0] == "ELSE":
             self.eat("ELSE")
@@ -327,7 +327,7 @@ class MetalParser:
             else_body = self.parse_block()
 
         return IfNode(condition, if_body, elif_conditions, else_body)
-    
+
     def parse_for_statement(self):
         self.eat("FOR")
         self.eat("LPAREN")
