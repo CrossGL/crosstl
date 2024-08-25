@@ -589,8 +589,7 @@ class Parser:
             "ASSIGN_AND",
             "ASSIGN_OR",
             "ASSIGN_XOR",
-            "ASSIGN_MOD"
-            
+            "ASSIGN_MOD",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -648,8 +647,7 @@ class Parser:
             "ASSIGN_AND",
             "ASSIGN_OR",
             "ASSIGN_XOR",
-            "ASSIGN_MOD"
-            
+            "ASSIGN_MOD",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -682,7 +680,7 @@ class Parser:
             "ASSIGN_AND",
             "ASSIGN_OR",
             "ASSIGN_XOR",
-            "ASSIGN_MOD"
+            "ASSIGN_MOD",
         ):
             op = self.current_token[0]
             self.eat(op)
@@ -733,7 +731,7 @@ class Parser:
             "ASSIGN_AND",
             "ASSIGN_OR",
             "ASSIGN_XOR",
-            "ASSIGN_MOD"
+            "ASSIGN_MOD",
         ]:
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -893,7 +891,7 @@ class Parser:
             "ASSIGN_AND",
             "ASSIGN_OR",
             "ASSIGN_XOR",
-            "ASSIGN_MOD"
+            "ASSIGN_MOD",
         ]:
             op = self.current_token[0]
             self.eat(op)
