@@ -244,3 +244,40 @@ def test_logical_operators():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_Assignment_operators():
+    code = """
+        shader LightControl {
+    vertex {
+        input vec3 position;
+        output float isLightOn;
+        void main() {
+            isLightOn = 0.0;
+
+            isLightOn |= (position.x > 0.3 && position.z < 0.7) ? 1.0 : 0.0;
+
+            isLightOn &= (position.y > 0.5) ? 1.0 : 0.0;
+
+            isLightOn %= 2.0;
+            isLightOn ^= (position.y > 0.6) ? 1.0 : 0.0;
+
+            gl_Position = vec4(position, 1.0);
+        }
+    }
+    fragment {
+        input float isLightOn;
+        output vec4 fragColor;
+        void main() {
+            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+
+            fragColor += vec4(1.0, 1.0, 0.0, 1.0) * isLightOn;
+        }
+    }
+}
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
