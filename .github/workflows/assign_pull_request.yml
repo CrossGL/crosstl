@@ -1,0 +1,36 @@
+name: Assign PR to Code Owner
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  assign_pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Set up GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install gh -y
+
+      - name: Get Code Owners
+        id: get-code-owners
+        run: |
+          CODEOWNERS_FILE=.github/CODEOWNERS
+          if [ -f "$CODEOWNERS_FILE" ]; then
+            CODE_OWNER=$(grep -v '^#' $CODEOWNERS_FILE | grep -Eo '@[a-zA-Z0-9_-]+' | head -n 1)
+            echo "code_owner=${CODE_OWNER#@}" >> $GITHUB_ENV
+          else
+            echo "No CODEOWNERS file found."
+            exit 1
+          fi
+
+      - name: Assign PR to Code Owner
+        if: env.code_owner != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} --add-assignee "${{ env.code_owner }}"
