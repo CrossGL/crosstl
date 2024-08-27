@@ -181,7 +181,7 @@ def test_shift_operators():
     try:
         tokenize_code(code)
     except SyntaxError:
-         pytest.fail("Shift operators tokenization failed.")
+        pytest.fail("Shift operators tokenization failed.")
 
 
 def test_assignment_operators_tokenization():
@@ -200,5 +200,3 @@ def test_assignment_operators_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Assignment operators tokenization not implemented.")
-
-
