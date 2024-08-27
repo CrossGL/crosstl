@@ -134,14 +134,15 @@ class GLSLToCrossGLConverter:
 
     def generate_if(self, node: IfNode, shader_type, indent=0):
         indent_str = "    " * indent
-        code = f"{indent_str}if {self.generate_expression(node.condition,shader_type)} {{\n"
+        code = f"{indent_str}if {self.generate_expression(node.condition, shader_type)} {{\n"
         for stmt in node.if_body:
             code += self.generate_statement(stmt, shader_type, indent + 1)
         code += f"{indent_str}}}"
-        while isinstance(node.else_body, IfNode):
-            node = node.else_body
-            code += f" else if ({self.generate_expression(node.condition, shader_type)}) {{\n"
-            for stmt in node.if_body:
+
+        # Handle else_if_chain
+        for elif_condition, elif_body in node.else_if_chain:
+            code += f" else if ({self.generate_expression(elif_condition, shader_type)}) {{\n"
+            for stmt in elif_body:
                 code += self.generate_statement(stmt, shader_type, indent + 1)
             code += f"{indent_str}}}"
 
