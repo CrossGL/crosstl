@@ -1,4 +1,3 @@
-```markdown
 ### PR Description
 <!-- Provide a brief summary of the changes you have made. Explain the purpose and motivation behind these changes. -->
 
@@ -47,4 +46,3 @@ shader PerlinNoise {
 - [ ] Are all tests passing?
 
 
-```
