@@ -72,7 +72,6 @@ Imagine writing a shader _once_ and deploying it across:
 
 ## Supported Backends
 
-- Vulkan
 - Metal
 - DirectX
 - OpenGL
