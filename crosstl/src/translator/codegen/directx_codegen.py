@@ -358,7 +358,5 @@ class HLSLCodeGen:
             "AND": "&&",
             "OR": "||",
             "EQUALS": "=",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
         }
         return op_map.get(op, op)
