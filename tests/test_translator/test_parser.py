@@ -270,4 +270,3 @@ def test_bitwise_operators():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
-
