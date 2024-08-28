@@ -272,7 +272,7 @@ your contributions are definitely welcome and appreciated 🙌
 find out more info in our [Contributing guide](https://crossgl.github.io/contribution.html)
 
 <a href="https://github.com/CrossGL/crosstl/graphs/contributors">
-  <img class="dark-light" src="https://contrib.rocks/image?repo=CrossGL/crosstl&anon=0&columns=20&max=100&r=true" />
+  <img src="https://contrib.rocks/image?repo=CrossGL/crosstl" />
 </a>
 
 

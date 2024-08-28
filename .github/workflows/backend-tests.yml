@@ -14,6 +14,7 @@ jobs:
     strategy:
       matrix:
         backend: [directx, metal, opengl] # ToDO: Add mojo to the list
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
 
     steps:
     - name: Checkout repository
@@ -22,7 +23,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: ${{ matrix.python-version }}
 
     - name: Install dependencies
       run: |

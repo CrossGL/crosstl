@@ -133,6 +133,21 @@ def test_data_types_tokenization():
         pytest.fail("Data types tokenization not implemented.")
 
 
+def test_operators_tokenization():
+    code = """
+    int a;
+    a = 2 + 1;
+    a = a -  2;
+    a = a / 1;
+    a = a * 2;
+    a = a % 2;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Operators tokenization not implemented.")
+
+
 def test_logical_operators_tokenization():
     code = """
     if (0.8 > 0.7 || 0.6 > 0.7) {    
@@ -144,7 +159,25 @@ def test_logical_operators_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Logical Operators tokenization not implemented.")
+        pytest.fail("Logical operators tokenization not implemented.")
+
+
+def test_assignment_operators_tokenization():
+    code = """
+    int a = 1;
+    a += 1;
+    a *= 2;
+    a /= a;
+    a -= -1;
+    a %= 2;
+    a &= 1;
+    a |= 1;
+    a ^= 1;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Assignment operators tokenization not implemented.")
 
 
 def test_const_tokenization():
