@@ -162,20 +162,10 @@ def test_logical_operators_tokenization():
         pytest.fail("Logical Operators tokenization not implemented.")
 
 
-def test_const_tokenization():
+def test_assignment_shift_operators():
     code = """
-    const int a;
-    """
-
-    try:
-        tokenize_code(code)
-    except SyntaxError:
-        pytest.fail("Const keyword tokenization failed")
-
-
-def test_shift_operators():
-    code = """
-    >>= <<=
+    a >>= 1;
+    b <<= 1;
         """
 
     try:
@@ -200,3 +190,14 @@ def test_assignment_operators_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Assignment operators tokenization not implemented.")
+
+
+def test_const_tokenization():
+    code = """
+    const int a;
+    """
+
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Const keyword tokenization failed")
