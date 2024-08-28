@@ -320,13 +320,13 @@ class MetalParser:
                 elif_conditions.append((elif_condition, elif_body))
             else:
                 else_body = self.parse_block()
-                return IfNode(condition, if_body, elif_conditions, else_body)
+                return IfNode(condition, if_body, elif_conditions,else_body)
         else_body = None
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             else_body = self.parse_block()
 
-        return IfNode(condition, if_body, elif_conditions, else_body)
+        return IfNode(condition, if_body, elif_conditions,elif_body, else_body)
 
     def parse_for_statement(self):
         self.eat("FOR")
