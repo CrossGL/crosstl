@@ -625,6 +625,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -679,6 +681,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -707,6 +711,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
             "EQUAL",
         ):
             op = self.current_token[0]
@@ -755,6 +761,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -913,6 +921,8 @@ class Parser:
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             op = self.current_token[0]
             self.eat(op)
