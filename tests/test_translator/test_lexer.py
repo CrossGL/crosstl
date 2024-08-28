@@ -159,7 +159,19 @@ def test_logical_operators_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Logical operators tokenization not implemented.")
+        pytest.fail("Logical Operators tokenization not implemented.")
+
+
+def test_assignment_shift_operators():
+    code = """
+    a >>= 1;
+    b <<= 1;
+        """
+
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Shift operators tokenization failed.")
 
 
 def test_assignment_operators_tokenization():
