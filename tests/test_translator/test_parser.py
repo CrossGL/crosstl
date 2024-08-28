@@ -246,41 +246,7 @@ def test_logical_operators():
         pytest.fail("Struct parsing not implemented.")
 
 
-def test_var_assignment():
-    code = """
-    shader PerlinNoise {
-    vertex {
-        input vec3 position;
-        output vec2 vUV;
 
-        void main() {
-            vUV = position.xy * 10.0;
-            gl_Position = vec4(position, 1.0);
-        }
-    }
-
-    // Fragment Shader
-    fragment {
-        input vec2 vUV;
-        output vec4 fragColor;
-
-        void main() {
-            double noise = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-            double height = noise * 10.0;
-            uint a = 1;
-            uint b = 2;
-            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
-            fragColor = vec4(color, 1.0);
-            }
-        }
-    }
-
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Variable assignment parsing not implemented.")
 
 
 def test_Assignment_operators():
@@ -318,4 +284,51 @@ def test_Assignment_operators():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Assignment operators parsing not implemented.")
+        pytest.fail("Variable assignment parsing not implemented.")
+
+
+
+def test_assign_ops():
+
+    code = """
+            shader LightControl {
+                vertex {
+                    input vec3 position;
+                    output int lightStatus;
+
+                    void main() {
+                        int xStatus = int(position.x * 10.0);
+                        int yStatus = int(position.y * 10.0);
+                        int zStatus = int(position.z * 10.0);
+
+                        xStatus |= yStatus;
+                        yStatus &= zStatus;
+                        zStatus %= xStatus;
+                        lightStatus = xStatus;
+                        lightStatus ^= zStatus;
+
+                        gl_Position = vec4(position, 1.0);
+                    }
+                }
+
+                fragment {
+                    input int lightStatus;
+                    output vec4 fragColor;
+
+                    void main() {
+                        if (lightStatus > 0) {
+                            fragColor = vec4(1.0, 1.0, 0.0, 1.0); 
+                        } else {
+                            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                        }
+                    }
+                }
+            }
+        """
+
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Assignment Operator parsing not implemented.")
+
