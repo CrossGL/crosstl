@@ -311,6 +311,7 @@ class MetalParser:
 
         # Handle `else if`
         elif_conditions = []
+        elif_body =[]
         while self.current_token[0] == "ELSE":
             self.eat("ELSE")
             if self.current_token[0] == "IF":
