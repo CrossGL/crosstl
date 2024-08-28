@@ -246,6 +246,7 @@ def test_logical_operators():
         pytest.fail("Struct parsing not implemented.")
 
 
+
 def test_Assignment_operators():
     code = """
         shader LightControl {
@@ -275,9 +276,11 @@ def test_Assignment_operators():
         }
     }
 }
+
     """
     try:
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Variable assignment parsing not implemented.")
+
