@@ -21,6 +21,8 @@ TOKENS = [
     ("DOUBLE", r"\bdouble\b"),
     ("SAMPLER2D", r"\bsampler2D\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
+    ("ASSIGN_SHIFT_RIGHT", r">>="),
+    ("ASSIGN_SHIFT_LEFT", r"<<="),
     ("NUMBER", r"\d+(\.\d+)?"),
     ("LBRACE", r"\{"),
     ("RBRACE", r"\}"),
