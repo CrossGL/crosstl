@@ -305,29 +305,29 @@ class MetalParser:
             return expr
 
     def parse_if_statement(self):
-        self.eat("IF")
-        condition = self.parse_expression()
-        if_body = self.parse_block()
-
-        # Handle `else if`
-        elif_conditions = []
-        elif_body = []
-        while self.current_token[0] == "ELSE":
-            self.eat("ELSE")
-            if self.current_token[0] == "IF":
-                self.eat("IF")
-                elif_condition = self.parse_expression()
-                elif_body = self.parse_block()
-                elif_conditions.append((elif_condition, elif_body))
-            else:
-                else_body = self.parse_block()
-                return IfNode(condition, if_body, elif_conditions, elif_body, else_body)
+        if_chain = []
+        else_if_chain = []
         else_body = None
+        while self.current_token[0] == "IF":
+            self.eat("IF")
+            self.eat("LPAREN")
+            condition = self.parse_expression()
+            self.eat("RPAREN")
+            body = self.parse_block()
+            if_chain.append((condition, body))
+        while self.current_token[0] == "ELSE_IF":
+            self.eat("ELSE_IF")
+            self.eat("LPAREN")
+            condition = self.parse_expression()
+            self.eat("RPAREN")
+            body = self.parse_block()
+            else_if_chain.append((condition, body))
+
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             else_body = self.parse_block()
 
-        return IfNode(condition, if_body, elif_conditions, elif_body, else_body)
+        return IfNode(if_chain, else_if_chain, else_body)
 
     def parse_for_statement(self):
         self.eat("FOR")

@@ -76,7 +76,7 @@ def test_struct():
         pytest.fail("Struct parsing not implemented.")
 
 
-def test_else_if():
+def test_if():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -94,11 +94,6 @@ def test_else_if():
         output.position = float4(input.position, 1.0);
         if (input.position.x == input.position.y) {
             output.vUV = float2(0.0, 0.0);
-        } 
-        else if (input.position.x > input.position.y) {
-            output.vUV = float2(1.0, 1.0);
-        } else {
-            output.vUV = float2(0.5, 0.5);
         }
         return output;
     }
@@ -113,21 +108,20 @@ def test_else_if():
 
     fragment Fragment_OUTPUT fragment_main(Fragment_INPUT input [[stage_in]]) {
         Fragment_OUTPUT output;
+        output.fragColor = float4(1.0, 0.0, 0.0, 1.0);
         if (input.vUV.x == input.vUV.y) {
             output.fragColor = float4(0.0, 1.0, 0.0, 1.0);
-        } else if (input.vUV.x > input.vUV.y) {
-            output.fragColor = float4(1.0, 0.0, 0.0, 1.0);
-        } else {
-            output.fragColor = float4(0.0, 0.0, 1.0, 1.0);
         }
         return output;
     }
     """
-
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
-    print(generated_code)
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
 
 
 def test_for():
@@ -164,54 +158,6 @@ def test_for():
         Fragment_OUTPUT output;
         output.fragColor = float4(1.0, 0.0, 0.0, 1.0);
         for (int i = 0; i < 10; i=i+1) {
-            output.fragColor = float4(0.0, 1.0, 0.0, 1.0);
-        }
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        ast = parse_code(tokens)
-        code = generate_code(ast)
-        print(code)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
-
-
-def test_if():
-    code = """
-    #include <metal_stdlib>
-    using namespace metal;
-    struct Vertex_INPUT {
-        float3 position [[attribute(0)]];
-    };
-
-    struct Vertex_OUTPUT {
-        float4 position [[position]];
-        float2 vUV;
-    };
-
-    vertex Vertex_OUTPUT vertex_main(Vertex_INPUT input [[stage_in]]) {
-        Vertex_OUTPUT output;
-        output.position = float4(input.position, 1.0);
-        if (input.position.x == input.position.y) {
-            output.vUV = float2(0.0, 0.0);
-        }
-        return output;
-    }
-
-    struct Fragment_INPUT {
-        float2 vUV [[stage_in]];
-    };
-
-    struct Fragment_OUTPUT {
-        float4 fragColor [[color(0)]];
-    };
-
-    fragment Fragment_OUTPUT fragment_main(Fragment_INPUT input [[stage_in]]) {
-        Fragment_OUTPUT output;
-        output.fragColor = float4(1.0, 0.0, 0.0, 1.0);
-        if (input.vUV.x == input.vUV.y) {
             output.fragColor = float4(0.0, 1.0, 0.0, 1.0);
         }
         return output;
@@ -325,6 +271,64 @@ def test_function_call():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_else_if():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct Vertex_INPUT {
+        float3 position [[attribute(0)]];
+    };
+
+    struct Vertex_OUTPUT {
+        float4 position [[position]];
+        float2 vUV;
+    };
+
+    vertex Vertex_OUTPUT vertex_main(Vertex_INPUT input [[stage_in]]) {
+        Vertex_OUTPUT output;
+        output.position = float4(input.position, 1.0);
+        if (input.position.x == input.position.y) {
+            output.vUV = float2(0.0, 0.0);}
+        
+        else if (input.position.x > input.position.y) {
+            output.vUV = float2(1.0, 1.0);
+        } 
+        else if (input.position.x < input.position.y) {
+            output.vUV = float2(-1.0, -1.0);
+        }
+        else {
+            output.vUV = float2(0.0, 0.0);
+        }
+        return output;
+    }
+
+    struct Fragment_INPUT {
+        float2 vUV [[stage_in]];
+    };
+
+    struct Fragment_OUTPUT {
+        float4 fragColor [[color(0)]];
+    };
+
+    fragment Fragment_OUTPUT fragment_main(Fragment_INPUT input [[stage_in]]) {
+        Fragment_OUTPUT output;
+        if (input.vUV.x == input.vUV.y) {
+            output.fragColor = float4(0.0, 1.0, 0.0, 1.0);
+        } else if (input.vUV.x > input.vUV.y) {
+            output.fragColor = float4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            output.fragColor = float4(0.0, 0.0, 1.0, 1.0);
+        }
+        return output;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    print(generated_code)
 
 
 if __name__ == "__main__":

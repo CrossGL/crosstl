@@ -167,18 +167,21 @@ class MetalToCrossGLConverter:
         return code
 
     def generate_if_statement(self, node, indent, is_main):
-        condition = self.generate_expression(node.condition, is_main)
-
-        code = f"if ({condition}) {{\n"
-        code += self.generate_function_body(node.if_body, indent + 1, is_main)
-        code += "    " * indent + "}"
-
-        # Handling elif conditions
-        for elif_condition, elif_body in node.elif_conditions:
-            elif_condition_code = self.generate_expression(elif_condition, is_main)
-            code += f" else if ({elif_condition_code}) {{\n"
-            code += self.generate_function_body(elif_body, indent + 1, is_main)
-            code += "    " * indent + "}"
+        code = ""
+        if node.if_chain:
+            # Handle the if chain
+            for condition, body in node.if_chain:
+                code += f"if ({self.generate_expression(condition, is_main)}) {{\n"
+                code += self.generate_function_body(body, indent + 1, is_main)
+                code += "    " * indent + "}"
+        # Handling the else if chain
+        if node.else_if_chain:
+            for condition, body in node.else_if_chain:
+                code += (
+                    f" else if ({self.generate_expression(condition, is_main)}) {{\n"
+                )
+                code += self.generate_function_body(body, indent + 1, is_main)
+                code += "    " * indent + "}"
 
         # Handling the else condition
         if node.else_body:
