@@ -64,12 +64,15 @@ def test_else_statement_tokenization():
 
 def test_else_if_statement_tokenization():
     code = """
-    if (a > b) {
+    if (!a) {
+        return b;
+    } 
+    if (!b) {
         return a;
     } else if (a < b) {
         return b;
-    } else if (a == b) {
-        return 1;
+    } else if (a > b) {
+        return a;
     } else {
         return 0;
     }

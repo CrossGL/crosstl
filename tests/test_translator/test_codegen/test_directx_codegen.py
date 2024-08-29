@@ -200,8 +200,13 @@ def test_else_if_statement():
             vUV = position.xy * 10.0;
             if (vUV.x < 0.5) {
                 vUV.x = 0.25;
+            }
+            if (vUV.x < 0.25) {
+                vUV.x = 0.0;
             } else if (vUV.x < 0.75) {
                 vUV.x = 0.5;
+            } else if (vUV.x < 1.0) {
+                vUV.x = 0.75;
             } else {
                 vUV.x = 0.0;
             }
