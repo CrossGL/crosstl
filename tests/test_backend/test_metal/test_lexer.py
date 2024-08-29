@@ -6,7 +6,7 @@ from crosstl.src.backend.Metal.MetalLexer import MetalLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = MetalLexer(code)
-    return lexer.tokenize()
+    return lexer.tokens
 
 
 def test_struct_tokenization():
@@ -20,8 +20,10 @@ def test_struct_tokenization():
         float2 vUV;
     };
     """
-    tokens = tokenize_code(code)
-    print(tokens)
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Struct tokenization not implemented.")
 
 
 def test_if_tokenization():
@@ -101,6 +103,27 @@ def test_function_call_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_if_else_tokenization():
+    code = """
+    float perlinNoise(float2 p) {
+        if (p.x == p.y) {
+            return 0.0;
+        }
+        else if (p.x == 0.0) {
+            return 1.0;
+        }
+
+        else {
+            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        }
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("If-else statement tokenization not implemented.")
 
 
 if __name__ == "__main__":

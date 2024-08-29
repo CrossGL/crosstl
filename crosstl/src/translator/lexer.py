@@ -21,6 +21,8 @@ TOKENS = [
     ("DOUBLE", r"\bdouble\b"),
     ("SAMPLER2D", r"\bsampler2D\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
+    ("ASSIGN_SHIFT_RIGHT", r">>="),
+    ("ASSIGN_SHIFT_LEFT", r"<<="),
     ("NUMBER", r"\d+(\.\d+)?"),
     ("LBRACE", r"\{"),
     ("RBRACE", r"\}"),
@@ -37,6 +39,8 @@ TOKENS = [
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),
     ("RETURN", r"\breturn\b"),
+    ("BITWISE_SHIFT_LEFT", r"<<"),
+    ("BITWISE_SHIFT_RIGHT", r">>"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("GREATER_THAN", r">"),
@@ -64,6 +68,11 @@ TOKENS = [
     ("EQUALS", r"="),
     ("QUESTION", r"\?"),
     ("COLON", r":"),
+    ("CONST", r"\bconst\b"),
+    ("BITWISE_AND", r"&"),
+    ("BITWISE_OR", r"\|"),
+    ("BITWISE_XOR", r"\^"),
+    ("BITWISE_NOT", r"~"),
 ]
 
 KEYWORDS = {
@@ -78,6 +87,7 @@ KEYWORDS = {
     "else": "ELSE",
     "for": "FOR",
     "return": "RETURN",
+    "const": "CONST",
 }
 
 

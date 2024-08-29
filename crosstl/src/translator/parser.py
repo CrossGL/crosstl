@@ -90,6 +90,8 @@ class Parser:
             if self.current_token[0] in [
                 "VECTOR",
                 "FLOAT",
+                "DOUBLE",
+                "UINT",
                 "INT",
                 "SAMPLER2D",
                 "MATRIX",
@@ -98,7 +100,7 @@ class Parser:
                 self.eat(self.current_token[0])
             else:
                 raise SyntaxError(
-                    f"Expected VECTOR, FLOAT, INT, or SAMPLER2D, got {self.current_token[0]}"
+                    f"Expected VECTOR, FLOAT, DOUBLE, UINT, INT or SAMPLER2D, got {self.current_token[0]}"
                 )
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -157,7 +159,15 @@ class Parser:
             elif self.current_token[0] == "FRAGMENT":
                 fragment_section = self.parse_shader_section("FRAGMENT")
                 self.skip_comments()  # Skip comments while parsing functions
-            elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "VOID", "MATRIX"]:
+            elif self.current_token[0] in [
+                "VECTOR",
+                "FLOAT",
+                "DOUBLE",
+                "UINT",
+                "INT",
+                "VOID",
+                "MATRIX",
+            ]:
                 global_functions.append(self.parse_function())
                 self.skip_comments()  # Skip comments while parsing functions
             else:
@@ -202,7 +212,8 @@ class Parser:
             elif self.current_token[0] == "OUTPUT":
                 outputs.extend(self.parse_outputs())
             elif (
-                self.current_token[0] in ["VECTOR", "FLOAT", "INT", "VOID", "MATRIX"]
+                self.current_token[0]
+                in ["VECTOR", "FLOAT", "DOUBLE", "UINT", "INT", "VOID", "MATRIX"]
                 and self.peak(2)[0] == "LPAREN"
             ):
                 functions.append(self.parse_function())
@@ -214,6 +225,8 @@ class Parser:
                 "VECTOR",
                 "IDENTIFIER",
                 "FLOAT",
+                "DOUBLE",
+                "UINT",
                 "INT",
                 "MATRIX",
             ]:
@@ -248,6 +261,8 @@ class Parser:
             if self.current_token[0] in [
                 "VECTOR",
                 "FLOAT",
+                "DOUBLE",
+                "UINT",
                 "INT",
                 "MATRIX",
                 "SAMPLER2D",
@@ -256,7 +271,7 @@ class Parser:
                 self.eat(self.current_token[0])
             else:
                 raise SyntaxError(
-                    f"Expected VECTOR, FLOAT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
+                    f"Expected VECTOR, FLOAT, DOUBLE, UINT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
                 )
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -285,6 +300,8 @@ class Parser:
             if self.current_token[0] in [
                 "VECTOR",
                 "FLOAT",
+                "DOUBLE",
+                "UINT",
                 "INT",
                 "MATRIX",
                 "SAMPLER2D",
@@ -293,7 +310,7 @@ class Parser:
                 self.eat(self.current_token[0])
             else:
                 raise SyntaxError(
-                    f"Expected VECTOR, FLOAT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
+                    f"Expected VECTOR, FLOAT, DOUBLE, UINT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
                 )
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -386,14 +403,22 @@ class Parser:
         if self.current_token[0] == "VOID":
             self.eat("VOID")
             return "void"
-        elif self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX", "SAMPLER2D"]:
+        elif self.current_token[0] in [
+            "VECTOR",
+            "FLOAT",
+            "DOUBLE",
+            "UINT",
+            "INT",
+            "MATRIX",
+            "SAMPLER2D",
+        ]:
             vtype = self.current_token[1]
             self.eat(self.current_token[0])
             return vtype
         elif self.current_token[0] == "IDENTIFIER":
             type_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if type_name in ["int", "float"]:
+            if type_name in ["int", "uint", "float", "double"]:
                 return type_name
             return type_name
         else:
@@ -417,7 +442,14 @@ class Parser:
                 body.append(self.parse_for_loop())
             elif self.current_token[0] == "RETURN":
                 body.append(self.parse_return_statement())
-            elif self.current_token[0] in ["VECTOR", "IDENTIFIER", "FLOAT", "INT"]:
+            elif self.current_token[0] in [
+                "VECTOR",
+                "IDENTIFIER",
+                "FLOAT",
+                "DOUBLE",
+                "UINT",
+                "INT",
+            ]:
                 body.append(self.parse_assignment_or_function_call())
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
@@ -563,7 +595,14 @@ class Parser:
         """
         type_name = ""
         inc_dec = False
-        if self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX"]:
+        if self.current_token[0] in [
+            "VECTOR",
+            "FLOAT",
+            "DOUBLE",
+            "UINT",
+            "INT",
+            "MATRIX",
+        ]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
         if self.current_token[0] == "IDENTIFIER":
@@ -586,6 +625,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -640,6 +681,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -668,6 +711,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
             "EQUAL",
         ):
             op = self.current_token[0]
@@ -716,6 +761,8 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -810,6 +857,8 @@ class Parser:
             "IDENTIFIER",
             "VECTOR",
             "FLOAT",
+            "DOUBLE",
+            "UINT",
             "INT",
             "MATRIX",
         ]:
@@ -861,8 +910,8 @@ class Parser:
             "GREATER_EQUAL",
             "EQUAL",
             "NOT_EQUAL",
-            "AND",
-            "OR",
+            "LOGICAL_AND",
+            "LOGICAL_OR",
             "PLUS",
             "MINUS",
             "MULTIPLY",
@@ -872,6 +921,8 @@ class Parser:
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
         ]:
             op = self.current_token[0]
             self.eat(op)
@@ -908,7 +959,14 @@ class Parser:
             ASTNode: An ASTNode object representing the function call or identifier
 
         """
-        if self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX"]:
+        if self.current_token[0] in [
+            "VECTOR",
+            "FLOAT",
+            "DOUBLE",
+            "UINT",
+            "INT",
+            "MATRIX",
+        ]:
             func_name = self.current_token[1]
             self.eat(self.current_token[0])
         else:
