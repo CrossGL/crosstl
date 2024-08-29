@@ -6,7 +6,7 @@ from typing import List
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
-    return lexer.tokenize()
+    return lexer.tokens
 
 
 def test_input_output_tokenization():
@@ -119,6 +119,24 @@ def test_function_call_tokenization():
         pytest.fail("Function call tokenization not implemented.")
 
 
+def test_bitwise_operator_tokenization():
+    code = """
+    int a = 60; // 60 = 0011 1100
+    int b = 13; // 13 = 0000 1101
+    int c = 0;
+    c = a & b; // 12 = 0000 1100
+    c = a | b; // 61 = 0011 1101
+    c = a ^ b; // 49 = 0011 0001
+    c = ~a; // -61 = 1100 0011
+    c = a << 2; // 240 = 1111 0000
+    c = a >> 2; // 15 = 0000 1111
+      """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operator tokenization not implemented.")
+
+
 def test_data_types_tokenization():
     code = """
     int a;
@@ -133,6 +151,21 @@ def test_data_types_tokenization():
         pytest.fail("Data types tokenization not implemented.")
 
 
+def test_operators_tokenization():
+    code = """
+    int a;
+    a = 2 + 1;
+    a = a -  2;
+    a = a / 1;
+    a = a * 2;
+    a = a % 2;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Operators tokenization not implemented.")
+
+
 def test_logical_operators_tokenization():
     code = """
     if (0.8 > 0.7 || 0.6 > 0.7) {    
@@ -144,4 +177,45 @@ def test_logical_operators_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Data types tokenization not implemented.")
+        pytest.fail("Logical Operators tokenization not implemented.")
+
+
+def test_assignment_shift_operators():
+    code = """
+    a >>= 1;
+    b <<= 1;
+        """
+
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Shift operators tokenization failed.")
+
+
+def test_assignment_operators_tokenization():
+    code = """
+    int a = 1;
+    a += 1;
+    a *= 2;
+    a /= a;
+    a -= -1;
+    a %= 2;
+    a &= 1;
+    a |= 1;
+    a ^= 1;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Assignment operators tokenization not implemented.")
+
+
+def test_const_tokenization():
+    code = """
+    const int a;
+    """
+
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Const keyword tokenization failed")

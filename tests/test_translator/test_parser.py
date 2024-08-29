@@ -256,3 +256,104 @@ def test_function_call():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_logical_operators():
+    code = """
+        shader LightControl {
+        vertex {
+            input vec3 position;
+            output float isLightOn;
+            void main() {
+                // Using logical AND and logical OR operators
+                if ((position.x > 0.3 && position.z < 0.7) || position.y > 0.5) {
+                    isLightOn = 1.0;
+                } else {
+                    isLightOn = 0.0;
+                }
+                // Set the vertex position
+                gl_Position = vec4(position, 1.0);
+            }
+        }
+        fragment {
+            input float isLightOn;
+            output vec4 fragColor;
+            void main() {
+                if (isLightOn == 1.0) {
+                    fragColor = vec4(1.0, 1.0, 0.0, 1.0);  // Light is on
+                } else {
+                    fragColor = vec4(0.0, 0.0, 0.0, 1.0);  // Light is off
+                }
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
+
+def test_var_assignment():
+    code = """
+    shader PerlinNoise {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
+
+        void main() {
+            vUV = position.xy * 10.0;
+            gl_Position = vec4(position, 1.0);
+        }
+    }
+
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+
+        void main() {
+            double noise = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+            double height = noise * 10.0;
+            uint a = 1;
+            uint b = 2;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Variable assignment parsing not implemented.")
+
+
+def test_bitwise_operators():
+    code = """
+        shader LightControl {
+        vertex {
+            input vec3 position;
+            output int isLightOn;
+            void main() {        
+                    isLightOn = 2 >> 1;
+            }
+        }
+        fragment {
+            input int isLightOn;
+            output vec4 fragColor;
+            void main() {
+                isLightOn = isLightOn << 1;
+            }
+        }
+    }
+
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Bitwise Shift not working")
