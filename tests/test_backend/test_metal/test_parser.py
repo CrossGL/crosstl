@@ -124,5 +124,34 @@ def test_function_call():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_if_else():
+    code = """
+    float perlinNoise(float2 p) {
+        if (p.x == p.y) {
+            return 0.0;
+        }
+        if (p.x > p.y) {
+            return 1.0;
+        }
+        else if (p.x > p.y) {
+            return 1.0;
+        }
+
+        else if (p.x < p.y) {
+            return -1.0;
+        }
+
+        else {
+            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("If-else statement parsing not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

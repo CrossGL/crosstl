@@ -72,7 +72,6 @@ Imagine writing a shader _once_ and deploying it across:
 
 ## Supported Backends
 
-- Vulkan
 - Metal
 - DirectX
 - OpenGL
@@ -175,13 +174,14 @@ shader main {
 import crosstl
 
 # Translate to Metal
-metal_code = crosstl.translate('shader.cgl', backend='metal')
+metal_code = crosstl.translate('shader.cgl', backend='metal', save_shader= 'shader.metal')
 
 # Translate to DirectX (HLSL)
-hlsl_code = crosstl.translate('shader.cgl', backend='directx')
+hlsl_code = crosstl.translate('shader.cgl', backend='directx', save_shader= 'shader.hlsl')
 
 # Translate to OpenGL
-opengl_code = crosstl.translate('shader.cgl', backend='opengl')
+opengl_code = crosstl.translate('shader.cgl', backend='opengl', save_shader= 'shader.glsl')
+
 ```
 
 #### Converting from HLSL to CrossGL
@@ -215,7 +215,7 @@ float4 PSMain(PS_INPUT input) : SV_TARGET {
 ```python
 import crosstl
 
-crossgl_code = crosstl.translate('shader.hlsl', backend='cgl')
+crossgl_code = crosstl.translate('shader.hlsl', backend='cgl', save_shader= 'shader.cgl')
 print(crossgl_code)
 ```
 

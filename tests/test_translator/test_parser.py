@@ -284,6 +284,7 @@ def test_Assignment_operators():
         pytest.fail("Variable assignment parsing not implemented.")
 
 
+
 def test_assign_ops():
 
     code = """
@@ -321,9 +322,37 @@ def test_assign_ops():
                 }
             }
         """
-
     try:
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Assignment Operator parsing not implemented.")
+
+
+def test_bitwise_operators():
+    code = """
+        shader LightControl {
+        vertex {
+            input vec3 position;
+            output int isLightOn;
+            void main() {        
+                    isLightOn = 2 >> 1;
+            }
+        }
+        fragment {
+            input int isLightOn;
+            output vec4 fragColor;
+            void main() {
+                isLightOn = isLightOn << 1;
+            }
+        }
+    }
+
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Bitwise Shift not working")
+
