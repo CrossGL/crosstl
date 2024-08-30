@@ -284,7 +284,6 @@ def test_Assignment_operators():
         pytest.fail("Variable assignment parsing not implemented.")
 
 
-
 def test_assign_ops():
 
     code = """
@@ -355,4 +354,3 @@ def test_bitwise_operators():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Bitwise Shift not working")
-

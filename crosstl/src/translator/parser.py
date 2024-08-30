@@ -631,7 +631,6 @@ class Parser:
             "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
-
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -692,7 +691,6 @@ class Parser:
             "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
-
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -781,7 +779,6 @@ class Parser:
             "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
-
         ]:
             op = self.current_token[0]
             op_name = self.current_token[1]
