@@ -30,24 +30,20 @@ class VulkanParser:
 
     def parse_module(self):
         statements = []
-
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "LAYOUT":
                 statements.append(self.parse_layout())
             elif self.current_token[0] == "STRUCT":
                 statements.append(self.parse_struct())
-            elif self.current_token[0] == "PUSH_CONSTANT":
-                statements.append(self.parse_push_constant())
-            elif self.current_token[0] == "DESCRIPTOR_SET":
-                statements.append(self.parse_descriptor_set())
-            elif self.current_token[0] == "FN":
+            elif self.current_token[0] == "UNIFORM":
+                statements.append(self.parse_uniform())
+            elif self.current_token[0] == "IDENTIFIER" and self.peek(1) == "LPAREN":
                 statements.append(self.parse_function())
-            elif self.current_token[0] in ["LET", "VAR"]:
+            elif self.current_token[0] in ["IDENTIFIER"]:
                 statements.append(self.parse_variable_declaration_or_assignment())
             else:
                 self.eat(self.current_token[0])
-
-        return ShaderNode(statements)
+        return ShaderNode(None, None, None, statements)
 
     def parse_layout(self):
         self.eat("LAYOUT")
