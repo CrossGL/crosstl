@@ -93,14 +93,15 @@ class VulkanParser:
         return StructNode(name, members)
 
     def parse_function(self):
-        self.eat("FN")
-        name = self.current_token[1]
+        return_type = self.current_token[1]
+        self.eat("IDENTIFIER")
+        func_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
         body = self.parse_block()
-        return FunctionNode(name, params, body)
+        return FunctionNode(func_name, return_type, params, body)
 
     def parse_parameters(self):
         params = []
@@ -123,12 +124,43 @@ class VulkanParser:
         return statements
 
     def parse_statement(self):
-        if self.current_token[0] in ["LET", "VAR"]:
-            return self.parse_variable_declaration_or_assignment()
-        elif self.current_token[0] == "FN":
-            return self.parse_function()
+        token_type = self.current_token[0]
+
+        if token_type == "IDENTIFIER":
+            if self.peek(1)[0] == "LPAREN":
+                return self.parse_function()
+            else:
+                return self.parse_variable_declaration_or_assignment()
+        elif token_type in ["IF", "FOR"]:
+            if token_type == "IF":
+                return self.parse_if_statement()
+            elif token_type == "FOR":
+                return self.parse_for_statement()
         else:
             return self.parse_expression_statement()
+        
+    def parse_if_statement(self):
+        self.eat("IF")
+        self.eat("LPAREN")
+        condition = self.parse_expression()  
+        self.eat("RPAREN")
+        if_body = self.parse_block() 
+        else_body = None
+        if self.current_token[0] == "ELSE":
+            self.eat("ELSE")
+            else_body = self.parse_block()  
+        return IfNode(condition, if_body, else_body)
+    
+    def parse_for_statement(self):
+        self.eat("FOR")
+        self.eat("LPAREN")
+        initialization = self.parse_expression_statement()  
+        condition = self.parse_expression()
+        self.eat("SEMICOLON")  
+        increment = self.parse_expression()
+        self.eat("RPAREN") 
+        body = self.parse_block()
+        return ForNode(initialization, condition, increment, body)
 
     def parse_variable_declaration_or_assignment(self):
         var_type = self.current_token[0]
