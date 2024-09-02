@@ -359,6 +359,9 @@ class GLSLParser:
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "ASSIGN_BINOPOR",
+            "ASSIGN_BINOPXOR",
+            "ASSIGN_BINOPAND"
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -554,6 +557,15 @@ class GLSLParser:
             return self.parse_member_access(func_name)
         return VariableNode("", func_name)
 
+    def parse_binop(self):
+        left = self.parse_additive()
+        while self.current_token[0] in ["BINOPAND", "BINOPXOR", "BINOPOR"]:
+            op = self.current_token[0]
+            self.eat(op)
+            right = self.parse_additive()
+            left = BinaryOpNode(left, op, right)
+        return left
+
     def parse_additive(self):
         left = self.parse_multiplicative()
         while self.current_token[0] in ["PLUS", "MINUS"]:
@@ -595,7 +607,7 @@ class GLSLParser:
         return left
 
     def parse_expression(self):
-        left = self.parse_additive()
+        left = self.parse_binop()
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
@@ -608,7 +620,8 @@ class GLSLParser:
         ]:
             op = self.current_token[0]
             self.eat(op)
-            right = self.parse_additive()
+            # right = self.parse_additive()
+            right = self.parse_binop()
             left = BinaryOpNode(left, op, right)
 
         if self.current_token[0] == "QUESTION":
