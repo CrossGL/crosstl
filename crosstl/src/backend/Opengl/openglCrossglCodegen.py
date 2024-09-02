@@ -139,14 +139,12 @@ class GLSLToCrossGLConverter:
             code += self.generate_statement(stmt, shader_type, indent + 1)
         code += f"{indent_str}}}"
 
-        # Handle else_if_chain
         for elif_condition, elif_body in node.else_if_chain:
             code += f" else if ({self.generate_expression(elif_condition, shader_type)}) {{\n"
             for stmt in elif_body:
                 code += self.generate_statement(stmt, shader_type, indent + 1)
             code += f"{indent_str}}}"
 
-        # Handle 'else' block if present
         if node.else_body:
             code += " else {\n"
             for stmt in node.else_body:
