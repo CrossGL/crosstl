@@ -1,4 +1,4 @@
-from .OpenglAst import (
+from crosstool.OpenglAst import (
     LayoutNode,
     ShaderNode,
     FunctionNode,
@@ -17,7 +17,6 @@ from .OpenglAst import (
     FRAGMENTShaderNode,
     VersionDirectiveNode,
 )
-from .OpenglLexer import *
 
 
 class GLSLParser:
@@ -319,12 +318,14 @@ class GLSLParser:
                 raise SyntaxError(
                     f"Expected ';' after variable assignment, found: {self.current_token[0]}"
                 )
-
         elif self.current_token[0] in (
-            "ASSIGN_ADD",
-            "ASSIGN_SUB",
-            "ASSIGN_MUL",
-            "ASSIGN_DIV",
+                "ASSIGN_ADD",
+                "ASSIGN_SUB",
+                "ASSIGN_MUL",
+                "ASSIGN_DIV",
+            "ASSIGN_BINOPXOR",
+            "ASSIGN_BINOPOR",
+            "ASSIGN_BINOPAND"
         ):
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -332,7 +333,18 @@ class GLSLParser:
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                return BinaryOpNode(VariableNode(type_name, name), op_name, value)
+                if op == "ASSIGN_ADD": return AssignmentNode(name,BinaryOpNode(VariableNode(type_name, name), "PLUS", value))
+                elif op == "ASSIGN_MUL": return AssignmentNode(name,BinaryOpNode(VariableNode(type_name, name), "MULTIPLY", value))
+                elif op == "ASSIGN_DIV":
+                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "DIVIDE", value))
+                elif op == "ASSIGN_SUB":
+                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "MINUS", value))
+                elif op == "ASSIGN_BINOPXOR":
+                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "BINOPXOR", value))
+                elif op == "ASSIGN_BINOPOR":
+                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "BINOPOR", value))
+                elif op == "ASSIGN_BINOPAND":
+                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "BINOPAND", value))
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
@@ -359,9 +371,6 @@ class GLSLParser:
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
-            "ASSIGN_BINOPOR",
-            "ASSIGN_BINOPXOR",
-            "ASSIGN_BINOPAND"
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -702,3 +711,4 @@ class GLSLParser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
+
