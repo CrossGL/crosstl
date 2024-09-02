@@ -151,4 +151,45 @@ class VariableDeclarationNode(ASTNode):
     def __repr__(self):
         return f"VariableDeclarationNode(name={self.name}, var_type={self.var_type}, initializer={self.initializer})"
     
+class SwitchNode(ASTNode):
+    def __init__(self, expression, cases):
+        self.expression = expression
+        self.cases = cases
+
+    def __repr__(self):
+        return f"SwitchNode(expression={self.expression}, cases={self.cases})"
+    
+class CaseNode(ASTNode):
+    def __init__(self, value, body):
+        self.value = value
+        self.body = body
+
+    def __repr__(self):
+        return f"CaseNode(value={self.value}, body={self.body})"
+    
+class WhileNode(ASTNode):
+    def __init__(self, condition, body):
+        self.condition = condition
+        self.body = body
+
+    def __repr__(self):
+        return f"WhileNode(condition={self.condition}, body={self.body})"
+    
+class DoWhileNode(ASTNode):
+    def __init__(self, body, condition):
+        self.body = body
+        self.condition = condition
+
+    def __repr__(self):
+        return f"DoWhileNode(body={self.body}, condition={self.condition})"
+    
+class AssignmentNode(ASTNode):
+    def __init__(self, left, right, operator="="):
+        self.left = left
+        self.right = right
+        self.operator = operator
+
+    def __repr__(self):
+        return f"AssignmentNode(left={self.left}, operator='{self.operator}', right={self.right})"
+    
 

@@ -194,3 +194,49 @@ class VulkanParser:
             return value
         else:
             raise SyntaxError(f"Unexpected token: {self.current_token[0]}")
+        
+    def parse_while_statement(self):
+        self.eat("WHILE")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        body = self.parse_block()
+        return WhileNode(condition, body)
+
+    def parse_do_while_statement(self):
+        self.eat("DO")
+        body = self.parse_block()
+        self.eat("WHILE")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        self.eat("SEMICOLON")
+        return DoWhileNode(condition, body)
+    
+    def parse_switch_statement(self):
+        self.eat("SWITCH")
+        self.eat("LPAREN")
+        expr = self.parse_expression()
+        self.eat("RPAREN")
+        self.eat("LBRACE")
+        cases = []
+        while self.current_token[0] != "RBRACE":
+            cases.append(self.parse_case_statement())
+        self.eat("RBRACE")
+        return SwitchNode(expr, cases)
+
+    def parse_case_statement(self):
+        if self.current_token[0] == "CASE":
+            self.eat("CASE")
+            value = self.parse_expression()
+            self.eat("COLON")
+        elif self.current_token[0] == "DEFAULT":
+            self.eat("DEFAULT")
+            value = None
+            self.eat("COLON")
+        statements = []
+        while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE"]:
+            statements.append(self.parse_statement())
+        return CaseNode(value, statements)
+    
+    
