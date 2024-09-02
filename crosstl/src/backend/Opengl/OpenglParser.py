@@ -285,7 +285,7 @@ class GLSLParser:
             false_body = self.parse_body()
             self.eat("RBRACE")
             return IfNode(condition, true_body, false_body)
-            
+
     def parse_inputs(self):
         inputs = []
         while self.current_token[0] == "IN":
