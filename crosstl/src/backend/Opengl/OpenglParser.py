@@ -261,6 +261,31 @@ class GLSLParser:
 
         raise SyntaxError("Unexpected end of input in shader section")
 
+    def parse_if(self):
+        self.eat("IF")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        self.eat("LBRACE")
+        true_body = self.parse_body()
+        self.eat("RBRACE")
+        false_body = None
+        while self.current_token[0] == "ELSE_IF":
+            self.eat("ELSE_IF")
+            self.eat("LPAREN")
+            elif_condition = self.parse_expression()
+            self.eat("RPAREN")
+            self.eat("LBRACE")
+            elif_body = self.parse_body()
+            self.eat("RBRACE")
+            false_body = IfNode(elif_condition, elif_body, false_body)
+        if self.current_token[0] == "ELSE":
+            self.eat("ELSE")
+            self.eat("LBRACE")
+            false_body = self.parse_body()
+            self.eat("RBRACE")
+            return IfNode(condition, true_body, false_body)
+            
     def parse_inputs(self):
         inputs = []
         while self.current_token[0] == "IN":
