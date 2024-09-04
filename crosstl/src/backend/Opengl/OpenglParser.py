@@ -1,4 +1,4 @@
-from crosstool.OpenglAst import (
+from .OpenglAst import (
     LayoutNode,
     ShaderNode,
     FunctionNode,
@@ -428,6 +428,9 @@ class GLSLParser:
                 body.append(self.parse_return())
             elif self.current_token[0] in ["VECTOR", "IDENTIFIER", "FLOAT", "INT"]:
                 body.append(self.parse_assignment_or_function_call())
+            elif self.current_token[0] in ["COMMENT_SINGLE","COMMENT_MULTI"]:
+                tok = self.current_token[0]
+                self.eat(tok)
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
         return body
