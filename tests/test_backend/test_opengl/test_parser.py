@@ -20,21 +20,13 @@ class TestGLSLParser(unittest.TestCase):
         ast = parser.parse(code)
 
         expected_ast = IfNode(
-            condition=BinaryOpNode(
-                left=VariableNode("a"),
-                op=">",
-                right=1
-            ),
+            condition=BinaryOpNode(left=VariableNode("a"), op=">", right=1),
             if_body=[FunctionCallNode("doSomething", [])],
             else_body=IfNode(
-                condition=BinaryOpNode(
-                    left=VariableNode("a"),
-                    op="<",
-                    right=0
-                ),
+                condition=BinaryOpNode(left=VariableNode("a"), op="<", right=0),
                 if_body=[FunctionCallNode("doSomethingElse", [])],
-                else_body=[FunctionCallNode("fallback", [])]
-            )
+                else_body=[FunctionCallNode("fallback", [])],
+            ),
         )
 
         self.assertEqual(ast, expected_ast)
@@ -46,8 +38,10 @@ class FunctionCallNode:
         self.arguments = arguments
 
     def __eq__(self, other):
-        return (self.function_name == other.function_name and
-                self.arguments == other.arguments)
+        return (
+            self.function_name == other.function_name
+            and self.arguments == other.arguments
+        )
 
     def __repr__(self):
         return f"FunctionCallNode({self.function_name}, {self.arguments})"
@@ -60,9 +54,11 @@ class IfNode:
         self.else_body = else_body
 
     def __eq__(self, other):
-        return (self.condition == other.condition and
-                self.if_body == other.if_body and
-                self.else_body == other.else_body)
+        return (
+            self.condition == other.condition
+            and self.if_body == other.if_body
+            and self.else_body == other.else_body
+        )
 
     def __repr__(self):
         return f"IfNode({self.condition}, {self.if_body}, {self.else_body})"
@@ -75,9 +71,11 @@ class BinaryOpNode:
         self.right = right
 
     def __eq__(self, other):
-        return (self.left == other.left and
-                self.op == other.op and
-                self.right == other.right)
+        return (
+            self.left == other.left
+            and self.op == other.op
+            and self.right == other.right
+        )
 
     def __repr__(self):
         return f"BinaryOpNode({self.left}, {self.op}, {self.right})"
