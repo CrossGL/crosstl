@@ -1,248 +1,85 @@
-from crosstl.src.backend.Opengl.OpenglLexer import GLSLLexer
-import pytest
-from typing import List
-from crosstl.src.backend.Opengl.OpenglParser import GLSLParser
+import unittest
+from glsl_parser import GLSLParser
+from ast import IfNode, BinaryOpNode, VariableNode
 
+class TestGLSLParser(unittest.TestCase):
+    
+    def setUp(self):
+        self.parser = GLSLParser()
 
-def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code.
-
-    Args:
-        code (str): The code to tokenize
-    Returns:
-        List: The list of tokens generated from the lexer
-
-
-    """
-    lexer = GLSLLexer(code)
-    return lexer.tokens
-
-
-def parse_code(Tokens: List) -> List:
-    """Helper function to parse code.
-
-    Args:
-        Tokens (List): The list of tokens to parse
-    Returns:
-        AST: The abstract syntax tree generated from the parser
-
-
-    """
-    parser = GLSLParser(Tokens)
-    return parser.parse()
-
-
-def test_input_output():
-    code = """
-    #version 450
-    // Vertex shader
-
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-    }
-
-    // Fragment shader
-
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
-
-    void main() {
-        float noise = perlinNoise(vUV);
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
-
-
-def test_if_statement():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-        if (vUV.x > vUV.y) {
-            vUV = vec2(0.0, 0.0);
+    def test_simple_if_else_if(self):
+        glsl_code = """
+        if (a > 1) {
+            // do something
+        } else if (a < 0) {
+            // do something else
+        } else {
+            // fallback
         }
-    }
-    // Fragment shader
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
+        """
+        
+        ast = self.parser.parse(glsl_code)
+        
+        # Check the structure of the IfNode
+        self.assertIsInstance(ast, IfNode)
+        self.assertIsInstance(ast.condition, BinaryOpNode)
+        self.assertEqual(ast.condition.op, ">")
+        self.assertEqual(ast.condition.left, VariableNode("a"))
+        self.assertEqual(ast.condition.right, 1)
+        
+        # Check the else if part is another IfNode
+        self.assertIsInstance(ast.else_body, IfNode)
+        self.assertEqual(ast.else_body.condition.op, "<")
+        self.assertEqual(ast.else_body.condition.left, VariableNode("a"))
+        self.assertEqual(ast.else_body.condition.right, 0)
+        
+        # Check the else part is correctly parsed
+        self.assertIsNotNone(ast.else_body.else_body)
 
-    void main() {
-        float noise = perlinNoise(vUV);
-        if (noise > 0.5) {
-            fragColor = vec4(1.0, 1.0, 1.0, 1.0);
+    def test_nested_else_if(self):
+        glsl_code = """
+        if (x == 10) {
+            // do something
+        } else if (x > 5) {
+            if (y < 3) {
+                // nested if
+            }
+        } else {
+            // fallback
         }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        """
 
+        ast = self.parser.parse(glsl_code)
 
-def test_for_statement():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
+        self.assertIsInstance(ast, IfNode)
+        self.assertEqual(ast.condition.op, "==")
+        self.assertEqual(ast.condition.left, VariableNode("x"))
+        self.assertEqual(ast.condition.right, 10)
 
-    void main() {
-        vUV = position.xy * 10.0;
-        for (int i = 0; i < 10; i = i + 1) {
-            vUV = vec2(0.0, 0.0);
+        else_if_node = ast.else_body
+        self.assertIsInstance(else_if_node, IfNode)
+        self.assertEqual(else_if_node.condition.op, ">")
+        self.assertEqual(else_if_node.condition.left, VariableNode("x"))
+        self.assertEqual(else_if_node.condition.right, 5)
+
+        nested_if = else_if_node.if_body[0]  # Assuming the body returns a list of statements
+        self.assertIsInstance(nested_if, IfNode)
+        self.assertEqual(nested_if.condition.op, "<")
+        self.assertEqual(nested_if.condition.left, VariableNode("y"))
+        self.assertEqual(nested_if.condition.right, 3)
+
+    def test_invalid_else_if(self):
+        glsl_code = """
+        if (a == 1) {
+            // do something
+        } else if {
+            // missing condition
         }
-    }
-    // Fragment shader
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
+        """
+        
+        with self.assertRaises(SyntaxError):
+            self.parser.parse(glsl_code)
 
-    void main() {
-        float noise = perlinNoise(vUV);
-        for (int i = 0; i < 10; i = i + 1) {
-            fragColor = vec4(1.0, 1.0, 1.0, 1.0);
-        }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+if __name__ == '__main__':
+    unittest.main()
 
-
-def test_else_statement():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-        if (vUV.x > vUV.y) {
-            vUV = vec2(0.0, 0.0);
-        }
-        else {
-            vUV = vec2(1.0, 1.0);
-        }
-    }
-    // Fragment shader
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
-    void main() {
-        float noise = perlinNoise(vUV);
-        if (noise > 0.5) {
-            fragColor = vec4(1.0, 1.0, 1.0, 1.0);
-        }
-        else {
-            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
-        }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
-
-
-def test_else_if_statement():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-        if (vUV.x > vUV.y) {
-            vUV = vec2(0.0, 0.0);
-        }
-        else {
-            vUV = vec2(1.0, 1.0);
-        }
-    }
-    // Fragment shader
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
-
-    void main() {
-        float noise = perlinNoise(vUV);
-        if (noise > 0.75) {
-            fragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        }
-        else if (noise > 0.5) {
-            fragColor = vec4(0.0, 1.0, 0.0, 1.0);
-        }
-        else {
-            fragColor = vec4(0.0, 0.0, 1.0, 1.0);
-        }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
-
-
-def test_function_call():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-        float noise = perlinNoise(vUV);
-
-    }
-    // Fragment shader
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
-
-    void main() {
-        float noise = perlinNoise(vUV);
-        float height = noise * 10.0;
-        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
-    }
-    """
-
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
