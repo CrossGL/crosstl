@@ -189,6 +189,60 @@ def test_else_statement():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_else_if_statement():
+    code = """
+    shader PerlinNoise {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
+
+        void main() {
+            vUV = position.xy * 10.0;
+            if (vUV.x < 0.5) {
+                vUV.x = 0.25;
+            }
+            if (vUV.x < 0.25) {
+                vUV.x = 0.0;
+            } else if (vUV.x < 0.75) {
+                vUV.x = 0.5;
+            } else if (vUV.x < 1.0) {
+                vUV.x = 0.75;
+            } else {
+                vUV.x = 0.0;
+            }
+            gl_Position = vec4(position, 1.0);
+        }
+    }
+
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+
+        void main() {
+            if (vUV.x > 0.75) {
+                fragColor = vec4(1.0, 1.0, 1.0, 1.0);
+            } else if (vUV.x > 0.5) {
+                fragColor = vec4(0.5, 0.5, 0.5, 1.0);
+            } else if (vUV.x > 0.25) {
+                fragColor = vec4(0.25, 0.25, 0.25, 1.0);
+            } else {
+                fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+            fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
+
 def test_function_call():
     code = """
     shader PerlinNoise {
