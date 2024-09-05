@@ -284,6 +284,6 @@ class GLSLCodeGen:
             "AND": "&&",
             "OR": "||",
             "EQUALS": "=",
-        "ASSIGN_SHIFT_RIGHT": ">>=",
+            "ASSIGN_SHIFT_RIGHT": ">>=",
         }
         return op_map.get(op, op)
