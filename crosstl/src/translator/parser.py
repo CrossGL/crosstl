@@ -638,6 +638,10 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:
@@ -694,6 +698,10 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:
@@ -727,6 +735,10 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
         ):
             op = self.current_token[0]
             self.eat(op)
@@ -774,6 +786,10 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:
@@ -934,6 +950,10 @@ class Parser:
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:

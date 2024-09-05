@@ -335,6 +335,50 @@ def test_var_assignment():
         pytest.fail("Variable assignment parsing not implemented.")
 
 
+def test_assign_ops():
+
+    code = """
+            shader LightControl {
+                vertex {
+                    input vec3 position;
+                    output int lightStatus;
+
+                    void main() {
+                        int xStatus = int(position.x * 10.0);
+                        int yStatus = int(position.y * 10.0);
+                        int zStatus = int(position.z * 10.0);
+
+                        xStatus |= yStatus;
+                        yStatus &= zStatus;
+                        zStatus %= xStatus;
+                        lightStatus = xStatus;
+                        lightStatus ^= zStatus;
+
+                        gl_Position = vec4(position, 1.0);
+                    }
+                }
+
+                fragment {
+                    input int lightStatus;
+                    output vec4 fragColor;
+
+                    void main() {
+                        if (lightStatus > 0) {
+                            fragColor = vec4(1.0, 1.0, 0.0, 1.0); 
+                        } else {
+                            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                        }
+                    }
+                }
+            }
+        """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Assignment Operator parsing not implemented.")
+
+
 def test_bitwise_operators():
     code = """
         shader LightControl {
