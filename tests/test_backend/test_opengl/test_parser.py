@@ -5,8 +5,7 @@ from crosstl.src.backend.Opengl.OpenglParser import GLSLParser
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code.
-
+   
     Args:
         code (str): The code to tokenize
     Returns:
