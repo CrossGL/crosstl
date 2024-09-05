@@ -467,18 +467,31 @@ class Parser:
         """
         self.eat("IF")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        if_condition = self.parse_expression()
         self.eat("RPAREN")
         self.eat("LBRACE")
         if_body = self.parse_body()
         self.eat("RBRACE")
+        else_if_condition = []
+        else_if_body = []
         else_body = None
+
+        while self.current_token[0] == "ELSE" and self.peak(1)[0] == "IF":
+            self.eat("ELSE")
+            self.eat("IF")
+            self.eat("LPAREN")
+            else_if_condition.append(self.parse_expression())
+            self.eat("RPAREN")
+            self.eat("LBRACE")
+            else_if_body.append(self.parse_body())
+            self.eat("RBRACE")
+
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             self.eat("LBRACE")
             else_body = self.parse_body()
             self.eat("RBRACE")
-        return IfNode(condition, if_body, else_body)
+        return IfNode(if_condition, if_body, else_if_condition, else_if_body, else_body)
 
     def peak(self, n):
         """Peek ahead in the token list
@@ -625,6 +638,10 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:
@@ -681,6 +698,10 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:
@@ -714,6 +735,10 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
         ):
             op = self.current_token[0]
             self.eat(op)
@@ -761,6 +786,10 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:
@@ -921,6 +950,10 @@ class Parser:
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
         ]:
