@@ -176,7 +176,9 @@ class GLSLParser:
             elif self.current_token[0] == "VERSION":
                 self.parse_version_directive()
 
-            elif self.current_token[0] in ["VOID", "FLOAT", "VECTOR"]:
+            elif self.current_token[0] in [
+                "VOID", "FLOAT", "VECTOR", "INT", "UINT", "DOUBLE"
+            ]:
                 self.skip_comments()
                 if current_section:
                     function_node = self.parse_function()
@@ -224,8 +226,6 @@ class GLSLParser:
         uniforms = []
         functions = []
         layout_qualifiers = []
-
-        self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "LAYOUT":
@@ -323,9 +323,9 @@ class GLSLParser:
                 "ASSIGN_SUB",
                 "ASSIGN_MUL",
                 "ASSIGN_DIV",
-            "ASSIGN_BINOPXOR",
-            "ASSIGN_BINOPOR",
-            "ASSIGN_BINOPAND"
+                "ASSIGN_XOR",
+                "ASSIGN_OR",
+                "ASSIGN_AND"
         ):
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -333,18 +333,41 @@ class GLSLParser:
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                if op == "ASSIGN_ADD": return AssignmentNode(name,BinaryOpNode(VariableNode(type_name, name), "PLUS", value))
-                elif op == "ASSIGN_MUL": return AssignmentNode(name,BinaryOpNode(VariableNode(type_name, name), "MULTIPLY", value))
+                if op == "ASSIGN_ADD":
+                    return AssignmentNode(
+                        VariableNode(type_name, name),
+                        BinaryOpNode(VariableNode("", name), "PLUS", value)
+                    )
+                elif op == "ASSIGN_MUL":
+                    return AssignmentNode(
+                        VariableNode(type_name, name),
+                        BinaryOpNode(VariableNode("", name), "MULTIPLY", value)
+                    )
                 elif op == "ASSIGN_DIV":
-                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "DIVIDE", value))
+                    return AssignmentNode(
+                        VariableNode(type_name, name), 
+                        BinaryOpNode(VariableNode("", name), "DIVIDE", value)
+                    )
                 elif op == "ASSIGN_SUB":
-                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "MINUS", value))
-                elif op == "ASSIGN_BINOPXOR":
-                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "BINOPXOR", value))
-                elif op == "ASSIGN_BINOPOR":
-                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "BINOPOR", value))
-                elif op == "ASSIGN_BINOPAND":
-                    return AssignmentNode(name, BinaryOpNode(VariableNode(type_name, name), "BINOPAND", value))
+                    return AssignmentNode(
+                        VariableNode(type_name, name), 
+                        BinaryOpNode(VariableNode("", name), "MINUS", value)
+                    )
+                elif op == "ASSIGN_XOR":
+                    return AssignmentNode(
+                        VariableNode(type_name, name), 
+                        BinaryOpNode(VariableNode("", name), "BITWISE_XOR", value)
+                    )
+                elif op == "ASSIGN_OR":
+                    return AssignmentNode(
+                        VariableNode(type_name, name), 
+                        BinaryOpNode(VariableNode("", name), "BITWISE_OR", value)
+                    )
+                elif op == "ASSIGN_AND":
+                    return AssignmentNode(
+                        VariableNode(type_name, name), 
+                        BinaryOpNode(VariableNode(type_name, name), "BITWISE_AND", value)
+                    )
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
@@ -356,7 +379,9 @@ class GLSLParser:
 
     def parse_assignment_or_function_call(self):
         type_name = ""
-        if self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX"]:
+        if self.current_token[0] in [
+            "VECTOR", "FLOAT", "INT", "MATRIX", "DOUBLE", "UINT"
+        ]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
         if self.current_token[0] == "IDENTIFIER":
@@ -426,9 +451,11 @@ class GLSLParser:
                 body.append(self.parse_for())
             elif self.current_token[0] == "RETURN":
                 body.append(self.parse_return())
-            elif self.current_token[0] in ["VECTOR", "IDENTIFIER", "FLOAT", "INT"]:
+            elif self.current_token[0] in [
+                "VECTOR", "IDENTIFIER", "FLOAT", "INT", "DOUBLE", "UINT"
+            ]:
                 body.append(self.parse_assignment_or_function_call())
-            elif self.current_token[0] in ["COMMENT_SINGLE","COMMENT_MULTI"]:
+            elif self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
                 tok = self.current_token[0]
                 self.eat(tok)
             else:
@@ -458,6 +485,8 @@ class GLSLParser:
             "VECTOR",
             "FLOAT",
             "INT",
+            "DOUBLE",
+            "UINT",
             "MATRIX",
             "BOOLEAN",
             "SAMPLER2D",
@@ -468,7 +497,7 @@ class GLSLParser:
         elif self.current_token[0] == "IDENTIFIER":
             type_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if type_name in ["int", "float"]:
+            if type_name in ["int", "float", "unsigned int", "double"]:
                 return type_name
             return type_name
         else:
@@ -571,7 +600,9 @@ class GLSLParser:
 
     def parse_binop(self):
         left = self.parse_additive()
-        while self.current_token[0] in ["BINOPAND", "BINOPXOR", "BINOPOR"]:
+        while self.current_token[0] in [
+            "BITWISE_AND", "BITWISE_XOR", "BITWISE_OR"
+        ]:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_additive()
@@ -632,7 +663,6 @@ class GLSLParser:
         ]:
             op = self.current_token[0]
             self.eat(op)
-            # right = self.parse_additive()
             right = self.parse_binop()
             left = BinaryOpNode(left, op, right)
 

@@ -220,12 +220,12 @@ class GLSLToCrossGLConverter:
         if isinstance(expr, str):
             return self.translate_expression(expr, shader_type)
         elif isinstance(expr, VariableNode):
-            return f"{expr.vtype} {self.translate_expression(expr.name, shader_type)}"
+            return f"{self.map_type(expr.vtype)} {self.translate_expression(expr.name, shader_type)}"
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, shader_type)
             right = self.generate_expression(expr.right, shader_type)
             op = self.map_operator(expr.op)
-            return f"{left} {op} {right}"
+            return f"({left} {op} {right})"
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(
                 self.generate_expression(arg, shader_type) for arg in expr.args
@@ -284,6 +284,8 @@ class GLSLToCrossGLConverter:
             "float": "float",
             "int": "int",
             "bool": "bool",
+            "double": "double",
+            "unsigned int": "uint"
         }
         return type_map.get(vtype, vtype)
 
@@ -301,5 +303,8 @@ class GLSLToCrossGLConverter:
             "NOT_EQUAL": "!=",
             "AND": "&&",
             "OR": "||",
+            "BITWISE_OR": "|",
+            "BITWISE_XOR": "^",
+            "BITWISE_AND": "&"
         }
         return op_map.get(op, op)
