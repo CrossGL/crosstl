@@ -298,35 +298,34 @@ def test_logical_operators():
         pytest.fail("Struct parsing not implemented.")
 
 
-def test_Assignment_operators():
+def test_var_assignment():
     code = """
-        shader LightControl {
+    shader PerlinNoise {
     vertex {
         input vec3 position;
-        output float isLightOn;
+        output vec2 vUV;
+
         void main() {
-            isLightOn = 0.0;
-
-            isLightOn |= (position.x > 0.3 && position.z < 0.7) ? 1.0 : 0.0;
-
-            isLightOn &= (position.y > 0.5) ? 1.0 : 0.0;
-
-            isLightOn %= 2.0;
-            isLightOn ^= (position.y > 0.6) ? 1.0 : 0.0;
-
+            vUV = position.xy * 10.0;
             gl_Position = vec4(position, 1.0);
         }
     }
-    fragment {
-        input float isLightOn;
-        output vec4 fragColor;
-        void main() {
-            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
 
-            fragColor += vec4(1.0, 1.0, 0.0, 1.0) * isLightOn;
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+
+        void main() {
+            double noise = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+            double height = noise * 10.0;
+            uint a = 1;
+            uint b = 2;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+            }
         }
     }
-}
 
     """
     try:
@@ -400,7 +399,6 @@ def test_bitwise_operators():
     }
 
     """
-
     try:
         tokens = tokenize_code(code)
         parse_code(tokens)
