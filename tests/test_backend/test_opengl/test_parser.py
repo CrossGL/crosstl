@@ -4,7 +4,7 @@ from crosstl.src.backend.Opengl.OpenglAst.py import IfNode, BinaryOpNode, Variab
 
 
 class TestGLSLParser(unittest.TestCase):
-    
+
     def setUp(self):
         self.parser = GLSLParser()
 
@@ -18,22 +18,20 @@ class TestGLSLParser(unittest.TestCase):
             // fallback
         }
         """
-        
+
         ast = self.parser.parse(glsl_code)
-        
-     
+
         self.assertIsInstance(ast, IfNode)
         self.assertIsInstance(ast.condition, BinaryOpNode)
         self.assertEqual(ast.condition.op, ">")
         self.assertEqual(ast.condition.left, VariableNode("a"))
         self.assertEqual(ast.condition.right, 1)
-        
+
         self.assertIsInstance(ast.else_body, IfNode)
         self.assertEqual(ast.else_body.condition.op, "<")
         self.assertEqual(ast.else_body.condition.left, VariableNode("a"))
         self.assertEqual(ast.else_body.condition.right, 0)
-        
-       
+
         self.assertIsNotNone(ast.else_body.else_body)
 
     def test_nested_else_if(self):
@@ -51,12 +49,10 @@ class TestGLSLParser(unittest.TestCase):
 
         ast = self.parser.parse(glsl_code)
 
-    
         self.assertIsInstance(ast, IfNode)
         self.assertEqual(ast.condition.op, "==")
         self.assertEqual(ast.condition.left, VariableNode("x"))
         self.assertEqual(ast.condition.right, 10)
-
 
         else_if_node = ast.else_body
         self.assertIsInstance(else_if_node, IfNode)
@@ -64,7 +60,9 @@ class TestGLSLParser(unittest.TestCase):
         self.assertEqual(else_if_node.condition.left, VariableNode("x"))
         self.assertEqual(else_if_node.condition.right, 5)
 
-        nested_if = else_if_node.if_body[0]  # Assuming the body returns a list of statements
+        nested_if = else_if_node.if_body[
+            0
+        ]  # Assuming the body returns a list of statements
         self.assertIsInstance(nested_if, IfNode)
         self.assertEqual(nested_if.condition.op, "<")
         self.assertEqual(nested_if.condition.left, VariableNode("y"))
@@ -78,9 +76,10 @@ class TestGLSLParser(unittest.TestCase):
             // missing condition
         }
         """
-        
+
         with self.assertRaises(SyntaxError):
             self.parser.parse(glsl_code)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
