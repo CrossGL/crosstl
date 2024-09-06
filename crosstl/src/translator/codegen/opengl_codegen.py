@@ -276,7 +276,6 @@ class GLSLCodeGen:
             "ASSIGN_SUB": "-=",
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
             "LESS_THAN": "<",
             "GREATER_THAN": ">",
             "LESS_EQUAL": "<=",

@@ -442,3 +442,37 @@ def test_bitwise_operators():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Bitwise Shift not working")
+
+
+def test_mod_operators():
+    code = """
+        shader LightControl {
+            vertex {
+                input vec3 position;
+                output int lightStatus;
+
+                void main() {
+                    int xStatus = int(position.x * 10.0);
+                    int modVal = xStatus % 10.0;
+                }
+            }
+
+            fragment {
+                input int lightStatus;
+                output vec4 fragColor;
+
+                void main() {
+                    if (lightStatus > 0) {
+                        fragColor = vec4(1.0, 1.0, 0.0, 1.0); 
+                    } else {
+                        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    }
+                }
+            }
+        }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Bitwise Shift not working")
