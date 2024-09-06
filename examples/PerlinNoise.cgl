@@ -25,10 +25,7 @@ shader PerlinNoise {
             vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
             fragColor = vec4(color, 1.0);
 
-            int value = 1024;
-            value >>= 2; 
-
-            fragColor = vec4(float(value) / 1024.0, 0.0, 0.0, 1.0);
+          
         }
     }
 }
