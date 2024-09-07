@@ -283,3 +283,28 @@ def test_function_call():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_right_shift_assignment():
+    code = """
+    shader BitwiseShift {
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+
+            void main() {
+                int value = 1024;
+                value >>= 2;
+                fragColor = vec4(float(value) / 1024.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
