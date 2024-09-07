@@ -307,4 +307,3 @@ def test_right_shift_assignment():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
-
