@@ -281,3 +281,46 @@ def test_function_call():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+
+def test_right_shift_assignment_operator():
+    # CGL shader code using the right shift assignment operator
+    shader_code = """
+    shader BitwiseShift {
+
+        // Fragment Shader
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+
+            void main() {
+                int value = 1024;
+                value >>= 2;  // Shifting value right by 2 bits
+
+                fragColor = vec4(float(value) / 1024.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(shader_code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        
+        # Expected translation output after processing
+        expected_output = """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        fragment float4 BitwiseShiftFragment(constant Fragment_INPUT& input [[stage_in]]) {
+            int value = 1024;
+            value >>= 2;  // Shifting value right by 2 bits
+            return float4(float(value) / 1024.0, 0.0, 0.0, 1.0);
+        }
+        """
+        
+        # Check if the generated code matches the expected output
+        assert generated_code.strip() == expected_output.strip()
+    except SyntaxError:
+        pytest.fail("Right shift assignment operator (`>>=`) parsing failed.")
