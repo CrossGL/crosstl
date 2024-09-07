@@ -744,6 +744,7 @@ class Parser:
             "ASSIGN_XOR",
             "ASSIGN_MOD",
             "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT",
         ):
             op = self.current_token[0]
             self.eat(op)
@@ -964,6 +965,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_RIGHT"
         ]:
             op = self.current_token[0]
             self.eat(op)
