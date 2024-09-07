@@ -311,7 +311,7 @@ def test_right_shift_assignment():
 
         void main() {
             int value = 1024;
-            value = shiftRight(value, 2);  // Apply right shift
+            value = shiftRight(value, 2);  
 
             fragColor = vec4(float(value) / 1024.0, 0.0, 0.0, 1.0);
         }
