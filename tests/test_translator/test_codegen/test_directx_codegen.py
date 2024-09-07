@@ -281,3 +281,38 @@ def test_function_call():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_assignment_modulus_operator():
+    code = """
+    shader ModulusShader {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
+        void main() {
+            vUV = position.xy * 10.0;
+            vUV.x %= 3.0;  // Modulus assignment operator
+            gl_Position = vec4(position, 1.0);
+        }
+    }
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height = noise * 10.0;
+            height %= 2.0;  // Modulus assignment operator
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
