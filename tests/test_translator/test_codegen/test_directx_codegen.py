@@ -283,7 +283,6 @@ def test_function_call():
         pytest.fail("Struct parsing not implemented.")
 
 
-
 def test_right_shift_assignment_operator():
     # CGL shader code using the right shift assignment operator
     shader_code = """
@@ -307,7 +306,7 @@ def test_right_shift_assignment_operator():
         tokens = tokenize_code(shader_code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        
+
         # Expected translation output after processing
         expected_output = """
         #include <metal_stdlib>
@@ -319,7 +318,7 @@ def test_right_shift_assignment_operator():
             return float4(float(value) / 1024.0, 0.0, 0.0, 1.0);
         }
         """
-        
+
         # Check if the generated code matches the expected output
         assert generated_code.strip() == expected_output.strip()
     except SyntaxError:
