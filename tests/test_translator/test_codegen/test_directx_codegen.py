@@ -282,6 +282,7 @@ def test_function_call():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_assignment_shift_operators():
     code = """
     shader PerlinNoise {
