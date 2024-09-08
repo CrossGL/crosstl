@@ -261,6 +261,44 @@ def test_function_call():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_assign_shift_right():
+    code = """
+    shader PerlinNoise {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
+
+        void main() {
+            vUV >>= 1;
+            vUV = position.xy * 10.0;
+            gl_Position = vec4(position, 1.0);
+        }
+    }
+
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+
+        void main() {
+            double noise = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+            double height = noise * 10.0;
+            uint a >>= 1;
+            uint b = 2;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        print(parse_code(tokens))
+    except SyntaxError as e:
+        pytest.fail(f"Failed to parse ASSIGN_SHIFT_RIGHT token: {e}")
+
+
 def test_logical_operators():
     code = """
         shader LightControl {
