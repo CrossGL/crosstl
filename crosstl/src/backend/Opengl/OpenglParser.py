@@ -333,41 +333,7 @@ class GLSLParser:
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                if op == "ASSIGN_ADD":
-                    return AssignmentNode(
-                        VariableNode(type_name, name),
-                        BinaryOpNode(VariableNode("", name), "PLUS", value)
-                    )
-                elif op == "ASSIGN_MUL":
-                    return AssignmentNode(
-                        VariableNode(type_name, name),
-                        BinaryOpNode(VariableNode("", name), "MULTIPLY", value)
-                    )
-                elif op == "ASSIGN_DIV":
-                    return AssignmentNode(
-                        VariableNode(type_name, name), 
-                        BinaryOpNode(VariableNode("", name), "DIVIDE", value)
-                    )
-                elif op == "ASSIGN_SUB":
-                    return AssignmentNode(
-                        VariableNode(type_name, name), 
-                        BinaryOpNode(VariableNode("", name), "MINUS", value)
-                    )
-                elif op == "ASSIGN_XOR":
-                    return AssignmentNode(
-                        VariableNode(type_name, name), 
-                        BinaryOpNode(VariableNode("", name), "BITWISE_XOR", value)
-                    )
-                elif op == "ASSIGN_OR":
-                    return AssignmentNode(
-                        VariableNode(type_name, name), 
-                        BinaryOpNode(VariableNode("", name), "BITWISE_OR", value)
-                    )
-                elif op == "ASSIGN_AND":
-                    return AssignmentNode(
-                        VariableNode(type_name, name), 
-                        BinaryOpNode(VariableNode(type_name, name), "BITWISE_AND", value)
-                    )
+                return AssignmentNode(VariableNode(type_name, name),BinaryOpNode(VariableNode("", name), op, value))
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"

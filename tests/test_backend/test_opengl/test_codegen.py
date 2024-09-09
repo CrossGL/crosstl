@@ -226,3 +226,294 @@ def test_function_call():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_bitwise_and():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        int bit = 7&4;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Bitwise and operation failed")
+
+
+def test_bitwise_or():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        int bit = 4|6;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Bitwise or operation failed")
+
+
+def test_bitwise_xor():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        int bit = 9^4;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Bitwise xor operation failed")
+
+
+def test_uint():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        unsigned int u = 4;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("uint operation failed")
+
+
+def test_double():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        double r = 7.87;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("double operation failed")
+
+
+def test_assign_and():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        int bit = 9&4;
+        bit&=7;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Assign and operation failed")
+
+
+def test_assign_or():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        int bit = 9|4;
+        bit|=7;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Assign or operation failed")
+
+
+def test_assign_xor():
+    code = """
+    #version 450
+    // Vertex shader
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+        float noise = perlinNoise(vUV);
+
+    }
+    // Fragment shader
+    in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float noise = perlinNoise(vUV);
+        float height = noise * 10.0;
+        int bit = 9^4;
+        bit^=7;
+        vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Assign xor operation failed")

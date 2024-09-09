@@ -108,7 +108,31 @@ def test_function_call_tokenization():
         pytest.fail("Function call tokenization not implemented.")
 
 
-def test_bitwise_tokenization():
+def test_bitwise_and():
+    code = """
+        float perlinNoise(float2 p) {
+            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        }
+        in vec2 vUV;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height = noise * 10.0;
+            int x=5;
+            int y=6;
+            int and_op = x&y;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+        }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operation failed")
+
+
+def test_bitwise_or():
     code = """
         float perlinNoise(float2 p) {
             return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
@@ -122,9 +146,102 @@ def test_bitwise_tokenization():
             int x=5;
             int y=6;
             int or_op = x|y;
-            int and_op = x&y;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+        }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operation failed")
+
+
+def test_bitwise_xor():
+    code = """
+        float perlinNoise(float2 p) {
+            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        }
+        in vec2 vUV;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height = noise * 10.0;
+            int x=5;
+            int y=6;
             int xor_op = x^y;
-            int combined = (x|y)&y^x;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+        }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operation failed")
+
+
+def test_assign_and():
+    code = """
+        float perlinNoise(float2 p) {
+            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        }
+        in vec2 vUV;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height = noise * 10.0;
+            int x=5;
+            int y=6;
+            x &= y;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+        }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operation failed")
+
+
+def test_assign_or():
+    code = """
+        float perlinNoise(float2 p) {
+            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        }
+        in vec2 vUV;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height = noise * 10.0;
+            int x=5;
+            int y=6;
+            x |= y;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+        }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Bitwise operation failed")
+
+
+def test_assign_xor():
+    code = """
+        float perlinNoise(float2 p) {
+            return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+        }
+        in vec2 vUV;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height = noise * 10.0;
+            int x=5;
+            int y=6;
+            x ^= y;
             vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
             fragColor = vec4(color, 1.0);
         }

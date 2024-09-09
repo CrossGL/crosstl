@@ -305,6 +305,13 @@ class GLSLToCrossGLConverter:
             "OR": "||",
             "BITWISE_OR": "|",
             "BITWISE_XOR": "^",
-            "BITWISE_AND": "&"
+            "BITWISE_AND": "&",
+            "ASSIGN_ADD": "+",
+            "ASSIGN_MUL": "*",
+            "ASSIGN_DIV": "/",
+            "ASSIGN_SUB": "-",
+            "ASSIGN_OR": "|",
+            "ASSIGN_XOR": "^",
+            "ASSIGN_AND": "&",
         }
         return op_map.get(op, op)
