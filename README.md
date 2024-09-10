@@ -66,6 +66,7 @@ Imagine writing a shader _once_ and deploying it across:
 - 🎮 **DirectX**
 - 🖥️ **OpenGL**
 - 🖥️ **Vulkan**
+- ⚙️  **Slang** 
 - 🔥 **Mojo**
 
 ...all without changing a single line of code!
@@ -75,6 +76,7 @@ Imagine writing a shader _once_ and deploying it across:
 - Metal
 - DirectX
 - OpenGL
+- Slang
 
 
 ## 💡 Key Benefits
