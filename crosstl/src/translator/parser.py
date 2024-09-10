@@ -638,8 +638,13 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -694,8 +699,13 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -727,6 +737,11 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
+            "ASSIGN_SHIFT_RIGHT",
         ):
             op = self.current_token[0]
             self.eat(op)
@@ -774,8 +789,13 @@ class Parser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -934,8 +954,13 @@ class Parser:
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             op = self.current_token[0]
             self.eat(op)
