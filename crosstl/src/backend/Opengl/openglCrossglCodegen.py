@@ -285,7 +285,7 @@ class GLSLToCrossGLConverter:
             "int": "int",
             "bool": "bool",
             "double": "double",
-            "unsigned int": "uint"
+            "unsigned int": "uint",
         }
         return type_map.get(vtype, vtype)
 
