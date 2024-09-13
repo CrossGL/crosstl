@@ -17,7 +17,6 @@ from .OpenglAst import (
     FRAGMENTShaderNode,
     VersionDirectiveNode,
 )
-from .OpenglLexer import *
 
 
 class GLSLParser:
@@ -177,7 +176,14 @@ class GLSLParser:
             elif self.current_token[0] == "VERSION":
                 self.parse_version_directive()
 
-            elif self.current_token[0] in ["VOID", "FLOAT", "VECTOR"]:
+            elif self.current_token[0] in [
+                "VOID",
+                "FLOAT",
+                "VECTOR",
+                "INT",
+                "UINT",
+                "DOUBLE",
+            ]:
                 self.skip_comments()
                 if current_section:
                     function_node = self.parse_function()
@@ -225,8 +231,6 @@ class GLSLParser:
         uniforms = []
         functions = []
         layout_qualifiers = []
-
-        self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "LAYOUT":
@@ -319,20 +323,25 @@ class GLSLParser:
                 raise SyntaxError(
                     f"Expected ';' after variable assignment, found: {self.current_token[0]}"
                 )
-
         elif self.current_token[0] in (
             "ASSIGN_ADD",
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "ASSIGN_XOR",
+            "ASSIGN_OR",
+            "ASSIGN_AND",
         ):
             op = self.current_token[0]
-            op_name = self.current_token[1]
+            self.current_token[1]
             self.eat(op)
             value = self.parse_expression()
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                return BinaryOpNode(VariableNode(type_name, name), op_name, value)
+                return AssignmentNode(
+                    VariableNode(type_name, name),
+                    BinaryOpNode(VariableNode("", name), op, value),
+                )
             else:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
@@ -344,7 +353,14 @@ class GLSLParser:
 
     def parse_assignment_or_function_call(self):
         type_name = ""
-        if self.current_token[0] in ["VECTOR", "FLOAT", "INT", "MATRIX"]:
+        if self.current_token[0] in [
+            "VECTOR",
+            "FLOAT",
+            "INT",
+            "MATRIX",
+            "DOUBLE",
+            "UINT",
+        ]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
         if self.current_token[0] == "IDENTIFIER":
@@ -414,8 +430,18 @@ class GLSLParser:
                 body.append(self.parse_for())
             elif self.current_token[0] == "RETURN":
                 body.append(self.parse_return())
-            elif self.current_token[0] in ["VECTOR", "IDENTIFIER", "FLOAT", "INT"]:
+            elif self.current_token[0] in [
+                "VECTOR",
+                "IDENTIFIER",
+                "FLOAT",
+                "INT",
+                "DOUBLE",
+                "UINT",
+            ]:
                 body.append(self.parse_assignment_or_function_call())
+            elif self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
+                tok = self.current_token[0]
+                self.eat(tok)
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
         return body
@@ -443,6 +469,8 @@ class GLSLParser:
             "VECTOR",
             "FLOAT",
             "INT",
+            "DOUBLE",
+            "UINT",
             "MATRIX",
             "BOOLEAN",
             "SAMPLER2D",
@@ -453,7 +481,7 @@ class GLSLParser:
         elif self.current_token[0] == "IDENTIFIER":
             type_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if type_name in ["int", "float"]:
+            if type_name in ["int", "float", "unsigned int", "double"]:
                 return type_name
             return type_name
         else:
@@ -554,6 +582,15 @@ class GLSLParser:
             return self.parse_member_access(func_name)
         return VariableNode("", func_name)
 
+    def parse_binop(self):
+        left = self.parse_additive()
+        while self.current_token[0] in ["BITWISE_AND", "BITWISE_XOR", "BITWISE_OR"]:
+            op = self.current_token[0]
+            self.eat(op)
+            right = self.parse_additive()
+            left = BinaryOpNode(left, op, right)
+        return left
+
     def parse_additive(self):
         left = self.parse_multiplicative()
         while self.current_token[0] in ["PLUS", "MINUS"]:
@@ -595,7 +632,7 @@ class GLSLParser:
         return left
 
     def parse_expression(self):
-        left = self.parse_additive()
+        left = self.parse_binop()
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
@@ -608,7 +645,7 @@ class GLSLParser:
         ]:
             op = self.current_token[0]
             self.eat(op)
-            right = self.parse_additive()
+            right = self.parse_binop()
             left = BinaryOpNode(left, op, right)
 
         if self.current_token[0] == "QUESTION":
