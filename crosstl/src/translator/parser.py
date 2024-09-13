@@ -645,7 +645,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
-            "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT" "ASSIGN_SHIFT_RIGHT",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -707,7 +707,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
-            "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT" "ASSIGN_SHIFT_RIGHT",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -745,6 +745,7 @@ class Parser:
             "ASSIGN_XOR",
             "ASSIGN_MOD",
             "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT",
         ):
             op = self.current_token[0]
             self.eat(op)
@@ -800,6 +801,7 @@ class Parser:
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
             "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT",
         ]:
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -966,6 +968,7 @@ class Parser:
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
             "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT",
         ]:
             op = self.current_token[0]
             self.eat(op)
