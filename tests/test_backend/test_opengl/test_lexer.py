@@ -107,3 +107,7 @@ def test_function_call_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+if __name__ == "__main__":
+    pytest.main()

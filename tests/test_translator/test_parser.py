@@ -416,7 +416,7 @@ def test_assign_ops():
     except SyntaxError:
         pytest.fail("Assignment Operator parsing not implemented.")
 
-
+        
 def test_bitwise_operators():
     code = """
         shader LightControl {
@@ -443,7 +443,7 @@ def test_bitwise_operators():
     except SyntaxError:
         pytest.fail("Bitwise Shift not working")
 
-
+        
 def test_xor_operator():
     code = """
     shader XorTestShader {
@@ -476,3 +476,7 @@ def test_xor_operator():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Bitwise XOR not working")
+
+  
+if __name__ == "__main__":
+    pytest.main()
