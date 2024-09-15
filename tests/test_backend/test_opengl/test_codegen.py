@@ -226,3 +226,7 @@ def test_function_call():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+if __name__ == "__main__":
+    pytest.main()

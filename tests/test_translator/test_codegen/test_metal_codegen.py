@@ -321,3 +321,7 @@ def test_assignment_shift_operators():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+if __name__ == "__main__":
+    pytest.main()

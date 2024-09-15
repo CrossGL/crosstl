@@ -222,3 +222,7 @@ def test_const_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Const keyword tokenization failed")
+
+
+if __name__ == "__main__":
+    pytest.main()
