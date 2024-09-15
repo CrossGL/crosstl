@@ -125,7 +125,7 @@ def test_else_if_parsing():
     """
     try:
         tokens = tokenize_code(code)
-        parse_code(tokens)
+        print(parse_code(tokens))
     except SyntaxError:
         pytest.fail("else_if parsing not implemented.")
 

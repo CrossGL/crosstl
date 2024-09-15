@@ -13,22 +13,35 @@ class TernaryOpNode:
 
 
 class ShaderNode:
-    def __init__(
-        self,
-        vsinput_struct,
-        vsoutput_struct,
-        psinput_struct,
-        psoutput_struct,
-        functions,
-    ):
-        self.vsinput_struct = vsinput_struct
-        self.vsoutput_struct = vsoutput_struct
-        self.psinput_struct = psinput_struct
-        self.psoutput_struct = psoutput_struct
+    def __init__(self, structs, functions, global_variables, cbuffers):
+        self.structs = structs
         self.functions = functions
+        self.global_variables = global_variables
+        self.cbuffers = cbuffers
 
     def __repr__(self):
-        return f"ShaderNode(vsinput_struct={self.vsinput_struct}, vsoutput_struct={self.vsoutput_struct}, psinput_struct={self.psinput_struct}, psoutput_struct={self.psoutput_struct}, functions={self.functions})"
+        return f"ShaderNode(structs={self.structs}, functions={self.functions}, global_variables={self.global_variables}, cbuffers={self.cbuffers})"
+
+
+class shaderTypeNode:
+    """
+    Represents a shader type node in the AST.
+
+    Attributes:
+        vertex (bool): The vertex shader type
+        fragment (bool): The fragment shader type
+        compute (bool): The compute shader type
+
+    """
+
+    def __init__(self, vertex=False, fragment=False, compute=False, custom=False):
+        self.vertex = vertex
+        self.fragment = fragment
+        self.compute = compute
+        self.custom = custom
+
+    def __repr__(self):
+        return f"shaderTypeNode(vertex={self.vertex}, fragment={self.fragment}, compute={self.compute}, custom={self.custom})"
 
 
 class StructNode:
@@ -41,14 +54,15 @@ class StructNode:
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, return_type, name, params, body):
+    def __init__(self, return_type, name, params, body, type_function="custom"):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
+        self.type_function = type_function
 
     def __repr__(self):
-        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body})"
+        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, type_function={self.type_function})"
 
 
 class VariableNode(ASTNode):

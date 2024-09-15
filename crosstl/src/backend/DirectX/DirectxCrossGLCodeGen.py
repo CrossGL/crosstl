@@ -36,66 +36,52 @@ class HLSLToCrossGLConverter:
         }
 
     def generate(self, ast):
-        self.process_structs(ast)
         code = "shader main {\n"
+        # Generate structs
+        for node in ast.structs:
+            if isinstance(node, StructNode):
+                code += f"    struct {node.name} {{\n"
+                for member in node.members:
+                    code += f"        {self.map_type(member.vtype)} {member.name};\n"
+                code += "    }\n"
+        # Generate global variables
+        for node in ast.global_variables:
+            code += f"    {self.map_type(node.vtype)} {node.name};\n"
+        # Generate cbuffers
+        if ast.cbuffers:
+            code += "    // Constant Buffers\n"
+            code += self.generate_cbuffers(ast)
 
         # Generate custom functions
         for func in ast.functions:
-            if func.name not in ["VSMain", "PSMain"]:
+            function_type_node = func.type_function
+            if function_type_node.custom:
                 code += self.generate_function(func)
-
-        # Generate vertex shader
-        code += "    // Vertex Shader\n"
-        code += "    vertex {\n"
-        code += self.generate_io_declarations("vertex")
-        code += "\n"
-        code += self.generate_vertex_main(
-            next(f for f in ast.functions if f.name == "VSMain")
-        )
-        code += "    }\n\n"
-
-        # Generate fragment shader
-        code += "    // Fragment Shader\n"
-        code += "    fragment {\n"
-        code += self.generate_io_declarations("fragment")
-        code += "\n"
-        code += self.generate_fragment_main(
-            next(f for f in ast.functions if f.name == "PSMain")
-        )
-        code += "    }\n"
+            if function_type_node.vertex:
+                code += f"vertex {{\n"
+                code += self.generate_function(func)
+                code += f"}}\n"
+            elif function_type_node.fragment:
+                code += f"fragment {{\n"
+                code += self.generate_function(func)
+                code += f"}}\n"
+            elif function_type_node.compute:
+                code += f"compute {{\n"
+                code += self.generate_function(func)
+                code += f"}}\n"
 
         code += "}\n"
         return code
 
-    def process_structs(self, ast):
-        if ast.vsinput_struct:
-            for member in ast.vsinput_struct.members:
-                self.vertex_inputs.append((member.vtype, member.name))
-        if ast.vsoutput_struct:
-            for member in ast.vsoutput_struct.members:
-                if member.name != "position":
-                    self.vertex_outputs.append((member.vtype, member.name))
-
-        if ast.psinput_struct:
-            for member in ast.psinput_struct.members:
-                self.fragment_inputs.append((member.vtype, member.name))
-        if ast.psoutput_struct:
-            for member in ast.psoutput_struct.members:
-                self.fragment_outputs.append((member.vtype, member.name))
-
-    def generate_io_declarations(self, shader_type):
+    def generate_cbuffers(self, ast):
         code = ""
-        if shader_type == "vertex":
-            for type, name in self.vertex_inputs:
-                code += f"        input {self.map_type(type)} {name};\n"
-            for type, name in self.vertex_outputs:
-                code += f"        output {self.map_type(type)} {name};\n"
-        elif shader_type == "fragment":
-            for type, name in self.fragment_inputs:
-                code += f"        input {self.map_type(type)} {name};\n"
-            for type, name in self.fragment_outputs:
-                code += f"        output {self.map_type(type)} {name};\n"
-        return code.rstrip()
+        for node in ast.cbuffers:
+            if isinstance(node, StructNode):
+                code += f"    cbuffer {node.name} {{\n"
+                for member in node.members:
+                    code += f"        {self.map_type(member.vtype)} {member.name};\n"
+                code += "    }\n"
+        return code
 
     def generate_function(self, func):
         params = ", ".join(f"{self.map_type(p.vtype)} {p.name}" for p in func.params)
@@ -104,27 +90,12 @@ class HLSLToCrossGLConverter:
         code += "    }\n\n"
         return code
 
-    def generate_vertex_main(self, func):
-        code = "        void main() {\n"
-        code += self.generate_function_body(func.body, indent=3, is_main=True)
-        code += "        }\n"
-        return code
-
-    def generate_fragment_main(self, func):
-        code = "        void main() {\n"
-        code += self.generate_function_body(func.body, indent=3, is_main=True)
-        code += "        }\n"
-        return code
-
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                if stmt.vtype in ["VSOutput", "PSOutput"]:
-                    continue
-                else:
-                    code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
 
@@ -171,15 +142,8 @@ class HLSLToCrossGLConverter:
     def generate_assignment(self, node, is_main):
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
-        if (
-            is_main
-            and isinstance(node.left, MemberAccessNode)
-            and node.left.object == "output"
-        ):
-            if node.left.member == "position":
-                return f"gl_Position = {rhs}"
-            return f"{node.left.member} = {rhs}"
-        return f"{lhs} = {rhs}"
+        op = node.operator
+        return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
         if isinstance(expr, str):
@@ -206,8 +170,6 @@ class HLSLToCrossGLConverter:
             return f"{expr.name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
-            if obj == "output" or obj == "input":
-                return expr.member
             return f"{obj}.{expr.member}"
 
         elif isinstance(expr, TernaryOpNode):
@@ -223,5 +185,5 @@ class HLSLToCrossGLConverter:
 
     def map_type(self, hlsl_type):
         if hlsl_type:
-            return self.type_map.get(hlsl_type)
+            return self.type_map.get(hlsl_type, hlsl_type)
         return hlsl_type
