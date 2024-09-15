@@ -367,5 +367,6 @@ class HLSLCodeGen:
             "AND": "&&",
             "OR": "||",
             "EQUALS": "=",
+            "BITWISE_NOT":"~",
         }
         return op_map.get(op, op)
