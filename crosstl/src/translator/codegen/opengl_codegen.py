@@ -271,6 +271,7 @@ class GLSLCodeGen:
             "MINUS": "-",
             "MULTIPLY": "*",
             "DIVIDE": "/",
+            "BITWISE_XOR": "^",
             "LESS_THAN": "<",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
