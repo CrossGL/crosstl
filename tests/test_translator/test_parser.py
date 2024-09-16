@@ -442,3 +442,7 @@ def test_bitwise_operators():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Bitwise Shift not working")
+
+
+if __name__ == "__main__":
+    pytest.main()
