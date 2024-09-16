@@ -62,6 +62,27 @@ def test_else_statement_tokenization():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_else_if_statement_tokenization():
+    code = """
+    if (!a) {
+        return b;
+    } 
+    if (!b) {
+        return a;
+    } else if (a < b) {
+        return b;
+    } else if (a > b) {
+        return a;
+    } else {
+        return 0;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
+
 def test_function_call_tokenization():
     code = """
     shader PerlinNoise {
@@ -201,3 +222,7 @@ def test_const_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Const keyword tokenization failed")
+
+
+if __name__ == "__main__":
+    pytest.main()

@@ -112,5 +112,4 @@ def test_else_if_tokenization():
 
 
 if __name__ == "__main__":
-
     pytest.main()
