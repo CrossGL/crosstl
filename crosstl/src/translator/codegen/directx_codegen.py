@@ -354,6 +354,7 @@ class HLSLCodeGen:
             "MINUS": "-",
             "MULTIPLY": "*",
             "DIVIDE": "/",
+            "MOD": "%",
             "LESS_THAN": "<",
             "GREATER_THAN": ">",
             "ASSIGN_ADD": "+=",
