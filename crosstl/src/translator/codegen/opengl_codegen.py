@@ -279,6 +279,7 @@ class GLSLCodeGen:
             "ASSIGN_DIV": "/=",
             "ASSIGN_MOD": "%=",
             "ASSIGN_AND": "&=",
+            "LOGICAL_AND": "&&",
             "GREATER_THAN": ">",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",

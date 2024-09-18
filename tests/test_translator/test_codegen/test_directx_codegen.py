@@ -387,5 +387,42 @@ def test_assignment_shift_operators():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_logical_and_operator():
+    code = """
+    shader ANDShader {
+        vertex {
+            input vec3 position;
+            output vec2 vUV;
+            void main() {
+                vUV = position.xy * 10.0;
+                if (vUV.x > 5.0 && vUV.y > 5.0) {  // Logical AND operator
+                    vUV.x = 1.0;
+                }
+                gl_Position = vec4(position, 1.0);
+            }
+        }
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+            void main() {
+                float height = 10.0;
+                if (vUV.x < 3.0 && vUV.y < 3.0) {  // Logical AND operator
+                    height = 5.0;
+                }
+                vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+                fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Logical AND operator parsing not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
