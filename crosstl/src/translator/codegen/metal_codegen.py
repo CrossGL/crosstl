@@ -421,6 +421,7 @@ class MetalCodeGen:
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
             "ASSIGN_MOD": "%=",
+            "ASSIGN_AND": "&=",
             "GREATER_THAN": ">",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",

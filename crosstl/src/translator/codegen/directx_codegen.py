@@ -362,6 +362,7 @@ class HLSLCodeGen:
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
             "ASSIGN_MOD": "%=",
+            "ASSIGN_AND": "&=",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",
             "EQUAL": "==",
