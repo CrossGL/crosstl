@@ -443,7 +443,6 @@ def test_bitwise_operators():
     except SyntaxError:
         pytest.fail("Bitwise Shift not working")
 
-
     def test_bitwise_or_operator():
         code = """
         shader OrTestShader {
