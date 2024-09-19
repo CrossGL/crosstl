@@ -359,6 +359,7 @@ class HLSLCodeGen:
             "GREATER_THAN": ">",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
+            "ASSIGN_OR": "|=",
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
             "ASSIGN_MOD": "%=",
