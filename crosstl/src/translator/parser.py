@@ -455,11 +455,19 @@ class Parser:
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
         return body
+
     def parse_function_call_or_identifier(self):
         """Parse a function call, identifier, or array indexing."""
-    
+
         # Parse function calls or identifiers as before
-        if self.current_token[0] in ["VECTOR", "FLOAT", "DOUBLE", "UINT", "INT", "MATRIX"]:
+        if self.current_token[0] in [
+            "VECTOR",
+            "FLOAT",
+            "DOUBLE",
+            "UINT",
+            "INT",
+            "MATRIX",
+        ]:
             func_name = self.current_token[1]
             self.eat(self.current_token[0])
         else:
@@ -469,12 +477,12 @@ class Parser:
         # Check for array indexing
         if self.current_token[0] == "LBRACKET":
             return self.parse_array_index(func_name)
-    
+
         # Handle function calls and member access as usual
         if self.current_token[0] == "LPAREN":
             return self.parse_function_call(func_name)
         elif self.current_token[0] == "DOT":
-            return self.parse_member_access(func_name)  
+            return self.parse_member_access(func_name)
         return VariableNode("", func_name)
 
     def parse_array_index(self, array_name):
