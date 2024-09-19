@@ -23,27 +23,6 @@ class ShaderNode:
         return f"ShaderNode(structs={self.structs}, functions={self.functions}, global_variables={self.global_variables}, cbuffers={self.cbuffers})"
 
 
-class shaderTypeNode:
-    """
-    Represents a shader type node in the AST.
-
-    Attributes:
-        vertex (bool): The vertex shader type
-        fragment (bool): The fragment shader type
-        compute (bool): The compute shader type
-
-    """
-
-    def __init__(self, vertex=False, fragment=False, compute=False, custom=False):
-        self.vertex = vertex
-        self.fragment = fragment
-        self.compute = compute
-        self.custom = custom
-
-    def __repr__(self):
-        return f"shaderTypeNode(vertex={self.vertex}, fragment={self.fragment}, compute={self.compute}, custom={self.custom})"
-
-
 class StructNode:
     def __init__(self, name, members):
         self.name = name
@@ -54,15 +33,16 @@ class StructNode:
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, return_type, name, params, body, type_function="custom"):
+    def __init__(self, return_type, name, params, body, qualifier=None, semantic=None):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
-        self.type_function = type_function
+        self.qualifier = qualifier
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, type_function={self.type_function})"
+        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, qualifier={self.qualifier}, semantic={self.semantic})"
 
 
 class VariableNode(ASTNode):
