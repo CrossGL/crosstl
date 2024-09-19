@@ -322,6 +322,7 @@ def test_assignment_shift_operators():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
 def test_bitwise_operators():
     code = """
         shader LightControl {
@@ -349,6 +350,7 @@ def test_bitwise_operators():
         print(code)
     except SyntaxError:
         pytest.fail("Bitwise Shift parsing not implemented.")
-        
+
+
 if __name__ == "__main__":
     pytest.main()

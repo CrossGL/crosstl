@@ -386,6 +386,7 @@ def test_assignment_shift_operators():
     except SyntaxError:
         pytest.fail("Assignment shift parsing not implemented.")
 
+
 def test_bitwise_operators():
     code = """
         shader LightControl {
