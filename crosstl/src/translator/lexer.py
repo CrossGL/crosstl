@@ -28,6 +28,8 @@ TOKENS = [
     ("RBRACE", r"\}"),
     ("LPAREN", r"\("),
     ("RPAREN", r"\)"),
+    ("LBRACKET", r"\["),
+    ("RBRACKET", r"\]"),
     ("SEMICOLON", r";"),
     ("COMMA", r","),
     ("ASSIGN_ADD", r"\+="),
