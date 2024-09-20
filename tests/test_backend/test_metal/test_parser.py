@@ -92,26 +92,30 @@ def test_else():
 
 def test_function_call():
     code = """
-   struct VertexIn {
-float3 position [[attribute(0)]];
-float4 color [[attribute(1)]];
-};
+    #include <metal_stdlib>
+    using namespace metal;
 
-struct VertexOut {
-float4 position [[position]];
-float4 color;
-};
+    float perlinNoise(float2 p) {
+        return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+    }
 
-vertex VertexOut basic_vertex(VertexIn in [[stage_in]]) {
-VertexOut out;
-out.position = float4(in.position, 1.0);
-out.color = in.color;
-return out;
-}
 
-fragment float4 basic_fragment(VertexOut in [[stage_in]]) {
-return in.color;
-}
+    struct Fragment_INPUT {
+        float2 vUV [[stage_in]];
+    };
+
+    struct Fragment_OUTPUT {
+        float4 fragColor [[color(0)]];
+    };
+
+    fragment Fragment_OUTPUT fragment_main(Fragment_INPUT input [[stage_in]]) {
+        Fragment_OUTPUT output;
+        float noise = perlinNoise(input.vUV);
+        float height = noise * 10.0;
+        float3 color = float3(height / 10.0, 1.0 - height / 10.0, 0.0);
+        output.fragColor = float4(color, 1.0);
+        return output;
+    }
     """
     try:
         tokens = tokenize_code(code)
