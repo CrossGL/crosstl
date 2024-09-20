@@ -7,7 +7,6 @@ TOKENS = [
     ("STRUCT", r"\bstruct\b"),
     ("CONSTANT", r"\bconstant\b"),
     ("TEXTURE2D", r"\btexture2d\b"),
-    ("buffer", r"\bbuffer\b"),
     ("SAMPLER", r"\bsampler\b"),
     ("VECTOR", r"\b(float|half|int|uint)[2-4]\b"),
     ("FLOAT", r"\bfloat\b"),
@@ -62,7 +61,6 @@ TOKENS = [
     ("OR", r"\|\|"),
     ("DOT", r"\."),
     ("EQUALS", r"="),
-    ("bitwise_and", r"&"),
     ("WHITESPACE", r"\s+"),
 ]
 

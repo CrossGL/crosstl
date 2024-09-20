@@ -12,18 +12,26 @@ class TernaryOpNode:
         return f"TernaryOpNode(condition={self.condition}, true_expr={self.true_expr}, false_expr={self.false_expr})"
 
 
-class ShaderNode(ASTNode):
-    def __init__(self, preprocessors, struct, constant, functions):
-        self.processors = preprocessors
-        self.struct = struct
-        self.constant = constant
+class ShaderNode:
+    def __init__(
+        self,
+        vsinput_struct,
+        vsoutput_struct,
+        psinput_struct,
+        psoutput_struct,
+        functions,
+    ):
+        self.vsinput_struct = vsinput_struct
+        self.vsoutput_struct = vsoutput_struct
+        self.psinput_struct = psinput_struct
+        self.psoutput_struct = psoutput_struct
         self.functions = functions
 
     def __repr__(self):
-        return f"ShaderNode(processors={self.processors}, struct={self.struct}, constant={self.constant}, functions={self.functions})"
+        return f"ShaderNode(vsinput_struct={self.vsinput_struct}, vsoutput_struct={self.vsoutput_struct}, psinput_struct={self.psinput_struct}, psoutput_struct={self.psoutput_struct}, functions={self.functions})"
 
 
-class StructNode(ASTNode):
+class StructNode:
     def __init__(self, name, members):
         self.name = name
         self.members = members
@@ -33,44 +41,24 @@ class StructNode(ASTNode):
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, qualifier, return_type, name, params, body, attributes=None):
-        self.qualifier = qualifier
+    def __init__(self, return_type, name, params, body):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
-        self.attributes = attributes or []
 
     def __repr__(self):
-        return f"FunctionNode(qualifier={self.qualifier}, return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, attributes={self.attributes})"
-
-
-class ArrayAccessNode(ASTNode):
-    def __init__(self, array, index):
-        self.array = array
-        self.index = index
-
-    def __repr__(self):
-        return f"ArrayAccessNode(array={self.array}, index={self.index})"
+        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body})"
 
 
 class VariableNode(ASTNode):
-    def __init__(self, vtype, name, attributes=None):
+    def __init__(self, vtype, name, semantic=None):
         self.vtype = vtype
         self.name = name
-        self.attributes = attributes or []
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', attributes={self.attributes})"
-
-
-class AttributeNode(ASTNode):
-    def __init__(self, name, args=None):
-        self.name = name
-        self.args = args or []
-
-    def __repr__(self):
-        return f"AttributeNode(name='{self.name}', args={self.args})"
+        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', semantic={self.semantic})"
 
 
 class AssignmentNode(ASTNode):
@@ -84,13 +72,13 @@ class AssignmentNode(ASTNode):
 
 
 class IfNode(ASTNode):
-    def __init__(self, if_chain=None, else_if_chain=None, else_body=None):
-        self.if_chain = if_chain or []
-        self.else_if_chain = else_if_chain or []
+    def __init__(self, condition, if_body, else_body=None):
+        self.condition = condition
+        self.if_body = if_body
         self.else_body = else_body
 
     def __repr__(self):
-        return f"IfNode(if_chain={self.if_chain}, else_if_chain={self.else_if_chain}, else_body={self.else_body})"
+        return f"IfNode(condition={self.condition}, if_body={self.if_body}, else_body={self.else_body})"
 
 
 class ForNode(ASTNode):
@@ -128,7 +116,7 @@ class BinaryOpNode(ASTNode):
         self.right = right
 
     def __repr__(self):
-        return f"BinaryOpNode(left={self.left}, operator={self.op}, right={self.right})"
+        return f"BinaryOpNode(left={self.left}, op={self.op}, right={self.right})"
 
 
 class MemberAccessNode(ASTNode):
@@ -140,7 +128,7 @@ class MemberAccessNode(ASTNode):
         return f"MemberAccessNode(object={self.object}, member={self.member})"
 
 
-class VectorConstructorNode(ASTNode):
+class VectorConstructorNode:
     def __init__(self, type_name, args):
         self.type_name = type_name
         self.args = args
@@ -157,29 +145,5 @@ class UnaryOpNode(ASTNode):
     def __repr__(self):
         return f"UnaryOpNode(operator={self.op}, operand={self.operand})"
 
-
-class TextureSampleNode(ASTNode):
-    def __init__(self, texture, sampler, coordinates):
-        self.texture = texture
-        self.sampler = sampler
-        self.coordinates = coordinates
-
-    def __repr__(self):
-        return f"TextureSampleNode(texture={self.texture}, sampler={self.sampler}, coordinates={self.coordinates})"
-
-
-class ThreadgroupSyncNode(ASTNode):
-    def __init__(self):
-        pass
-
-    def __repr__(self):
-        return "ThreadgroupSyncNode()"
-
-
-class ConstantBufferNode(ASTNode):
-    def __init__(self, name, members):
-        self.name = name
-        self.members = members
-
-    def __repr__(self):
-        return f"ConstantBufferNode(name={self.name}, members={self.members})"
+    def __str__(self):
+        return f"({self.op}{self.operand})"

@@ -414,13 +414,11 @@ class MetalCodeGen:
             "MINUS": "-",
             "MULTIPLY": "*",
             "DIVIDE": "/",
-            "BITWISE_XOR": "^",
             "LESS_THAN": "<",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
             "GREATER_THAN": ">",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",
@@ -430,6 +428,5 @@ class MetalCodeGen:
             "OR": "||",
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
-            "BITWISE_OR": "|",
         }
         return op_map.get(op, op)

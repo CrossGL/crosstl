@@ -370,5 +370,6 @@ class HLSLCodeGen:
             "OR": "||",
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
+            "BITWISE_OR": "|",
         }
         return op_map.get(op, op)

@@ -1,0 +1,8 @@
+crosstl
+crosstl/src
+crosstl/src/backend
+crosstl/src/backend/DirectX
+crosstl/src/backend/Metal/
+crosstl/src/backend/Opengl/
+crosstl/src/translator/
+crosstl/src/translator/codegen/

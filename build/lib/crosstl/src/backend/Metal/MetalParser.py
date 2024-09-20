@@ -30,21 +30,16 @@ class MetalParser:
 
     def parse_shader(self):
         functions = []
-        preprocessors = []
-        struct = []
-        constant = []
 
         while self.current_token[0] != "EOF":
-            if (
-                self.current_token[0] == "PREPROCESSOR"
-            ):  # TODO: Implement preprocessor directive parsing
+            if self.current_token[0] == "PREPROCESSOR":
                 self.parse_preprocessor_directive()
             elif self.current_token[0] == "USING":
                 self.parse_using_statement()
             elif self.current_token[0] == "STRUCT":
-                struct.append(self.parse_struct())
+                functions.append(self.parse_struct())
             elif self.current_token[0] == "CONSTANT":
-                constant.append(self.parse_constant_buffer())
+                functions.append(self.parse_constant_buffer())
             elif self.current_token[0] in [
                 "VERTEX",
                 "FRAGMENT",
@@ -62,7 +57,7 @@ class MetalParser:
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
-        return ShaderNode(preprocessors, struct, constant, functions)
+        return ShaderNode(functions)
 
     def parse_preprocessor_directive(self):
         self.eat("PREPROCESSOR")
@@ -105,10 +100,6 @@ class MetalParser:
         self.eat("CONSTANT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        if self.current_token[0] == "bitwise_and":
-            self.eat("bitwise_and")
-            self.eat("IDENTIFIER")
-            return ConstantBufferNode(name, [])
         self.eat("LBRACE")
 
         members = []

@@ -1,13 +1,28 @@
-from .MetalLexer import *
-from .MetalAst import *
+from .DirectxAst import (
+    AssignmentNode,
+    BinaryOpNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+    TernaryOpNode,
+)
+from .DirectxLexer import HLSLLexer
 
 
-class MetalParser:
+class HLSLParser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
-        self.skip_comments()
+        self.skip_comments()  # Skip any initial comments
 
     def skip_comments(self):
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
@@ -19,7 +34,7 @@ class MetalParser:
             self.current_token = (
                 self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
             )
-            self.skip_comments()
+            self.skip_comments()  # Skip comments after eating a token
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
@@ -30,198 +45,76 @@ class MetalParser:
 
     def parse_shader(self):
         functions = []
-        preprocessors = []
-        struct = []
-        constant = []
-
+        vsinput_struct = None
+        vsoutput_struct = None
+        psinput_struct = None
+        psoutput_struct = None
         while self.current_token[0] != "EOF":
-            if (
-                self.current_token[0] == "PREPROCESSOR"
-            ):  # TODO: Implement preprocessor directive parsing
-                self.parse_preprocessor_directive()
-            elif self.current_token[0] == "USING":
-                self.parse_using_statement()
-            elif self.current_token[0] == "STRUCT":
-                struct.append(self.parse_struct())
-            elif self.current_token[0] == "CONSTANT":
-                constant.append(self.parse_constant_buffer())
-            elif self.current_token[0] in [
-                "VERTEX",
-                "FRAGMENT",
-                "KERNEL",
-                "VOID",
-                "FLOAT",
-                "HALF",
-                "INT",
-                "UINT",
-                "BOOL",
-                "VECTOR",
-                "IDENTIFIER",
-            ]:
+            if self.current_token[0] == "STRUCT":
+                struct = self.parse_struct()
+                if struct.name == "VSInput":
+                    vsinput_struct = struct
+                if struct.name == "VSOutput":
+                    vsoutput_struct = struct
+                if struct.name == "PSInput":
+                    psinput_struct = struct
+                if struct.name == "PSOutput":
+                    psoutput_struct = struct
+            elif self.current_token[0] in ["VOID", "FLOAT", "FVECTOR", "IDENTIFIER"]:
                 functions.append(self.parse_function())
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
-        return ShaderNode(preprocessors, struct, constant, functions)
-
-    def parse_preprocessor_directive(self):
-        self.eat("PREPROCESSOR")
-        if self.current_token[0] == "LESS_THAN":
-            self.eat("LESS_THAN")
-            while self.current_token[0] != "GREATER_THAN":
-                self.eat(self.current_token[0])
-            self.eat("GREATER_THAN")
-        elif self.current_token[0] == "STRING":
-            self.eat("STRING")
-
-    def parse_using_statement(self):
-        self.eat("USING")
-        self.eat("NAMESPACE")
-        self.eat("METAL")
-        self.eat("SEMICOLON")
+        return ShaderNode(
+            vsinput_struct, vsoutput_struct, psinput_struct, psoutput_struct, functions
+        )
 
     def parse_struct(self):
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("LBRACE")
-
         members = []
         while self.current_token[0] != "RBRACE":
             vtype = self.current_token[1]
-            self.eat(self.current_token[0])  # Eat the type
+            self.eat(self.current_token[0])  # Eat the type (FVECTOR, FLOAT, etc.)
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            attributes = self.parse_attributes()
+            semantic = None
+            if self.current_token[0] == "SEMANTIC":
+                semantic = self.current_token[1]
+                self.eat("SEMANTIC")
             self.eat("SEMICOLON")
-            members.append(VariableNode(vtype, var_name, attributes))
-
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
+            members.append(VariableNode(vtype, var_name, semantic))
 
         return StructNode(name, members)
 
-    def parse_constant_buffer(self):
-        self.eat("CONSTANT")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
-        if self.current_token[0] == "bitwise_and":
-            self.eat("bitwise_and")
-            self.eat("IDENTIFIER")
-            return ConstantBufferNode(name, [])
-        self.eat("LBRACE")
-
-        members = []
-        while self.current_token[0] != "RBRACE":
-            vtype = self.current_token[1]
-            self.eat(self.current_token[0])  # Eat the type
-            var_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            self.eat("SEMICOLON")
-            members.append(VariableNode(vtype, var_name))
-
-        self.eat("RBRACE")
-
-        return ConstantBufferNode(name, members)
-
     def parse_function(self):
-        attributes = self.parse_attributes()
-
-        qualifier = None
-        if self.current_token[0] in ["VERTEX", "FRAGMENT", "KERNEL"]:
-            qualifier = self.current_token[1]
-            self.eat(self.current_token[0])
-
         return_type = self.current_token[1]
         self.eat(self.current_token[0])
-
-        # Handle potential second qualifier after return type
-        if self.current_token[0] in ["VERTEX", "FRAGMENT", "KERNEL"]:
-            if qualifier is None:
-                qualifier = self.current_token[1]
-            self.eat(self.current_token[0])
-
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
-
-        # Handle possible attribute after parameters
-        post_attributes = self.parse_attributes()
-        attributes.extend(post_attributes)
-
+        if self.current_token[0] == "SEMANTIC":
+            self.eat("SEMANTIC")
         body = self.parse_block()
-
-        return FunctionNode(qualifier, return_type, name, params, body, attributes)
+        return FunctionNode(return_type, name, params, body)
 
     def parse_parameters(self):
         params = []
         while self.current_token[0] != "RPAREN":
-            attributes = self.parse_attributes()
-            if self.current_token[0] in [
-                "FLOAT",
-                "HALF",
-                "INT",
-                "UINT",
-                "BOOL",
-                "VECTOR",
-                "IDENTIFIER",
-                "TEXTURE2D",
-                "SAMPLER",
-            ]:
-                vtype = self.current_token[1]
-                self.eat(self.current_token[0])
-
-                if self.current_token[0] == "LESS_THAN":
-                    self.eat("LESS_THAN")
-                    if self.current_token[0] in ["FLOAT", "INT", "UINT", "VECTOR"]:
-                        vtype += f"<{self.current_token[1]}>"
-                        self.eat(self.current_token[0])
-                    self.eat("GREATER_THAN")
-
-                if self.current_token[0] == "IDENTIFIER":
-                    name = self.current_token[1]
-                    self.eat("IDENTIFIER")
-                else:
-                    name = ""  # Handle case where there's no explicit parameter name
-
-                param_attributes = self.parse_attributes()
-                attributes.extend(param_attributes)
-
-                params.append(VariableNode(vtype, name, attributes))
-            else:
-                # Handle unexpected token
-                raise SyntaxError(
-                    f"Unexpected token in parameter list: {self.current_token[0]}"
-                )
-
+            vtype = self.current_token[1]
+            self.eat(self.current_token[0])
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "SEMANTIC":
+                self.eat("SEMANTIC")
+            params.append(VariableNode(vtype, name))
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-            elif self.current_token[0] == "RPAREN":
-                break
-            else:
-                # Handle unexpected token
-                raise SyntaxError(
-                    f"Expected comma or closing parenthesis, got {self.current_token[0]}"
-                )
         return params
-
-    def parse_attributes(self):
-        attributes = []
-        while self.current_token[0] == "ATTRIBUTE":
-            attr_content = self.current_token[1][2:-2]  # Remove [[ and ]]
-            attr_parts = attr_content.split("(")
-            if len(attr_parts) > 1:
-                name = attr_parts[0]
-                args = attr_parts[1][:-1].split(",")  # Remove closing ) and split args
-            else:
-                name = attr_content
-                args = []
-            attributes.append(AttributeNode(name, args))
-            self.eat("ATTRIBUTE")
-        return attributes
 
     def parse_block(self):
         statements = []
@@ -234,11 +127,10 @@ class MetalParser:
     def parse_statement(self):
         if self.current_token[0] in [
             "FLOAT",
-            "HALF",
+            "FVECTOR",
             "INT",
             "UINT",
             "BOOL",
-            "VECTOR",
             "IDENTIFIER",
         ]:
             return self.parse_variable_declaration_or_assignment()
@@ -314,35 +206,39 @@ class MetalParser:
             return expr
 
     def parse_if_statement(self):
-        if_chain = []
-        else_if_chain = []
+        self.eat("IF")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        if_body = self.parse_block()
         else_body = None
-        while self.current_token[0] == "IF":
-            self.eat("IF")
-            self.eat("LPAREN")
-            condition = self.parse_expression()
-            self.eat("RPAREN")
-            body = self.parse_block()
-            if_chain.append((condition, body))
-        while self.current_token[0] == "ELSE_IF":
-            self.eat("ELSE_IF")
-            self.eat("LPAREN")
-            condition = self.parse_expression()
-            self.eat("RPAREN")
-            body = self.parse_block()
-            else_if_chain.append((condition, body))
-
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             else_body = self.parse_block()
+        elif self.current_token[0] == "ELSE_IF":
+            else_body = self.parse_else_if_statement()
+        return IfNode(condition, if_body, else_body)
 
-        return IfNode(if_chain, else_if_chain, else_body)
+    def parse_else_if_statement(self):
+        self.eat("ELSE_IF")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        if_body = self.parse_block()
+        else_body = None
+        if self.current_token[0] == "ELSE":
+            self.eat("ELSE")
+            else_body = self.parse_block()
+        elif self.current_token[0] == "ELSE_IF":
+            else_body = self.parse_else_if_statement()
+        return IfNode(condition, if_body, else_body)
 
     def parse_for_statement(self):
         self.eat("FOR")
         self.eat("LPAREN")
 
-        if self.current_token[0] in ["INT", "UINT"]:
+        # Parse initialization
+        if self.current_token[0] in ["INT", "FLOAT", "FVECTOR"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             var_name = self.current_token[1]
@@ -355,12 +251,15 @@ class MetalParser:
             init = self.parse_expression()
         self.eat("SEMICOLON")
 
+        # Parse condition
         condition = self.parse_expression()
         self.eat("SEMICOLON")
 
+        # Parse update
         update = self.parse_expression()
         self.eat("RPAREN")
 
+        # Parse body
         body = self.parse_block()
 
         return ForNode(init, condition, update, body)
@@ -377,11 +276,8 @@ class MetalParser:
         return expr
 
     def parse_expression(self):
-        return self.parse_assignment()
-
-    def parse_assignment(self):
         left = self.parse_logical_or()
-        if self.current_token[0] in [
+        while self.current_token[0] in [
             "EQUALS",
             "PLUS_EQUALS",
             "MINUS_EQUALS",
@@ -390,14 +286,22 @@ class MetalParser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_assignment()
-            return AssignmentNode(left, right, op)
+            right = self.parse_logical_or()
+            left = AssignmentNode(left, right, op)
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
             true_expr = self.parse_expression()
             self.eat("COLON")
             false_expr = self.parse_expression()
             left = TernaryOpNode(left, true_expr, false_expr)
+        return left
+
+    def parse_assignment(self):
+        left = self.parse_logical_or()
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            right = self.parse_assignment()
+            return AssignmentNode(left, right)
         return left
 
     def parse_logical_or(self):
@@ -468,23 +372,8 @@ class MetalParser:
         return self.parse_primary()
 
     def parse_primary(self):
-        if self.current_token[0] in [
-            "IDENTIFIER",
-            "INT",
-            "UINT",
-            "FLOAT",
-            "HALF",
-            "BOOL",
-            "VECTOR",
-        ]:
-            if self.current_token[0] in [
-                "INT",
-                "UINT",
-                "FLOAT",
-                "HALF",
-                "BOOL",
-                "VECTOR",
-            ]:
+        if self.current_token[0] in ["IDENTIFIER", "INT", "FLOAT", "FVECTOR"]:
+            if self.current_token[0] in ["INT", "FLOAT", "FVECTOR"]:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
                 if self.current_token[0] == "IDENTIFIER":
@@ -492,6 +381,7 @@ class MetalParser:
                     self.eat("IDENTIFIER")
                     return VariableNode(type_name, var_name)
                 elif self.current_token[0] == "LPAREN":
+                    # Handle vector constructor
                     return self.parse_vector_constructor(type_name)
             return self.parse_function_call_or_identifier()
         elif self.current_token[0] == "NUMBER":
@@ -546,18 +436,8 @@ class MetalParser:
         member = self.current_token[1]
         self.eat("IDENTIFIER")
 
+        # Check if there's another dot after this member access
         if self.current_token[0] == "DOT":
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
-
-    def parse_texture_sample(self):
-        texture = self.parse_expression()
-        self.eat("DOT")
-        self.eat("IDENTIFIER")  # 'sample' method
-        self.eat("LPAREN")
-        sampler = self.parse_expression()
-        self.eat("COMMA")
-        coordinates = self.parse_expression()
-        self.eat("RPAREN")
-        return TextureSampleNode(texture, sampler, coordinates)
