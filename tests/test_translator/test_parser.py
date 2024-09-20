@@ -444,38 +444,38 @@ def test_bitwise_operators():
         pytest.fail("Bitwise Shift not working")
 
 
-    def test_bitwise_or_operator():
-        code = """
-        shader OrTestShader {
-        vertex {
-            input vec3 position;
-            output vec2 vUV;
+def test_bitwise_or_operator():
+    code = """
+    shader OrTestShader {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
 
-            void main() {
-                // Perform OR on the x and y components of the position
-                vUV.x = float(int(position.x) | 3);  // OR with 3
-                vUV.y = float(int(position.y) | 5);  // OR with 5
-                gl_Position = vec4(position, 1.0);
-            }
+        void main() {
+            // Perform OR on the x and y components of the position
+            vUV.x = float(int(position.x) | 3);  // OR with 3
+            vUV.y = float(int(position.y) | 5);  // OR with 5
+            gl_Position = vec4(position, 1.0);
         }
+    }
 
-        fragment {
-            input vec2 vUV;
-            output vec4 fragColor;
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
 
-            void main() {
-                // Use OR in fragment shader
-                float result = float(int(vUV.x) | int(vUV.y));
-                fragColor = vec4(result / 10.0, 1.0 - result / 10.0, 0.0, 1.0);
-            }
+        void main() {
+            // Use OR in fragment shader
+            float result = float(int(vUV.x) | int(vUV.y));
+            fragColor = vec4(result / 10.0, 1.0 - result / 10.0, 0.0, 1.0);
         }
-        }
-        """
-        try:
-            tokens = tokenize_code(code)
-            parse_code(tokens)
-        except SyntaxError:
-            pytest.fail("Bitwise OR operator not working")
+    }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Bitwise OR operator not working")
 
 
 if __name__ == "__main__":
