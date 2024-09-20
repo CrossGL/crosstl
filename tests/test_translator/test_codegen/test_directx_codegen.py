@@ -449,6 +449,7 @@ def test_bitwise_operators():
     except SyntaxError:
         pytest.fail("Bitwise Shift parsing not implemented.")
 
+
 def test_double_data_type():
     code = """
     shader DoubleShader {
@@ -477,9 +478,10 @@ def test_double_data_type():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
-        assert 'double' in generated_code
+        assert "double" in generated_code
     except SyntaxError:
         pytest.fail("Double data type not supported.")
+
 
 if __name__ == "__main__":
     pytest.main()
