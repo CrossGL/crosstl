@@ -6,6 +6,7 @@ TOKENS = [
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("STRUCT", r"\bstruct\b"),
     ("CBUFFER", r"\bcbuffer\b"),
+    ("TYPE_SHADER", r'\[shader\("(vertex|fragment|compute)"\)\]'),
     ("SHADER", r"\bshader\b"),
     ("STRING", r'"(?:\\.|[^"\\])*"'),
     ("TEXTURE2D", r"\bTexture2D\b"),
@@ -30,10 +31,6 @@ TOKENS = [
     ("BREAK", r"\bbreak\b"),
     ("CONTINUE", r"\bcontinue\b"),
     ("REGISTER", r"\bregister\b"),
-    (
-        "SEMANTIC",
-        r":\s*[A-Za-z_][A-Za-z0-9_]*",
-    ),  # Correctly capturing the entire semantic token
     ("STRING", r'"[^"]*"'),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("NUMBER", r"\d+(\.\d+)?"),

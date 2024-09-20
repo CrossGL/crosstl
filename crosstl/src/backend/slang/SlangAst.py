@@ -26,9 +26,7 @@ class ShaderNode(ASTNode):
         functions,
         global_vars,
         cbuffers,
-        shader_type,
     ):
-        self.shader_type = shader_type
         self.imports = imports
         self.exports = exports
         self.structs = structs
@@ -39,26 +37,6 @@ class ShaderNode(ASTNode):
 
     def __repr__(self):
         return f"ShaderNode(imports={self.imports}, exports={self.exports}, structs={self.structs}, typedefs={self.typedefs}, functions={self.functions}), global_vars={self.global_vars}, cbuffers={self.cbuffers}"
-
-
-class shaderTypeNode:
-    """
-    Represents a shader type node in the AST.
-
-    Attributes:
-        vertex (bool): The vertex shader type
-        fragment (bool): The fragment shader type
-        compute (bool): The compute shader type
-
-    """
-
-    def __init__(self, vertex=False, fragment=False, compute=False):
-        self.vertex = vertex
-        self.fragment = fragment
-        self.compute = compute
-
-    def __repr__(self):
-        return f"shaderTypeNode(vertex={self.vertex}, fragment={self.fragment}, compute={self.compute})"
 
 
 class ImportNode(ASTNode):
@@ -148,17 +126,25 @@ class FunctionNode(ASTNode):
     """
 
     def __init__(
-        self, return_type, name, params, body, is_generic=False, type_function="custom"
+        self,
+        return_type,
+        name,
+        params,
+        body,
+        is_generic=False,
+        qualifier=None,
+        semantic=None,
     ):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
         self.is_generic = is_generic
-        self.type_function = type_function
+        self.qualifier = qualifier
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"FunctionNode(return_type='{self.return_type}', name='{self.name}', params={self.params}, body={self.body}, is_generic={self.is_generic}), type_function={self.type_function}"
+        return f"FunctionNode(return_type='{self.return_type}', name='{self.name}', params={self.params}, body={self.body}, is_generic={self.is_generic}, qualifier={self.qualifier}, semantic={self.semantic})"
 
 
 class VariableNode(ASTNode):
