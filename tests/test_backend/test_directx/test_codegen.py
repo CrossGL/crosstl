@@ -50,7 +50,7 @@ def test_struct_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_TARGET0;
+        float4 out_color : SV_Target0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -93,7 +93,7 @@ def test_if_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_TARGET0;
+        float4 out_color : SV_Target0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -139,7 +139,7 @@ def test_for_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_TARGET0;
+        float4 out_color : SV_Target0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -188,7 +188,7 @@ def test_else_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_TARGET0;
+        float4 out_color : SV_Target0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -238,7 +238,7 @@ def test_function_call_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_TARGET0;
+        float4 out_color : SV_Target0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -285,7 +285,7 @@ def test_else_if_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_TARGET0;
+        float4 out_color : SV_Target0;
     };
 
     PSOutput PSMain(PSInput input) {
