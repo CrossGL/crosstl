@@ -95,10 +95,10 @@ class HLSLToCrossGLConverter:
             "TEXCOORD5": "TexCoord5",
             "TEXCOORD6": "TexCoord6",
             # Vertex inputs instance
-            "FRONT_FACE": "SV_IsFrontFace",
-            "PRIMITIVE_ID": "SV_PrimitiveID",
-            "INSTANCE_ID": "SV_InstanceID",
-            "VERTEX_ID": "SV_VertexID",
+            "FRONT_FACE": "gl_IsFrontFace",
+            "PRIMITIVE_ID": "gl_PrimitiveID",
+            "INSTANCE_ID": "gl_InstanceID",
+            "VERTEX_ID": "gl_VertexID",
             # Vertex outputs
             "SV_Position": "Out_Position",
             "SV_Position0": "Out_Position0",
