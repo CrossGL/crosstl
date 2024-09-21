@@ -117,7 +117,7 @@ class Lexer:
                     text = match.group(0)
                     if token_type == "IDENTIFIER" and text in KEYWORDS:
                         token_type = KEYWORDS[text]
-                    if token_type != "WHITESPACE":  # Ignore whitespace tokens
+                    if token_type != "WHITESPACE": 
 
                         token = (token_type, text)
 
@@ -133,4 +133,47 @@ class Lexer:
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
 
-        self.tokens.append(("EOF", None))  # End of file token
+        self.tokens.append(("EOF", None))  
+
+
+class Parser:
+    def __init__(self, lexer):
+        self.lexer = lexer
+        self.current_token = None
+        self.next_token()
+
+    def next_token(self):
+        self.current_token = self.lexer.get_next_token()
+
+    def parse(self):
+        return self.expression()
+
+    def expression(self):
+        node = self.term()
+        while self.current_token.type in ('BITWISE_OR',):
+            token = self.current_token
+            if token.type == 'BITWISE_OR':
+                self.next_token()
+                node = BinOp(left=node, op=token, right=self.term())
+        return node
+
+    def term(self):
+    
+        pass
+
+
+class BinOp:
+    def __init__(self, left, op, right):
+        self.left = left
+        self.op = op
+        self.right = right
+
+
+class Lexer:
+  
+    pass
+
+
+lexer = Lexer(input_code)
+parser = Parser(lexer)
+ast = parser.parse()
