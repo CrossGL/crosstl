@@ -142,6 +142,7 @@ class BinOp:
         self.op = op
         self.right = right
 
+
 class Parser:
     def __init__(self, lexer):
         self.lexer = lexer
@@ -168,17 +169,13 @@ class Parser:
         pass
 
 
-input_code = "your shader code here"
-lexer = Lexer(input_code)
-def __init__(self, input_code):
-        self.input_code = input_code
-
-
 class Lexer:
+    def __init__(self, input_code):
+        self.input_code = input_code
+        self.tokens = []
+        # Initialize other attributes and methods
 
-    pass
+    # Add other methods of the Lexer class here
 
-
-lexer = Lexer(input_code)
-parser = Parser(lexer)
-ast = parser.parse()
+# Remove or comment out the incorrect instantiation at the module level
+# lexer = Lexer(input_code)  # This should be done in the appropriate context, not at the module level
