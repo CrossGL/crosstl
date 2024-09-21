@@ -136,6 +136,12 @@ class Lexer:
         self.tokens.append(("EOF", None))
 
 
+class BinOp:
+    def __init__(self, left, op, right):
+        self.left = left
+        self.op = op
+        self.right = right
+
 class Parser:
     def __init__(self, lexer):
         self.lexer = lexer
@@ -162,11 +168,10 @@ class Parser:
         pass
 
 
-class BinOp:
-    def __init__(self, left, op, right):
-        self.left = left
-        self.op = op
-        self.right = right
+input_code = "your shader code here"
+lexer = Lexer(input_code)
+def __init__(self, input_code):
+        self.input_code = input_code
 
 
 class Lexer:
