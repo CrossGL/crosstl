@@ -117,7 +117,7 @@ class Lexer:
                     text = match.group(0)
                     if token_type == "IDENTIFIER" and text in KEYWORDS:
                         token_type = KEYWORDS[text]
-                    if token_type != "WHITESPACE": 
+                    if token_type != "WHITESPACE":
 
                         token = (token_type, text)
 
@@ -133,7 +133,7 @@ class Lexer:
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
 
-        self.tokens.append(("EOF", None))  
+        self.tokens.append(("EOF", None))
 
 
 class Parser:
@@ -150,15 +150,15 @@ class Parser:
 
     def expression(self):
         node = self.term()
-        while self.current_token.type in ('BITWISE_OR',):
+        while self.current_token.type in ("BITWISE_OR",):
             token = self.current_token
-            if token.type == 'BITWISE_OR':
+            if token.type == "BITWISE_OR":
                 self.next_token()
                 node = BinOp(left=node, op=token, right=self.term())
         return node
 
     def term(self):
-    
+
         pass
 
 
@@ -170,7 +170,7 @@ class BinOp:
 
 
 class Lexer:
-  
+
     pass
 
 
