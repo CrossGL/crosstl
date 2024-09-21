@@ -142,6 +142,7 @@ class BinOp:
         self.op = op
         self.right = right
 
+
 class Parser:
     def __init__(self, lexer):
         self.lexer = lexer
@@ -170,8 +171,10 @@ class Parser:
 
 input_code = "your shader code here"
 lexer = Lexer(input_code)
+
+
 def __init__(self, input_code):
-        self.input_code = input_code
+    self.input_code = input_code
 
 
 class Lexer:
