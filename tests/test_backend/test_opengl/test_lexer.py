@@ -14,18 +14,19 @@ def tokenize_code(code: str) -> List:
 
     """
     lexer = GLSLLexer(code)
-    return lexer.tokenize()
+    return lexer.tokens
 
 
 def test_input_output_tokenization():
     code = """
+    #version 330 core
     layout(location = 0) in vec3 position;
     out vec2 vUV;
     in vec2 vUV;
     layout(location = 0) out vec4 fragColor;
     """
     try:
-        tokenize_code(code)
+        print(tokenize_code(code))
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
