@@ -20,7 +20,6 @@ TOKENS = [
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),
     ("REGISTER", r"\bregister\b"),
-    ("SEMANTIC", r": [A-Z_][A-Z0-9_]*"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
     ("LBRACE", r"\{"),

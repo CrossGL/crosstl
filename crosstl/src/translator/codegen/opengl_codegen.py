@@ -275,6 +275,7 @@ class GLSLCodeGen:
             "LESS_THAN": "<",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
+            "ASSIGN_OR": "|=",
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
             "ASSIGN_MOD": "%=",
@@ -288,5 +289,7 @@ class GLSLCodeGen:
             "OR": "||",
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
+            "BITWISE_SHIFT_RIGHT": ">>",
+            "BITWISE_SHIFT_LEFT": "<<",
         }
         return op_map.get(op, op)

@@ -43,6 +43,34 @@ class MetalToCrossGLConverter:
             "half4x4": "half4x4",
         }
 
+        self.map_semantics = {
+            "attribute(0)": "in_Position",
+            "attribute(1)": "in_Normal",
+            "attribute(2)": "in_Tangent",
+            "attribute(3)": "in_Binormal",
+            "attribute(4)": "TexCoord",
+            "attribute(5)": "TexCoord0",
+            "attribute(6)": "TexCoord1",
+            "attribute(7)": "TexCoord2",
+            "attribute(8)": "TexCoord3",
+            "vertex_id": "gl_VertexID",
+            "instance_id": "gl_InstanceID",
+            "base_vertex": "gl_BaseVertex",
+            "base_instance": "gl_BaseInstance",
+            "position": "out_Position",
+            "point_size": "gl_PointSize",
+            "clip_distance": "gl_ClipDistance",
+            "front_facing": "gl_IsFrontFace",
+            "point_coord": "gl_PointCoord",
+            "color(0)": "out_Color",
+            "color(1)": "out_Color1",
+            "color(2)": "out_Color2",
+            "color(3)": "out_Color3",
+            "color(4)": "out_Color4",
+            "depth(any)": "Out_Depth",
+            "stage_in": "gl_in",
+        }
+
     def generate(self, ast):
 
         code = "shader main {\n"
@@ -62,7 +90,7 @@ class MetalToCrossGLConverter:
                     code += f"    // Structs\n"
                     code += f"    struct {struct_node.name} {{\n"
                 for member in struct_node.members:
-                    code += f"        {self.map_type(member.vtype)} {member.name};\n"
+                    code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.attributes)};\n"
                 code += "    }\n\n"
 
         for f in ast.functions:
@@ -95,8 +123,11 @@ class MetalToCrossGLConverter:
     def generate_function(self, func, indent=2):
         code = ""
         code += "    " * indent
-        params = ", ".join(f"{self.map_type(p.vtype)} {p.name}" for p in func.params)
-        code += f"{self.map_type(func.return_type)} {func.name}({params}) {{\n"
+        params = ", ".join(
+            f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.attributes)}"
+            for p in func.params
+        )
+        code += f"{self.map_type(func.return_type)} {func.name}({params})  {self.map_semantic(func.attributes)} {{\n"
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
         return code
@@ -204,3 +235,22 @@ class MetalToCrossGLConverter:
         if metal_type:
             return self.type_map.get(metal_type, metal_type)
         return metal_type
+
+    def map_semantic(self, semantic):
+        if semantic:
+            for semantic in semantic:
+                if isinstance(semantic, AttributeNode):
+                    name = semantic.name
+                    args = semantic.args
+                    if args:
+                        out = self.map_semantics.get(
+                            f"{name}({args[0]})", f"{name}({args[0]})"
+                        )
+                        return f"@{out}"
+                    else:
+                        out = self.map_semantics.get(f"{name}", f"{name}")
+                        return f"@{out}"
+                else:
+                    return ""
+        else:
+            return ""
