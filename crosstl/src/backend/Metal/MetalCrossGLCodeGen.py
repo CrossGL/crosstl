@@ -5,10 +5,6 @@ from .MetalLexer import *
 
 class MetalToCrossGLConverter:
     def __init__(self):
-        self.vertex_inputs = []
-        self.vertex_outputs = []
-        self.fragment_inputs = []
-        self.fragment_outputs = []
         self.type_map = {
             # Scalar Types
             "void": "void",

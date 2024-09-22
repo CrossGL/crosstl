@@ -5,10 +5,6 @@ from .DirectxLexer import *
 
 class HLSLToCrossGLConverter:
     def __init__(self):
-        self.vertex_inputs = []
-        self.vertex_outputs = []
-        self.fragment_inputs = []
-        self.fragment_outputs = []
         self.type_map = {
             "void": "void",
             "float2": "vec2",
