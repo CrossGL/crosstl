@@ -66,8 +66,8 @@ class GLSLParser:
             io_variables,
             constant,
             uniforms,
-            functions,
             global_variables,
+            functions,
             self.shader_type,
         )
 
@@ -79,7 +79,6 @@ class GLSLParser:
             if self.tokens[current_pos][0] == "SEMICOLON":
                 return False
             current_pos += 1
-        return False
 
     def parse_constant(self):
         self.eat("CONSTANT")
