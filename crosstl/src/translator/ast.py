@@ -46,12 +46,12 @@ class ShaderNode:
 
 
 class ArrayIndexNode(ASTNode):
-    def __init__(self, array_name, index):
+    def __init__(self, array_name, index, value):
         self.array_name = array_name
         self.index = index
-
+        self.value = value
     def __repr__(self):
-        return f"ArrayIndexNode({self.array_name}){self.index}"
+        return f"ArrayIndexNode({self.array_name}){self.index}{self.value}"
 
 
 class VERTEXShaderNode:

@@ -51,6 +51,39 @@ def test_input_output():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+def test_array_indexing():
+    code = """
+    shader PerlinNoise {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
+
+        void main() {
+            // Accessing array elements
+            float arr[5];
+            arr[2] = 6.0;
+            float value = arr[2];  // Array index access
+            gl_Position = vec4(position, value);
+        }
+    }
+
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+
+        void main() {
+            vec3 color = vec3(1.0, 0.0, 0.0);
+            fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Array indexing parsing not implemented.")
 
 
 def test_if_statement():

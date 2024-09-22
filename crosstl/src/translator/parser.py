@@ -452,6 +452,8 @@ class Parser:
                 "INT",
             ]:
                 body.append(self.parse_assignment_or_function_call())
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")  # Consume the semicolon and move on
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
         return body
@@ -485,11 +487,22 @@ class Parser:
             return self.parse_member_access(func_name)
         return VariableNode("", func_name)
 
-    def parse_array_index(self, array_name):
-        self.eat("LBRACKET")
-        index = self.parse_expression()
-        self.eat("RBRACKET")
-        return ArrayIndexNode(array_name, index)
+    def parse_array_index(self, name):
+            self.eat("LBRACKET")
+            index = self.parse_expression()  # Parsing the array index expression
+            self.eat("RBRACKET")
+            name = ArrayIndexNode(name, index, None)  # Representing array access
+            value = None
+            if self.current_token[0] == "EQUALS":
+            # If there's an assignment, parse the assigned value
+                self.eat("EQUALS")
+                value = self.parse_expression()
+            if isinstance(name, ArrayIndexNode):
+                name.value = value  # Set the value for array assignment
+            else:
+                name = AssignmentNode(name, value)
+            self.eat("SEMICOLON")
+            return name
 
     def parse_if_statement(self):
         """Parse an if statement
@@ -694,6 +707,8 @@ class Parser:
             return VariableNode(type_name, VariableNode("", name + op_name))
         elif self.current_token[0] == "LPAREN":
             return self.parse_function_call(name)
+        elif self.current_token[0] == "LBRACKET":
+            return self.parse_array_index(name)
         else:
             raise SyntaxError(
                 f"Unexpected token after identifier: {self.current_token[0]}"
@@ -721,6 +736,8 @@ class Parser:
         self.eat("IDENTIFIER")
         if self.current_token[0] == "DOT":
             name = self.parse_member_access(name)
+        if self.current_token[0] == "LBRACKET":
+            name = self.parse_array_index(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)

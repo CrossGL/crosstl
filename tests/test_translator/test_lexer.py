@@ -223,6 +223,17 @@ def test_const_tokenization():
     except SyntaxError:
         pytest.fail("Const keyword tokenization failed")
 
+def test_array_indexing_tokenization():
+    code = """
+    float arr[5];
+    arr[2] = 6.0;
+    float value = arr[2];
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("Array indexing tokenization not implemented.")
+
 
 if __name__ == "__main__":
     pytest.main()
