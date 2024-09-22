@@ -51,6 +51,8 @@ def test_input_output():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
 def test_array_indexing():
     code = """
     shader PerlinNoise {

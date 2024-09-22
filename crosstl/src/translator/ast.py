@@ -50,6 +50,7 @@ class ArrayIndexNode(ASTNode):
         self.array_name = array_name
         self.index = index
         self.value = value
+
     def __repr__(self):
         return f"ArrayIndexNode({self.array_name}){self.index}{self.value}"
 

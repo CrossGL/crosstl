@@ -488,21 +488,21 @@ class Parser:
         return VariableNode("", func_name)
 
     def parse_array_index(self, name):
-            self.eat("LBRACKET")
-            index = self.parse_expression()  # Parsing the array index expression
-            self.eat("RBRACKET")
-            name = ArrayIndexNode(name, index, None)  # Representing array access
-            value = None
-            if self.current_token[0] == "EQUALS":
+        self.eat("LBRACKET")
+        index = self.parse_expression()  # Parsing the array index expression
+        self.eat("RBRACKET")
+        name = ArrayIndexNode(name, index, None)  # Representing array access
+        value = None
+        if self.current_token[0] == "EQUALS":
             # If there's an assignment, parse the assigned value
-                self.eat("EQUALS")
-                value = self.parse_expression()
-            if isinstance(name, ArrayIndexNode):
-                name.value = value  # Set the value for array assignment
-            else:
-                name = AssignmentNode(name, value)
-            self.eat("SEMICOLON")
-            return name
+            self.eat("EQUALS")
+            value = self.parse_expression()
+        if isinstance(name, ArrayIndexNode):
+            name.value = value  # Set the value for array assignment
+        else:
+            name = AssignmentNode(name, value)
+        self.eat("SEMICOLON")
+        return name
 
     def parse_if_statement(self):
         """Parse an if statement
