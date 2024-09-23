@@ -1,5 +1,5 @@
 from crosstl.src.translator.lexer import Lexer
-import pytest
+import pytest 
 from typing import List
 
 
@@ -225,4 +225,4 @@ def test_const_tokenization():
 
 
 if __name__ == "__main__":
-    pytest.main()+
+    pytest.main()
