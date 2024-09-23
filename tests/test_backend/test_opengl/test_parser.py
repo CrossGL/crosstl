@@ -156,6 +156,7 @@ def test_function_call():
     out vec2 vUV;
 
     void main() {
+        gl_Position = vec4(position, 1.0);
         vUV = position.xy * 10.0;
         float noise = perlinNoise(vUV);
 

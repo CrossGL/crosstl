@@ -11,10 +11,13 @@ class GLSLToCrossGLConverter:
         self.type_mapping = {}
 
     def generate(self, ast):
-
+        self.gl_position = False
         code = "shader main {\n"
         # Generate custom functions
         code += " \n"
+        self.check_for_gl_position(ast)
+        if self.gl_position:
+            self.structures["VSOutput"].append(("vec4", "position"))
         for uniform in ast.uniforms:
             code += f"    cbuffer uniforms {{\n"
             if isinstance(uniform, UniformNode):
@@ -23,16 +26,25 @@ class GLSLToCrossGLConverter:
 
         for var in ast.io_variables:
             if isinstance(var, LayoutNode):
-                if var.io_type == "in":
+                if var.io_type == "vertex_IN":
                     self.structures["VSInput"].append((var.dtype, var.name))
-                elif var.io_type == "out":
+                elif var.io_type == "vertex_OUT":
+                    self.structures["VSOutput"].append((var.dtype, var.name))
+                elif var.io_type == "fragment_IN":
+                    self.structures["PSInput"].append((var.dtype, var.name))
+                elif var.io_type == "fragment_OUT":
                     self.structures["PSOutput"].append((var.dtype, var.name))
             elif isinstance(var, VariableNode):
-                if var.io_type == "IN":
-                    self.structures["PSInput"].append((var.vtype, var.name))
-                elif var.io_type == "OUT":
+                if var.io_type == "vertex_IN":
+                    self.structures["VSInput"].append((var.vtype, var.name))
+                elif var.io_type == "vertex_OUT":
                     self.structures["VSOutput"].append((var.vtype, var.name))
-
+                elif var.io_type == "fragment_IN":
+                    self.structures["PSInput"].append((var.vtype, var.name))
+                elif var.io_type == "fragment_OUT":
+                    self.structures["PSOutput"].append((var.vtype, var.name))
+            else:
+                raise ValueError("Invalid io type")
         for struct_name, members in self.structures.items():
             if members:
                 code += f"struct {struct_name} {{\n"
@@ -56,11 +68,24 @@ class GLSLToCrossGLConverter:
         code += "}\n"
         return code
 
+    def check_for_gl_position(self, ast):
+        for f in ast.functions:
+            if f.name == "main":
+                for stmt in f.body:
+                    if isinstance(stmt, BinaryOpNode):
+                        if isinstance(stmt.left, str) and stmt.left == "gl_Position":
+                            self.gl_position = True
+                        elif (
+                            isinstance(stmt.left, VariableNode)
+                            and stmt.left.name == "gl_Position"
+                        ):
+                            self.gl_position = True
+
     def generate_functions(self, functions, shader_type):
         code = ""
         if shader_type == "vertex":
             if functions.name == "main":
-                code += "vertex {\n\n"
+                code += "vertex {\n"
                 code += "      VSOutput main(VSInput input) {\n"
                 code += "         VSOutput output;\n"
             else:
@@ -72,8 +97,11 @@ class GLSLToCrossGLConverter:
                 code += f"{return_type} {functions.name}({params}) {{\n"
         elif shader_type == "fragment":
             if functions.name == "main":
-                code += "fragment {\n\n"
-                code += "       PSOutput main(PSInput input) {\n"
+                code += "fragment {\n"
+                if self.structures["PSInput"]:
+                    code += "       PSOutput main(PSInput input) {\n"
+                else:
+                    code += "       PSOutput main(VSOutput input) {\n"
                 code += "         PSOutput output;\n"
             else:
                 params = ", ".join(
@@ -115,9 +143,10 @@ class GLSLToCrossGLConverter:
 
     def generate_assignment(self, node, shader_type=None):
         if shader_type in ["vertex", "fragment"] and isinstance(node.name, str):
-            if node.name in [
-                output[1] for output in getattr(self, f"{shader_type}_item").outputs
-            ]:
+            if (
+                node.name in self.structures["VSOutput"]
+                or node.name in self.structures["PSOutput"]
+            ):
                 return f"output.{node.name} = {self.generate_expression(node.value, shader_type)}"
         if isinstance(node.name, VariableNode) and node.name.vtype:
             return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
@@ -199,6 +228,8 @@ class GLSLToCrossGLConverter:
 
     def translate_expression(self, expr, shader_type):
         if shader_type == "vertex":
+            if expr == "gl_Position":
+                return "output.position"
             for vsinput in self.structures["VSInput"]:
                 if vsinput[1] == expr:
                     return f"input.{expr}"
