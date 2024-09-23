@@ -48,8 +48,27 @@ class GLSLToCrossGLConverter:
         for struct_name, members in self.structures.items():
             if members:
                 code += f"struct {struct_name} {{\n"
-                for dtype, name in members:
-                    code += f"    {dtype} {name};\n"
+                for i, (dtype, name) in enumerate(members):
+                    if struct_name == "VSInput":
+                        if i == 0:
+                            code += f"    {dtype} {name} @ in_position;\n"
+                        else:
+                            code += f"    {dtype} {name} @ TexCoord{i};\n"
+                    elif struct_name == "VSOutput":
+                        if i == 0:
+                            code += f"    {dtype} {name} @ out_position;\n"
+                        else:
+                            code += f"    {dtype} {name} @ Color{i};\n"
+                    elif struct_name == "PSInput":
+                        if i == 0:
+                            code += f"    {dtype} {name} @ Color;\n"
+                        else:
+                            code += f"    {dtype} {name} @ Color{i};\n"
+                    elif struct_name == "PSOutput":
+                        if i == 0:
+                            code += f"    {dtype} {name} @ Out_Color;\n"
+                        else:
+                            code += f"    {dtype} {name} @ Out_Color{i};\n"
                 code += "};\n\n"
 
         for constant in ast.constant:
