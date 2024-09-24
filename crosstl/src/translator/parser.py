@@ -773,10 +773,12 @@ class Parser:
                         self.eat("RBRACKET")
                         if self.current_token[0] == "SEMICOLON":
                             self.eat("SEMICOLON")
-                            return BinaryOpNode(ArrayIndexNode(name, index, None), op, value)
+                            return BinaryOpNode(
+                                ArrayIndexNode(name, index, None), op, value
+                            )
                     else:
                         raise SyntaxError(
-                        f"Expected ';' after variable assignment, found: {self.current_token[0]}"
+                            f"Expected ';' after variable assignment, found: {self.current_token[0]}"
                         )
         elif self.current_token[0] in (
             "ASSIGN_ADD",
@@ -813,6 +815,7 @@ class Parser:
             raise SyntaxError(
                 f"Unexpected token in variable declaration: {self.current_token[0]}"
             )
+
     def parse_assignment(self, name):
         """Parse an assignment statement
 

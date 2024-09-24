@@ -54,7 +54,7 @@ def test_input_output():
 
 
 def test_array_indexing():
-        code = """
+    code = """
         shader PerlinNoise {
         vertex {
             input vec3 position;
@@ -85,11 +85,11 @@ def test_array_indexing():
             }
         }
         """
-        try:
-            tokens = tokenize_code(code)
-            parse_code(tokens)
-        except SyntaxError:
-           pytest.fail("Array indexing parsing not implemented.")
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Array indexing parsing not implemented.")
 
 
 def test_if_statement():
