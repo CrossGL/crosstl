@@ -148,7 +148,7 @@ class GLSLParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
-        return VariableNode(dtype, name, io_type)
+        return VariableNode(dtype, name, f"{self.shader_type}_{io_type}")
 
     def parse_layout(self):
         self.eat("LAYOUT")
@@ -167,7 +167,7 @@ class GLSLParser:
                 self.eat("NUMBER")
                 self.eat("RPAREN")
             elif self.current_token[0] == "IN" or self.current_token[0] == "OUT":
-                io_type = self.current_token[1]
+                io_type = self.current_token[0]
                 self.eat(self.current_token[0])
                 dtype = self.current_token[1]
                 self.eat(self.current_token[0])
@@ -181,7 +181,7 @@ class GLSLParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         self.eat("SEMICOLON")
-        return LayoutNode(location_number, dtype, name, io_type)
+        return LayoutNode(location_number, dtype, name, f"{self.shader_type}_{io_type}")
 
     def parse_uniform(self):
         self.eat("UNIFORM")
