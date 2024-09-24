@@ -489,20 +489,14 @@ class Parser:
 
     def parse_array_index(self, name):
         self.eat("LBRACKET")
-        index = self.parse_expression()  # Parsing the array index expression
+        index = self.parse_expression()
         self.eat("RBRACKET")
-        name = ArrayIndexNode(name, index, None)  # Representing array access
-        value = None
         if self.current_token[0] == "EQUALS":
-            # If there's an assignment, parse the assigned value
             self.eat("EQUALS")
             value = self.parse_expression()
-        if isinstance(name, ArrayIndexNode):
-            name.value = value  # Set the value for array assignment
+            return BinaryOpNode(ArrayIndexNode(name, index, None), "EQUALS", value)
         else:
-            name = AssignmentNode(name, value)
-        self.eat("SEMICOLON")
-        return name
+            return ArrayIndexNode(name, index, None)
 
     def parse_if_statement(self):
         """Parse an if statement
@@ -741,13 +735,11 @@ class Parser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
-
         elif self.current_token[0] in [
             "EQUALS",
             "ASSIGN_ADD",
             "ASSIGN_SUB",
             "ASSIGN_MUL",
-            "ASSIGN_DIV",
             "EQUAL",
             "LESS_THAN",
             "GREATER_THAN",
@@ -770,15 +762,22 @@ class Parser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op, value)
-
             else:
                 if update_condition:
                     return BinaryOpNode(VariableNode(type_name, name), op, value)
                 else:
-                    raise SyntaxError(
+                    if self.current_token[0] == "LBRACKET":
+                        # Handle array indexing as the left-hand side of an assignment
+                        self.eat("LBRACKET")
+                        index = self.parse_expression()
+                        self.eat("RBRACKET")
+                        if self.current_token[0] == "SEMICOLON":
+                            self.eat("SEMICOLON")
+                            return BinaryOpNode(ArrayIndexNode(name, index, None), op, value)
+                    else:
+                        raise SyntaxError(
                         f"Expected ';' after variable assignment, found: {self.current_token[0]}"
-                    )
-
+                        )
         elif self.current_token[0] in (
             "ASSIGN_ADD",
             "ASSIGN_SUB",
@@ -810,12 +809,10 @@ class Parser:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
                 )
-
         else:
             raise SyntaxError(
                 f"Unexpected token in variable declaration: {self.current_token[0]}"
             )
-
     def parse_assignment(self, name):
         """Parse an assignment statement
 

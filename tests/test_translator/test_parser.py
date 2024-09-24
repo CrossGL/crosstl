@@ -54,38 +54,42 @@ def test_input_output():
 
 
 def test_array_indexing():
-    code = """
-    shader PerlinNoise {
-    vertex {
-        input vec3 position;
-        output vec2 vUV;
-
-        void main() {
-            // Accessing array elements
-            float arr[5];
-            arr[2] = 6.0;
-            float value = arr[2];  // Array index access
-            gl_Position = vec4(position, value);
-        }
-    }
-
-    // Fragment Shader
-    fragment {
-        input vec2 vUV;
-        output vec4 fragColor;
-
-        void main() {
-            vec3 color = vec3(1.0, 0.0, 0.0);
-            fragColor = vec4(color, 1.0);
+        code = """
+        shader PerlinNoise {
+        vertex {
+            input vec3 position;
+            output vec2 vUV;
+    
+            void main() {
+                // Accessing array elements
+                float arr[5];
+                arr[0] = 1.0;
+                arr[1] = 2.0;
+                arr[2] = 3.0;
+                arr[3] = 4.0;
+                arr[4] = 5.0;
+                float value = arr[2];  // Array index access
+                gl_Position = vec4(position, value);
             }
         }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Array indexing parsing not implemented.")
+    
+        // Fragment Shader
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+    
+            void main() {
+                vec3 color = vec3(1.0, 0.0, 0.0);
+                fragColor = vec4(color, 1.0);
+                }
+            }
+        }
+        """
+        try:
+            tokens = tokenize_code(code)
+            parse_code(tokens)
+        except SyntaxError:
+           pytest.fail("Array indexing parsing not implemented.")
 
 
 def test_if_statement():
