@@ -109,58 +109,61 @@ class Lexer:
     def __init__(self, input_code):
         self.input_code = input_code
         self.tokens = []
+
+
 token_specification = [
-            ("WHITESPACE", r"\s+"),
-            ("IF", r"\bif\b"),
-            ("ELSE", r"\belse\b"),
-            ("FOR", r"\bfor\b"),
-            ("RETURN", r"\breturn\b"),
-            ("BITWISE_SHIFT_LEFT", r"<<"),
-            ("BITWISE_SHIFT_RIGHT", r">>"),
-            ("LESS_EQUAL", r"<="),
-            ("GREATER_EQUAL", r">="),
-            ("GREATER_THAN", r">"),
-            ("LESS_THAN", r"<"),
-            ("INCREMENT", r"\+\+"),
-            ("DECREMENT", r"--"),
-            ("EQUAL", r"=="),
-            ("NOT_EQUAL", r"!="),
-            ("ASSIGN_AND", r"&="),
-            ("ASSIGN_OR", r"\|="),
-            ("ASSIGN_XOR", r"\^="),
-            ("LOGICAL_AND", r"&&"),
-            ("LOGICAL_OR", r"\|\|"),
-            # Add other token definitions here
-        ]
+    ("WHITESPACE", r"\s+"),
+    ("IF", r"\bif\b"),
+    ("ELSE", r"\belse\b"),
+    ("FOR", r"\bfor\b"),
+    ("RETURN", r"\breturn\b"),
+    ("BITWISE_SHIFT_LEFT", r"<<"),
+    ("BITWISE_SHIFT_RIGHT", r">>"),
+    ("LESS_EQUAL", r"<="),
+    ("GREATER_EQUAL", r">="),
+    ("GREATER_THAN", r">"),
+    ("LESS_THAN", r"<"),
+    ("INCREMENT", r"\+\+"),
+    ("DECREMENT", r"--"),
+    ("EQUAL", r"=="),
+    ("NOT_EQUAL", r"!="),
+    ("ASSIGN_AND", r"&="),
+    ("ASSIGN_OR", r"\|="),
+    ("ASSIGN_XOR", r"\^="),
+    ("LOGICAL_AND", r"&&"),
+    ("LOGICAL_OR", r"\|\|"),
+    # Add other token definitions here
+]
+
 
 def tokenize(self):
-        pos = 0
-        while pos < len(self.code):
-            match = None
-            for token_type, pattern in TOKENS:
-                regex = re.compile(pattern)
-                match = regex.match(self.code, pos)
-                if match:
-                    text = match.group(0)
-                    if token_type == "IDENTIFIER" and text in KEYWORDS:
-                        token_type = KEYWORDS[text]
-                    if token_type != "WHITESPACE":
+    pos = 0
+    while pos < len(self.code):
+        match = None
+        for token_type, pattern in TOKENS:
+            regex = re.compile(pattern)
+            match = regex.match(self.code, pos)
+            if match:
+                text = match.group(0)
+                if token_type == "IDENTIFIER" and text in KEYWORDS:
+                    token_type = KEYWORDS[text]
+                if token_type != "WHITESPACE":
 
-                        token = (token_type, text)
+                    token = (token_type, text)
 
-                        self.tokens.append(token)
-                    pos = match.end(0)
-                    break
-            if not match:
-                unmatched_char = self.code[pos]
-                highlighted_code = (
-                    self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1 :]
-                )
-                raise SyntaxError(
-                    f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
-                )
+                    self.tokens.append(token)
+                pos = match.end(0)
+                break
+        if not match:
+            unmatched_char = self.code[pos]
+            highlighted_code = (
+                self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1 :]
+            )
+            raise SyntaxError(
+                f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
+            )
 
-        self.tokens.append(("EOF", None))
+    self.tokens.append(("EOF", None))
 
 
 class BinOp:
