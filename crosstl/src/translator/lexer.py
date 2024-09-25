@@ -106,7 +106,34 @@ class Lexer:
         self.tokens = []
         self.tokenize()
 
-    def tokenize(self):
+    def __init__(self, input_code):
+        self.input_code = input_code
+        self.tokens = []
+token_specification = [
+            ("WHITESPACE", r"\s+"),
+            ("IF", r"\bif\b"),
+            ("ELSE", r"\belse\b"),
+            ("FOR", r"\bfor\b"),
+            ("RETURN", r"\breturn\b"),
+            ("BITWISE_SHIFT_LEFT", r"<<"),
+            ("BITWISE_SHIFT_RIGHT", r">>"),
+            ("LESS_EQUAL", r"<="),
+            ("GREATER_EQUAL", r">="),
+            ("GREATER_THAN", r">"),
+            ("LESS_THAN", r"<"),
+            ("INCREMENT", r"\+\+"),
+            ("DECREMENT", r"--"),
+            ("EQUAL", r"=="),
+            ("NOT_EQUAL", r"!="),
+            ("ASSIGN_AND", r"&="),
+            ("ASSIGN_OR", r"\|="),
+            ("ASSIGN_XOR", r"\^="),
+            ("LOGICAL_AND", r"&&"),
+            ("LOGICAL_OR", r"\|\|"),
+            # Add other token definitions here
+        ]
+
+def tokenize(self):
         pos = 0
         while pos < len(self.code):
             match = None
