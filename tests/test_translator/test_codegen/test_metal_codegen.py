@@ -285,6 +285,38 @@ def test_function_call():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_bitwise_not_operator():
+    code = """
+    shader PerlinNoise {
+        vertex {
+            input vec3 position;
+            output vec2 vUV;
+            void main() {
+                vUV = position.xy;
+                gl_Position = vec4(position, 1.0);
+            }
+        }
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+            void main() {
+                int value = int(vUV.x); // Use vUV.x as the integer value
+                int notValue = ~value; // Apply bitwise NOT
+                vec3 color = vec3(float(notValue & 0xFF) / 255.0, 0.0, 0.0); // Use the result to set the red channel
+                fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
+
 def test_assignment_shift_operators():
     code = """
     shader PerlinNoise {
@@ -346,11 +378,7 @@ def test_bitwise_operators():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        code = generate_code(ast)
-        print(code)
+        generated_code = generate_code(ast)
+        print(generated_code)
     except SyntaxError:
         pytest.fail("Bitwise Shift parsing not implemented.")
-
-
-if __name__ == "__main__":
-    pytest.main()
