@@ -168,16 +168,7 @@ class Parser:
         pass
 
 
-<<<<<<< HEAD
 
 class Lexer:
 
     pass
-
-
-
-=======
-class Lexer:
-
-    pass
->>>>>>> ad3023eebaf1b4cf0d76ed02acc96c26f85ccead
