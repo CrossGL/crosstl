@@ -1,5 +1,5 @@
 from crosstl.src.translator.lexer import Lexer
-import pytest 
+import pytest
 from typing import List
 
 
