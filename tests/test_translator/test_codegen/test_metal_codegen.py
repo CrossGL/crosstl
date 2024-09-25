@@ -285,8 +285,6 @@ def test_function_call():
         pytest.fail("Struct parsing not implemented.")
 
 
-        
-        
 def test_bitwise_not_operator():
     code = """
     shader PerlinNoise {
@@ -317,7 +315,7 @@ def test_bitwise_not_operator():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
-        
+
 
 def test_assignment_shift_operators():
     code = """

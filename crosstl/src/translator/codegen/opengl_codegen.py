@@ -288,7 +288,7 @@ class GLSLCodeGen:
             "AND": "&&",
             "OR": "||",
             "EQUALS": "=",
-            "BITWISE_NOT":"~",
+            "BITWISE_NOT": "~",
             "ASSIGN_SHIFT_LEFT": "<<=",
             "BITWISE_SHIFT_RIGHT": ">>",
             "BITWISE_SHIFT_LEFT": "<<",
