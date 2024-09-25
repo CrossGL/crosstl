@@ -169,6 +169,7 @@ class BinOp:
         self.op = op
         self.right = right
 
+
 class Parser:
     def __init__(self, lexer):
         self.lexer = lexer
@@ -193,7 +194,6 @@ class Parser:
     def term(self):
 
         pass
-
 
 
 class Lexer:
