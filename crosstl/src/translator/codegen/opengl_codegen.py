@@ -271,11 +271,15 @@ class GLSLCodeGen:
             "MINUS": "-",
             "MULTIPLY": "*",
             "DIVIDE": "/",
+            "BITWISE_XOR": "^",
             "LESS_THAN": "<",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
+            "ASSIGN_OR": "|=",
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
+            "ASSIGN_MOD": "%=",
+            "ASSIGN_XOR": "^=",
             "GREATER_THAN": ">",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",
@@ -285,6 +289,8 @@ class GLSLCodeGen:
             "OR": "||",
             "EQUALS": "=",
             "BITWISE_NOT":"~",
-            
+            "ASSIGN_SHIFT_LEFT": "<<=",
+            "BITWISE_SHIFT_RIGHT": ">>",
+            "BITWISE_SHIFT_LEFT": "<<",
         }
         return op_map.get(op, op)

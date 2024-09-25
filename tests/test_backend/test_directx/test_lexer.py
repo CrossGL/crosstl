@@ -6,13 +6,13 @@ from crosstl.src.backend.DirectX.DirectxLexer import HLSLLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = HLSLLexer(code)
-    return lexer.tokenize()
+    return lexer.tokens
 
 
 def test_struct_tokenization():
     code = """
     struct VSInput {
-        float4 position : POSITION;
+        float4 position : SV_position;
         float4 color : TEXCOORD0;
     };
 
@@ -112,5 +112,4 @@ def test_else_if_tokenization():
 
 
 if __name__ == "__main__":
-
     pytest.main()

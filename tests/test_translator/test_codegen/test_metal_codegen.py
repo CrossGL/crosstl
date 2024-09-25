@@ -284,6 +284,9 @@ def test_function_call():
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
+
+        
+        
 def test_bitwise_not_operator():
     code = """
     shader PerlinNoise {
@@ -314,3 +317,70 @@ def test_bitwise_not_operator():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+        
+
+def test_assignment_shift_operators():
+    code = """
+    shader PerlinNoise {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
+
+        void main() {
+            vUV = position.xy * 10.0;
+            vUV.x <<= 1;
+            gl_Position = vec4(position, 1.0);
+        }
+    }
+
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height <<= noise * 10.0;
+            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
+
+def test_bitwise_operators():
+    code = """
+        shader LightControl {
+        vertex {
+            input vec3 position;
+            output int isLightOn;
+            void main() {        
+                    isLightOn = 2 >> 1;
+            }
+        }
+        fragment {
+            input int isLightOn;
+            output vec4 fragColor;
+            void main() {
+                isLightOn = isLightOn << 1;
+            }
+        }
+    }
+
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Bitwise Shift parsing not implemented.")

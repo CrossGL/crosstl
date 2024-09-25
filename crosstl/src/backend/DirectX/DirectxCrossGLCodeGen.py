@@ -5,10 +5,6 @@ from .DirectxLexer import *
 
 class HLSLToCrossGLConverter:
     def __init__(self):
-        self.vertex_inputs = []
-        self.vertex_outputs = []
-        self.fragment_inputs = []
-        self.fragment_outputs = []
         self.type_map = {
             "void": "void",
             "float2": "vec2",
@@ -34,86 +30,163 @@ class HLSLToCrossGLConverter:
             "Texture2D": "sampler2D",
             "TextureCube": "samplerCube",
         }
+        self.semantic_map = {
+            # Vertex inputs position
+            "POSITION": "in_Position",
+            "POSITION0": "in_Position0",
+            "POSITION1": "in_Position1",
+            "POSITION2": "in_Position2",
+            "POSITION3": "in_Position3",
+            "POSITION4": "in_Position4",
+            "POSITION5": "in_Position5",
+            "POSITION6": "in_Position6",
+            "POSITION7": "in_Position7",
+            # Vertex inputs normal
+            "NORMAL": "in_Normal",
+            "NORMAL0": "in_Normal0",
+            "NORMAL1": "in_Normal1",
+            "NORMAL2": "in_Normal2",
+            "NORMAL3": "in_Normal3",
+            "NORMAL4": "in_Normal4",
+            "NORMAL5": "in_Normal5",
+            "NORMAL6": "in_Normal6",
+            "NORMAL7": "in_Normal7",
+            # Vertex inputs tangent
+            "TANGENT": "in_Tangent",
+            "TANGENT0": "in_Tangent0",
+            "TANGENT1": "in_Tangent1",
+            "TANGENT2": "in_Tangent2",
+            "TANGENT3": "in_Tangent3",
+            "TANGENT4": "in_Tangent4",
+            "TANGENT5": "in_Tangent5",
+            "TANGENT6": "in_Tangent6",
+            "TANGENT7": "in_Tangent7",
+            # Vertex inputs binormal
+            "BINORMAL": "in_Binormal",
+            "BINORMAL0": "in_Binormal0",
+            "BINORMAL1": "in_Binormal1",
+            "BINORMAL2": "in_Binormal2",
+            "BINORMAL3": "in_Binormal3",
+            "BINORMAL4": "in_Binormal4",
+            "BINORMAL5": "in_Binormal5",
+            "BINORMAL6": "in_Binormal6",
+            "BINORMAL7": "in_Binormal7",
+            # Vertex inputs color
+            "COLOR": "Color",
+            "COLOR0": "Color0",
+            "COLOR1": "Color1",
+            "COLOR2": "Color2",
+            "COLOR3": "Color3",
+            "COLOR4": "Color4",
+            "COLOR5": "Color5",
+            "COLOR6": "Color6",
+            "COLOR7": "Color7",
+            # Vertex inputs texcoord
+            "TEXCOORD": "TexCoord",
+            "TEXCOORD0": "TexCoord0",
+            "TEXCOORD1": "TexCoord1",
+            "TEXCOORD2": "TexCoord2",
+            "TEXCOORD3": "TexCoord3",
+            "TEXCOORD4": "TexCoord4",
+            "TEXCOORD5": "TexCoord5",
+            "TEXCOORD6": "TexCoord6",
+            # Vertex inputs instance
+            "FRONT_FACE": "gl_IsFrontFace",
+            "PRIMITIVE_ID": "gl_PrimitiveID",
+            "INSTANCE_ID": "gl_InstanceID",
+            "VERTEX_ID": "gl_VertexID",
+            # Vertex outputs
+            "SV_Position": "Out_Position",
+            "SV_Position0": "Out_Position0",
+            "SV_Position1": "Out_Position1",
+            "SV_Position2": "Out_Position2",
+            "SV_Position3": "Out_Position3",
+            "SV_Position4": "Out_Position4",
+            "SV_Position5": "Out_Position5",
+            "SV_Position6": "Out_Position6",
+            "SV_Position7": "Out_Position7",
+            # Fragment inputs
+            "SV_Target": "Out_Color",
+            "SV_Target0": "Out_Color0",
+            "SV_Target1": "Out_Color1",
+            "SV_Target2": "Out_Color2",
+            "SV_Target3": "Out_Color3",
+            "SV_Target4": "Out_Color4",
+            "SV_Target5": "Out_Color5",
+            "SV_Target6": "Out_Color6",
+            "SV_Target7": "Out_Color7",
+            "SV_Depth": "Out_Depth",
+            "SV_Depth0": "Out_Depth0",
+            "SV_Depth1": "Out_Depth1",
+            "SV_Depth2": "Out_Depth2",
+            "SV_Depth3": "Out_Depth3",
+            "SV_Depth4": "Out_Depth4",
+            "SV_Depth5": "Out_Depth5",
+            "SV_Depth6": "Out_Depth6",
+            "SV_Depth7": "Out_Depth7",
+        }
 
     def generate(self, ast):
-        self.process_structs(ast)
         code = "shader main {\n"
+        # Generate structs
+        for node in ast.structs:
+            if isinstance(node, StructNode):
+                code += f"    struct {node.name} {{\n"
+                for member in node.members:
+                    code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
+                code += "    }\n"
+        # Generate global variables
+        for node in ast.global_variables:
+            code += f"    {self.map_type(node.vtype)} {node.name};\n"
+        # Generate cbuffers
+        if ast.cbuffers:
+            code += "    // Constant Buffers\n"
+            code += self.generate_cbuffers(ast)
 
         # Generate custom functions
         for func in ast.functions:
-            if func.name not in ["VSMain", "PSMain"]:
+            if func.qualifier == "vertex":
+                code += "    // Vertex Shader\n"
+                code += "    vertex {\n"
                 code += self.generate_function(func)
+                code += "    }\n\n"
+            elif func.qualifier == "fragment":
+                code += "    // Fragment Shader\n"
+                code += "    fragment {\n"
+                code += self.generate_function(func)
+                code += "    }\n\n"
 
-        # Generate vertex shader
-        code += "    // Vertex Shader\n"
-        code += "    vertex {\n"
-        code += self.generate_io_declarations("vertex")
-        code += "\n"
-        code += self.generate_vertex_main(
-            next(f for f in ast.functions if f.name == "VSMain")
-        )
-        code += "    }\n\n"
-
-        # Generate fragment shader
-        code += "    // Fragment Shader\n"
-        code += "    fragment {\n"
-        code += self.generate_io_declarations("fragment")
-        code += "\n"
-        code += self.generate_fragment_main(
-            next(f for f in ast.functions if f.name == "PSMain")
-        )
-        code += "    }\n"
+            elif func.qualifier == "compute":
+                code += "    // Compute Shader\n"
+                code += "    compute {\n"
+                code += self.generate_function(func)
+                code += "    }\n\n"
+            else:
+                code += self.generate_function(func)
 
         code += "}\n"
         return code
 
-    def process_structs(self, ast):
-        if ast.vsinput_struct:
-            for member in ast.vsinput_struct.members:
-                self.vertex_inputs.append((member.vtype, member.name))
-        if ast.vsoutput_struct:
-            for member in ast.vsoutput_struct.members:
-                if member.name != "position":
-                    self.vertex_outputs.append((member.vtype, member.name))
-
-        if ast.psinput_struct:
-            for member in ast.psinput_struct.members:
-                self.fragment_inputs.append((member.vtype, member.name))
-        if ast.psoutput_struct:
-            for member in ast.psoutput_struct.members:
-                self.fragment_outputs.append((member.vtype, member.name))
-
-    def generate_io_declarations(self, shader_type):
+    def generate_cbuffers(self, ast):
         code = ""
-        if shader_type == "vertex":
-            for type, name in self.vertex_inputs:
-                code += f"        input {self.map_type(type)} {name};\n"
-            for type, name in self.vertex_outputs:
-                code += f"        output {self.map_type(type)} {name};\n"
-        elif shader_type == "fragment":
-            for type, name in self.fragment_inputs:
-                code += f"        input {self.map_type(type)} {name};\n"
-            for type, name in self.fragment_outputs:
-                code += f"        output {self.map_type(type)} {name};\n"
-        return code.rstrip()
+        for node in ast.cbuffers:
+            if isinstance(node, StructNode):
+                code += f"    cbuffer {node.name} {{\n"
+                for member in node.members:
+                    code += f"        {self.map_type(member.vtype)} {member.name};\n"
+                code += "    }\n"
+        return code
 
-    def generate_function(self, func):
-        params = ", ".join(f"{self.map_type(p.vtype)} {p.name}" for p in func.params)
-        code = f"    {self.map_type(func.return_type)} {func.name}({params}) {{\n"
-        code += self.generate_function_body(func.body, indent=2)
+    def generate_function(self, func, indent=1):
+        code = " "
+        code += "  " * indent
+        params = ", ".join(
+            f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.semantic)}"
+            for p in func.params
+        )
+        code += f"    {self.map_type(func.return_type)} {func.name}({params}) {self.map_semantic(func.semantic)} {{\n"
+        code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
-        return code
-
-    def generate_vertex_main(self, func):
-        code = "        void main() {\n"
-        code += self.generate_function_body(func.body, indent=3, is_main=True)
-        code += "        }\n"
-        return code
-
-    def generate_fragment_main(self, func):
-        code = "        void main() {\n"
-        code += self.generate_function_body(func.body, indent=3, is_main=True)
-        code += "        }\n"
         return code
 
     def generate_function_body(self, body, indent=0, is_main=False):
@@ -121,10 +194,7 @@ class HLSLToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                if stmt.vtype in ["VSOutput", "PSOutput"]:
-                    continue
-                else:
-                    code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
 
@@ -171,15 +241,8 @@ class HLSLToCrossGLConverter:
     def generate_assignment(self, node, is_main):
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
-        if (
-            is_main
-            and isinstance(node.left, MemberAccessNode)
-            and node.left.object == "output"
-        ):
-            if node.left.member == "position":
-                return f"gl_Position = {rhs}"
-            return f"{node.left.member} = {rhs}"
-        return f"{lhs} = {rhs}"
+        op = node.operator
+        return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
         if isinstance(expr, str):
@@ -206,8 +269,6 @@ class HLSLToCrossGLConverter:
             return f"{expr.name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
-            if obj == "output" or obj == "input":
-                return expr.member
             return f"{obj}.{expr.member}"
 
         elif isinstance(expr, TernaryOpNode):
@@ -223,5 +284,11 @@ class HLSLToCrossGLConverter:
 
     def map_type(self, hlsl_type):
         if hlsl_type:
-            return self.type_map.get(hlsl_type)
+            return self.type_map.get(hlsl_type, hlsl_type)
         return hlsl_type
+
+    def map_semantic(self, semantic):
+        if semantic is not None:
+            return f"@ {self.semantic_map.get(semantic, semantic)}"
+        else:
+            return ""

@@ -1,81 +1,102 @@
 import re
 
-# Token patterns
 TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
-    ("ELSE_IF", r"\belse\s+if\b"),
     ("VERSION", r"#version"),
-    ("NUMBER", r"\d+(\.\d+)?"),
-    ("CORE", r"\bcore\b"),
-    ("SHADER", r"\bshader\b"),
-    ("INPUT", r"\binput\b"),
-    ("OUTPUT", r"\boutput\b"),
-    ("VOID", r"\bvoid\b"),
-    ("MAIN", r"\bmain\b"),
+    ("PREPROCESSOR", r"#\w+"),
+    ("CONSTANT", r"\bconst\b"),
+    ("STRUCT", r"\bstruct\b"),
     ("UNIFORM", r"\buniform\b"),
-    ("VECTOR", r"\bvec[2-4]\b"),
-    ("MATRIX", r"\bmat[2-4]\b"),
-    ("BOOL", r"\bbool\b"),
+    ("SAMPLER2D", r"\bsampler2D\b"),
+    ("SAMPLERCUBE", r"\bsamplerCube\b"),
+    ("BUFFER", r"\bbuffer\b"),
+    ("VECTOR", r"\b(vec|ivec|uvec|bvec)[234]\b"),
+    ("MATRIX", r"\bmat[234](x[234])?\b"),
     ("FLOAT", r"\bfloat\b"),
     ("INT", r"\bint\b"),
-    ("SAMPLER2D", r"\bsampler2D\b"),
-    ("PRE_INCREMENT", r"\+\+(?=\w)"),
-    ("PRE_DECREMENT", r"--(?=\w)"),
-    ("POST_INCREMENT", r"(?<=\w)\+\+"),
-    ("POST_DECREMENT", r"(?<=\w)--"),
-    ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),
+    ("UINT", r"\buint\b"),
+    ("BOOL", r"\bbool\b"),
+    ("VOID", r"\bvoid\b"),
+    ("RETURN", r"\breturn\b"),
+    ("IF", r"\bif\b"),
+    ("ELSE", r"\belse\b"),
+    ("FOR", r"\bfor\b"),
+    ("WHILE", r"\bwhile\b"),
+    ("DO", r"\bdo\b"),
+    ("IN", r"\bin\b"),
+    ("OUT", r"\bout\b"),
+    ("INOUT", r"\binout\b"),
+    ("LAYOUT", r"\blayout\b"),
+    ("ATTRIBUTE", r"\battribute\b"),
+    ("VARYING", r"\bvarying\b"),
+    ("CONST", r"\bconst\b"),
+    ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
+    ("NUMBER", r"\d+(\.\d+)?([eE][+-]?\d+)?"),
     ("LBRACE", r"\{"),
     ("RBRACE", r"\}"),
     ("LPAREN", r"\("),
     ("RPAREN", r"\)"),
+    ("LBRACKET", r"\["),
+    ("RBRACKET", r"\]"),
     ("SEMICOLON", r";"),
+    ("STRING", r'"[^"]*"'),
     ("COMMA", r","),
-    ("ASSIGN_ADD", r"\+="),
-    ("ASSIGN_SUB", r"-="),
-    ("ASSIGN_MUL", r"\*="),
-    ("ASSIGN_DIV", r"/="),
-    ("EQUAL", r"=="),
-    ("NOT_EQUAL", r"!="),
-    ("WHITESPACE", r"\s+"),
-    ("IF", r"\bif\b"),
-    ("ELSE", r"\belse\b"),
-    ("FOR", r"\bfor\b"),
-    ("RETURN", r"\breturn\b"),
+    ("COLON", r":"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("LESS_THAN", r"<"),
     ("GREATER_THAN", r">"),
+    ("EQUAL", r"=="),
     ("NOT_EQUAL", r"!="),
-    ("AND", r"&&"),
-    ("OR", r"\|\|"),
-    ("NOT", r"!"),
+    ("ASSIGN_AND", r"&="),
+    ("ASSIGN_OR", r"\|="),
+    ("ASSIGN_XOR", r"\^="),
+    ("LOGICAL_AND", r"&&"),
+    ("LOGICAL_OR", r"\|\|"),
+    ("ASSIGN_MOD", r"%="),
+    ("MOD", r"%"),
+    ("PLUS_EQUALS", r"\+="),
+    ("MINUS_EQUALS", r"-="),
+    ("MULTIPLY_EQUALS", r"\*="),
+    ("DIVIDE_EQUALS", r"/="),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
     ("DOT", r"\."),
     ("EQUALS", r"="),
-    ("QUESTION", r"\?"),
-    ("COLON", r":"),
-    ("LAYOUT", r"\blayout\b"),
-    ("IN", r"\bin\b"),
-    ("OUT", r"\bout\b"),
+    ("BITWISE_AND", r"&"),
+    ("BITWISE_OR", r"\|"),
+    ("BITWISE_XOR", r"\^"),
+    ("BITWISE_NOT", r"~"),
+    ("WHITESPACE", r"\s+"),
 ]
 
 KEYWORDS = {
+    "struct": "STRUCT",
+    "uniform": "UNIFORM",
+    "sampler2D": "SAMPLER2D",
+    "samplerCube": "SAMPLERCUBE",
+    "float": "FLOAT",
+    "int": "INT",
+    "uint": "UINT",
+    "bool": "BOOL",
     "void": "VOID",
-    "main": "MAIN",
-    "vertex": "VERTEX",
-    "fragment": "FRAGMENT",
+    "return": "RETURN",
     "else if": "ELSE_IF",
     "if": "IF",
     "else": "ELSE",
     "for": "FOR",
-    "return": "RETURN",
-    "layout": "LAYOUT",
+    "while": "WHILE",
+    "do": "DO",
     "in": "IN",
     "out": "OUT",
+    "inout": "INOUT",
+    "layout": "LAYOUT",
+    "attribute": "ATTRIBUTE",
+    "varying": "VARYING",
+    "const": "CONST",
 }
 
 
@@ -96,24 +117,17 @@ class GLSLLexer:
                     text = match.group(0)
                     if token_type == "IDENTIFIER" and text in KEYWORDS:
                         token_type = KEYWORDS[text]
-                    if token_type == "VERSION":
-                        self.tokens.append((token_type, text))
-                    elif token_type == "VERSION_NUMBER":
-                        self.tokens.append((token_type, text))
-                    elif token_type == "CORE":
-                        self.tokens.append((token_type, text))
-                    elif token_type != "WHITESPACE":  # Ignore whitespace tokens
+                    if token_type not in [
+                        "WHITESPACE",
+                        "COMMENT_SINGLE",
+                        "COMMENT_MULTI",
+                    ]:
                         token = (token_type, text)
                         self.tokens.append(token)
                     pos = match.end(0)
                     break
             if not match:
-                unmatched_char = self.code[pos]
-                highlighted_code = (
-                    self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1 :]
-                )
                 raise SyntaxError(
-                    f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
+                    f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
-
-        self.tokens.append(("EOF", None))
+        self.tokens.append(("EOF", ""))

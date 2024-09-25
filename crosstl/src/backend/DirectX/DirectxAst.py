@@ -13,22 +13,14 @@ class TernaryOpNode:
 
 
 class ShaderNode:
-    def __init__(
-        self,
-        vsinput_struct,
-        vsoutput_struct,
-        psinput_struct,
-        psoutput_struct,
-        functions,
-    ):
-        self.vsinput_struct = vsinput_struct
-        self.vsoutput_struct = vsoutput_struct
-        self.psinput_struct = psinput_struct
-        self.psoutput_struct = psoutput_struct
+    def __init__(self, structs, functions, global_variables, cbuffers):
+        self.structs = structs
         self.functions = functions
+        self.global_variables = global_variables
+        self.cbuffers = cbuffers
 
     def __repr__(self):
-        return f"ShaderNode(vsinput_struct={self.vsinput_struct}, vsoutput_struct={self.vsoutput_struct}, psinput_struct={self.psinput_struct}, psoutput_struct={self.psoutput_struct}, functions={self.functions})"
+        return f"ShaderNode(structs={self.structs}, functions={self.functions}, global_variables={self.global_variables}, cbuffers={self.cbuffers})"
 
 
 class StructNode:
@@ -41,14 +33,16 @@ class StructNode:
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, return_type, name, params, body):
+    def __init__(self, return_type, name, params, body, qualifier=None, semantic=None):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
+        self.qualifier = qualifier
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body})"
+        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, qualifier={self.qualifier}, semantic={self.semantic})"
 
 
 class VariableNode(ASTNode):
