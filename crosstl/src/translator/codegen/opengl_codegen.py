@@ -1,7 +1,6 @@
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
-    FRAGMENTShaderNode,
     ForNode,
     FunctionCallNode,
     IfNode,
@@ -10,7 +9,6 @@ from ..ast import (
     ShaderNode,
     TernaryOpNode,
     UnaryOpNode,
-    VERTEXShaderNode,
     VariableNode,
 )
 
