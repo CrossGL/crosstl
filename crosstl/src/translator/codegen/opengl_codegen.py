@@ -1,18 +1,17 @@
 from ..ast import (
-    ShaderNode,
     AssignmentNode,
-    FunctionNode,
-    ReturnNode,
     BinaryOpNode,
-    UnaryOpNode,
-    IfNode,
-    ForNode,
-    VariableNode,
-    FunctionCallNode,
-    MemberAccessNode,
-    VERTEXShaderNode,
     FRAGMENTShaderNode,
+    ForNode,
+    FunctionCallNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
     TernaryOpNode,
+    UnaryOpNode,
+    VERTEXShaderNode,
+    VariableNode,
 )
 
 

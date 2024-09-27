@@ -40,10 +40,10 @@ class MetalToCrossGLConverter:
         }
 
         self.map_semantics = {
-            "attribute(0)": "in_Position",
-            "attribute(1)": "in_Normal",
-            "attribute(2)": "in_Tangent",
-            "attribute(3)": "in_Binormal",
+            "attribute(0)": "Position",
+            "attribute(1)": "Normal",
+            "attribute(2)": "Tangent",
+            "attribute(3)": "Binormal",
             "attribute(4)": "TexCoord",
             "attribute(5)": "TexCoord0",
             "attribute(6)": "TexCoord1",
@@ -53,18 +53,18 @@ class MetalToCrossGLConverter:
             "instance_id": "gl_InstanceID",
             "base_vertex": "gl_BaseVertex",
             "base_instance": "gl_BaseInstance",
-            "position": "out_Position",
+            "position": "gl_Position",
             "point_size": "gl_PointSize",
             "clip_distance": "gl_ClipDistance",
             "front_facing": "gl_IsFrontFace",
             "point_coord": "gl_PointCoord",
-            "color(0)": "out_Color",
-            "color(1)": "out_Color1",
-            "color(2)": "out_Color2",
-            "color(3)": "out_Color3",
-            "color(4)": "out_Color4",
-            "depth(any)": "Out_Depth",
-            "stage_in": "gl_in",
+            "color(0)": "gl_FragColor",
+            "color(1)": "gl_FragColor1",
+            "color(2)": "gl_FragColor2",
+            "color(3)": "gl_FragColor3",
+            "color(4)": "gl_FragColor4",
+            "depth(any)": "gl_FragDepth",
+            "stage_in": "gl_FragColor",
         }
 
     def generate(self, ast):
