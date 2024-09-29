@@ -10,11 +10,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.OS }}
     strategy:
       matrix:
         component: ['directx', 'metal', 'opengl', 'general']  # ToDo: Add 'mojo' to the list
         python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        OS: [ubuntu-latest, windows-latest, macOS-latest]
+      fail-fast: false
 
     steps:
     - name: Checkout repository
@@ -32,6 +34,7 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run translator tests
+      shell: bash
       run: |
         if [ "${{ matrix.component }}" == "general" ]; then
           pytest tests/test_translator/test_lexer.py tests/test_translator/test_parser.py
