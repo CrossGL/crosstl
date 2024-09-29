@@ -47,11 +47,10 @@ def test_struct():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        print(ast)
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Struct codegen not implemented.")
 
 
 def test_if_statement():
@@ -111,7 +110,7 @@ def test_if_statement():
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("if statement codegen not implemented.")
 
 
 def test_for_statement():
@@ -149,7 +148,7 @@ def test_for_statement():
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("for statement codegen not implemented.")
 
 
 def test_else_if_statement():
@@ -213,7 +212,7 @@ fragment {
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("else if codegen not implemented.")
 
 
 def test_function_call():
@@ -264,7 +263,7 @@ def test_function_call():
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("function call codegen not implemented.")
 
 
 def test_assignment_or_operator():
@@ -312,7 +311,7 @@ def test_assignment_or_operator():
         generated_code = generate_code(ast)
         print(generated_code)
     except SyntaxError:
-        pytest.fail("OR operator parsing not implemented.")
+        pytest.fail("OR operator codegen not implemented.")
 
 
 def test_assignment_modulus_operator():
@@ -360,7 +359,7 @@ def test_assignment_modulus_operator():
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("assignment modulus codegen not implemented.")
 
 
 def test_assignment_xor_operator():
@@ -408,7 +407,7 @@ def test_assignment_xor_operator():
         generated_code = generate_code(ast)
         print(generated_code)
     except SyntaxError:
-        pytest.fail("XOR operator parsing not implemented.")
+        pytest.fail("XOR operator codegen not implemented.")
 
 
 def test_assignment_shift_operators():
@@ -458,7 +457,7 @@ def test_assignment_shift_operators():
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Assignment shift parsing not implemented.")
+        pytest.fail("Assignment shift codegen not implemented.")
 
 
 def test_bitwise_operators():
@@ -506,7 +505,7 @@ def test_bitwise_operators():
         code = generate_code(ast)
         print(code)
     except SyntaxError:
-        pytest.fail("Bitwise Shift parsing not implemented")
+        pytest.fail("Bitwise Shift codegen not implemented")
 
 
 if __name__ == "__main__":

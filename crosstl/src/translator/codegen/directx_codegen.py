@@ -39,6 +39,7 @@ class HLSLCodeGen:
             "double": "double",
             "sampler2D": "Texture2D",
             "samplerCube": "TextureCube",
+            "sampler": "SamplerState",
         }
 
         self.semantic_map = {
@@ -50,25 +51,25 @@ class HLSLCodeGen:
             "InstanceID": "INSTANCE_ID",
             "VertexID": "VERTEX_ID",
             # Vertex outputs
-            "gl_Position": "SV_Position",
-            "gl_PointSize": "SV_PointSize",
+            "gl_Position": "SV_POSITION",
+            "gl_PointSize": "SV_POINTSIZE",
             "gl_ClipDistance": "SV_ClipDistance",
             "gl_CullDistance": "SV_CullDistance",
             # Fragment inputs
-            "gl_FragColor": "SV_Target",
-            "gl_FragColor0": "SV_Target0",
-            "gl_FragColor1": "SV_Target1",
-            "gl_FragColor2": "SV_Target2",
-            "gl_FragColor3": "SV_Target3",
-            "gl_FragColor4": "SV_Target4",
-            "gl_FragColor5": "SV_Target5",
-            "gl_FragColor6": "SV_Target6",
-            "gl_FragColor7": "SV_Target7",
-            "gl_FragDepth": "SV_Depth",
-            "gl_FragDepth0": "SV_Depth0",
-            "gl_FragDepth1": "SV_Depth1",
-            "gl_FragDepth2": "SV_Depth2",
-            "gl_FragDepth3": "SV_Depth3",
+            "gl_FragColor": "SV_TARGET",
+            "gl_FragColor0": "SV_TARGET0",
+            "gl_FragColor1": "SV_TARGET1",
+            "gl_FragColor2": "SV_TARGET2",
+            "gl_FragColor3": "SV_TARGET3",
+            "gl_FragColor4": "SV_TARGET4",
+            "gl_FragColor5": "SV_TARGET5",
+            "gl_FragColor6": "SV_TARGET6",
+            "gl_FragColor7": "SV_TARGET7",
+            "gl_FragDepth": "SV_DEPTH",
+            "gl_FragDepth0": "SV_DEPTH0",
+            "gl_FragDepth1": "SV_DEPTH1",
+            "gl_FragDepth2": "SV_DEPTH2",
+            "gl_FragDepth3": "SV_DEPTH3",
         }
 
     def generate(self, ast):
@@ -81,8 +82,15 @@ class HLSLCodeGen:
                     code += f"    {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
                 code += "}\n"
         # Generate global variables
-        for node in ast.global_variables:
-            code += f"{self.map_type(node.vtype)} {node.name};\n"
+        for i, node in enumerate(ast.global_variables):
+            if node.vtype in ["sampler2D", "samplerCube"]:
+                code += "// Texture Samplers\n"
+                code += f"{self.map_type(node.vtype)} {node.name} :register(t{i});\n"
+            elif node.vtype in ["sampler"]:
+                code += "// Sampler States\n"
+                code += f"{self.map_type(node.vtype)} {node.name} :register(s{i});\n"
+            else:
+                code += f"{self.map_type(node.vtype)} {node.name};\n"
         # Generate cbuffers
         if ast.cbuffers:
             code += "// Constant Buffers\n"
@@ -107,9 +115,9 @@ class HLSLCodeGen:
 
     def generate_cbuffers(self, ast):
         code = ""
-        for node in ast.cbuffers:
+        for i, node in enumerate(ast.cbuffers):
             if isinstance(node, StructNode):
-                code += f"cbuffer {node.name} {{\n"
+                code += f"cbuffer {node.name} : register(b{i}){{\n"
                 for member in node.members:
                     code += f"    {self.map_type(member.vtype)} {member.name};\n"
                 code += "}\n"
