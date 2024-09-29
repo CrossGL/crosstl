@@ -16,6 +16,7 @@ jobs:
         component: ['directx', 'metal', 'opengl', 'general']  # ToDo: Add 'mojo' to the list
         python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
         OS: [ubuntu-latest, windows-latest, macOS-latest]
+      fail-fast: false
 
     steps:
     - name: Checkout repository
