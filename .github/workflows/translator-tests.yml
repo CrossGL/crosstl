@@ -34,6 +34,7 @@ jobs:
         pip install -r requirements.txt
 
     - name: Run translator tests
+      shell: bash
       run: |
         if [ "${{ matrix.component }}" == "general" ]; then
           pytest tests/test_translator/test_lexer.py tests/test_translator/test_parser.py
