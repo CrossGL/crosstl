@@ -16,6 +16,7 @@ from .ast import (
     TernaryOpNode,
     VERTEXShaderNode,
     FRAGMENTShaderNode,
+    ArrayIndexNode,
 )
 
 from .lexer import Lexer
@@ -451,9 +452,51 @@ class Parser:
                 "INT",
             ]:
                 body.append(self.parse_assignment_or_function_call())
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")  # Consume the semicolon and move on
             else:
                 raise SyntaxError(f"Unexpected token {self.current_token[0]}")
         return body
+
+    def parse_function_call_or_identifier(self):
+        """Parse a function call, identifier, or array indexing."""
+
+        # Parse function calls or identifiers as before
+        if self.current_token[0] in [
+            "VECTOR",
+            "FLOAT",
+            "DOUBLE",
+            "UINT",
+            "INT",
+            "MATRIX",
+        ]:
+            func_name = self.current_token[1]
+            self.eat(self.current_token[0])
+        else:
+            func_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+
+        # Check for array indexing
+        if self.current_token[0] == "LBRACKET":
+            return self.parse_array_index(func_name)
+
+        # Handle function calls and member access as usual
+        if self.current_token[0] == "LPAREN":
+            return self.parse_function_call(func_name)
+        elif self.current_token[0] == "DOT":
+            return self.parse_member_access(func_name)
+        return VariableNode("", func_name)
+
+    def parse_array_index(self, name):
+        self.eat("LBRACKET")
+        index = self.parse_expression()
+        self.eat("RBRACKET")
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            value = self.parse_expression()
+            return BinaryOpNode(ArrayIndexNode(name, index, None), "EQUALS", value)
+        else:
+            return ArrayIndexNode(name, index, None)
 
     def parse_if_statement(self):
         """Parse an if statement
@@ -658,6 +701,8 @@ class Parser:
             return VariableNode(type_name, VariableNode("", name + op_name))
         elif self.current_token[0] == "LPAREN":
             return self.parse_function_call(name)
+        elif self.current_token[0] == "LBRACKET":
+            return self.parse_array_index(name)
         else:
             raise SyntaxError(
                 f"Unexpected token after identifier: {self.current_token[0]}"
@@ -685,16 +730,16 @@ class Parser:
         self.eat("IDENTIFIER")
         if self.current_token[0] == "DOT":
             name = self.parse_member_access(name)
+        if self.current_token[0] == "LBRACKET":
+            name = self.parse_array_index(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
-
         elif self.current_token[0] in [
             "EQUALS",
             "ASSIGN_ADD",
             "ASSIGN_SUB",
             "ASSIGN_MUL",
-            "ASSIGN_DIV",
             "EQUAL",
             "LESS_THAN",
             "GREATER_THAN",
@@ -717,15 +762,24 @@ class Parser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op, value)
-
             else:
                 if update_condition:
                     return BinaryOpNode(VariableNode(type_name, name), op, value)
                 else:
-                    raise SyntaxError(
-                        f"Expected ';' after variable assignment, found: {self.current_token[0]}"
-                    )
-
+                    if self.current_token[0] == "LBRACKET":
+                        # Handle array indexing as the left-hand side of an assignment
+                        self.eat("LBRACKET")
+                        index = self.parse_expression()
+                        self.eat("RBRACKET")
+                        if self.current_token[0] == "SEMICOLON":
+                            self.eat("SEMICOLON")
+                            return BinaryOpNode(
+                                ArrayIndexNode(name, index, None), op, value
+                            )
+                    else:
+                        raise SyntaxError(
+                            f"Expected ';' after variable assignment, found: {self.current_token[0]}"
+                        )
         elif self.current_token[0] in (
             "ASSIGN_ADD",
             "ASSIGN_SUB",
@@ -757,7 +811,6 @@ class Parser:
                 raise SyntaxError(
                     f"Expected ';' after compound assignment, found: {self.current_token[0]}"
                 )
-
         else:
             raise SyntaxError(
                 f"Unexpected token in variable declaration: {self.current_token[0]}"

@@ -45,6 +45,16 @@ class ShaderNode:
         return f"ShaderNode({self.name!r}) {self.global_inputs!r} {self.global_outputs!r} {self.global_functions!r} {self.vertex_section!r} {self.fragment_section!r}"
 
 
+class ArrayIndexNode(ASTNode):
+    def __init__(self, array_name, index, value):
+        self.array_name = array_name
+        self.index = index
+        self.value = value
+
+    def __repr__(self):
+        return f"ArrayIndexNode({self.array_name}){self.index}{self.value}"
+
+
 class VERTEXShaderNode:
     def __init__(self, inputs, outputs, functions, intermidiate):
         self.inputs = inputs
