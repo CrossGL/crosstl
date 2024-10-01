@@ -9,43 +9,94 @@ from ..ast import (
     ForNode,
     VariableNode,
     FunctionCallNode,
+    TernaryOpNode,
     MemberAccessNode,
     VERTEXShaderNode,
     FRAGMENTShaderNode,
-    TernaryOpNode,
 )
 
 
-class HLSLCodeGen:
+class CharTypeMapper:
+    def map_char_type(self, vtype):
+        char_type_mapping = {
+            "char": "int",
+            "signed char": "int",
+            "unsigned char": "uint",
+            "char2": "int2",
+            "char3": "int3",
+            "char4": "int4",
+            "uchar2": "uint2",
+            "uchar3": "uint3",
+            "uchar4": "uint4",
+        }
+        return char_type_mapping.get(vtype, vtype)
+
+
+class MetalCodeGen:
     def __init__(self):
         self.current_shader = None
         self.vertex_item = None
         self.fragment_item = None
         self.gl_position = False
+        self.char_mapper = CharTypeMapper()
         self.type_mapping = {
+            # Scalar Types
             "void": "void",
+            "short": "int",
+            "signed short": "int",
+            "unsigned short": "uint",
+            "int": "int",
+            "signed int": "int",
+            "unsigned int": "uint",
+            "long": "int64_t",
+            "signed long": "int64_t",
+            "unsigned long": "uint64_t",
+            "float": "float",
+            "half": "half",
+            "bool": "bool",
+            # Vector Types
             "vec2": "float2",
             "vec3": "float3",
             "vec4": "float4",
-            "mat2": "float2x2",
-            "mat3": "float3x3",
-            "mat4": "float4x4",
-            "int": "int",
             "ivec2": "int2",
             "ivec3": "int3",
             "ivec4": "int4",
-            "uint": "uint",
+            "short2": "int2",
+            "short3": "int3",
+            "short4": "int4",
+            "ushort2": "uint2",
+            "ushort3": "uint3",
+            "ushort4": "uint4",
+            "int2": "int2",
+            "int3": "int3",
+            "int4": "int4",
+            "uint2": "uint2",
+            "uint3": "uint3",
+            "uint4": "uint4",
             "uvec2": "uint2",
             "uvec3": "uint3",
             "uvec4": "uint4",
-            "bool": "bool",
+            "float2": "float2",
+            "float3": "float3",
+            "float4": "float4",
+            "half2": "half2",
+            "half3": "half3",
+            "half4": "half4",
             "bvec2": "bool2",
             "bvec3": "bool3",
             "bvec4": "bool4",
-            "float": "float",
-            "double": "double",
+            "bool2": "bool2",
+            "bool3": "bool3",
+            "bool4": "bool4",
             "sampler2D": "Texture2D",
             "samplerCube": "TextureCube",
+            # Matrix Types
+            "mat2": "float2x2",
+            "mat3": "float3x3",
+            "mat4": "float4x4",
+            "half2x2": "half2x2",
+            "half3x3": "half3x3",
+            "half4x4": "half4x4",
         }
 
     def generate(self, ast):
@@ -57,21 +108,19 @@ class HLSLCodeGen:
     def generate_shader(self, node):
         self.shader_inputs = node.global_inputs
         self.shader_outputs = node.global_outputs
-        code = "\n"
+        code = "#include <metal_stdlib>\nusing namespace metal;\n\n"
+
         # Generate global inputs and outputs
         if self.shader_inputs:
-            code += "struct VSINPUT {\n"
+            code += "struct Global_INPUT {\n"
             for i, (vtype, name) in enumerate(self.shader_inputs):
-                if i >= 1:
-                    code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
-                else:
-                    code += f"    {self.map_type(vtype)} {name} : POSITION{i};\n"
+                code += f"    {self.map_type(vtype)} {name} [[attribute({i})]];\n"
             code += "};\n\n"
 
         if self.shader_outputs:
-            code += "struct VSOUTPUT {\n"
+            code += "struct Global_OUTPUT {\n"
             for i, (vtype, name) in enumerate(self.shader_outputs):
-                code += f"    {self.map_type(vtype)} {name} : SV_TARGET{i};\n"
+                code += f"    {self.map_type(vtype)} {name} [[color({i})]];\n"
             code += "};\n\n"
 
         # Generate functions
@@ -84,20 +133,17 @@ class HLSLCodeGen:
             shader_type = "vertex"
             self.check_gl_position(self.vertex_item)
             if self.vertex_item.inputs:
-                code += "struct VSInput {\n"
+                code += "struct Vertex_INPUT {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.inputs):
-                    if i >= 1:
-                        code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i-1};\n"
-                    else:
-                        code += f"    {self.map_type(vtype)} {name} : POSITION;\n"
+                    code += f"    {self.map_type(vtype)} {name} [[attribute({i})]];\n"
                 code += "};\n\n"
             if self.vertex_item.outputs:
-                code += "struct VSOutput {\n"
+                code += "struct Vertex_OUTPUT {\n"
                 for i, (vtype, name) in enumerate(self.vertex_item.outputs):
                     if self.gl_position:
-                        code += f"   float4 position : SV_POSITION;\n"
+                        code += f"    float4 position [[position]];\n"
                         self.gl_position = False
-                    code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
+                    code += f"    {self.map_type(vtype)} {name};\n"
                 code += "};\n\n"
 
             if self.vertex_item.functions:
@@ -105,6 +151,7 @@ class HLSLCodeGen:
 
             if self.vertex_item.intermidiate:
                 code += f"{self.generate_intermidiate(self.vertex_item.intermidiate, shader_type)}\n"
+
             if self.vertex_item.functions:
                 for function_node in self.vertex_item.functions:
                     if function_node.name == "main":
@@ -115,16 +162,18 @@ class HLSLCodeGen:
         if isinstance(self.fragment_item, FRAGMENTShaderNode):
             shader_type = "fragment"
             if self.fragment_item.inputs:
-                code += "struct PSInput {\n"
+                code += "struct Fragment_INPUT {\n"
                 for i, (vtype, name) in enumerate(self.fragment_item.inputs):
-                    code += f"    {self.map_type(vtype)} {name} : TEXCOORD{i};\n"
+                    if i == 0:
+                        code += f"    {self.map_type(vtype)} {name} [[stage_in]];\n"
+                    else:
+                        code += f"    {self.map_type(vtype)} {name};\n"
                 code += "};\n\n"
             if self.fragment_item.outputs:
-                code += "struct PSOutput {\n"
+                code += "struct Fragment_OUTPUT {\n"
                 for i, (vtype, name) in enumerate(self.fragment_item.outputs):
-                    code += f"    {self.map_type(vtype)} {name} : SV_TARGET{i};\n"
+                    code += f"    {self.map_type(vtype)} {name} [[color({i})]];\n"
                 code += "};\n\n"
-
             if self.fragment_item.functions:
                 code += f"{self.generate_function(self.fragment_item.functions, shader_type)}\n"
             if self.fragment_item.intermidiate:
@@ -133,6 +182,7 @@ class HLSLCodeGen:
                 for function_node in self.fragment_item.functions:
                     if function_node.name == "main":
                         code += f"{self.generate_main(function_node, shader_type)}\n"
+
         return code
 
     def check_gl_position(self, node):
@@ -176,15 +226,15 @@ class HLSLCodeGen:
                     )
                     return_type = self.map_type(function_node.return_type)
                     code += f"{return_type} {function_node.name}({params}) {{\n"
-
                     for stmt in function_node.body:
                         code += self.generate_statement(
                             stmt, 1, shader_type=shader_type
                         )
+
                     code += "}\n"
         elif shader_type == "global":
             if node.name == "main":
-                params = "Global_INPUT input"
+                params = "Global_INPUT input [[stage_in]]"
                 return_type = "Global_OUTPUT"
             else:
                 params = ", ".join(
@@ -192,7 +242,7 @@ class HLSLCodeGen:
                 )
                 return_type = self.map_type(node.return_type)
 
-            code += f"{return_type} {node.name}({params}) {{\n"
+            code = f"{return_type} {node.name}({params}) {{\n"
             if node.name == "main":
                 code += "    Global_OUTPUT output;\n"
             for stmt in node.body:
@@ -204,14 +254,16 @@ class HLSLCodeGen:
 
     def generate_main(self, node, shader_type):
         if shader_type == "vertex":
-            code = "VSOutput VSMain(VSInput input) {\n"
-            code += "    VSOutput output;\n"
-        elif shader_type == "fragment":
-            code = "PSOutput PSMain(PSInput input) {\n"
-            code += "    PSOutput output;\n"
+            code = "vertex Vertex_OUTPUT main(Vertex_INPUT input [[stage_in]]) {\n"
+            code += "    Vertex_OUTPUT output;\n"
+        if shader_type == "fragment":
+            code = (
+                "fragment Fragment_OUTPUT main(Fragment_INPUT input [[stage_in]]) {\n"
+            )
+            code += "    Fragment_OUTPUT output;\n"
+
         for stmt in node.body:
             code += self.generate_statement(stmt, 1, shader_type)
-
         code += "    return output;\n"
         code += "}\n"
         return code
@@ -311,12 +363,17 @@ class HLSLCodeGen:
             else:
                 func_name = self.translate_expression(expr.name, shader_type)
                 return f"{func_name}({args})"
+
         elif isinstance(expr, UnaryOpNode):
-            return f"{self.map_operator(expr.op)} {self.generate_expression(expr.operand, shader_type)}"
+            return f"{self.map_operator(expr.op)}{self.generate_expression(expr.operand, shader_type)}"
+
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"
+
         elif isinstance(expr, MemberAccessNode):
+
             return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
+
         else:
             return str(expr)
 
@@ -346,6 +403,9 @@ class HLSLCodeGen:
         if vtype == "":
             return ""
         else:
+            mapped_type = self.char_mapper.map_char_type(vtype)
+            if mapped_type != vtype:
+                return mapped_type
             return self.type_mapping.get(vtype, vtype)
 
     def map_operator(self, op):
@@ -354,16 +414,12 @@ class HLSLCodeGen:
             "MINUS": "-",
             "MULTIPLY": "*",
             "DIVIDE": "/",
-            "BITWISE_XOR": "^",
             "LESS_THAN": "<",
-            "GREATER_THAN": ">",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
-            "ASSIGN_OR": "|=",
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
+            "GREATER_THAN": ">",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",
             "EQUAL": "==",
@@ -372,8 +428,5 @@ class HLSLCodeGen:
             "OR": "||",
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
-            "BITWISE_OR": "|",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
         }
         return op_map.get(op, op)

@@ -289,6 +289,7 @@ class GLSLCodeGen:
             "OR": "||",
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
+            "BITWISE_OR": "|",
             "BITWISE_SHIFT_RIGHT": ">>",
             "BITWISE_SHIFT_LEFT": "<<",
         }
