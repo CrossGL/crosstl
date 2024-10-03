@@ -138,28 +138,31 @@ token_specification = [
 
 
 def tokenize(self):
-     pos = 0
-     while pos < len(self.input_code):
-            match = None
-            for token_spec in token_specification:
-                pattern, tag = token_spec
-                regex = re.compile(pattern)
-                match = regex.match(self.input_code, pos)
-                if match:
-                    token = (tag, match.group(0))
-                    self.tokens.append(token)
-                    pos = match.end(0)
-                    break
-            if not match:
-                unmatched_char = self.input_code[pos]
-                highlighted_code = (
-                    self.input_code[:pos] + "[" + self.input_code[pos] + "]" + self.input_code[pos + 1:]
-                )
-                raise SyntaxError(
-                    f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
-                )
-     self.tokens.append(("EOF", None))
-
+    pos = 0
+    while pos < len(self.input_code):
+        match = None
+        for token_spec in token_specification:
+            pattern, tag = token_spec
+            regex = re.compile(pattern)
+            match = regex.match(self.input_code, pos)
+            if match:
+                token = (tag, match.group(0))
+                self.tokens.append(token)
+                pos = match.end(0)
+                break
+        if not match:
+            unmatched_char = self.input_code[pos]
+            highlighted_code = (
+                self.input_code[:pos]
+                + "["
+                + self.input_code[pos]
+                + "]"
+                + self.input_code[pos + 1 :]
+            )
+            raise SyntaxError(
+                f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
+            )
+    self.tokens.append(("EOF", None))
 
 
 class BinOp:
