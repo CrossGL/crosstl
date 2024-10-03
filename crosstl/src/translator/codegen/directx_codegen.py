@@ -16,64 +16,76 @@ from ..ast import (
 )
 from crosstl.src.translator.lexer import Lexer
 
+
 def tokenize_code(code: str):
     """Helper function to tokenize code."""
     lexer = Lexer(code)
     return lexer.tokens
 
+
 def test_input_output():
     input_code = "some test input"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_if_statement():
     input_code = "if (condition) { doSomething(); }"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_for_statement():
     input_code = "for (int i = 0; i < 10; i++) { doSomething(); }"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_else_statement():
     input_code = "else { doSomethingElse(); }"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_else_if_statement():
     input_code = "else if (condition) { doSomethingElse(); }"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_function_call():
     input_code = "functionCall();"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_assignment_or_operator():
     input_code = "a |= b;"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_assignment_modulus_operator():
     input_code = "a %= b;"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_assignment_xor_operator():
     input_code = "a ^= b;"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_assignment_shift_operators():
     input_code = "a <<= b; a >>= b;"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
+
 
 def test_bitwise_operators():
     input_code = "a & b; a | b; a ^ b;"
-    tokens = tokenize_code(input_code)
+    tokenize_code(input_code)
     # Add assertions and test logic here
 
 
