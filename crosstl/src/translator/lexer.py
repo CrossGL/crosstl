@@ -109,6 +109,7 @@ class Lexer:
     def __init__(self, input_code):
         self.input_code = input_code
         self.tokens = []
+        self.tokenize()
 
 
 token_specification = [
@@ -137,33 +138,28 @@ token_specification = [
 
 
 def tokenize(self):
-    pos = 0
-    while pos < len(self.code):
-        match = None
-        for token_type, pattern in TOKENS:
-            regex = re.compile(pattern)
-            match = regex.match(self.code, pos)
-            if match:
-                text = match.group(0)
-                if token_type == "IDENTIFIER" and text in KEYWORDS:
-                    token_type = KEYWORDS[text]
-                if token_type != "WHITESPACE":
-
-                    token = (token_type, text)
-
+     pos = 0
+     while pos < len(self.input_code):
+            match = None
+            for token_spec in token_specification:
+                pattern, tag = token_spec
+                regex = re.compile(pattern)
+                match = regex.match(self.input_code, pos)
+                if match:
+                    token = (tag, match.group(0))
                     self.tokens.append(token)
-                pos = match.end(0)
-                break
-        if not match:
-            unmatched_char = self.code[pos]
-            highlighted_code = (
-                self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1 :]
-            )
-            raise SyntaxError(
-                f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
-            )
+                    pos = match.end(0)
+                    break
+            if not match:
+                unmatched_char = self.input_code[pos]
+                highlighted_code = (
+                    self.input_code[:pos] + "[" + self.input_code[pos] + "]" + self.input_code[pos + 1:]
+                )
+                raise SyntaxError(
+                    f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
+                )
+     self.tokens.append(("EOF", None))
 
-    self.tokens.append(("EOF", None))
 
 
 class BinOp:
