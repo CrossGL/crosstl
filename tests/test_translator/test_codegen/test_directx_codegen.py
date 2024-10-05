@@ -384,5 +384,73 @@ def test_assignment_shift_operators():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_assignment_and_operator():
+    code = """
+    shader ANDShader {
+        vertex {
+            input vec3 position;
+            output vec2 vUV;
+            void main() {
+                vUV = position.xy * 10.0;
+                vUV.x &= 3.0;  // AND assignment operator
+                gl_Position = vec4(position, 1.0);
+            }
+        }
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+            void main() {
+                float noise = perlinNoise(vUV);
+                float height = noise * 10.0;
+                height &= 2.0;  // AND assignment operator
+                vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+                fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("AND operator parsing not implemented.")
+
+
+def test_assignment_xor_operator():
+    code = """
+    shader XORShader {
+        vertex {
+            input vec3 position;
+            output vec2 vUV;
+            void main() {
+                vUV = position.xy * 10.0;
+                vUV.x ^= 3.0;  // XOR assignment operator
+                gl_Position = vec4(position, 1.0);
+            }
+        }
+        fragment {
+            input vec2 vUV;
+            output vec4 fragColor;
+            void main() {
+                float noise = perlinNoise(vUV);
+                float height = noise * 10.0;
+                height ^= 2.0;  // XOR assignment operator
+                vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+                fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("XOR operator parsing not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

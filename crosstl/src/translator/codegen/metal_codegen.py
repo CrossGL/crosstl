@@ -430,5 +430,9 @@ class MetalCodeGen:
             "OR": "||",
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
+            "ASSIGN_SHIFT_RIGHT": ">>=",
+            "ASSIGN_AND": "&=",
+            "LOGICAL_AND": "&&",
+            "ASSIGN_XOR": "^=",
         }
         return op_map.get(op, op)
