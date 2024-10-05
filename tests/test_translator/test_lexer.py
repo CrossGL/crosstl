@@ -31,12 +31,17 @@ class Lexer:
             if not match:
                 unmatched_char = self.input_code[pos]
                 highlighted_code = (
-                    self.input_code[:pos] + "[" + self.input_code[pos] + "]" + self.input_code[pos + 1:]
+                    self.input_code[:pos]
+                    + "["
+                    + self.input_code[pos]
+                    + "]"
+                    + self.input_code[pos + 1 :]
                 )
                 raise SyntaxError(
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
         self.tokens.append(("EOF", None))
+
 
 # Example token definitions (including the provided excerpt)
 token_specification = [
