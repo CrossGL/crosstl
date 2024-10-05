@@ -130,6 +130,5 @@ def test_else_if_parsing():
         pytest.fail("else_if parsing not implemented.")
 
 
-# Run all tests
 if __name__ == "__main__":
     pytest.main()

@@ -284,6 +284,9 @@ def test_function_call():
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> b84441012b9952e55d574932bfa1b558e5e69f69
 def test_assignment_modulus_operator():
     code = """
     shader ModulusShader {
@@ -296,7 +299,33 @@ def test_assignment_modulus_operator():
             gl_Position = vec4(position, 1.0);
         }
     }
+<<<<<<< HEAD
 =======
+=======
+    // Fragment Shader
+    fragment {
+        input vec2 vUV;
+        output vec4 fragColor;
+     void main() {
+            float noise = perlinNoise(vUV);
+            float height = noise * 10.0;
+            height %= 2.0;  // Modulus assignment operator
+             vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
+            fragColor = vec4(color, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
+
+
+>>>>>>> b84441012b9952e55d574932bfa1b558e5e69f69
 def test_assignment_shift_operators():
     code = """
     shader PerlinNoise {
@@ -310,12 +339,16 @@ def test_assignment_shift_operators():
             gl_Position = vec4(position, 1.0);
         }
     }
+<<<<<<< HEAD
 
 >>>>>>> 09b77ec6bc9ac724d5227e434ef6474409a246bb
+=======
+>>>>>>> b84441012b9952e55d574932bfa1b558e5e69f69
     // Fragment Shader
     fragment {
         input vec2 vUV;
         output vec4 fragColor;
+<<<<<<< HEAD
 <<<<<<< HEAD
         void main() {
             float noise = perlinNoise(vUV);
@@ -323,6 +356,8 @@ def test_assignment_shift_operators():
             height %= 2.0;  // Modulus assignment operator
 =======
 
+=======
+>>>>>>> b84441012b9952e55d574932bfa1b558e5e69f69
         void main() {
             float noise = perlinNoise(vUV);
             float height <<= noise * 10.0;
@@ -333,9 +368,12 @@ def test_assignment_shift_operators():
         }
     }
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 
 >>>>>>> 09b77ec6bc9ac724d5227e434ef6474409a246bb
+=======
+>>>>>>> b84441012b9952e55d574932bfa1b558e5e69f69
     """
     try:
         tokens = tokenize_code(code)
@@ -344,3 +382,7 @@ def test_assignment_shift_operators():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+if __name__ == "__main__":
+    pytest.main()

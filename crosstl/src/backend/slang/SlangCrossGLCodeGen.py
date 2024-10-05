@@ -37,7 +37,6 @@ class SlangToCrossGLConverter:
         }
 
     def generate(self, ast):
-        self.process_structs(ast)
         code = "shader main {\n"
         if ast.imports:
             code += "    // Imports\n"
@@ -91,31 +90,6 @@ class SlangToCrossGLConverter:
         code += "}\n"
         return code
 
-    def process_structs(self, ast):
-        for node in ast.structs:
-            if isinstance(node, StructNode):
-                if node.name == "VSInput":
-                    for member in node.members:
-                        self.vertex_inputs.append(
-                            (self.map_type(member.vtype), member.name)
-                        )
-                elif node.name == "VSOutput":
-                    for member in node.members:
-                        if member.name != "position":
-                            self.vertex_outputs.append(
-                                (self.map_type(member.vtype), member.name)
-                            )
-                elif node.name == "PSInput":
-                    for member in node.members:
-                        self.fragment_inputs.append(
-                            (self.map_type(member.vtype), member.name)
-                        )
-                elif node.name == "PSOUTPUT":
-                    for member in node.members:
-                        self.fragment_outputs.append(
-                            (self.map_type(member.vtype), member.name)
-                        )
-
     def generate_cbuffers(self, ast):
         code = ""
         for node in ast.cbuffers:
@@ -126,37 +100,11 @@ class SlangToCrossGLConverter:
                 code += "    }\n"
         return code
 
-    def generate_io_declarations(self, shader_type):
-        code = ""
-        if shader_type == "vertex":
-            for type, name in self.vertex_inputs:
-                code += f"        input {self.map_type(type)} {name};\n"
-            for type, name in self.vertex_outputs:
-                code += f"        output {self.map_type(type)} {name};\n"
-        elif shader_type == "fragment":
-            for type, name in self.fragment_inputs:
-                code += f"        input {self.map_type(type)} {name};\n"
-            for type, name in self.fragment_outputs:
-                code += f"        output {self.map_type(type)} {name};\n"
-        return code.rstrip()
-
     def generate_function(self, func):
         params = ", ".join(f"{self.map_type(p.vtype)} {p.name}" for p in func.params)
         code = f"    {self.map_type(func.return_type)} {func.name}({params}) {{\n"
         code += self.generate_function_body(func.body, indent=2)
         code += "    }\n\n"
-        return code
-
-    def generate_vertex_main(self, func):
-        code = "        void main() {\n"
-        code += self.generate_function_body(func.body, indent=3, is_main=True)
-        code += "        }\n"
-        return code
-
-    def generate_fragment_main(self, func):
-        code = "        void main() {\n"
-        code += self.generate_function_body(func.body, indent=3, is_main=True)
-        code += "        }\n"
         return code
 
     def generate_function_body(self, body, indent=0, is_main=False):
@@ -210,15 +158,8 @@ class SlangToCrossGLConverter:
     def generate_assignment(self, node, is_main):
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
-        if (
-            is_main
-            and isinstance(node.left, MemberAccessNode)
-            and node.left.object == "output"
-        ):
-            if node.left.member == "position":
-                return f"gl_Position = {rhs}"
-            return f"{node.left.member} = {rhs}"
-        return f"{lhs} = {rhs}"
+        op = node.operator
+        return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
         if isinstance(expr, str):
@@ -243,8 +184,6 @@ class SlangToCrossGLConverter:
             return f"{expr.name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
-            if obj == "output" or obj == "input":
-                return expr.member
             return f"{obj}.{expr.member}"
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
