@@ -283,6 +283,7 @@ def test_function_call():
         pytest.fail("Struct parsing not implemented.")
 
 
+<<<<<<< HEAD
 def test_assignment_modulus_operator():
     code = """
     shader ModulusShader {
@@ -295,19 +296,46 @@ def test_assignment_modulus_operator():
             gl_Position = vec4(position, 1.0);
         }
     }
+=======
+def test_assignment_shift_operators():
+    code = """
+    shader PerlinNoise {
+    vertex {
+        input vec3 position;
+        output vec2 vUV;
+
+        void main() {
+            vUV = position.xy * 10.0;
+            vUV.x <<= 1;
+            gl_Position = vec4(position, 1.0);
+        }
+    }
+
+>>>>>>> 09b77ec6bc9ac724d5227e434ef6474409a246bb
     // Fragment Shader
     fragment {
         input vec2 vUV;
         output vec4 fragColor;
+<<<<<<< HEAD
         void main() {
             float noise = perlinNoise(vUV);
             float height = noise * 10.0;
             height %= 2.0;  // Modulus assignment operator
+=======
+
+        void main() {
+            float noise = perlinNoise(vUV);
+            float height <<= noise * 10.0;
+>>>>>>> 09b77ec6bc9ac724d5227e434ef6474409a246bb
             vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
             fragColor = vec4(color, 1.0);
             }
         }
     }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 09b77ec6bc9ac724d5227e434ef6474409a246bb
     """
     try:
         tokens = tokenize_code(code)

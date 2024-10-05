@@ -6,9 +6,20 @@ from .src.translator.ast import ASTNode
 from .src.backend.DirectX import *
 from .src.backend.Metal import *
 from .src.backend.Opengl import *
+from .src.backend.slang import *
 
 
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
+    """Translate a shader file to another language.
+
+    Args:
+        file_path (str): The path to the shader file
+        backend (str, optional): The target language to translate to. Defaults to "cgl".
+        save_shader (str, optional): The path to save the translated shader. Defaults to None.
+
+    Returns:
+        str: The translated shader code
+    """
     backend = backend.lower()
 
     with open(file_path, "r") as file:
@@ -27,6 +38,9 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
     elif file_path.endswith(".glsl"):
         lexer = GLSLLexer(shader_code)
         parser = GLSLParser(lexer.tokens)
+    elif file_path.endswith(".slang"):
+        lexer = SlangLexer(shader_code)
+        parser = SlangParser(lexer.tokens)
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -49,6 +63,8 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
                 codegen = MetalToCrossGLConverter()
             elif file_path.endswith(".glsl"):
                 codegen = GLSLToCrossGLConverter()
+            elif file_path.endswith(".slang"):
+                codegen = SlangToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
         else:
