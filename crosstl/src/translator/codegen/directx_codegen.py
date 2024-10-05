@@ -15,6 +15,7 @@ from ..ast import (
     TernaryOpNode,
 )
 
+
 class HLSLCodeGen:
     def __init__(self):
         self.current_shader = None
