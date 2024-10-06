@@ -18,7 +18,7 @@ def tokenize_code(code: str) -> List:
     return lexer.tokens
 
 
-def parse_code(Tokens: List, shader_type: str) -> List:
+def parse_code(Tokens: List, shader_type="vertex") -> List:
     """Helper function to parse code.
 
     Args:
@@ -59,10 +59,22 @@ def test_if_statement():
             float fragColor = vec4(1.0, 1.0, 1.0, 1.0);
         }
     }
+
+    float perlinNoise(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    layout(location = 0) in vec3 position;
+    out vec2 vUV;
+
+    void main() {
+        vUV = position.xy * 10.0;
+    }
+    
     """
     try:
         tokens = tokenize_code(code)
-        parse_code(tokens, "fragment")
+        print(parse_code(tokens))
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 
@@ -86,7 +98,7 @@ def test_for_statement():
     """
     try:
         tokens = tokenize_code(code)
-        parse_code(tokens, "vertex")
+        print(parse_code(tokens, "vertex"))
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
 

@@ -1,21 +1,18 @@
-# compiler/parser.py
-
 from .ast import (
-    ShaderNode,
-    FunctionNode,
-    AssignmentNode,
-    IfNode,
-    ForNode,
-    ReturnNode,
-    FunctionCallNode,
     BinaryOpNode,
+    CbufferNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
     MemberAccessNode,
-    VariableNode,
-    UniformNode,
-    UnaryOpNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
     TernaryOpNode,
-    VERTEXShaderNode,
-    FRAGMENTShaderNode,
+    UnaryOpNode,
+    VariableNode,
+    AssignmentNode,
 )
 
 from .lexer import Lexer
@@ -69,45 +66,6 @@ class Parser:
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
-    def parse_uniforms(self):
-        """Parse uniform declarations
-
-        This method parses uniform declarations in the shader code.
-        It consumes the "UNIFORM" token and then parses the uniform type and name.
-        The method returns a list of UniformNode objects.
-
-        Returns:
-            list: A list of UniformNode objects
-
-        Raises:
-            SyntaxError: If the current token is not "UNIFORM"
-
-        """
-
-        uniforms = []
-        while self.current_token[0] == "UNIFORM":
-            self.eat("UNIFORM")
-            if self.current_token[0] in [
-                "VECTOR",
-                "FLOAT",
-                "DOUBLE",
-                "UINT",
-                "INT",
-                "SAMPLER2D",
-                "MATRIX",
-            ]:
-                vtype = self.current_token[1]
-                self.eat(self.current_token[0])
-            else:
-                raise SyntaxError(
-                    f"Expected VECTOR, FLOAT, DOUBLE, UINT, INT or SAMPLER2D, got {self.current_token[0]}"
-                )
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            self.eat("SEMICOLON")
-            uniforms.append(UniformNode(vtype, name))
-        return uniforms
-
     def parse(self):
         """Parse the shader code
 
@@ -120,309 +78,145 @@ class Parser:
         return self.parse_shader()
 
     def parse_shader(self):
-        """Parse the shader code
-
-        This method parses the shader code and generates a ShaderNode object.
-
-        Returns:
-            ShaderNode: The root node of the AST
-
-        Raises:
-            SyntaxError: If the current token is not "SHADER"
-
-        """
-        self.eat("SHADER")
-        self.skip_comments()  # Skip comments after eating SHADER
-        if self.current_token[0] in ("IDENTIFIER", "MAIN"):
-            shader_name = self.current_token[1]
-            self.eat(self.current_token[0])
-            self.skip_comments()
-        else:
-            raise SyntaxError(
-                f"Expected IDENTIFIER or MAIN, got {self.current_token[0]}"
-            )
-        self.eat("LBRACE")
-
-        global_inputs = self.parse_inputs()
-        self.parse_uniforms()
-        global_outputs = self.parse_outputs()
-
-        global_functions = []
-
-        vertex_section = None
-        fragment_section = None
-
-        while self.current_token[0] != "RBRACE":
-            if self.current_token[0] == "VERTEX":
-                vertex_section = self.parse_shader_section("VERTEX")
-                self.skip_comments()  # Skip comments while parsing functions
-            elif self.current_token[0] == "FRAGMENT":
-                fragment_section = self.parse_shader_section("FRAGMENT")
-                self.skip_comments()  # Skip comments while parsing functions
-            elif self.current_token[0] in [
-                "VECTOR",
-                "FLOAT",
-                "DOUBLE",
-                "UINT",
-                "INT",
-                "VOID",
-                "MATRIX",
-            ]:
-                global_functions.append(self.parse_function())
-                self.skip_comments()  # Skip comments while parsing functions
-            else:
-                raise SyntaxError(f"Unexpected token: {self.current_token[0]}")
-
-        self.eat("RBRACE")
-        return ShaderNode(
-            shader_name,
-            global_inputs,
-            global_outputs,
-            global_functions,
-            vertex_section,
-            fragment_section,
-        )
-
-    def parse_shader_section(self, section_type):
-        """Parse a shader section
-
-        This method parses a shader section (VERTEX or FRAGMENT) and generates a VERTEXShaderNode or FRAGMENTShaderNode object.
-
-        Args:
-            section_type (str): The type of shader section (VERTEX or FRAGMENT)
-
-        Returns:
-            VERTEXShaderNode or FRAGMENTShaderNode: The root node of the AST for the shader section
-
-        Raises:
-            SyntaxError: If the current token is not "VERTEX" or "FRAGMENT"
-
-        """
-        self.eat(section_type)
-        self.eat("LBRACE")
         functions = []
-        intermidiate = []
-        inputs = []
-        outputs = []
-        while self.current_token[0] != "RBRACE":
-            if self.current_token[0] == "UNIFORM":
-                self.parse_uniforms()
-            elif self.current_token[0] == "INPUT":
-                inputs.extend(self.parse_inputs())
-            elif self.current_token[0] == "OUTPUT":
-                outputs.extend(self.parse_outputs())
-            elif (
-                self.current_token[0]
-                in ["VECTOR", "FLOAT", "DOUBLE", "UINT", "INT", "VOID", "MATRIX"]
-                and self.peak(2)[0] == "LPAREN"
-            ):
-                functions.append(self.parse_function())
-            elif self.current_token[0] == "FOR":
-                intermidiate.append(self.parse_for_loop())
-            elif self.current_token[0] == "IF":
-                intermidiate.append(self.parse_if_statement())
+        structs = []
+        cbuffers = []
+        global_variables = []
+        while self.current_token[0] != "EOF":
+            if self.current_token[0] == "SHADER":
+                self.eat("SHADER")
+                self.eat("IDENTIFIER")
+                self.eat("LBRACE")
+            if self.current_token[0] == "STRUCT":
+                structs.append(self.parse_struct())
+            elif self.current_token[0] == "CBUFFER":
+                cbuffers.append(self.parse_cbuffer())
+            elif self.current_token[1] in ["vertex", "fragment"]:
+                functions.append(self.parse_main_function())
+                self.eat("RBRACE")
             elif self.current_token[0] in [
+                "VOID",
+                "FLOAT",
                 "VECTOR",
+                "DOUBLE",
+                "UINT",
+                "INT",
+                "MATRIX",
                 "IDENTIFIER",
-                "FLOAT",
-                "DOUBLE",
-                "UINT",
-                "INT",
-                "MATRIX",
+                "SAMPLER2D",
+                "SAMPLERCUBE",
+                "SAMPLER",
             ]:
-                intermidiate.append(self.parse_assignment_or_function_call())
+                if self.is_function():
+                    functions.append(self.parse_function())
+                else:
+                    global_variables.append(self.parse_global_variable())
             else:
-                raise SyntaxError(f"Unexpected token {self.current_token[0]}")
+                self.eat(self.current_token[0])  # Skip unknown tokens
+
+        return ShaderNode(structs, functions, global_variables, cbuffers)
+
+    def parse_global_variable(self):
+        var_type = self.current_token[1]
+        self.eat(self.current_token[0])
+        var_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("SEMICOLON")
+        return VariableNode(var_type, var_name)
+
+    def is_function(self):
+        current_pos = self.pos
+        while self.tokens[current_pos][0] != "EOF":
+            if self.tokens[current_pos][0] == "LPAREN":
+                return True
+            if self.tokens[current_pos][0] == "SEMICOLON":
+                return False
+            current_pos += 1
+        return False
+
+    def parse_cbuffer(self):
+        self.eat("CBUFFER")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            vtype = self.current_token[1]
+            self.eat(self.current_token[0])
+            var_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "LBRACKET":
+                self.eat("LBRACKET")
+                size = self.current_token[1]
+                self.eat("NUMBER")
+                self.eat("RBRACKET")
+                var_name += f"[{size}]"
+            self.eat("SEMICOLON")
+            members.append(VariableNode(vtype, var_name))
         self.eat("RBRACE")
-        if section_type == "VERTEX":
-            return VERTEXShaderNode(inputs, outputs, functions, intermidiate)
-        else:
-            return FRAGMENTShaderNode(inputs, outputs, functions, intermidiate)
+        return CbufferNode(name, members)
 
-    def parse_inputs(self):
-        """Parse input declarations
-
-        This method parses input declarations in the shader code.
-
-        Returns:
-
-            list: A list of input declarations
-
-
-        Raises:
-
-            SyntaxError: If the current token is not "INPUT"
-
-
-        """
-        inputs = []
-        while self.current_token[0] == "INPUT":
-            self.eat("INPUT")
-            if self.current_token[0] in [
-                "VECTOR",
-                "FLOAT",
-                "DOUBLE",
-                "UINT",
-                "INT",
-                "MATRIX",
-                "SAMPLER2D",
-            ]:
-                vtype = self.current_token[1]
-                self.eat(self.current_token[0])
-            else:
-                raise SyntaxError(
-                    f"Expected VECTOR, FLOAT, DOUBLE, UINT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
-                )
-            name = self.current_token[1]
+    def parse_struct(self):
+        self.eat("STRUCT")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            vtype = self.current_token[1]
+            self.eat(self.current_token[0])
+            var_name = self.current_token[1]
             self.eat("IDENTIFIER")
+            semantic = None
+            if self.current_token[0] == "AT":
+                self.eat("AT")
+                semantic = self.current_token[1]
+                self.eat("IDENTIFIER")
             self.eat("SEMICOLON")
-            inputs.append((vtype, name))
-        return inputs
+            members.append(VariableNode(vtype, var_name, semantic))
+        self.eat("RBRACE")
+        return StructNode(name, members)
 
-    def parse_outputs(self):
-        """Parse output declarations
-
-        This method parses output declarations in the shader code.
-
-        Returns:
-
-            list: A list of output declarations
-
-
-        Raises:
-
-            SyntaxError: If the current token is not "OUTPUT"
-
-        """
-        outputs = []
-        while self.current_token[0] == "OUTPUT":
-            self.eat("OUTPUT")
-            if self.current_token[0] in [
-                "VECTOR",
-                "FLOAT",
-                "DOUBLE",
-                "UINT",
-                "INT",
-                "MATRIX",
-                "SAMPLER2D",
-            ]:
-                vtype = self.current_token[1]
-                self.eat(self.current_token[0])
-            else:
-                raise SyntaxError(
-                    f"Expected VECTOR, FLOAT, DOUBLE, UINT, INT, MATRIX, or SAMPLER2D, got {self.current_token[0]}"
-                )
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            self.eat("SEMICOLON")
-            outputs.append((vtype, name))
-        return outputs
-
-    def parse_function(self):
-        """Parse a function declaration
-
-        This method parses a function declaration in the shader code.
-
-        Returns:
-
-                FunctionNode: A FunctionNode object representing the function declaration
-
-        Raises:
-
-            SyntaxError: If the current token is not a valid function declaration
-
-        """
-        return_type = self.parse_type()
-        if self.current_token[0] == "MAIN":
-            fname = self.current_token[1]
-            self.eat("MAIN")
-        elif self.current_token[0] == "IDENTIFIER":
-            fname = self.current_token[1]
-            self.eat("IDENTIFIER")
-        else:
-            raise SyntaxError(
-                f"Expected MAIN or IDENTIFIER, got {self.current_token[0]}"
-            )
+    def parse_function(self, qualifier=None):
+        return_type = self.current_token[1]
+        self.eat(self.current_token[0])
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
+        semantic = None
+        if self.current_token[0] == "AT":
+            self.eat("AT")
+            semantic = self.current_token[1]
+            self.eat("IDENTIFIER")
         self.eat("LBRACE")
         body = self.parse_body()
         self.eat("RBRACE")
-        return FunctionNode(return_type, fname, params, body)
+        return FunctionNode(return_type, name, params, body, qualifier, semantic)
+
+    def parse_main_function(self):
+        qualifier = self.current_token[1]
+        self.eat(self.current_token[0])
+        self.eat("LBRACE")
+        return self.parse_function(qualifier)
 
     def parse_parameters(self):
-        """Parse function parameters
-
-        This method parses function parameters in the shader code.
-
-        Returns:
-
-            list: A list of function parameters
-
-        """
-
         params = []
-        if self.current_token[0] != "RPAREN":
-            params.append(self.parse_parameter())
-            while self.current_token[0] == "COMMA":
-                self.eat("COMMA")
-                params.append(self.parse_parameter())
-        return params
-
-    def parse_parameter(self):
-        """Parse a function parameter
-
-        This method parses a function parameter in the shader code.
-
-        Returns:
-
-            tuple: A tuple containing the parameter type and name
-
-        """
-        param_type = self.parse_type()
-        param_name = self.current_token[1]
-
-        self.eat("IDENTIFIER")
-        return (param_type, param_name)
-
-    def parse_type(self):
-        """Parse a type declaration
-
-        This method parses a type declaration in the shader code.
-
-        Returns:
-
-            str: The type name
-
-        Raises:
-
-            SyntaxError: If the current token is not a valid type declaration
-
-        """
-        if self.current_token[0] == "VOID":
-            self.eat("VOID")
-            return "void"
-        elif self.current_token[0] in [
-            "VECTOR",
-            "FLOAT",
-            "DOUBLE",
-            "UINT",
-            "INT",
-            "MATRIX",
-            "SAMPLER2D",
-        ]:
+        while self.current_token[0] != "RPAREN":
             vtype = self.current_token[1]
             self.eat(self.current_token[0])
-            return vtype
-        elif self.current_token[0] == "IDENTIFIER":
-            type_name = self.current_token[1]
+            name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if type_name in ["int", "uint", "float", "double"]:
-                return type_name
-            return type_name
-        else:
-            raise SyntaxError(f"Expected type, got {self.current_token[0]}")
+            semantic = None
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                semantic = self.current_token[1]
+                self.eat("IDENTIFIER")
+            params.append(VariableNode(vtype, name, semantic))
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+        return params
 
     def parse_body(self):
         """Parse a function body
@@ -645,7 +439,8 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
-            "ASSIGN_SHIFT_LEFT" "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -685,6 +480,11 @@ class Parser:
         self.eat("IDENTIFIER")
         if self.current_token[0] == "DOT":
             name = self.parse_member_access(name)
+        if self.current_token[0] == "IDENTIFIER":
+            value = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.eat("SEMICOLON")
+            return VariableNode(name, value)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
@@ -717,7 +517,6 @@ class Parser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op, value)
-
             else:
                 if update_condition:
                     return BinaryOpNode(VariableNode(type_name, name), op, value)
@@ -825,7 +624,7 @@ class Parser:
                 ASTNode: An ASTNode object representing the additive expression
 
         """
-        expr = self.parse_multiplicative()
+        expr = self.parse_bitwise()
         while self.current_token[0] in ["PLUS", "MINUS"]:
             op = self.current_token[0]
             self.eat(op)
@@ -848,6 +647,30 @@ class Parser:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_unary()
+            expr = BinaryOpNode(expr, op, right)
+        return expr
+
+    def parse_bitwise(self):
+        """Parse a bitwise expression
+
+        This method parses a bitwise expression in the shader code.
+
+        Returns:
+
+            ASTNode: An ASTNode object representing the bitwise expression
+
+        """
+        expr = self.parse_multiplicative()
+        while self.current_token[0] in [
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
+            "BITWISE_XOR",
+            "BITWISE_AND",
+            "BITWISE_OR",
+        ]:
+            op = self.current_token[0]
+            self.eat(op)
+            right = self.parse_multiplicative()
             expr = BinaryOpNode(expr, op, right)
         return expr
 

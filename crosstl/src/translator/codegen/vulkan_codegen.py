@@ -1,14 +1,13 @@
 from ..ast import (
-    ShaderNode,
     AssignmentNode,
-    FunctionNode,
-    ReturnNode,
     BinaryOpNode,
-    IfNode,
     ForNode,
-    VariableNode,
     FunctionCallNode,
+    IfNode,
     MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    VariableNode,
 )
 
 
