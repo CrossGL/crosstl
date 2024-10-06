@@ -12,6 +12,7 @@ from .ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    AssignmentNode,
 )
 
 from .lexer import Lexer
@@ -438,7 +439,8 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
-            "ASSIGN_SHIFT_LEFT" "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":
@@ -515,7 +517,6 @@ class Parser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op, value)
-
             else:
                 if update_condition:
                     return BinaryOpNode(VariableNode(type_name, name), op, value)
@@ -623,7 +624,7 @@ class Parser:
                 ASTNode: An ASTNode object representing the additive expression
 
         """
-        expr = self.parse_multiplicative()
+        expr = self.parse_bitwise()
         while self.current_token[0] in ["PLUS", "MINUS"]:
             op = self.current_token[0]
             self.eat(op)
@@ -646,6 +647,30 @@ class Parser:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_unary()
+            expr = BinaryOpNode(expr, op, right)
+        return expr
+
+    def parse_bitwise(self):
+        """Parse a bitwise expression
+
+        This method parses a bitwise expression in the shader code.
+
+        Returns:
+
+            ASTNode: An ASTNode object representing the bitwise expression
+
+        """
+        expr = self.parse_multiplicative()
+        while self.current_token[0] in [
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
+            "BITWISE_XOR",
+            "BITWISE_AND",
+            "BITWISE_OR",
+        ]:
+            op = self.current_token[0]
+            self.eat(op)
+            right = self.parse_multiplicative()
             expr = BinaryOpNode(expr, op, right)
         return expr
 

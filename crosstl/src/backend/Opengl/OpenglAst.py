@@ -34,14 +34,15 @@ class TernaryOpNode:
 
 
 class LayoutNode:
-    def __init__(self, location_number, dtype, name, io_type):
+    def __init__(self, location_number, dtype, name, io_type, semantic=None):
         self.location_number = location_number
         self.dtype = dtype
         self.name = name
         self.io_type = io_type
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"LayoutNode(location_number={self.location_number}, dtype={self.dtype}, name={self.name}, io_type={self.io_type})"
+        return f"LayoutNode(location_number={self.location_number}, dtype={self.dtype}, name={self.name}, io_type={self.io_type}, semantic={self.semantic})"
 
 
 class ShaderNode(ASTNode):
@@ -81,13 +82,14 @@ class ArrayAccessNode(ASTNode):
 
 
 class VariableNode(ASTNode):
-    def __init__(self, vtype, name, io_type=None):
+    def __init__(self, vtype, name, io_type=None, semantic=None):
         self.vtype = vtype
         self.name = name
         self.io_type = io_type
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', io_type={self.io_type})"
+        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', io_type={self.io_type}, semantic={self.semantic})"
 
 
 class AssignmentNode(ASTNode):

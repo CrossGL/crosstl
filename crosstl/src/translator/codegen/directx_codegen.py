@@ -81,7 +81,9 @@ class HLSLCodeGen:
                 for member in node.members:
                     code += f"    {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
                 code += "}\n"
+
         # Generate global variables
+
         for i, node in enumerate(ast.global_variables):
             if node.vtype in ["sampler2D", "samplerCube"]:
                 code += "// Texture Samplers\n"

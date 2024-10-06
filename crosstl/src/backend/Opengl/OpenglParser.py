@@ -3,10 +3,11 @@ from .OpenglLexer import *
 
 
 class GLSLParser:
-    def __init__(self, tokens, shader_type):
+    def __init__(self, tokens, shader_type="vertex"):
         self.tokens = tokens
         self.shader_type = shader_type
         self.pos = 0
+        self.main_count = 0
         self.current_token = self.tokens[self.pos]
         self.skip_comments()
 
@@ -15,6 +16,9 @@ class GLSLParser:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
+        if self.current_token[1] == "main" and self.shader_type == "vertex":
+            self.shader_type = "fragment"
+            # If we encounter the second 'main', switch shader_type to 'fragment'
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -60,7 +64,7 @@ class GLSLParser:
                 else:
                     global_variables.append(self.parse_global_variable())
             else:
-                self.eat(self.current_token[0])  # Skip unknown tokens
+                self.eat(self.current_token[0])  # Skip token
 
         return ShaderNode(
             io_variables,
@@ -181,7 +185,13 @@ class GLSLParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         self.eat("SEMICOLON")
-        return LayoutNode(location_number, dtype, name, f"{self.shader_type}_{io_type}")
+        return LayoutNode(
+            location_number,
+            dtype,
+            name,
+            f"{self.shader_type}_{io_type}",
+            f"layout(location = {location_number})",
+        )
 
     def parse_uniform(self):
         self.eat("UNIFORM")
@@ -198,8 +208,7 @@ class GLSLParser:
         name = self.current_token[1]
         qualifier = None
         if name == "main":
-            qualifier = "main"
-
+            qualifier = self.shader_type
         self.eat("IDENTIFIER")
         self.eat("LPAREN")
         params = self.parse_parameters()

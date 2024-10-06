@@ -4,11 +4,42 @@ from .OpenglLexer import *
 
 
 class GLSLToCrossGLConverter:
-    def __init__(self, shader_type: str):
+    def __init__(self, shader_type="vertex"):
         self.shader_type = shader_type
         self.structures = {"VSInput": [], "PSOutput": [], "PSInput": [], "VSOutput": []}
         self.gl_position = False
         self.type_mapping = {}
+        self.semantic_map = {
+            "gl_VertexID": "gl_VertexID",
+            "gl_InstanceID": "gl_InstanceID",
+            "gl_FrontFacing": "gl_IsFrontFace",
+            "gl_PrimitiveID": "gl_PrimitiveID",
+            "layout(location = 8)": "TEXCOORD3",
+            "layout(location = 9)": "TEXCOORD4",
+            "layout(location = 10)": "TEXCOORD5",
+            "layout(location = 11)": "TEXCOORD6",
+            "layout(location = 12)": "TEXCOORD7",
+            "gl_Position": "gl_Position",
+            "gl_PointSize": "gl_PointSize",
+            "gl_ClipDistance": "gl_ClipDistance",
+            "layout(location = 0)": "gl_FragColor",
+            "layout(location = 1)": "gl_FragColor1",
+            "layout(location = 2)": "gl_FragColor2",
+            "layout(location = 3)": "gl_FragColor3",
+            "layout(location = 4)": "gl_FragColor4",
+            "layout(location = 5)": "gl_FragColor5",
+            "layout(location = 6)": "gl_FragColor6",
+            "layout(location = 7)": "gl_FragColor7",
+            "gl_FragDepth": "gl_FragDepth",
+            "gl_FragCoord": "gl_FragCoord",
+            "gl_PointCoord": "gl_PointCoord",
+            "gl_GlobalInvocationID": "gl_GlobalInvocationID",
+            "gl_LocalInvocationID": "gl_LocalInvocationID",
+            "gl_WorkGroupID": "gl_WorkGroupID",
+            "gl_LocalInvocationIndex": "gl_LocalInvocationIndex",
+            "gl_WorkGroupSize": "gl_WorkGroupSize",
+            "gl_NumWorkGroups": "gl_NumWorkGroups",
+        }
 
     def generate(self, ast):
         self.gl_position = False
@@ -17,7 +48,7 @@ class GLSLToCrossGLConverter:
         code += " \n"
         self.check_for_gl_position(ast)
         if self.gl_position:
-            self.structures["VSOutput"].append(("vec4", "position"))
+            self.structures["VSOutput"].append(("vec4", "position", None))
         for uniform in ast.uniforms:
             code += f"    cbuffer uniforms {{\n"
             if isinstance(uniform, UniformNode):
@@ -27,48 +58,52 @@ class GLSLToCrossGLConverter:
         for var in ast.io_variables:
             if isinstance(var, LayoutNode):
                 if var.io_type == "vertex_IN":
-                    self.structures["VSInput"].append((var.dtype, var.name))
+                    self.structures["VSInput"].append(
+                        (var.dtype, var.name, var.semantic)
+                    )
                 elif var.io_type == "vertex_OUT":
-                    self.structures["VSOutput"].append((var.dtype, var.name))
+                    self.structures["VSOutput"].append(
+                        (var.dtype, var.name, var.semantic)
+                    )
                 elif var.io_type == "fragment_IN":
-                    self.structures["PSInput"].append((var.dtype, var.name))
+                    self.structures["PSInput"].append(
+                        (var.dtype, var.name, var.semantic)
+                    )
                 elif var.io_type == "fragment_OUT":
-                    self.structures["PSOutput"].append((var.dtype, var.name))
+                    self.structures["PSOutput"].append(
+                        (var.dtype, var.name, var.semantic)
+                    )
             elif isinstance(var, VariableNode):
                 if var.io_type == "vertex_IN":
-                    self.structures["VSInput"].append((var.vtype, var.name))
+                    self.structures["VSInput"].append(
+                        (var.vtype, var.name, var.semantic)
+                    )
                 elif var.io_type == "vertex_OUT":
-                    self.structures["VSOutput"].append((var.vtype, var.name))
+                    self.structures["VSOutput"].append(
+                        (var.vtype, var.name, var.semantic)
+                    )
                 elif var.io_type == "fragment_IN":
-                    self.structures["PSInput"].append((var.vtype, var.name))
+                    self.structures["PSInput"].append(
+                        (var.vtype, var.name, var.semantic)
+                    )
                 elif var.io_type == "fragment_OUT":
-                    self.structures["PSOutput"].append((var.vtype, var.name))
+                    self.structures["PSOutput"].append(
+                        (var.vtype, var.name, var.semantic)
+                    )
             else:
                 raise ValueError("Invalid io type")
         for struct_name, members in self.structures.items():
             if members:
                 code += f"struct {struct_name} {{\n"
-                for i, (dtype, name) in enumerate(members):
+                for i, (dtype, name, semantic) in enumerate(members):
                     if struct_name == "VSInput":
-                        if i == 0:
-                            code += f"    {dtype} {name} @ in_position;\n"
-                        else:
-                            code += f"    {dtype} {name} @ TexCoord{i};\n"
+                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
                     elif struct_name == "VSOutput":
-                        if i == 0:
-                            code += f"    {dtype} {name} @ out_position;\n"
-                        else:
-                            code += f"    {dtype} {name} @ Color{i};\n"
+                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
                     elif struct_name == "PSInput":
-                        if i == 0:
-                            code += f"    {dtype} {name} @ Color;\n"
-                        else:
-                            code += f"    {dtype} {name} @ Color{i};\n"
+                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
                     elif struct_name == "PSOutput":
-                        if i == 0:
-                            code += f"    {dtype} {name} @ Out_Color;\n"
-                        else:
-                            code += f"    {dtype} {name} @ Out_Color{i};\n"
+                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
                 code += "};\n\n"
 
         for constant in ast.constant:
@@ -78,12 +113,7 @@ class GLSLToCrossGLConverter:
         for global_variable in ast.global_variables:
             code += f"    {global_variable.vtype} {global_variable.name};\n"
         for f in ast.functions:
-            if self.shader_type == "vertex":
-                code += self.generate_functions(f, "vertex")
-            elif self.shader_type == "fragment":
-                code += self.generate_functions(f, "fragment")
-            else:
-                raise ValueError("Invalid shader type")
+            code += self.generate_functions(f)
         code += "}\n"
         return code
 
@@ -100,39 +130,26 @@ class GLSLToCrossGLConverter:
                         ):
                             self.gl_position = True
 
-    def generate_functions(self, functions, shader_type):
+    def generate_functions(self, functions):
         code = ""
-        if shader_type == "vertex":
-            if functions.name == "main":
-                code += "vertex {\n"
-                code += "      VSOutput main(VSInput input) {\n"
-                code += "         VSOutput output;\n"
-            else:
-                params = ", ".join(
-                    f"{self.map_type(param[0])} {param[1]}"
-                    for param in functions.params
-                )
-                return_type = self.map_type(functions.return_type)
-                code += f"{return_type} {functions.name}({params}) {{\n"
-        elif shader_type == "fragment":
-            if functions.name == "main":
-                code += "fragment {\n"
-                if self.structures["PSInput"]:
-                    code += "       PSOutput main(PSInput input) {\n"
-                else:
-                    code += "       PSOutput main(VSOutput input) {\n"
-                code += "         PSOutput output;\n"
-            else:
-                params = ", ".join(
-                    f"{self.map_type(param[0])} {param[1]}"
-                    for param in functions.params
-                )
-                return_type = self.map_type(functions.return_type)
-                code += f"{return_type} {functions.name}({params}) {{\n"
+        if functions.qualifier == "vertex":
+            code += "vertex {\n"
+            code += "      VSOutput main(VSInput input) {\n"
+            code += "         VSOutput output;\n"
+        elif functions.qualifier == "fragment":
+            code += "fragment {\n"
+            code += "       PSOutput main(PSInput input) {\n"
+            code += "        PSOutput output;\n"
+        else:
+            params = ", ".join(
+                f"{self.map_type(param[0])} {param[1]}" for param in functions.params
+            )
+            return_type = self.map_type(functions.return_type)
+            code += f"{return_type} {functions.name}({params}) {{\n"
         for stmt in functions.body:
-            code += self.generate_statement(stmt, 2, shader_type)
+            code += self.generate_statement(stmt, 2)
         if functions.name == "main":
-            code += "            return output;\n"
+            code += "        return output;\n"
             code += "        }\n"
             code += "    }\n"
         else:
@@ -298,3 +315,9 @@ class GLSLToCrossGLConverter:
             "BITWISE_SHIFT_LEFT": "<<",
         }
         return op_map.get(op, op)
+
+    def map_semantic(self, semantic, i):
+        if semantic is not None:
+            return f"@ {self.semantic_map.get(semantic, semantic)}"
+        else:
+            return f"@ TEXCOORD{i}"
