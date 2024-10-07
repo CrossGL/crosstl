@@ -242,10 +242,10 @@ class MetalToCrossGLConverter:
                         out = self.map_semantics.get(
                             f"{name}({args[0]})", f"{name}({args[0]})"
                         )
-                        return f"@{out}"
+                        return f"{out}"
                     else:
                         out = self.map_semantics.get(f"{name}", f"{name}")
-                        return f"@{out}"
+                        return f"{out}"
                 else:
                     return ""
         else:
