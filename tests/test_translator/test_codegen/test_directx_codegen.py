@@ -408,6 +408,7 @@ def test_assignment_modulus_operator():
     except SyntaxError:
         pytest.fail("assignment modulus codegen not implemented.")
 
+
 def test_assignment_xor_operator():
     code = """
     shader main {
@@ -432,6 +433,7 @@ def test_assignment_xor_operator():
             return output;
         }
     }
+
     fragment {
         vec4 main(VSOutput input) @ gl_FragColor {
             // Sample brightness and calculate bloom
@@ -446,7 +448,7 @@ def test_assignment_xor_operator():
     }
 }
     """
-  try:
+    try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
@@ -480,6 +482,7 @@ def test_assignment_shift_operators():
             return output;
         }
     }
+
     fragment {
         vec4 main(VSOutput input) @ gl_FragColor {
             // Sample brightness and calculate bloom
