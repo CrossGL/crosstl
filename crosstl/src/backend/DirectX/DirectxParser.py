@@ -12,7 +12,6 @@ from .DirectxAst import (
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
-    shaderTypeNode,
 )
 from .DirectxLexer import HLSLLexer
 
@@ -37,21 +36,6 @@ class HLSLParser:
             self.skip_comments()
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
-
-    def parse_shader_type(self):
-        vertex = False
-        fragment = False
-        compute = False
-        custom = False
-        if self.current_token[1] == "VSMain":
-            vertex = True
-        elif self.current_token[1] == "PSMain":
-            fragment = True
-        elif self.current_token[1] == "CSMain":
-            compute = True
-        else:
-            custom = True
-        return shaderTypeNode(vertex, fragment, compute, custom)
 
     def parse(self):
         shader = self.parse_shader()
@@ -137,9 +121,10 @@ class HLSLParser:
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
             semantic = None
-            if self.current_token[0] == "SEMANTIC":
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
                 semantic = self.current_token[1]
-                self.eat("SEMANTIC")
+                self.eat("IDENTIFIER")
             self.eat("SEMICOLON")
             members.append(VariableNode(vtype, var_name, semantic))
         self.eat("RBRACE")
@@ -148,16 +133,26 @@ class HLSLParser:
     def parse_function(self):
         return_type = self.current_token[1]
         self.eat(self.current_token[0])
-        type_function = self.parse_shader_type()
         name = self.current_token[1]
+        qualifier = None
+        if name == "VSMain":
+            qualifier = "vertex"
+        elif name == "PSMain":
+            qualifier = "fragment"
+        elif name == "CSMain":
+            qualifier = "compute"
+
         self.eat("IDENTIFIER")
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
-        if self.current_token[0] == "SEMANTIC":
-            self.eat("SEMANTIC")
+        semantic = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            semantic = self.current_token[1]
+            self.eat("IDENTIFIER")
         body = self.parse_block()
-        return FunctionNode(return_type, name, params, body, type_function)
+        return FunctionNode(return_type, name, params, body, qualifier, semantic)
 
     def parse_parameters(self):
         params = []
@@ -166,9 +161,12 @@ class HLSLParser:
             self.eat(self.current_token[0])
             name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if self.current_token[0] == "SEMANTIC":
-                self.eat("SEMANTIC")
-            params.append(VariableNode(vtype, name))
+            semantic = None
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                semantic = self.current_token[1]
+                self.eat("IDENTIFIER")
+            params.append(VariableNode(vtype, name, semantic))
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         return params

@@ -13,11 +13,14 @@ class TernaryOpNode:
 
 
 class ShaderNode(ASTNode):
-    def __init__(self, functions):
+    def __init__(self, preprocessors, struct, constant, functions):
+        self.processors = preprocessors
+        self.struct = struct
+        self.constant = constant
         self.functions = functions
 
     def __repr__(self):
-        return f"ShaderNode(functions={self.functions})"
+        return f"ShaderNode(processors={self.processors}, struct={self.struct}, constant={self.constant}, functions={self.functions})"
 
 
 class StructNode(ASTNode):

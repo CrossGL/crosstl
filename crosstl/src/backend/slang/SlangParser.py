@@ -36,7 +36,6 @@ class SlangParser:
         typedefs = []
         cbuffers = []
         global_variables = []
-        shader_type = None
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "IMPORT":
                 imports.append(self.parse_import())
@@ -48,12 +47,10 @@ class SlangParser:
                 cbuffers.append(self.parse_cbuffer())
             elif self.current_token[0] == "TYPEDEF":
                 typedefs.append(self.parse_typedef())
-            elif (
-                self.current_token[0] == "LBRACKET"
-                and self.tokens[self.pos + 1][0] == "SHADER"
-            ):
-                shader_type = self.parse_shader_type()
-                functions.append(self.parse_function(shader_type))
+            elif self.current_token[0] == "TYPE_SHADER":
+                type_shader = self.current_token[1].split('"')[1]
+                self.eat("TYPE_SHADER")
+                functions.append(self.parse_function(type_shader))
             elif self.current_token[0] in [
                 "VOID",
                 "FLOAT",
@@ -78,29 +75,7 @@ class SlangParser:
             functions,
             global_variables,
             cbuffers,
-            shader_type,
         )
-
-    def parse_shader_type(self):
-        self.eat("LBRACKET")
-        self.eat("SHADER")
-        self.eat("LPAREN")
-        vertex = False
-        fragment = False
-        compute = False
-        type_sh = self.current_token[1].split('"')[1]
-        if type_sh == "vertex":
-            vertex = True
-            self.eat(self.current_token[0])
-        elif type_sh == "fragment":
-            fragment = True
-            self.eat(self.current_token[0])
-        elif type_sh == "compute":
-            compute = True
-            self.eat("COMPUTE")
-        self.eat("RPAREN")
-        self.eat("RBRACKET")
-        return shaderTypeNode(vertex, fragment, compute)
 
     def is_function(self):
         # Look ahead to check if there's a left parenthesis after the identifier
@@ -171,9 +146,10 @@ class SlangParser:
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
             semantic = None
-            if self.current_token[0] == "SEMANTIC":
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
                 semantic = self.current_token[1]
-                self.eat("SEMANTIC")
+                self.eat(self.current_token[0])
             self.eat("SEMICOLON")
             members.append(VariableNode(vtype, var_name, semantic))
         self.eat("RBRACE")
@@ -188,7 +164,7 @@ class SlangParser:
         self.eat("SEMICOLON")
         return TypedefNode(original_type, new_type)
 
-    def parse_function(self, shader_type="custom"):
+    def parse_function(self, shader_type=None):
         is_generic = False
         if self.current_token[0] == "GENERIC":
             is_generic = True
@@ -200,10 +176,15 @@ class SlangParser:
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
-        if self.current_token[0] == "SEMANTIC":
-            self.eat("SEMANTIC")
+        semantic = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            semantic = self.current_token[1]
+            self.eat(self.current_token[0])
         body = self.parse_block()
-        return FunctionNode(return_type, name, params, body, is_generic, shader_type)
+        return FunctionNode(
+            return_type, name, params, body, is_generic, shader_type, semantic
+        )
 
     def parse_parameters(self):
         params = []
@@ -213,12 +194,15 @@ class SlangParser:
             self.eat(self.current_token[0])
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+            semantic = None
             if self.current_token[0] == "IDENTIFIER":
                 struct_def = self.current_token[1]
                 self.eat("IDENTIFIER")
-            if self.current_token[0] == "SEMANTIC":
-                self.eat("SEMANTIC")
-            params.append(VariableNode(vtype + struct_def, name))
+            if self.current_token[0] == "COLON":
+                self.eat("COLON")
+                semantic = self.current_token[1]
+                self.eat(self.current_token[0])
+            params.append(VariableNode(vtype + struct_def, name, semantic))
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         return params

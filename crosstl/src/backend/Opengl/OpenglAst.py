@@ -10,44 +10,17 @@ class UniformNode(ASTNode):
     def __repr__(self):
         return f"UniformNode(vtype={self.vtype}, name={self.name})"
 
-    def __str__(self):
-        return f"uniform {self.vtype} {self.name};"
-
 
 class ConstantNode(ASTNode):
-    def __init__(self, value):
+    def __init__(self, vtype, name, value):
+        self.vtype = vtype
+        self.name = name
         self.value = value
 
     def __repr__(self):
-        return f"ConstantNode(value={self.value})"
-
-    def __str__(self):
-        return str(self.value)
-
-
-class VersionDirectiveNode(ASTNode):
-    def __init__(self, number, profile):
-        self.version_number = number
-        self.profile = profile
-
-    def __repr__(self):
-        return f"VersionDirectiveNode(version_number={self.version_number}, profile={self.profile})"
-
-    def __str__(self):
-        return f"#version {self.version_number} {self.profile}"
-
-
-class LayoutNode:
-    def __init__(self, location_number, dtype, name):
-        self.location_number = location_number
-        self.dtype = dtype
-        self.name = name
-
-    def __repr__(self):
-        return f"LayoutNode(location={self.location_number}, dtype={self.dtype})"
-
-    def __str__(self):
-        return f"Layout(location={self.location_number}, type={self.dtype})"
+        return (
+            f"ConstantNode(vtype={self.vtype}, name ={self.name} ,value={self.value})"
+        )
 
 
 class TernaryOpNode:
@@ -61,105 +34,100 @@ class TernaryOpNode:
 
 
 class LayoutNode:
-    def __init__(self, section, location_number, dtype, name, io_type):
-        self.section = section
+    def __init__(self, location_number, dtype, name, io_type, semantic=None):
         self.location_number = location_number
         self.dtype = dtype
         self.name = name
         self.io_type = io_type
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"LayoutNode(section={self.section}, location_number={self.location_number}, dtype={self.dtype}, name={self.name}, io_type={self.io_type})"
+        return f"LayoutNode(location_number={self.location_number}, dtype={self.dtype}, name={self.name}, io_type={self.io_type}, semantic={self.semantic})"
 
 
-class ShaderNode:
+class ShaderNode(ASTNode):
     def __init__(
-        self,
-        version,
-        global_inputs,
-        global_outputs,
-        uniforms,
-        vertex_section,
-        fragment_section,
-        functions,
+        self, io_variables, constant, uniforms, global_variables, functions, shader_type
     ):
-        self.version = version
-        self.global_inputs = global_inputs
-        self.global_outputs = global_outputs
+        self.io_variables = io_variables
+        self.constant = constant
         self.uniforms = uniforms
-        self.vertex_section = vertex_section
-        self.fragment_section = fragment_section
+        self.global_variables = global_variables
         self.functions = functions
+        self.shader_type = shader_type
 
     def __repr__(self):
-        return f"ShaderNode({self.version!r}) {self.global_inputs!r} {self.global_outputs!r} {self.functions!r} {self.vertex_section!r} {self.fragment_section!r}"
-
-
-class VERTEXShaderNode:
-    def __init__(self, inputs, outputs, uniform, functions, layout_qualifiers=[]):
-        self.inputs = inputs
-        self.outputs = outputs
-        self.uniform = uniform
-        self.functions = functions
-        self.layout_qualifiers = layout_qualifiers
-
-    def __repr__(self):
-        return f"VERTEXShaderNode({self.inputs!r}) {self.outputs!r} {self.uniform!r}{self.functions!r}{self.layout_qualifiers!r}"
-
-
-class FRAGMENTShaderNode:
-    def __init__(self, inputs, outputs, uniform, functions, layout_qualifiers=[]):
-        self.inputs = inputs
-        self.outputs = outputs
-        self.uniform = uniform
-        self.functions = functions
-        self.layout_qualifiers = layout_qualifiers
-
-    def __repr__(self):
-        return f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r}{self.uniform!r} {self.functions!r}{self.layout_qualifiers!r}"
+        return f"ShaderNode(io_variables={self.io_variables}, constant={self.constant},uniforms={self.uniforms} , global_variables={self.global_variables}, functions={self.functions}, shader_type={self.shader_type})"
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, return_type, name, params, body):
+    def __init__(self, return_type, name, params, body, qualifier=None):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
+        self.qualifier = qualifier
 
     def __repr__(self):
-        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body})"
+        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, qualifier={self.qualifier})"
+
+
+class ArrayAccessNode(ASTNode):
+    def __init__(self, array, index):
+        self.array = array
+        self.index = index
+
+    def __repr__(self):
+        return f"ArrayAccessNode(array={self.array}, index={self.index})"
 
 
 class VariableNode(ASTNode):
-    def __init__(self, vtype, name):
+    def __init__(self, vtype, name, io_type=None, semantic=None):
         self.vtype = vtype
         self.name = name
+        self.io_type = io_type
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"VariableNode(vtype={self.vtype}, name={self.name})"
+        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', io_type={self.io_type}, semantic={self.semantic})"
 
 
 class AssignmentNode(ASTNode):
-    def __init__(self, name, value):
+    def __init__(self, name, value, operator="="):
         self.name = name
         self.value = value
+        self.operator = operator
 
     def __repr__(self):
-        return f"AssignmentNode(name={self.name}, value={self.value})"
+        return f"AssignmentNode(name={self.name}, value={self.value}, operator='{self.operator}')"
+
+
+class VectorConstructorNode:
+    def __init__(self, type_name, args):
+        self.type_name = type_name
+        self.args = args
+
+    def __repr__(self):
+        return f"VectorConstructorNode(type_name={self.type_name}, args={self.args})"
 
 
 class IfNode(ASTNode):
-    def __init__(self, condition, if_body, else_if_chain=None, else_body=None):
-        self.condition = condition
+    def __init__(
+        self,
+        if_condition,
+        if_body,
+        else_if_conditions=[],
+        else_if_bodies=[],
+        else_body=None,
+    ):
+        self.if_condition = if_condition
         self.if_body = if_body
-        self.else_if_chain = else_if_chain or []
+        self.else_if_conditions = else_if_conditions
+        self.else_if_bodies = else_if_bodies
         self.else_body = else_body
 
     def __repr__(self):
-        return (
-            f"IfNode(condition={self.condition}, if_body={self.if_body}, "
-            f"else_if_chain={self.else_if_chain}, else_body={self.else_body})"
-        )
+        return f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, else_if_conditions={self.else_if_conditions}, else_if_bodies={self.else_if_bodies}, else_body={self.else_body})"
 
 
 class ForNode(ASTNode):
