@@ -129,6 +129,43 @@ def test_else_if_parsing():
     except SyntaxError:
         pytest.fail("else_if parsing not implemented.")
 
+def test_assignment_ops_parsing():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+
+        if (input.in_position.r > 0.5) {
+            output.out_color += input.in_position;
+        }
+
+        if (input.in_position.r < 0.5) {
+            output.out_color -= float4(0.1, 0.1, 0.1, 0.1);
+        }
+
+        if (input.in_position.g > 0.5) {
+            output.out_color *= 2.0;
+        }
+
+        if (input.in_position.b > 0.5) {
+            output.out_color /= 2.0;
+        }
+
+        if (input.in_position.r == 0.5) {
+            uint redValue = asuint(output.out_color.r);
+            redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+        }
+
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("assign_op parsing not implemented.")
+
 
 if __name__ == "__main__":
     pytest.main()
