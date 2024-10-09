@@ -222,6 +222,7 @@ class HLSLParser:
                     "MINUS_EQUALS",
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
+                    "ASSIGN_XOR",
                 ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -236,6 +237,7 @@ class HLSLParser:
                     "MINUS_EQUALS",
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
+                    "ASSIGN_XOR",
                 ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -330,6 +332,7 @@ class HLSLParser:
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
+            "ASSIGN_XOR",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
