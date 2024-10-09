@@ -25,7 +25,7 @@ def tokenize_code(code: str) -> List:
 def test_struct_parsing():
     code = """
     struct VSInput {
-        float4 position : POSITION;
+        float4 position : SV_Position;
         float4 color : TEXCOORD0;
     };
 

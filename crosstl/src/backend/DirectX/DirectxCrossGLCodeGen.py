@@ -5,10 +5,6 @@ from .DirectxLexer import *
 
 class HLSLToCrossGLConverter:
     def __init__(self):
-        self.vertex_inputs = []
-        self.vertex_outputs = []
-        self.fragment_inputs = []
-        self.fragment_outputs = []
         self.type_map = {
             "void": "void",
             "float2": "vec2",
@@ -34,6 +30,36 @@ class HLSLToCrossGLConverter:
             "Texture2D": "sampler2D",
             "TextureCube": "samplerCube",
         }
+        self.semantic_map = {
+            # Vertex inputs instance
+            "FRONT_FACE": "gl_IsFrontFace",
+            "PRIMITIVE_ID": "gl_PrimitiveID",
+            "INSTANCE_ID": "InstanceID",
+            "VERTEX_ID": "VertexID",
+            "SV_InstanceID": "gl_InstanceID",
+            "SV_VertexID": "gl_VertexID",
+            # Vertex outputs
+            "SV_POSITION": "gl_Position",
+            # Fragment inputs
+            "SV_TARGET": "gl_FragColor",
+            "SV_TARGET0": "gl_FragColor0",
+            "SV_TARGET1": "gl_FragColor1",
+            "SV_TARGET2": "gl_FragColor2",
+            "SV_TARGET3": "gl_FragColor3",
+            "SV_TARGET4": "gl_FragColor4",
+            "SV_TARGET5": "gl_FragColor5",
+            "SV_TARGET6": "gl_FragColor6",
+            "SV_TARGET7": "gl_FragColor7",
+            "SV_DEPTH": "gl_FragDepth",
+            "SV_DEPTH0": "gl_FragDepth0",
+            "SV_DEPTH1": "gl_FragDepth1",
+            "SV_DEPTH2": "gl_FragDepth2",
+            "SV_DEPTH3": "gl_FragDepth3",
+            "SV_DEPTH4": "gl_FragDepth4",
+            "SV_DEPTH5": "gl_FragDepth5",
+            "SV_DEPTH6": "gl_FragDepth6",
+            "SV_DEPTH7": "gl_FragDepth7",
+        }
 
     def generate(self, ast):
         code = "shader main {\n"
@@ -42,7 +68,7 @@ class HLSLToCrossGLConverter:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
-                    code += f"        {self.map_type(member.vtype)} {member.name};\n"
+                    code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
                 code += "    }\n"
         # Generate global variables
         for node in ast.global_variables:
@@ -54,21 +80,24 @@ class HLSLToCrossGLConverter:
 
         # Generate custom functions
         for func in ast.functions:
-            function_type_node = func.type_function
-            if function_type_node.custom:
+            if func.qualifier == "vertex":
+                code += "    // Vertex Shader\n"
+                code += "    vertex {\n"
                 code += self.generate_function(func)
-            if function_type_node.vertex:
-                code += f"vertex {{\n"
+                code += "    }\n\n"
+            elif func.qualifier == "fragment":
+                code += "    // Fragment Shader\n"
+                code += "    fragment {\n"
                 code += self.generate_function(func)
-                code += f"}}\n"
-            elif function_type_node.fragment:
-                code += f"fragment {{\n"
+                code += "    }\n\n"
+
+            elif func.qualifier == "compute":
+                code += "    // Compute Shader\n"
+                code += "    compute {\n"
                 code += self.generate_function(func)
-                code += f"}}\n"
-            elif function_type_node.compute:
-                code += f"compute {{\n"
+                code += "    }\n\n"
+            else:
                 code += self.generate_function(func)
-                code += f"}}\n"
 
         code += "}\n"
         return code
@@ -83,10 +112,15 @@ class HLSLToCrossGLConverter:
                 code += "    }\n"
         return code
 
-    def generate_function(self, func):
-        params = ", ".join(f"{self.map_type(p.vtype)} {p.name}" for p in func.params)
-        code = f"    {self.map_type(func.return_type)} {func.name}({params}) {{\n"
-        code += self.generate_function_body(func.body, indent=2)
+    def generate_function(self, func, indent=1):
+        code = " "
+        code += "  " * indent
+        params = ", ".join(
+            f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.semantic)}"
+            for p in func.params
+        )
+        code += f"    {self.map_type(func.return_type)} {func.name}({params}) {self.map_semantic(func.semantic)} {{\n"
+        code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
         return code
 
@@ -187,3 +221,9 @@ class HLSLToCrossGLConverter:
         if hlsl_type:
             return self.type_map.get(hlsl_type, hlsl_type)
         return hlsl_type
+
+    def map_semantic(self, semantic):
+        if semantic is not None:
+            return f"@ {self.semantic_map.get(semantic, semantic)}"
+        else:
+            return ""
