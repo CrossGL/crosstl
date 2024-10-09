@@ -110,6 +110,7 @@ def test_else_if_tokenization():
     except SyntaxError:
         pytest.fail("else_if tokenization not implemented.")
 
+
 def test_assignment_ops_tokenization():
     code = """
     PSOutput PSMain(PSInput input) {
@@ -145,6 +146,7 @@ def test_assignment_ops_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("assign_op tokenization is not implemented.")
+
 
 if __name__ == "__main__":
     pytest.main()
