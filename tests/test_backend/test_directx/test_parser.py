@@ -149,12 +149,12 @@ def test_assignment_ops_parsing():
         }
 
         if (input.in_position.b > 0.5) {
-            output.out_color /= 2.0;
+            out_color /= 2.0;
         }
 
         if (input.in_position.r == 0.5) {
             uint redValue = asuint(output.out_color.r);
-            redValue ^= 0x1;
+            output.redValue ^= 0x1;
             output.out_color.r = asfloat(redValue);
         }
 
