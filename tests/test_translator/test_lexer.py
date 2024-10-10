@@ -9,17 +9,21 @@ def tokenize_code(code: str) -> List:
     return lexer.tokens
 
 
-def test_input_output_tokenization():
+def test_struct_tokenization():
     code = """
-    input vec3 position;
-    output vec2 vUV;
-    input vec2 vUV;
-    output vec4 fragColor;
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+
     """
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Struct tokenization not implemented.")
 
 
 def test_if_statement_tokenization():
@@ -33,7 +37,7 @@ def test_if_statement_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("if tokenization not implemented.")
 
 
 def test_for_statement_tokenization():
@@ -45,7 +49,7 @@ def test_for_statement_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("for tokenization not implemented.")
 
 
 def test_else_statement_tokenization():
@@ -59,7 +63,7 @@ def test_else_statement_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("else tokenization not implemented.")
 
 
 def test_else_if_statement_tokenization():
@@ -80,42 +84,33 @@ def test_else_if_statement_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("else if  tokenization not implemented.")
 
 
 def test_function_call_tokenization():
     code = """
-    shader PerlinNoise {
-    vertex {
-        input vec3 position;
-        output vec2 vUV;
-
-        void main() {
-            vUV = position.xy * 10.0;
-            gl_Position = vec4(position, 1.0);
-        }
-    }
-
+shader main {
+    
     // Perlin Noise Function
     float perlinNoise(vec2 p) {
         return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
     }
-
-    // Fragment Shader
+    
     fragment {
-        input vec2 vUV;
-        output vec4 fragColor;
+        vec4 main(VSOutput input) @ gl_FragColor {
+            // Sample brightness and calculate bloom
+            float brightness = texture(iChannel0, input.color.xy).r;
+            float bloom = max(0.0, brightness - 0.5);
+            bloom = perlinNoise(input.color.xy);
+            // Apply bloom to the texture color
+            vec3 texColor = texture(iChannel0, input.color.xy).rgb;
+            vec3 colorWithBloom = texColor + vec3(bloom);
 
-        void main() {
-            float noise = perlinNoise(vUV);
-            float height = noise * 10.0;
-            vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
-            fragColor = vec4(color, 1.0);
-            }
+            return vec4(colorWithBloom, 1.0);
         }
     }
-
-    """
+}
+"""
     try:
         tokenize_code(code)
     except SyntaxError:

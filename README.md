@@ -271,7 +271,7 @@ We believe that everyone can contribute and make a difference. Whether
 it\'s writing code, fixing bugs, or simply sharing feedback,
 your contributions are definitely welcome and appreciated 🙌
 
-find out more info in our [Contributing guide](https://crossgl.github.io/contribution.html)
+find out more info in our [Contributing guide](CONTRIBUTING.md)
 
 <a href="https://github.com/CrossGL/crosstl/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=CrossGL/crosstl" />
