@@ -111,5 +111,42 @@ def test_else_if_tokenization():
         pytest.fail("else_if tokenization not implemented.")
 
 
+def test_assignment_ops_tokenization():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+
+        if (input.in_position.r > 0.5) {
+            output.out_color += input.in_position;
+        }
+
+        if (input.in_position.r < 0.5) {
+            output.out_color -= float4(0.1, 0.1, 0.1, 0.1);
+        }
+
+        if (input.in_position.g > 0.5) {
+            output.out_color *= 2.0;
+        }
+
+        if (input.in_position.b > 0.5) {
+            output.out_color /= 2.0;
+        }
+
+        if (input.in_position.r == 0.5) {
+            uint redValue = asuint(output.out_color.r);
+            redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+        }
+
+        return output;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("assign_op tokenization is not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

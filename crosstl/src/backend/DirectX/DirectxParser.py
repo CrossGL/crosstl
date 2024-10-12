@@ -207,12 +207,19 @@ class HLSLParser:
             "BOOL",
             "IDENTIFIER",
         ]:
+            # Handle variable declaration (e.g., int a = b;)
             first_token = self.current_token
-            self.eat(self.current_token[0])
+            self.eat(self.current_token[0])  # Eat type or identifier
+            name = None
 
+            # Check for member access (e.g., a.b)
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
+
+                if self.current_token[0] == "DOT":
+                    name = self.parse_member_access(name)
+
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
                     return VariableNode(first_token[1], name)
@@ -222,13 +229,32 @@ class HLSLParser:
                     "MINUS_EQUALS",
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
+                    "ASSIGN_XOR",
                 ]:
+                    # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
                     value = self.parse_expression()
                     self.eat("SEMICOLON")
                     return AssignmentNode(VariableNode(first_token[1], name), value, op)
+
+            elif self.current_token[0] in [
+                "EQUALS",
+                "PLUS_EQUALS",
+                "MINUS_EQUALS",
+                "MULTIPLY_EQUALS",
+                "DIVIDE_EQUALS",
+                "ASSIGN_XOR",
+            ]:
+                # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                value = self.parse_expression()
+                self.eat("SEMICOLON")
+                return AssignmentNode(first_token[1], value, op)
+
             elif self.current_token[0] == "DOT":
+                # Handle int a.b = c; case directly
                 left = self.parse_member_access(first_token[1])
                 if self.current_token[0] in [
                     "EQUALS",
@@ -236,6 +262,7 @@ class HLSLParser:
                     "MINUS_EQUALS",
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
+                    "ASSIGN_XOR",
                 ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -245,6 +272,8 @@ class HLSLParser:
                 else:
                     self.eat("SEMICOLON")
                     return left
+
+        # If it's not a type/identifier, it must be an expression
         expr = self.parse_expression()
         self.eat("SEMICOLON")
         return expr
@@ -330,6 +359,7 @@ class HLSLParser:
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
+            "ASSIGN_XOR",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -406,6 +436,14 @@ class HLSLParser:
 
     def parse_primary(self):
         if self.current_token[0] in ["IDENTIFIER", "FLOAT", "FVECTOR"]:
+            if self.current_token[0] == "IDENTIFIER":
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                if self.current_token[0] == "LPAREN":
+                    return self.parse_function_call(name)
+                elif self.current_token[0] == "DOT":
+                    return self.parse_member_access(name)
+                return VariableNode("", name)
             if self.current_token[0] in ["FLOAT", "FVECTOR"]:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
@@ -415,6 +453,10 @@ class HLSLParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
+            if self.current_token[0] == "IDENTIFIER":
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                return VariableNode(value, name)
             return value
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")

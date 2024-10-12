@@ -50,7 +50,7 @@ def test_struct_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_Target0;
+        float4 out_color : SV_TARGET0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -93,7 +93,7 @@ def test_if_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_Target0;
+        float4 out_color : SV_TARGET0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -139,7 +139,7 @@ def test_for_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_Target0;
+        float4 out_color : SV_TARGET0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -188,7 +188,7 @@ def test_else_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_Target0;
+        float4 out_color : SV_TARGET0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -238,7 +238,7 @@ def test_function_call_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_Target0;
+        float4 out_color : SV_TARGET0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -285,7 +285,7 @@ def test_else_if_codegen():
     };
 
     struct PSOutput {
-        float4 out_color : SV_Target0;
+        float4 out_color : SV_TARGET0;
     };
 
     PSOutput PSMain(PSInput input) {
@@ -307,6 +307,46 @@ def test_else_if_codegen():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Else_if statement parsing or code generation not implemented.")
+
+
+def test_assignment_ops_parsing():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+
+        if (input.in_position.r > 0.5) {
+            output.out_color += input.in_position;
+        }
+
+        if (input.in_position.r < 0.5) {
+            output.out_color -= float4(0.1, 0.1, 0.1, 0.1);
+        }
+
+        if (input.in_position.g > 0.5) {
+            output.out_color *= 2.0;
+        }
+
+        if (input.in_position.b > 0.5) {
+            out_color /= 2.0;
+        }
+
+        if (input.in_position.r == 0.5) {
+            uint redValue = asuint(output.out_color.r);
+            output.redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+        }
+
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("assignment ops parsing or code generation not implemented.")
 
 
 if __name__ == "__main__":
