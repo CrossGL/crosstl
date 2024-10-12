@@ -343,6 +343,7 @@ class MetalCodeGen:
             "MULTIPLY": "*",
             "DIVIDE": "/",
             "BITWISE_XOR": "^",
+            "BITWISE_AND": "&",
             "LESS_THAN": "<",
             "GREATER_THAN": ">",
             "ASSIGN_ADD": "+=",
