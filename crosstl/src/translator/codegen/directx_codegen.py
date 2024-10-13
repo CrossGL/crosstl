@@ -266,6 +266,7 @@ class HLSLCodeGen:
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
             "ASSIGN_MOD": "%=",
+            "ASSIGN_AND": "&=",
             "ASSIGN_XOR": "^=",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",
