@@ -335,6 +335,8 @@ def test_assignment_ops_parsing():
             uint redValue = asuint(output.out_color.r);
             output.redValue ^= 0x1;
             output.out_color.r = asfloat(redValue);
+
+            outpu.redValue |= 0x2;
         }
 
         return output;
