@@ -74,6 +74,7 @@ def test_for_parsing():
     except SyntaxError:
         pytest.fail("for parsing not implemented.")
 
+
 def test_while_parsing():
     code = """
     VSOutput VSMain(VSInput input) {
@@ -91,6 +92,7 @@ def test_while_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("while parsing not implemented")
+
 
 def test_else_parsing():
     code = """

@@ -85,6 +85,7 @@ class ForNode(ASTNode):
     def __repr__(self):
         return f"ForNode(init={self.init}, condition={self.condition}, update={self.update}, body={self.body})"
 
+
 class WhileNode(ASTNode):
     def __init__(self, condition, body):
         self.condition = condition
