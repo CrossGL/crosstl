@@ -1,6 +1,3 @@
-from typing import AnyStr
-
-
 class ASTNode:
     pass
 
