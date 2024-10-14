@@ -362,6 +362,53 @@ def test_assignment_modulus_operator():
         pytest.fail("assignment modulus codegen not implemented.")
 
 
+def test_assignment_modulus_operator():
+    code = """
+    shader main {
+
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+
+    sampler2D iChannel0;
+
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
+            uint a ^= b;
+            // Pass through texture coordinates as color
+            output.color = vec4(input.texCoord, 0.0, 1.0);
+            return output;
+        }
+    }
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            // Sample brightness and calculate bloom
+            float brightness = texture(iChannel0, input.color.xy).r;
+            float bloom = max(0.0, brightness - 0.5);
+            // Apply bloom to the texture color
+            uint a ^= b;
+            vec3 texColor = texture(iChannel0, input.color.xy).rgb;
+            vec3 colorWithBloom = texColor + vec3(bloom);
+            return vec4(colorWithBloom, 1.0);
+        }
+    }
+}
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("assignment modulus codegen not implemented.")
+
+
 def test_assignment_xor_operator():
     code = """
     shader main {
@@ -407,7 +454,7 @@ def test_assignment_xor_operator():
         generated_code = generate_code(ast)
         print(generated_code)
     except SyntaxError:
-        pytest.fail("XOR operator codegen not implemented.")
+        pytest.fail("assignment modulus codegen not implemented.")
 
 
 def test_assignment_shift_operators():
@@ -478,7 +525,9 @@ def test_bitwise_operators():
         VSOutput main(VSInput input) {
             VSOutput output;
             output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
-            isLightOn = 2 >> 1;
+            isLightOn = 2 & 1;
+            isLightOn = 2 | 1;
+            isLightOn = 2 ^ 1;
             // Pass through texture coordinates as color
             output.color = vec4(input.texCoord, 0.0, 1.0);
             return output;
@@ -491,7 +540,9 @@ def test_bitwise_operators():
             float brightness = texture(iChannel0, input.color.xy).r;
             float bloom = max(0.0, brightness - 0.5);
             // Apply bloom to the texture color
-            isLightOn = 2 >> 1;
+            isLightOn = 2 & 1;
+            isLightOn = 2 | 1;
+            isLightOn = 2 ^ 1;
             vec3 texColor = texture(iChannel0, input.color.xy).rgb;
             vec3 colorWithBloom = texColor + vec3(bloom);
             return vec4(colorWithBloom, 1.0);

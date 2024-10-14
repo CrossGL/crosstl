@@ -262,11 +262,9 @@ class HLSLCodeGen:
             "GREATER_THAN": ">",
             "ASSIGN_ADD": "+=",
             "ASSIGN_SUB": "-=",
-            "ASSIGN_OR": "|=",
             "ASSIGN_MUL": "*=",
             "ASSIGN_DIV": "/=",
             "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",
             "EQUAL": "==",
@@ -276,8 +274,9 @@ class HLSLCodeGen:
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
             "ASSIGN_SHIFT_RIGHT": ">>=",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
+            "ASSIGN_AND": "&=",
+            "LOGICAL_AND": "&&",
+            "ASSIGN_XOR": "^=",
         }
         return op_map.get(op, op)
 
