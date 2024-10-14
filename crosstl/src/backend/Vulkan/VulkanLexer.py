@@ -5,6 +5,10 @@ TOKENS = [
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("WHITESPACE", r"\s+"),
     ("SEMANTIC", r":\w+"),  
+    ("PRE_INCREMENT", r"\+\+(?=\w)"),
+    ("PRE_DECREMENT", r"--(?=\w)"),
+    ("POST_INCREMENT", r"(?<=\w)\+\+"),
+    ("POST_DECREMENT", r"(?<=\w)--"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),  
     ("NUMBER", r"\d+(\.\d*)?|\.\d+"),
     ("SEMICOLON", r";"),
@@ -23,6 +27,7 @@ TOKENS = [
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
+    ("MODULUS", r"%"),
     ("LESS_EQUAL", r"<="),  
     ("GREATER_EQUAL", r">="),
     ("NOT_EQUAL", r"!="),
@@ -104,7 +109,12 @@ KEYWORDS = {
     "image2DMS": "IMAGE2DMS",
     "image2DMSArray": "IMAGE2DMSARRAY",
     "atomic_uint": "ATOMICUINT",
+    "mat2": "MAT2",
+    "mat3": "MAT3",
+    "mat4": "MAT4",
 }
+
+VALID_DATA_TYPES = ["int", "float", "double", "vec2", "vec3", "vec4", "mat2", "mat3", "mat4", "uint", "bool", "void"]
 
 class VulkanLexer:
     def __init__(self, code):
