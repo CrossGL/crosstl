@@ -506,7 +506,8 @@ def test_bitwise_operators():
         print(code)
     except SyntaxError:
         pytest.fail("Bitwise Shift codegen not implemented")
-        
+
+
 def test_bitwise_and_operator():
     code = """
     shader main {

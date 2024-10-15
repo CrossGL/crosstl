@@ -550,6 +550,7 @@ def test_xor_operator():
     except SyntaxError:
         pytest.fail("Bitwise XOR not working")
 
+
 def test_and_operator():
     code = """
     shader main {
@@ -583,6 +584,7 @@ def test_and_operator():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Bitwise AND not working")
+
 
 if __name__ == "__main__":
     pytest.main()
