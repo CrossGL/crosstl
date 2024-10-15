@@ -1,10 +1,14 @@
 import re
 
+# Token definitions
 TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("STRUCT", r"\bstruct\b"),
     ("CBUFFER", r"\bcbuffer\b"),
+    ("TYPE_SHADER", r'\[shader\("(vertex|fragment|compute)"\)\]'),
+    ("SHADER", r"\bshader\b"),
+    ("STRING", r'"(?:\\.|[^"\\])*"'),
     ("TEXTURE2D", r"\bTexture2D\b"),
     ("SAMPLER_STATE", r"\bSamplerState\b"),
     ("FVECTOR", r"\bfloat[2-4]\b"),
@@ -16,10 +20,18 @@ TOKENS = [
     ("VOID", r"\bvoid\b"),
     ("RETURN", r"\breturn\b"),
     ("IF", r"\bif\b"),
-    ("ELSE_IF", r"\belse\sif\b"),
+    ("ELSE_IF", r"\belse\s+if\b"),
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),
+    ("WHILE", r"\bwhile\b"),
+    ("DO", r"\bdo\b"),
+    ("SWITCH", r"\bswitch\b"),
+    ("CASE", r"\bcase\b"),
+    ("DEFAULT", r"\bdefault\b"),
+    ("BREAK", r"\bbreak\b"),
+    ("CONTINUE", r"\bcontinue\b"),
     ("REGISTER", r"\bregister\b"),
+    ("STRING", r'"[^"]*"'),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
     ("LBRACE", r"\{"),
@@ -30,7 +42,7 @@ TOKENS = [
     ("RBRACKET", r"\]"),
     ("SEMICOLON", r";"),
     ("COMMA", r","),
-    ("COLON", r":"),
+    ("COLON", r":"),  # Separate token for single colon, if needed separately
     ("QUESTION", r"\?"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
@@ -42,8 +54,6 @@ TOKENS = [
     ("MINUS_EQUALS", r"-="),
     ("MULTIPLY_EQUALS", r"\*="),
     ("DIVIDE_EQUALS", r"/="),
-    ("ASSIGN_XOR", r"\^="),
-    ("ASSIGN_OR", r"\|="),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("DOT", r"\."),
@@ -53,8 +63,18 @@ TOKENS = [
     ("MINUS", r"-"),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
+    # Slang-specific tokens
+    ("IMPORT", r"\bimport\b"),
+    ("EXPORT", r"\bexport\b"),
+    ("GENERIC", r"\b__generic\b"),
+    ("EXTENSION", r"\bextension\b"),
+    ("TYPEDEF", r"\btypedef\b"),
+    ("CONSTEXPR", r"\bconstexpr\b"),
+    ("STATIC", r"\bstatic\b"),
+    ("INLINE", r"\binline\b"),
 ]
 
+# Keywords map for matching identifiers to token types
 KEYWORDS = {
     "struct": "STRUCT",
     "cbuffer": "CBUFFER",
@@ -72,11 +92,26 @@ KEYWORDS = {
     "if": "IF",
     "else": "ELSE",
     "for": "FOR",
+    "while": "WHILE",
+    "do": "DO",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
+    "break": "BREAK",
+    "continue": "CONTINUE",
     "register": "REGISTER",
+    "import": "IMPORT",
+    "export": "EXPORT",
+    "__generic": "GENERIC",
+    "extension": "EXTENSION",
+    "typedef": "TYPEDEF",
+    "constexpr": "CONSTEXPR",
+    "static": "STATIC",
+    "inline": "INLINE",
 }
 
 
-class HLSLLexer:
+class SlangLexer:
     def __init__(self, code):
         self.code = code
         self.tokens = []
@@ -98,7 +133,7 @@ class HLSLLexer:
                         "COMMENT_SINGLE",
                         "COMMENT_MULTI",
                     ]:
-                        token = (token_type, text)
+                        token = (token_type, text.strip())
                         self.tokens.append(token)
                     pos = match.end(0)
                     break
@@ -106,5 +141,4 @@ class HLSLLexer:
                 raise SyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
-
         self.tokens.append(("EOF", ""))

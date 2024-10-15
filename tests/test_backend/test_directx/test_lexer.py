@@ -6,13 +6,13 @@ from crosstl.src.backend.DirectX.DirectxLexer import HLSLLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = HLSLLexer(code)
-    return lexer.tokenize()
+    return lexer.tokens
 
 
 def test_struct_tokenization():
     code = """
     struct VSInput {
-        float4 position : POSITION;
+        float4 position : SV_position;
         float4 color : TEXCOORD0;
     };
 
@@ -111,6 +111,42 @@ def test_else_if_tokenization():
         pytest.fail("else_if tokenization not implemented.")
 
 
-if __name__ == "__main__":
+def test_assignment_ops_tokenization():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color = float4(0.0, 0.0, 0.0, 1.0);
 
+        if (input.in_position.r > 0.5) {
+            output.out_color += input.in_position;
+        }
+
+        if (input.in_position.r < 0.5) {
+            output.out_color -= float4(0.1, 0.1, 0.1, 0.1);
+        }
+
+        if (input.in_position.g > 0.5) {
+            output.out_color *= 2.0;
+        }
+
+        if (input.in_position.b > 0.5) {
+            output.out_color /= 2.0;
+        }
+
+        if (input.in_position.r == 0.5) {
+            uint redValue = asuint(output.out_color.r);
+            redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+        }
+
+        return output;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("assign_op tokenization is not implemented.")
+
+
+if __name__ == "__main__":
     pytest.main()

@@ -25,7 +25,7 @@ def tokenize_code(code: str) -> List:
 def test_struct_parsing():
     code = """
     struct VSInput {
-        float4 position : POSITION;
+        float4 position : SV_Position;
         float4 color : TEXCOORD0;
     };
 
@@ -130,6 +130,45 @@ def test_else_if_parsing():
         pytest.fail("else_if parsing not implemented.")
 
 
-# Run all tests
+def test_assignment_ops_parsing():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+
+        if (input.in_position.r > 0.5) {
+            output.out_color += input.in_position;
+        }
+
+        if (input.in_position.r < 0.5) {
+            output.out_color -= float4(0.1, 0.1, 0.1, 0.1);
+        }
+
+        if (input.in_position.g > 0.5) {
+            output.out_color *= 2.0;
+        }
+
+        if (input.in_position.b > 0.5) {
+            out_color /= 2.0;
+        }
+
+        if (input.in_position.r == 0.5) {
+            uint redValue = asuint(output.out_color.r);
+            output.redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+
+            output.redValue |= 0x2;
+        }
+
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("assign_op parsing not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -1,10 +1,15 @@
-from .DirectxAst import *
-from .DirectxParser import *
-from .DirectxLexer import *
+from .SlangAst import *
+from .SlangParser import *
+from .SlangLexer import *
 
 
-class HLSLToCrossGLConverter:
+class SlangToCrossGLConverter:
     def __init__(self):
+        self.vertex_inputs = []
+        self.vertex_outputs = []
+        self.fragment_inputs = []
+        self.fragment_outputs = []
+        self.cbuffers = []
         self.type_map = {
             "void": "void",
             "float2": "vec2",
@@ -30,40 +35,121 @@ class HLSLToCrossGLConverter:
             "Texture2D": "sampler2D",
             "TextureCube": "samplerCube",
         }
+
         self.semantic_map = {
+            # Vertex inputs position
+            "POSITION": "in_Position",
+            "POSITION0": "in_Position0",
+            "POSITION1": "in_Position1",
+            "POSITION2": "in_Position2",
+            "POSITION3": "in_Position3",
+            "POSITION4": "in_Position4",
+            "POSITION5": "in_Position5",
+            "POSITION6": "in_Position6",
+            "POSITION7": "in_Position7",
+            # Vertex inputs normal
+            "NORMAL": "in_Normal",
+            "NORMAL0": "in_Normal0",
+            "NORMAL1": "in_Normal1",
+            "NORMAL2": "in_Normal2",
+            "NORMAL3": "in_Normal3",
+            "NORMAL4": "in_Normal4",
+            "NORMAL5": "in_Normal5",
+            "NORMAL6": "in_Normal6",
+            "NORMAL7": "in_Normal7",
+            # Vertex inputs tangent
+            "TANGENT": "in_Tangent",
+            "TANGENT0": "in_Tangent0",
+            "TANGENT1": "in_Tangent1",
+            "TANGENT2": "in_Tangent2",
+            "TANGENT3": "in_Tangent3",
+            "TANGENT4": "in_Tangent4",
+            "TANGENT5": "in_Tangent5",
+            "TANGENT6": "in_Tangent6",
+            "TANGENT7": "in_Tangent7",
+            # Vertex inputs binormal
+            "BINORMAL": "in_Binormal",
+            "BINORMAL0": "in_Binormal0",
+            "BINORMAL1": "in_Binormal1",
+            "BINORMAL2": "in_Binormal2",
+            "BINORMAL3": "in_Binormal3",
+            "BINORMAL4": "in_Binormal4",
+            "BINORMAL5": "in_Binormal5",
+            "BINORMAL6": "in_Binormal6",
+            "BINORMAL7": "in_Binormal7",
+            # Vertex inputs color
+            "COLOR": "Color",
+            "COLOR0": "Color0",
+            "COLOR1": "Color1",
+            "COLOR2": "Color2",
+            "COLOR3": "Color3",
+            "COLOR4": "Color4",
+            "COLOR5": "Color5",
+            "COLOR6": "Color6",
+            "COLOR7": "Color7",
+            # Vertex inputs texcoord
+            "TEXCOORD": "TexCoord",
+            "TEXCOORD0": "TexCoord0",
+            "TEXCOORD1": "TexCoord1",
+            "TEXCOORD2": "TexCoord2",
+            "TEXCOORD3": "TexCoord3",
+            "TEXCOORD4": "TexCoord4",
+            "TEXCOORD5": "TexCoord5",
+            "TEXCOORD6": "TexCoord6",
             # Vertex inputs instance
             "FRONT_FACE": "gl_IsFrontFace",
             "PRIMITIVE_ID": "gl_PrimitiveID",
-            "INSTANCE_ID": "InstanceID",
-            "VERTEX_ID": "VertexID",
-            "SV_InstanceID": "gl_InstanceID",
-            "SV_VertexID": "gl_VertexID",
+            "INSTANCE_ID": "gl_InstanceID",
+            "VERTEX_ID": "gl_VertexID",
             # Vertex outputs
-            "SV_POSITION": "gl_Position",
+            "SV_Position": "Out_Position",
+            "SV_Position0": "Out_Position0",
+            "SV_Position1": "Out_Position1",
+            "SV_Position2": "Out_Position2",
+            "SV_Position3": "Out_Position3",
+            "SV_Position4": "Out_Position4",
+            "SV_Position5": "Out_Position5",
+            "SV_Position6": "Out_Position6",
+            "SV_Position7": "Out_Position7",
             # Fragment inputs
-            "SV_TARGET": "gl_FragColor",
-            "SV_TARGET0": "gl_FragColor0",
-            "SV_TARGET1": "gl_FragColor1",
-            "SV_TARGET2": "gl_FragColor2",
-            "SV_TARGET3": "gl_FragColor3",
-            "SV_TARGET4": "gl_FragColor4",
-            "SV_TARGET5": "gl_FragColor5",
-            "SV_TARGET6": "gl_FragColor6",
-            "SV_TARGET7": "gl_FragColor7",
-            "SV_DEPTH": "gl_FragDepth",
-            "SV_DEPTH0": "gl_FragDepth0",
-            "SV_DEPTH1": "gl_FragDepth1",
-            "SV_DEPTH2": "gl_FragDepth2",
-            "SV_DEPTH3": "gl_FragDepth3",
-            "SV_DEPTH4": "gl_FragDepth4",
-            "SV_DEPTH5": "gl_FragDepth5",
-            "SV_DEPTH6": "gl_FragDepth6",
-            "SV_DEPTH7": "gl_FragDepth7",
+            "SV_Target": "Out_Color",
+            "SV_Target0": "Out_Color0",
+            "SV_Target1": "Out_Color1",
+            "SV_Target2": "Out_Color2",
+            "SV_Target3": "Out_Color3",
+            "SV_Target4": "Out_Color4",
+            "SV_Target5": "Out_Color5",
+            "SV_Target6": "Out_Color6",
+            "SV_Target7": "Out_Color7",
+            "SV_Depth": "Out_Depth",
+            "SV_Depth0": "Out_Depth0",
+            "SV_Depth1": "Out_Depth1",
+            "SV_Depth2": "Out_Depth2",
+            "SV_Depth3": "Out_Depth3",
+            "SV_Depth4": "Out_Depth4",
+            "SV_Depth5": "Out_Depth5",
+            "SV_Depth6": "Out_Depth6",
+            "SV_Depth7": "Out_Depth7",
         }
 
     def generate(self, ast):
         code = "shader main {\n"
-        # Generate structs
+        if ast.imports:
+            code += "    // Imports\n"
+            for imp in ast.imports:
+                code += f"    import {imp.module_name};\n"
+            code += "\n"
+        if ast.exports:
+            code += "    // Exports\n"
+            for exp in ast.exports:
+                code += f"    export {exp.item};\n"
+            code += "\n"
+        # Generate custom types
+        for node in ast.typedefs:
+            code += (
+                f"    typedef {self.map_type(node.original_type)} {node.new_type};\n"
+            )
+        # Generate custom structs
         for node in ast.structs:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
@@ -71,7 +157,7 @@ class HLSLToCrossGLConverter:
                     code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
                 code += "    }\n"
         # Generate global variables
-        for node in ast.global_variables:
+        for node in ast.global_vars:
             code += f"    {self.map_type(node.vtype)} {node.name};\n"
         # Generate cbuffers
         if ast.cbuffers:
@@ -132,7 +218,6 @@ class HLSLToCrossGLConverter:
                 code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
-
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
             elif isinstance(stmt, ReturnNode):
@@ -188,12 +273,10 @@ class HLSLToCrossGLConverter:
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.op} {right}"
-
         elif isinstance(expr, AssignmentNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
-
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
             return f"{expr.op}{operand}"
@@ -205,10 +288,8 @@ class HLSLToCrossGLConverter:
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
-
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
-
         elif isinstance(expr, VectorConstructorNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
@@ -217,10 +298,10 @@ class HLSLToCrossGLConverter:
         else:
             return str(expr)
 
-    def map_type(self, hlsl_type):
-        if hlsl_type:
-            return self.type_map.get(hlsl_type, hlsl_type)
-        return hlsl_type
+    def map_type(self, slang_type):
+        if slang_type:
+            return self.type_map.get(slang_type, slang_type)
+        return slang_type
 
     def map_semantic(self, semantic):
         if semantic is not None:

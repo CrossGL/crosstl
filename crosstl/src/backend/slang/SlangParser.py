@@ -1,22 +1,8 @@
-from .DirectxAst import (
-    AssignmentNode,
-    BinaryOpNode,
-    ForNode,
-    FunctionCallNode,
-    FunctionNode,
-    IfNode,
-    MemberAccessNode,
-    ReturnNode,
-    ShaderNode,
-    StructNode,
-    UnaryOpNode,
-    VariableNode,
-    VectorConstructorNode,
-)
-from .DirectxLexer import HLSLLexer
+from .SlangLexer import *
+from .SlangAst import *
 
 
-class HLSLParser:
+class SlangParser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
@@ -43,20 +29,34 @@ class HLSLParser:
         return shader
 
     def parse_shader(self):
+        imports = []
+        exports = []
         functions = []
         structs = []
+        typedefs = []
         cbuffers = []
         global_variables = []
         while self.current_token[0] != "EOF":
-            if self.current_token[0] == "STRUCT":
+            if self.current_token[0] == "IMPORT":
+                imports.append(self.parse_import())
+            elif self.current_token[0] == "EXPORT":
+                exports.append(self.parse_export())
+            elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "CBUFFER":
                 cbuffers.append(self.parse_cbuffer())
+            elif self.current_token[0] == "TYPEDEF":
+                typedefs.append(self.parse_typedef())
+            elif self.current_token[0] == "TYPE_SHADER":
+                type_shader = self.current_token[1].split('"')[1]
+                self.eat("TYPE_SHADER")
+                functions.append(self.parse_function(type_shader))
             elif self.current_token[0] in [
                 "VOID",
                 "FLOAT",
                 "FVECTOR",
                 "IDENTIFIER",
+                "GENERIC",
                 "TEXTURE2D",
                 "SAMPLER_STATE",
             ]:
@@ -67,9 +67,18 @@ class HLSLParser:
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
-        return ShaderNode(structs, functions, global_variables, cbuffers)
+        return ShaderNode(
+            imports,
+            exports,
+            structs,
+            typedefs,
+            functions,
+            global_variables,
+            cbuffers,
+        )
 
     def is_function(self):
+        # Look ahead to check if there's a left parenthesis after the identifier
         current_pos = self.pos
         while self.tokens[current_pos][0] != "EOF":
             if self.tokens[current_pos][0] == "LPAREN":
@@ -109,6 +118,22 @@ class HLSLParser:
         self.eat("SEMICOLON")
         return VariableNode(var_type, var_name)
 
+    def parse_import(self):
+        self.eat("IMPORT")
+        module_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("SEMICOLON")
+        return ImportNode(module_name)
+
+    def parse_export(self):
+        self.eat("EXPORT")
+        exported_item = (
+            self.parse_function()
+            if self.current_token[0] in ["VOID", "FLOAT", "FVECTOR", "IDENTIFIER"]
+            else self.parse_struct()
+        )
+        return ExportNode(exported_item)
+
     def parse_struct(self):
         self.eat("STRUCT")
         name = self.current_token[1]
@@ -117,31 +142,36 @@ class HLSLParser:
         members = []
         while self.current_token[0] != "RBRACE":
             vtype = self.current_token[1]
-            self.eat(self.current_token[0])
+            self.eat(self.current_token[0])  # Eat the type (FVECTOR, FLOAT, etc.)
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
             semantic = None
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 semantic = self.current_token[1]
-                self.eat("IDENTIFIER")
+                self.eat(self.current_token[0])
             self.eat("SEMICOLON")
             members.append(VariableNode(vtype, var_name, semantic))
         self.eat("RBRACE")
         return StructNode(name, members)
 
-    def parse_function(self):
+    def parse_typedef(self):
+        self.eat("TYPEDEF")
+        original_type = self.current_token[1]
+        self.eat(self.current_token[0])
+        new_type = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("SEMICOLON")
+        return TypedefNode(original_type, new_type)
+
+    def parse_function(self, shader_type=None):
+        is_generic = False
+        if self.current_token[0] == "GENERIC":
+            is_generic = True
+            self.eat("GENERIC")
         return_type = self.current_token[1]
         self.eat(self.current_token[0])
         name = self.current_token[1]
-        qualifier = None
-        if name == "VSMain":
-            qualifier = "vertex"
-        elif name == "PSMain":
-            qualifier = "fragment"
-        elif name == "CSMain":
-            qualifier = "compute"
-
         self.eat("IDENTIFIER")
         self.eat("LPAREN")
         params = self.parse_parameters()
@@ -150,23 +180,29 @@ class HLSLParser:
         if self.current_token[0] == "COLON":
             self.eat("COLON")
             semantic = self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
         body = self.parse_block()
-        return FunctionNode(return_type, name, params, body, qualifier, semantic)
+        return FunctionNode(
+            return_type, name, params, body, is_generic, shader_type, semantic
+        )
 
     def parse_parameters(self):
         params = []
         while self.current_token[0] != "RPAREN":
+            struct_def = " "
             vtype = self.current_token[1]
             self.eat(self.current_token[0])
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             semantic = None
+            if self.current_token[0] == "IDENTIFIER":
+                struct_def = self.current_token[1]
+                self.eat("IDENTIFIER")
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 semantic = self.current_token[1]
-                self.eat("IDENTIFIER")
-            params.append(VariableNode(vtype, name, semantic))
+                self.eat(self.current_token[0])
+            params.append(VariableNode(vtype + struct_def, name, semantic))
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         return params
@@ -207,19 +243,12 @@ class HLSLParser:
             "BOOL",
             "IDENTIFIER",
         ]:
-            # Handle variable declaration (e.g., int a = b;)
             first_token = self.current_token
-            self.eat(self.current_token[0])  # Eat type or identifier
-            name = None
+            self.eat(self.current_token[0])
 
-            # Check for member access (e.g., a.b)
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
-
-                if self.current_token[0] == "DOT":
-                    name = self.parse_member_access(name)
-
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
                     return VariableNode(first_token[1], name)
@@ -229,34 +258,48 @@ class HLSLParser:
                     "MINUS_EQUALS",
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
-                    "ASSIGN_XOR",
-                    "ASSIGN_OR",
                 ]:
-                    # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
-                    op = self.current_token[1]
                     self.eat(self.current_token[0])
                     value = self.parse_expression()
+                    if self.current_token[0] == "LPAREN":
+                        # This handles cases like "float3 test = float3(1.0, 1.0, 1.0);"
+                        self.eat("LPAREN")
+                        args = []
+                        while self.current_token[0] != "RPAREN":
+                            args.append(self.parse_expression())
+                            if self.current_token[0] == "COMMA":
+                                self.eat("COMMA")
+                        self.eat("RPAREN")
+                        self.eat("SEMICOLON")
+                        return AssignmentNode(
+                            VariableNode(first_token[1], name),
+                            VectorConstructorNode(first_token[1], args),
+                        )
+                    elif self.current_token[0] == "LBRACKET":
+                        self.eat("LBRACKET")
+                        index = self.current_token[1]
+                        self.eat("IDENTIFIER")
+                        self.eat("RBRACKET")
+                        if self.current_token[0] == "SEMICOLON":
+                            self.eat("SEMICOLON")
+                        return AssignmentNode(
+                            VariableNode(first_token[1], f"{name}[{index}]"), value
+                        )
                     self.eat("SEMICOLON")
-                    return AssignmentNode(VariableNode(first_token[1], name), value, op)
-
+                    return AssignmentNode(VariableNode(first_token[1], name), value)
             elif self.current_token[0] in [
                 "EQUALS",
                 "PLUS_EQUALS",
                 "MINUS_EQUALS",
                 "MULTIPLY_EQUALS",
                 "DIVIDE_EQUALS",
-                "ASSIGN_XOR",
-                "ASSIGN_OR",
             ]:
-                # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
-                op = self.current_token[1]
+                # This handles cases like "test = float3(1.0, 1.0, 1.0);"
                 self.eat(self.current_token[0])
                 value = self.parse_expression()
                 self.eat("SEMICOLON")
-                return AssignmentNode(first_token[1], value, op)
-
+                return AssignmentNode(VariableNode("", first_token[1]), value)
             elif self.current_token[0] == "DOT":
-                # Handle int a.b = c; case directly
                 left = self.parse_member_access(first_token[1])
                 if self.current_token[0] in [
                     "EQUALS",
@@ -264,22 +307,36 @@ class HLSLParser:
                     "MINUS_EQUALS",
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
-                    "ASSIGN_XOR",
-                    "ASSIGN_OR",
                 ]:
-                    op = self.current_token[1]
                     self.eat(self.current_token[0])
                     right = self.parse_expression()
                     self.eat("SEMICOLON")
-                    return AssignmentNode(left, right, op)
+                    return AssignmentNode(left, right)
                 else:
                     self.eat("SEMICOLON")
                     return left
-
-        # If it's not a type/identifier, it must be an expression
-        expr = self.parse_expression()
-        self.eat("SEMICOLON")
-        return expr
+            else:
+                if self.current_token[0] in [
+                    "PLUS_EQUALS",
+                    "MINUS_EQUALS",
+                    "MULTIPLY_EQUALS",
+                    "DIVIDE_EQUALS",
+                    "EQUAL",
+                ]:
+                    op = self.current_token[1]
+                    self.eat(self.current_token[0])
+                    expr = self.parse_expression()
+                    self.eat("SEMICOLON")
+                    return BinaryOpNode(VariableNode("", first_token[1]), op, expr)
+                    # This handles cases like "float3(1.0, 1.0, 1.0);"
+                else:
+                    expr = self.parse_expression()
+                    self.eat("SEMICOLON")
+                    return expr
+        else:
+            expr = self.parse_expression()
+            self.eat("SEMICOLON")
+            return expr
 
     def parse_if_statement(self):
         self.eat("IF")
@@ -352,23 +409,32 @@ class HLSLParser:
         return expr
 
     def parse_expression(self):
-        return self.parse_assignment()
-
-    def parse_assignment(self):
         left = self.parse_logical_or()
-        if self.current_token[0] in [
+        while self.current_token[0] in [
             "EQUALS",
             "PLUS_EQUALS",
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
-            "ASSIGN_XOR",
-            "ASSIGN_OR",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
+            right = self.parse_logical_or()
+            left = AssignmentNode(left, right, op)
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            true_expr = self.parse_expression()
+            self.eat("COLON")
+            false_expr = self.parse_expression()
+            left = TernaryOpNode(left, true_expr, false_expr)
+        return left
+
+    def parse_assignment(self):
+        left = self.parse_logical_or()
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
             right = self.parse_assignment()
-            return AssignmentNode(left, right, op)
+            return AssignmentNode(left, right)
         return left
 
     def parse_logical_or(self):
@@ -439,28 +505,42 @@ class HLSLParser:
         return self.parse_primary()
 
     def parse_primary(self):
-        if self.current_token[0] in ["IDENTIFIER", "FLOAT", "FVECTOR"]:
-            if self.current_token[0] == "IDENTIFIER":
-                name = self.current_token[1]
-                self.eat("IDENTIFIER")
-                if self.current_token[0] == "LPAREN":
-                    return self.parse_function_call(name)
-                elif self.current_token[0] == "DOT":
-                    return self.parse_member_access(name)
-                return VariableNode("", name)
-            if self.current_token[0] in ["FLOAT", "FVECTOR"]:
+        if self.current_token[0] in [
+            "IDENTIFIER",
+            "INT",
+            "FLOAT",
+            "FVECTOR",
+            "GENERIC",
+        ]:
+            if self.current_token[0] in ["INT", "FLOAT", "FVECTOR", "GENERIC"]:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
-                if self.current_token[0] == "LPAREN":
+                if self.current_token[0] == "IDENTIFIER":
+                    var_name = self.current_token[1]
+                    self.eat("IDENTIFIER")
+                    if self.current_token[0] == "LBRAKET":
+                        self.eat("LBRAKET")
+                        if self.current_token[0] == "NUMBER":
+                            index = self.current_token[1]
+                        else:
+                            index = self.current_token[1]
+                            self.eat("IDENTIFIER")
+                        self.eat("RBRAKET")
+                        return VariableNode(type_name, f"{var_name}[{index}]")
+                    return VariableNode(type_name, var_name)
+                elif self.current_token[0] == "LPAREN":
                     return self.parse_vector_constructor(type_name)
             return self.parse_function_call_or_identifier()
+
+        if self.current_token[0] == "LBRAKET":
+            self.eat("LBRAKET")
+            expr = self.parse_expression()
+            self.eat("RBRAKET")
+            return expr
+
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
-            if self.current_token[0] == "IDENTIFIER":
-                name = self.current_token[1]
-                self.eat("IDENTIFIER")
-                return VariableNode(value, name)
             return value
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")

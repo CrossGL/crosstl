@@ -21,7 +21,7 @@ setup(
     author="CrossGL team",
     author_email="vaatsalya@crossgl.net",
     description="CrossGL: Revolutionizing Shader Development",
-    long_description=open("README.md").read(),
+    long_description=open("README.md", "r", -1, "UTF8").read(),
     long_description_content_type="text/markdown",
     url="https://crossgl.net/",
     project_urls={"Documentation": "https://crossgl.github.io/index.html"},

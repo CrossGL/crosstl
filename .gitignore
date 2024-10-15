@@ -3,6 +3,10 @@
 __pycache__/
 .venv
 
+# msvc specific
+.vs
+build
+
 # Compiled Object files
 *.slo
 *.lo

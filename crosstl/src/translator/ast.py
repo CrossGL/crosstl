@@ -2,18 +2,6 @@ class ASTNode:
     pass
 
 
-class UniformNode(ASTNode):
-    def __init__(self, vtype, name):
-        self.vtype = vtype
-        self.name = name
-
-    def __repr__(self):
-        return f"UniformNode(vtype={self.vtype}, name={self.name})"
-
-    def __str__(self):
-        return f"uniform {self.vtype} {self.name};"
-
-
 class TernaryOpNode:
     def __init__(self, condition, true_expr, false_expr):
         self.condition = condition
@@ -25,85 +13,84 @@ class TernaryOpNode:
 
 
 class ShaderNode:
-    def __init__(
-        self,
-        name,
-        global_inputs,
-        global_outputs,
-        global_functions,
-        vertex_section,
-        fragment_section,
-    ):
+    def __init__(self, structs, functions, global_variables, cbuffers):
+        self.structs = structs
+        self.functions = functions
+        self.global_variables = global_variables
+        self.cbuffers = cbuffers
+
+    def __repr__(self):
+        return f"ShaderNode(structs={self.structs}, functions={self.functions}, global_variables={self.global_variables}, cbuffers={self.cbuffers})"
+
+
+class StructNode:
+    def __init__(self, name, members):
         self.name = name
-        self.global_inputs = global_inputs
-        self.global_outputs = global_outputs
-        self.global_functions = global_functions
-        self.vertex_section = vertex_section
-        self.fragment_section = fragment_section
+        self.members = members
 
     def __repr__(self):
-        return f"ShaderNode({self.name!r}) {self.global_inputs!r} {self.global_outputs!r} {self.global_functions!r} {self.vertex_section!r} {self.fragment_section!r}"
+        return f"StructNode(name={self.name}, members={self.members})"
 
 
-class VERTEXShaderNode:
-    def __init__(self, inputs, outputs, functions, intermidiate):
-        self.inputs = inputs
-        self.outputs = outputs
-        self.functions = functions
-        self.intermidiate = intermidiate
+class CbufferNode:
+    def __init__(self, name, members):
+        self.name = name
+        self.members = members
 
     def __repr__(self):
-        return f"VERTEXShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r} {self.intermidiate!r}"
-
-
-class FRAGMENTShaderNode:
-    def __init__(self, inputs, outputs, functions, intermidiate):
-        self.inputs = inputs
-        self.outputs = outputs
-        self.functions = functions
-        self.intermidiate = intermidiate
-
-    def __repr__(self):
-        return f"FRAGMENTShaderNode({self.inputs!r}) {self.outputs!r} {self.functions!r} {self.intermidiate!r}"
+        return f"CbufferNode(name={self.name}, members={self.members})"
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, return_type, name, params, body):
+    def __init__(self, return_type, name, params, body, qualifier=None, semantic=None):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
+        self.qualifier = qualifier
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body})"
+        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, qualifier={self.qualifier}, semantic={self.semantic})"
 
 
 class VariableNode(ASTNode):
-    def __init__(self, vtype, name):
+    def __init__(self, vtype, name, semantic=None):
         self.vtype = vtype
         self.name = name
+        self.semantic = semantic
 
     def __repr__(self):
-        return f"VariableNode(vtype={self.vtype}, name={self.name})"
+        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', semantic={self.semantic})"
 
 
 class AssignmentNode(ASTNode):
-    def __init__(self, name, value):
-        self.name = name
-        self.value = value
+    def __init__(self, left, right, operator="="):
+        self.left = left
+        self.right = right
+        self.operator = operator
 
     def __repr__(self):
-        return f"AssignmentNode(name={self.name}, value={self.value})"
+        return f"AssignmentNode(left={self.left}, operator='{self.operator}', right={self.right})"
 
 
 class IfNode(ASTNode):
-    def __init__(self, condition, if_body, else_body=None):
-        self.condition = condition
+    def __init__(
+        self,
+        if_condition,
+        if_body,
+        else_if_conditions=[],
+        else_if_bodies=[],
+        else_body=None,
+    ):
+        self.if_condition = if_condition
         self.if_body = if_body
+        self.else_if_conditions = else_if_conditions
+        self.else_if_bodies = else_if_bodies
         self.else_body = else_body
 
     def __repr__(self):
-        return f"IfNode(condition={self.condition}, if_body={self.if_body}, else_body={self.else_body})"
+        return f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, else_if_conditions={self.else_if_conditions}, else_if_bodies={self.else_if_bodies}, else_body={self.else_body})"
 
 
 class ForNode(ASTNode):

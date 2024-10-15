@@ -63,7 +63,6 @@ def test_struct_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print("############## struct code ##############")
         print(generated_code)
     except SyntaxError:
         pytest.fail("Struct parsing or code generation not implemented.")
@@ -110,7 +109,6 @@ def test_if_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print("############## if code ##############")
         print(generated_code)
     except SyntaxError:
         pytest.fail("If statement parsing or code generation not implemented.")
@@ -157,7 +155,6 @@ def test_for_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print("############## for code ##############")
         print(generated_code)
     except SyntaxError:
         pytest.fail("For loop parsing or code generation not implemented.")
@@ -210,7 +207,6 @@ def test_else_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print("############## else code ##############")
         print(generated_code)
     except SyntaxError:
         pytest.fail("Else statement parsing or code generation not implemented.")
@@ -256,7 +252,6 @@ def test_function_call_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print("############## function call code ##############")
         print(generated_code)
     except SyntaxError:
         pytest.fail("Function call parsing or code generation not implemented.")
@@ -309,12 +304,52 @@ def test_else_if_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print("############## else if code ##############")
         print(generated_code)
     except SyntaxError:
         pytest.fail("Else_if statement parsing or code generation not implemented.")
 
 
-# Run all tests
+def test_assignment_ops_parsing():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+
+        if (input.in_position.r > 0.5) {
+            output.out_color += input.in_position;
+        }
+
+        if (input.in_position.r < 0.5) {
+            output.out_color -= float4(0.1, 0.1, 0.1, 0.1);
+        }
+
+        if (input.in_position.g > 0.5) {
+            output.out_color *= 2.0;
+        }
+
+        if (input.in_position.b > 0.5) {
+            out_color /= 2.0;
+        }
+
+        if (input.in_position.r == 0.5) {
+            uint redValue = asuint(output.out_color.r);
+            output.redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+
+            outpu.redValue |= 0x2;
+        }
+
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("assignment ops parsing or code generation not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
