@@ -538,8 +538,8 @@ def test_bitwise_and_operator():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generate_code = generate_code(ast)
-        print(generate_code)
+        generated_code = generate_code(ast)
+        print(generated_code)
     except SyntaxError:
         pytest.fail("Bitwise AND codegen not implemented")
 
