@@ -230,6 +230,7 @@ class HLSLParser:
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
                     "ASSIGN_XOR",
+                    "ASSIGN_OR",
                 ]:
                     # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                     op = self.current_token[1]
@@ -245,6 +246,7 @@ class HLSLParser:
                 "MULTIPLY_EQUALS",
                 "DIVIDE_EQUALS",
                 "ASSIGN_XOR",
+                "ASSIGN_OR",
             ]:
                 # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                 op = self.current_token[1]
@@ -263,6 +265,7 @@ class HLSLParser:
                     "MULTIPLY_EQUALS",
                     "DIVIDE_EQUALS",
                     "ASSIGN_XOR",
+                    "ASSIGN_OR",
                 ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -360,6 +363,7 @@ class HLSLParser:
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
             "ASSIGN_XOR",
+            "ASSIGN_OR",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
