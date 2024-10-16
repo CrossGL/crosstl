@@ -44,6 +44,7 @@ TOKENS = [
     ("DIVIDE_EQUALS", r"/="),
     ("ASSIGN_XOR", r"\^="),
     ("ASSIGN_OR", r"\|="),
+    ("SHIFT_LEFT", r"<<"),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("DOT", r"\."),
