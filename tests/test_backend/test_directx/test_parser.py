@@ -93,6 +93,24 @@ def test_while_parsing():
     except SyntaxError:
         pytest.fail("while parsing not implemented")
 
+def test_do_while_parsing():
+    code = """
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        int i = 0;
+        do {
+            output.out_position = input.position;
+            i = i + 1;
+        } while (i < 10);
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("do while parsing not implemented")
+
 
 def test_else_parsing():
     code = """

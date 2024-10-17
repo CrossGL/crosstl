@@ -142,6 +142,8 @@ class HLSLToCrossGLConverter:
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, WhileNode):
                 code += self.generate_while_loop(stmt, indent, is_main)
+            elif isinstance(stmt, DoWhileNode):
+                code += self.generate_do_while_loop(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
         return code
@@ -162,6 +164,15 @@ class HLSLToCrossGLConverter:
         code = f"while ({condition}) {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
+        return code
+
+    def generate_do_while_loop(self, node, indent, is_main):
+        condition = self.generate_expression(node.condition, is_main)
+
+        code = "do {\n"
+        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + "} "
+        code += f"while ({condition});"
         return code
 
     def generate_if_statement(self, node, indent, is_main):
