@@ -4,12 +4,12 @@ TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("WHITESPACE", r"\s+"),
-    ("SEMANTIC", r":\w+"),  
+    ("SEMANTIC", r":\w+"),
     ("PRE_INCREMENT", r"\+\+(?=\w)"),
     ("PRE_DECREMENT", r"--(?=\w)"),
     ("POST_INCREMENT", r"(?<=\w)\+\+"),
     ("POST_DECREMENT", r"(?<=\w)--"),
-    ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),  
+    ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("NUMBER", r"\d+(\.\d*)?|\.\d+"),
     ("SEMICOLON", r";"),
     ("LBRACE", r"\{"),
@@ -22,12 +22,12 @@ TOKENS = [
     ("ASSIGN_AND", r"&="),
     ("ASSIGN_OR", r"\|="),
     ("ASSIGN_XOR", r"\^="),
-    ("PLUS_EQUALS", r"\+="),  
+    ("PLUS_EQUALS", r"\+="),
     ("MINUS_EQUALS", r"-="),
     ("MULTIPLY_EQUALS", r"\*="),
     ("DIVIDE_EQUALS", r"/="),
     ("ASSIGN_MOD", r"%="),
-    ("ASSIGN_SHIFT_LEFT", r"<<="),  
+    ("ASSIGN_SHIFT_LEFT", r"<<="),
     ("ASSIGN_SHIFT_RIGHT", r">>="),
     ("BITWISE_SHIFT_LEFT", r"<<"),
     ("BITWISE_SHIFT_RIGHT", r">>"),
@@ -37,7 +37,7 @@ TOKENS = [
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
     ("MODULUS", r"%"),
-    ("LESS_EQUAL", r"<="),  
+    ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("NOT_EQUAL", r"!="),
     ("LESS_THAN", r"<"),
@@ -121,7 +121,21 @@ KEYWORDS = {
     "mat4": "MAT4",
 }
 
-VALID_DATA_TYPES = ["int", "float", "double", "vec2", "vec3", "vec4", "mat2", "mat3", "mat4", "uint", "bool", "void"]
+VALID_DATA_TYPES = [
+    "int",
+    "float",
+    "double",
+    "vec2",
+    "vec3",
+    "vec4",
+    "mat2",
+    "mat3",
+    "mat4",
+    "uint",
+    "bool",
+    "void",
+]
+
 
 class VulkanLexer:
     def __init__(self, code):
