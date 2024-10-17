@@ -27,13 +27,22 @@ class ShaderNode:
         return f"ShaderNode(spirv_version={self.spirv_version}, descriptor_sets={self.descriptor_sets}, shader_stages={self.shader_stages}, functions={self.functions})"
     
 class IfNode(ASTNode):
-    def __init__(self, condition, if_body, else_body=None):
-        self.condition = condition
+    def __init__(
+        self,
+        if_condition,
+        if_body,
+        else_if_conditions=[],
+        else_if_bodies=[],
+        else_body=None,
+    ):
+        self.if_condition = if_condition
         self.if_body = if_body
+        self.else_if_conditions = else_if_conditions
+        self.else_if_bodies = else_if_bodies
         self.else_body = else_body
 
     def __repr__(self):
-        return f"IfNode(condition={self.condition}, if_body={self.if_body}, else_body={self.else_body})"
+        return f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, else_if_conditions={self.else_if_conditions}, else_if_bodies={self.else_if_bodies}, else_body={self.else_body})"
     
 class ForNode(ASTNode):
     def __init__(self, init, condition, update, body):
@@ -77,9 +86,6 @@ class UnaryOpNode(ASTNode):
     def __repr__(self):
         return f"UnaryOpNode(operator={self.op}, operand={self.operand})"
 
-    # def __str__(self):
-    #     return f"({self.op}{self.operand})"
-
 class DescriptorSetNode(ASTNode):
     def __init__(self, set_number, bindings):
         self.set_number = set_number  
@@ -89,12 +95,18 @@ class DescriptorSetNode(ASTNode):
         return f"DescriptorSetNode(set_number={self.set_number}, bindings={self.bindings})"
     
 class LayoutNode(ASTNode):
-    def __init__(self, sets, push_constants):
-        self.sets = sets  
-        self.push_constants = push_constants  
+    def __init__(self, bindings, push_constant, layout_type, data_type, variable_name, struct_fields):
+        self.bindings = bindings  
+        self.push_constant = push_constant  
+        self.layout_type = layout_type  
+        self.data_type = data_type  
+        self.variable_name = variable_name  
+        self.struct_fields = struct_fields 
 
     def __repr__(self):
-        return f"LayoutNode(sets={self.sets}, push_constants={self.push_constants})"
+        return (f"LayoutNode(bindings={self.bindings}, push_constant={self.push_constant}, "
+                f"layout_type={self.layout_type}, data_type={self.data_type}, "
+                f"variable_name={self.variable_name}, struct_fields={self.struct_fields})")
     
 class UniformNode(ASTNode):
     def __init__(self, name, var_type, value=None):

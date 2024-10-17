@@ -55,36 +55,80 @@ class VulkanParser:
     def parse_layout(self):
         self.eat("LAYOUT")
         self.eat("LPAREN")
-        bindings = []
+        bindings = []  # Stores pairs like ('location', '0'), ('binding', '1'), etc.
+        push_constant = False 
+        if self.current_token[0] == "PUSH_CONSTANT":
+            push_constant = True  
+            self.eat("PUSH_CONSTANT")
+        if self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+        
+        # Parse layout bindings
         while self.current_token[0] != "RPAREN":
             binding_name = self.current_token[1]
             self.eat("IDENTIFIER")
             
-            # Handle optional assignment with EQUALS and NUMBER
+            # Handle assignment with EQUALS and a number
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
                 binding_value = self.current_token[1]
                 self.eat("NUMBER")
                 bindings.append((binding_name, binding_value))
             else:
-                bindings.append((binding_name, None))  # No assignment
+                bindings.append((binding_name, None))  
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+
         self.eat("RPAREN")
-        # Allow for keywords like 'in' or 'out' as qualifiers
-        if self.current_token[0] in ["IN", "OUT"]:
+
+        layout_type = None
+        if self.current_token[0] in ["IN", "OUT", "UNIFORM", "BUFFER"]:
             layout_type = self.current_token[0]
             self.eat(layout_type)
+            if(self.current_token[0] == "IDENTIFIER"):
+                self.eat(self.current_token[0])
+
+        data_type = None
+        struct_fields = None
+        if layout_type in ["UNIFORM", "BUFFER"]:
+            # If a curly brace follows, we have a structured data block
+            if self.current_token[0] == "LBRACE":
+                self.eat("LBRACE")
+                struct_fields = []
+                
+                # Parse structured fields within the uniform/push_constant/buffer block
+                while self.current_token[0] != "RBRACE":
+                    if self.current_token[1] in VALID_DATA_TYPES:
+                        field_type = self.current_token[1]  # Field type (e.g., mat4)
+                        self.eat(self.current_token[0])
+                    else:
+                        raise SyntaxError("Expected some data type before an identifier")
+                    field_name = self.current_token[1]  # Field name
+                    self.eat("IDENTIFIER")
+                    self.eat("SEMICOLON")
+                    struct_fields.append((field_type, field_name))
+                
+                self.eat("RBRACE")
+                data_type = "struct"  # Use 'struct' as data_type placeholder for uniform/push_constant/buffer
+            else:
+                raise SyntaxError("Expected structured data block after 'uniform' or 'buffer'")
         else:
-            raise SyntaxError(f"Expected 'in' or 'out', got {self.current_token[0]}")
-        
-        if self.current_token[1] in VALID_DATA_TYPES:
-            self.eat(self.current_token[0])  
-        else:
-            raise SyntaxError(f"Unexpected type: {self.current_token[1]}")
-        # The actual variable name associated with the layout
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+            # For `in` and `out`, expect a data type and variable name
+            if self.current_token[1] in VALID_DATA_TYPES:
+                data_type = self.current_token[1]
+                self.eat(self.current_token[0])
+            else:
+                raise SyntaxError(f"Unexpected type: {self.current_token[1]}")
+
+        # Parse variable name
+        variable_name = None
+        if(self.current_token[0] == "IDENTIFIER"):
+            variable_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+
         self.eat("SEMICOLON")
-        return LayoutNode(bindings, name)
+        return LayoutNode(bindings, push_constant, layout_type, data_type, variable_name, struct_fields)
 
     def parse_push_constant(self):
         self.eat("PUSH_CONSTANT")
@@ -246,14 +290,26 @@ class VulkanParser:
     def parse_if_statement(self):
         self.eat("IF")
         self.eat("LPAREN")
-        condition = self.parse_expression()  
+        if_condition = self.parse_expression()  
         self.eat("RPAREN")
         if_body = self.parse_block() 
         else_body = None
+        else_if_condition = []
+        else_if_body = []
+        while self.current_token[0] == "ELSE" and self.peek(1) == "IF":
+            self.eat("ELSE")
+            self.eat("IF")
+            self.eat("LPAREN")
+            else_if_condition.append(self.parse_expression())
+            self.eat("RPAREN")
+            self.eat("LBRACE")
+            else_if_body.append(self.parse_body())
+            self.eat("RBRACE")
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             else_body = self.parse_block()  
-        return IfNode(condition, if_body, else_body)
+        return IfNode(if_condition, if_body, else_if_condition, else_if_body, else_body)
+
     
     def parse_for_statement(self):
         self.eat("FOR")
@@ -293,10 +349,25 @@ class VulkanParser:
                 )
 
         elif self.current_token[0] in (
-            "PLUS_EQUALS",
-            "MINUS_EQUALS",
-            "MULTIPLY_EQUALS",
-            "DIVIDE_EQUALS",
+                "EQUALS",
+                "PLUS_EQUALS",
+                "MINUS_EQUALS",
+                "MULTIPLY_EQUALS",
+                "DIVIDE_EQUALS",
+                "EQUAL",
+                "LESS_THAN",
+                "GREATER_THAN",
+                "LESS_EQUAL",
+                "GREATER_EQUAL",
+                "ASSIGN_AND",
+                "ASSIGN_OR",
+                "ASSIGN_XOR",
+                "ASSIGN_MOD",
+                "BITWISE_SHIFT_RIGHT",
+                "BITWISE_SHIFT_LEFT",
+                "BITWISE_XOR",
+                "ASSIGN_SHIFT_LEFT", 
+                "ASSIGN_SHIFT_RIGHT",
         ):
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -389,6 +460,39 @@ class VulkanParser:
             left = BinaryOpNode(left, op, right)
         return left        
     
+    def parse_assignment(self, name):
+        if self.current_token[0] in [
+            "EQUALS",
+            "PLUS_EQUALS",
+            "MINUS_EQUALS",
+            "MULTIPLY_EQUALS",
+            "DIVIDE_EQUALS",
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_MOD",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
+            "BITWISE_XOR",
+            "ASSIGN_SHIFT_LEFT", 
+            "ASSIGN_SHIFT_RIGHT",
+        ]:
+            op = self.current_token[0]
+            op_name = self.current_token[1]
+            self.eat(op)
+            value = self.parse_expression()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            return BinaryOpNode(name, op_name, value)
+        else:
+            raise SyntaxError(
+                f"Expected assignment operator, found: {self.current_token[0]}"
+            )
+    
     def parse_assignment_or_function_call(self):
         type_name = ""
         if self.current_token[0] == "IDENTIFIER" and self.peek(1) in ["POST_INCREMENT", "POST_DECREMENT"]:
@@ -401,6 +505,19 @@ class VulkanParser:
                 "MINUS_EQUALS",
                 "MULTIPLY_EQUALS",
                 "DIVIDE_EQUALS",
+                "LESS_THAN",
+                "GREATER_THAN",
+                "LESS_EQUAL",
+                "GREATER_EQUAL",
+                "ASSIGN_AND",
+                "ASSIGN_OR",
+                "ASSIGN_XOR",
+                "ASSIGN_MOD",
+                "BITWISE_SHIFT_RIGHT",
+                "BITWISE_SHIFT_LEFT",
+                "BITWISE_XOR",
+                "ASSIGN_SHIFT_LEFT", 
+                "ASSIGN_SHIFT_RIGHT",
             ]:
                 return self.parse_assignment(name)                      #todo
             elif self.current_token[0] == "POST_INCREMENT":
@@ -521,7 +638,11 @@ class VulkanParser:
 
 # Testing the Parser
 sample_code = """
-    layout(location = 0) in vec3 position;
+    layout(push_constant, location = 0, binding = 1, offset = 16, set = 2, row_major) uniform Transform {
+        mat4 modelMatrix;
+        vec3 position;
+        vec3 rotation;
+    } transform;
     struct Light {
         vec3 color;
         float intensity;
@@ -529,20 +650,8 @@ sample_code = """
     uniform mat4 viewMatrix;
 
     void main() {
-        int var = 1;
-        switch(var)
-        {
-            case 1:
-                s = a + b;
-                break;
-            case 2:
-                break;
-
-            case 3:
-                break;
-            default:
-                break;
-        }
+        vec3 lightDir = normalize(vec3(0.0, 1.0, 0.0)) + b + c;
+        a ^= b;
     }
 """
 
