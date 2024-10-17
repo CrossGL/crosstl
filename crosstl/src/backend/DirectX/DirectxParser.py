@@ -2,6 +2,7 @@ from .DirectxAst import (
     AssignmentNode,
     BinaryOpNode,
     ForNode,
+    WhileNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
@@ -195,6 +196,8 @@ class HLSLParser:
             return self.parse_for_statement()
         elif self.current_token[0] == "RETURN":
             return self.parse_return_statement()
+        elif self.current_token[0] == "WHILE":
+            return self.parse_while_statement()
         else:
             return self.parse_expression_statement()
 
@@ -339,6 +342,19 @@ class HLSLParser:
         body = self.parse_block()
 
         return ForNode(init, condition, update, body)
+
+    def parse_while_statement(self):
+        self.eat("WHILE")
+        self.eat("LPAREN")
+
+        # Parse condition
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+
+        # Parse body
+        body = self.parse_block()
+
+        return WhileNode(condition, body)
 
     def parse_return_statement(self):
         self.eat("RETURN")

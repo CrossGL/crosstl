@@ -160,6 +160,56 @@ def test_for_codegen():
         pytest.fail("For loop parsing or code generation not implemented.")
 
 
+def test_while_codegen():
+    code = """
+    struct VSInput {
+    float4 position : POSITION;
+    float4 color : TEXCOORD0;
+    };
+
+    struct VSOutput {
+        float4 out_position : TEXCOORD0;
+    };
+
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        output.out_position = input.position;
+        int i = 0;
+        while (i < 10) {
+            output.out_position = input.color;
+            i = i + 1;  // Increment the loop variable
+        }
+        return output;
+    }
+
+    struct PSInput {
+        float4 in_position : TEXCOORD0;
+    };
+
+    struct PSOutput {
+        float4 out_color : SV_TARGET0;
+    };
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color = input.in_position;
+        int i = 0;
+        while (i < 10) {
+            output.out_color = float4(1.0, 1.0, 1.0, 1.0);
+            i = i + 1;  // Increment the loop variable
+        }
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("While loop parsing or code generation not implemented.")
+
+
 def test_else_codegen():
     code = """
     struct VSInput {
