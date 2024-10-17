@@ -209,6 +209,7 @@ def test_while_codegen():
     except SyntaxError:
         pytest.fail("While loop parsing or code generation not implemented.")
 
+
 def test_do_while_codegen():
     code = """
     struct VSInput {

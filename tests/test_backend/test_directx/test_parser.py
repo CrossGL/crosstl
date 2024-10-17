@@ -93,6 +93,7 @@ def test_while_parsing():
     except SyntaxError:
         pytest.fail("while parsing not implemented")
 
+
 def test_do_while_parsing():
     code = """
     VSOutput VSMain(VSInput input) {
