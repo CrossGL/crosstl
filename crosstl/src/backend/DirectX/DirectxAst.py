@@ -95,6 +95,15 @@ class WhileNode(ASTNode):
         return f"WhileNode(condition={self.condition}, body={self.body})"
 
 
+class DoWhileNode(ASTNode):
+    def __init__(self, condition, body):
+        self.condition = condition
+        self.body = body
+
+    def __repr__(self):
+        return f"DoWhileNode(condition={self.condition}, body={self.body})"
+
+
 class ReturnNode(ASTNode):
     def __init__(self, value):
         self.value = value
