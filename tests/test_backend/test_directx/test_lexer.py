@@ -137,6 +137,10 @@ def test_assignment_ops_tokenization():
             uint redValue = asuint(output.out_color.r);
             redValue ^= 0x1;
             output.out_color.r = asfloat(redValue);
+
+            redValue |= 0x2;
+
+            redValue &= 0x3;
         }
 
         return output;

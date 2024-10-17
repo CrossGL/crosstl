@@ -177,6 +177,8 @@ def test_assignment_ops_parsing():
             output.out_color.r = asfloat(redValue);
 
             output.redValue |= 0x2;
+
+            output.redValue &= 0x3;
         }
 
         return output;
