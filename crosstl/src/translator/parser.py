@@ -439,6 +439,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
+            "BITWISE_AND",
             "ASSIGN_SHIFT_LEFT",
             "ASSIGN_SHIFT_RIGHT",
         ]:
@@ -507,6 +508,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
+            "BITWISE_AND",
             "ASSIGN_SHIFT_LEFT" "ASSIGN_SHIFT_RIGHT",
         ]:
             op = self.current_token[1]
@@ -538,6 +540,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
+            "BITWISE_AND",
             "EQUAL",
             "ASSIGN_AND",
             "ASSIGN_OR",
@@ -599,6 +602,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
+            "BITWISE_AND",
             "ASSIGN_SHIFT_RIGHT",
             "ASSIGN_SHIFT_LEFT",
         ]:
@@ -790,6 +794,7 @@ class Parser:
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
+            "BITWISE_AND",
             "ASSIGN_SHIFT_RIGHT",
             "ASSIGN_SHIFT_LEFT",
         ]:
