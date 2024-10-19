@@ -106,98 +106,31 @@ class Lexer:
         self.tokens = []
         self.tokenize()
 
-    def __init__(self, input_code):
-        self.input_code = input_code
-        self.tokens = []
-        self.tokenize()
+    def tokenize(self):
+        pos = 0
+        while pos < len(self.code):
+            match = None
+            for token_type, pattern in TOKENS:
+                regex = re.compile(pattern)
+                match = regex.match(self.code, pos)
+                if match:
+                    text = match.group(0)
+                    if token_type == "IDENTIFIER" and text in KEYWORDS:
+                        token_type = KEYWORDS[text]
+                    if token_type != "WHITESPACE":  # Ignore whitespace tokens
 
+                        token = (token_type, text)
 
-token_specification = [
-    ("WHITESPACE", r"\s+"),
-    ("IF", r"\bif\b"),
-    ("ELSE", r"\belse\b"),
-    ("FOR", r"\bfor\b"),
-    ("RETURN", r"\breturn\b"),
-    ("BITWISE_SHIFT_LEFT", r"<<"),
-    ("BITWISE_SHIFT_RIGHT", r">>"),
-    ("LESS_EQUAL", r"<="),
-    ("GREATER_EQUAL", r">="),
-    ("GREATER_THAN", r">"),
-    ("LESS_THAN", r"<"),
-    ("INCREMENT", r"\+\+"),
-    ("DECREMENT", r"--"),
-    ("EQUAL", r"=="),
-    ("NOT_EQUAL", r"!="),
-    ("ASSIGN_AND", r"&="),
-    ("ASSIGN_OR", r"\|="),
-    ("ASSIGN_XOR", r"\^="),
-    ("LOGICAL_AND", r"&&"),
-    ("LOGICAL_OR", r"\|\|"),
-    # Add other token definitions here
-]
+                        self.tokens.append(token)
+                    pos = match.end(0)
+                    break
+            if not match:
+                unmatched_char = self.code[pos]
+                highlighted_code = (
+                    self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1 :]
+                )
+                raise SyntaxError(
+                    f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
+                )
 
-
-def tokenize(self):
-    pos = 0
-    while pos < len(self.input_code):
-        match = None
-        for token_spec in token_specification:
-            pattern, tag = token_spec
-            regex = re.compile(pattern)
-            match = regex.match(self.input_code, pos)
-            if match:
-                token = (tag, match.group(0))
-                self.tokens.append(token)
-                pos = match.end(0)
-                break
-        if not match:
-            unmatched_char = self.input_code[pos]
-            highlighted_code = (
-                self.input_code[:pos]
-                + "["
-                + self.input_code[pos]
-                + "]"
-                + self.input_code[pos + 1 :]
-            )
-            raise SyntaxError(
-                f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
-            )
-    self.tokens.append(("EOF", None))
-
-
-class BinOp:
-    def __init__(self, left, op, right):
-        self.left = left
-        self.op = op
-        self.right = right
-
-
-class Parser:
-    def __init__(self, lexer):
-        self.lexer = lexer
-        self.current_token = None
-        self.next_token()
-
-    def next_token(self):
-        self.current_token = self.lexer.get_next_token()
-
-    def parse(self):
-        return self.expression()
-
-    def expression(self):
-        node = self.term()
-        while self.current_token.type in ("BITWISE_OR",):
-            token = self.current_token
-            if token.type == "BITWISE_OR":
-                self.next_token()
-                node = BinOp(left=node, op=token, right=self.term())
-        return node
-
-    def term(self):
-
-        pass
-
-
-class Lexer:
-
-    pass
+        self.tokens.append(("EOF", None))  
