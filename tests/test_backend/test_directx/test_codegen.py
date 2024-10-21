@@ -386,7 +386,10 @@ def test_assignment_ops_parsing():
             output.redValue ^= 0x1;
             output.out_color.r = asfloat(redValue);
 
-            outpu.redValue |= 0x2;
+            output.redValue |= 0x2;
+
+            output.redValue &= 0x3;
+
         }
 
         return output;
