@@ -75,6 +75,44 @@ def test_for_parsing():
         pytest.fail("for parsing not implemented.")
 
 
+def test_while_parsing():
+    code = """
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        int i = 0;
+        while (i < 10) {
+            output.out_position = input.position;
+            i = i + 1;
+        }
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("while parsing not implemented")
+
+
+def test_do_while_parsing():
+    code = """
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        int i = 0;
+        do {
+            output.out_position = input.position;
+            i = i + 1;
+        } while (i < 10);
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("do while parsing not implemented")
+
+
 def test_else_parsing():
     code = """
     PSOutput PSMain(PSInput input) {
@@ -159,9 +197,9 @@ def test_assignment_ops_parsing():
             output.out_color.r = asfloat(redValue);
 
             output.redValue |= 0x2;
-
             // Applying shift left operation
             output.redValue <<= 1; // Shift left by 1
+            output.redValue &= 0x3;
         }
 
 

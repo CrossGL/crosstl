@@ -19,6 +19,8 @@ TOKENS = [
     ("ELSE_IF", r"\belse\sif\b"),
     ("ELSE", r"\belse\b"),
     ("FOR", r"\bfor\b"),
+    ("WHILE", r"\b\while\b"),
+    ("DO", r"\b\do\b"),
     ("REGISTER", r"\bregister\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
@@ -45,6 +47,7 @@ TOKENS = [
     ("ASSIGN_XOR", r"\^="),
     ("ASSIGN_OR", r"\|="),
     ("SHIFT_LEFT", r"<<"),
+    ("ASSIGN_AND", r"\&="),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("DOT", r"\."),
@@ -73,6 +76,8 @@ KEYWORDS = {
     "if": "IF",
     "else": "ELSE",
     "for": "FOR",
+    "while": "WHILE",
+    "do": "DO",
     "register": "REGISTER",
 }
 
