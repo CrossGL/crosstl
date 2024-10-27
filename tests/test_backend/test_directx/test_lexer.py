@@ -133,15 +133,20 @@ def test_assignment_ops_tokenization():
             output.out_color /= 2.0;
         }
 
+        // Testing SHIFT_LEFT (<<) operator on some condition
         if (input.in_position.r == 0.5) {
             uint redValue = asuint(output.out_color.r);
-            redValue ^= 0x1;
+            output.redValue ^= 0x1;
             output.out_color.r = asfloat(redValue);
+            output.redValue |= 0x2;
 
+            // Applying shift left operation
+            output.redValue << 1; // Shift left by 1
             redValue |= 0x2;
 
             redValue &= 0x3;
         }
+
 
         return output;
     }

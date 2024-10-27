@@ -238,6 +238,7 @@ class HLSLParser:
                     "ASSIGN_XOR",
                     "ASSIGN_OR",
                     "ASSIGN_AND",
+                    "SHIFT_LEFT",
                 ]:
                     # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                     op = self.current_token[1]
@@ -255,6 +256,7 @@ class HLSLParser:
                 "ASSIGN_XOR",
                 "ASSIGN_OR",
                 "ASSIGN_AND",
+                "SHIFT_LEFT",
             ]:
                 # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                 op = self.current_token[1]
@@ -275,6 +277,7 @@ class HLSLParser:
                     "ASSIGN_XOR",
                     "ASSIGN_OR",
                     "ASSIGN_AND",
+                    "SHIFT_LEFT",
                 ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -403,6 +406,7 @@ class HLSLParser:
             "ASSIGN_XOR",
             "ASSIGN_OR",
             "ASSIGN_AND",
+            "SHIFT_LEFT",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -441,6 +445,7 @@ class HLSLParser:
         left = self.parse_additive()
         while self.current_token[0] in [
             "LESS_THAN",
+            "SHIFT_LEFT",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
