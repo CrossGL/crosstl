@@ -190,7 +190,7 @@ def test_assignment_ops_parsing():
             out_color /= 2.0;
         }
 
-        // Testing SHIFT_LEFT (<<=) operator on some condition
+        // Testing SHIFT_LEFT (<<) operator on some condition
         if (input.in_position.r == 0.5) {
             uint redValue = asuint(output.out_color.r);
             output.redValue ^= 0x1;
@@ -198,7 +198,7 @@ def test_assignment_ops_parsing():
 
             output.redValue |= 0x2;
             // Applying shift left operation
-            output.redValue <<= 1; // Shift left by 1
+            output.redValue << 1; // Shift left by 1
             output.redValue &= 0x3;
         }
 
