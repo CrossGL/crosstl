@@ -403,6 +403,14 @@ def test_else_if_codegen():
     except SyntaxError:
         pytest.fail("Else_if statement parsing or code generation not implemented.")
 
+def test_bitwise_or_codegen():
+    code = """
+    uint val = 0x01;
+    val = val | 0x02;
+    """
+    generated_code = codegen.generate(code)
+    assert "| 0x02" in generated_code
+
 
 def test_assignment_ops_parsing():
     code = """

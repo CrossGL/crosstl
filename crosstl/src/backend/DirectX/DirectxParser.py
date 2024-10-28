@@ -239,6 +239,7 @@ class HLSLParser:
                     "ASSIGN_OR",
                     "ASSIGN_AND",
                     "SHIFT_LEFT",
+                    "BITWISE_OR",
                 ]:
                     # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                     op = self.current_token[1]
@@ -257,6 +258,7 @@ class HLSLParser:
                 "ASSIGN_OR",
                 "ASSIGN_AND",
                 "SHIFT_LEFT",
+                "BITWISE_OR",
             ]:
                 # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                 op = self.current_token[1]
@@ -278,6 +280,7 @@ class HLSLParser:
                     "ASSIGN_OR",
                     "ASSIGN_AND",
                     "SHIFT_LEFT",
+                    "BITWISE_OR",
                 ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -407,6 +410,7 @@ class HLSLParser:
             "ASSIGN_OR",
             "ASSIGN_AND",
             "SHIFT_LEFT",
+            "BITWISE_OR",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])

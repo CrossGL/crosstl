@@ -205,7 +205,19 @@ def test_assignment_ops_parsing():
 
         return output;
     }
+
     """
+
+    def test_bitwise_or_parsing():
+    code = """
+    uint val = 0x01;
+    if (val | 0x02) {
+        // Test case for bitwise OR
+    }
+    """
+    parsed_output = parser.parse(code)
+    assert "BITWISE_OR" in parsed_output
+
     try:
         tokens = tokenize_code(code)
         parse_code(tokens)
