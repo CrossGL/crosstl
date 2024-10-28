@@ -48,6 +48,7 @@ TOKENS = [
     ("ASSIGN_XOR", r"\^="),
     ("ASSIGN_OR", r"\|="),
     ("ASSIGN_AND", r"\&="),
+    ("BITWISE_XOR", r"\^"),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
     ("DOT", r"\."),
