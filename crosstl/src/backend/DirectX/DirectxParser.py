@@ -2,8 +2,6 @@ from .DirectxAst import (
     AssignmentNode,
     BinaryOpNode,
     ForNode,
-    WhileNode,
-    DoWhileNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
@@ -197,10 +195,6 @@ class HLSLParser:
             return self.parse_for_statement()
         elif self.current_token[0] == "RETURN":
             return self.parse_return_statement()
-        elif self.current_token[0] == "WHILE":
-            return self.parse_while_statement()
-        elif self.current_token[0] == "DO":
-            return self.parse_do_while_statement()
         else:
             return self.parse_expression_statement()
 
@@ -237,8 +231,8 @@ class HLSLParser:
                     "DIVIDE_EQUALS",
                     "ASSIGN_XOR",
                     "ASSIGN_OR",
-                    "ASSIGN_AND",
                     "SHIFT_LEFT",
+                    "BITWISE_XOR",
                 ]:
                     # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                     op = self.current_token[1]
@@ -255,8 +249,8 @@ class HLSLParser:
                 "DIVIDE_EQUALS",
                 "ASSIGN_XOR",
                 "ASSIGN_OR",
-                "ASSIGN_AND",
                 "SHIFT_LEFT",
+                "BITWISE_XOR",
             ]:
                 # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
                 op = self.current_token[1]
@@ -276,8 +270,8 @@ class HLSLParser:
                     "DIVIDE_EQUALS",
                     "ASSIGN_XOR",
                     "ASSIGN_OR",
-                    "ASSIGN_AND",
                     "SHIFT_LEFT",
+                    "BITWISE_XOR",
                 ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
@@ -352,35 +346,6 @@ class HLSLParser:
 
         return ForNode(init, condition, update, body)
 
-    def parse_while_statement(self):
-        self.eat("WHILE")
-        self.eat("LPAREN")
-
-        # Parse condition
-        condition = self.parse_expression()
-        self.eat("RPAREN")
-
-        # Parse body
-        body = self.parse_block()
-
-        return WhileNode(condition, body)
-
-    def parse_do_while_statement(self):
-        # do token
-        self.eat("DO")
-
-        # parse do block
-        body = self.parse_block()
-
-        # parse while condition
-        self.eat("WHILE")
-        self.eat("LPAREN")
-        condition = self.parse_expression()
-        self.eat("RPAREN")
-        self.eat("SEMICOLON")
-
-        return DoWhileNode(condition, body)
-
     def parse_return_statement(self):
         self.eat("RETURN")
         value = self.parse_expression()
@@ -405,8 +370,7 @@ class HLSLParser:
             "DIVIDE_EQUALS",
             "ASSIGN_XOR",
             "ASSIGN_OR",
-            "ASSIGN_AND",
-            "SHIFT_LEFT",
+            "BITWISE_XOR",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -445,7 +409,6 @@ class HLSLParser:
         left = self.parse_additive()
         while self.current_token[0] in [
             "LESS_THAN",
-            "SHIFT_LEFT",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
