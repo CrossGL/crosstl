@@ -205,7 +205,7 @@ def test_assignment_ops_parsing():
         // Testing BITWISE_XOR (^) operator on some condition
         if (input.in_position.r == 0.5) {
             uint redValue = asuint(output.out_color.r);
-            output.redValue ^= 0x1;  // BITWISE_XOR operation
+            output.redValue ^ 0x1;  // BITWISE_XOR operation
             output.out_color.r = asfloat(redValue);
         }
 
