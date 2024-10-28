@@ -404,7 +404,7 @@ def test_else_if_codegen():
         pytest.fail("Else_if statement parsing or code generation not implemented.")
 
 
-def test_assignment_ops_codegem():
+def test_assignment_ops_codegen():
     code = """
     PSOutput PSMain(PSInput input) {
         PSOutput output;
