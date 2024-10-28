@@ -157,5 +157,16 @@ def test_assignment_ops_tokenization():
         pytest.fail("assign_op tokenization is not implemented.")
 
 
+def test_bitwise_or_tokenization():
+    code = """
+        uint val = 0x01;
+        val = val | 0x02;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("bitwise_op tokenization is not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

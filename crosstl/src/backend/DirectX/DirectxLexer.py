@@ -51,6 +51,7 @@ TOKENS = [
     ("BITWISE_XOR", r"\^"),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
+    ("BITWISE_OR", r"\|"),
     ("DOT", r"\."),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
