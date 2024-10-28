@@ -205,24 +205,36 @@ def test_assignment_ops_parsing():
 
         return output;
     }
-
     """
-
-    def test_bitwise_or_parsing():
-    code = """
-    uint val = 0x01;
-    if (val | 0x02) {
-        // Test case for bitwise OR
-    }
-    """
-    parsed_output = parser.parse(code)
-    assert "BITWISE_OR" in parsed_output
-
     try:
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("assign_op parsing not implemented.")
+
+
+def test_bitwise_ops_parsing():
+    code = """
+        PSOutput PSMain(PSInput input) {
+            PSOutput output;
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+            uint val = 0x01;
+            if (val | 0x02) {
+                // Test case for bitwise OR
+            }
+            uint filterA = 0b0001; // First filter
+            uint filterB = 0b1000; // Second filter
+
+            // Merge both filters
+            uint combinedFilter = filterA | filterB; // combinedFilter becomes 0b1001
+            return output;
+        }
+        """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("bitwise_op parsing not implemented.")
 
 
 if __name__ == "__main__":

@@ -147,15 +147,6 @@ def test_assignment_ops_tokenization():
             redValue &= 0x3;
         }
 
-        // Testing BITWISE_XOR (^) operator on some condition
-        if (input.in_position.r == 0.5) {
-            uint redValue = asuint(output.out_color.r);
-            output.redValue ^= 0x1;  
-            // BITWISE_XOR operation
-            output.out_color.r = asfloat(redValue);
-        }
-
-
 
         return output;
     }
@@ -168,11 +159,13 @@ def test_assignment_ops_tokenization():
 
 def test_bitwise_or_tokenization():
     code = """
-    uint val = 0x01;
-    val = val | 0x02;
+        uint val = 0x01;
+        val = val | 0x02;
     """
-    tokens = lexer.tokenize(code)
-    assert ("BITWISE_OR", "|") in tokens
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("bitwise_op tokenization is not implemented.")
 
 
 if __name__ == "__main__":

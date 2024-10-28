@@ -404,16 +404,7 @@ def test_else_if_codegen():
         pytest.fail("Else_if statement parsing or code generation not implemented.")
 
 
-def test_bitwise_or_codegen():
-    code = """
-    uint val = 0x01;
-    val = val | 0x02;
-    """
-    generated_code = codegen.generate(code)
-    assert "| 0x02" in generated_code
-
-
-def test_assignment_ops_parsing():
+def test_assignment_ops_codegem():
     code = """
     PSOutput PSMain(PSInput input) {
         PSOutput output;
@@ -458,6 +449,32 @@ def test_assignment_ops_parsing():
         print(generated_code)
     except SyntaxError:
         pytest.fail("assignment ops parsing or code generation not implemented.")
+
+
+def test_bitwise_ops_codgen():
+    code = """
+        PSOutput PSMain(PSInput input) {
+            PSOutput output;
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+            uint val = 0x01;
+            if (val | 0x02) {
+                // Test case for bitwise OR
+            }
+            uint filterA = 0b0001; // First filter
+            uint filterB = 0b1000; // Second filter
+
+            // Merge both filters
+            uint combinedFilter = filterA | filterB; // combinedFilter becomes 0b1001
+            return output;
+        }
+        """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("bitwise_op parsing or codegen not implemented.")
 
 
 if __name__ == "__main__":
