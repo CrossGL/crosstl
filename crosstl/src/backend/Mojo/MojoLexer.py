@@ -46,7 +46,7 @@ TOKENS = [
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
-    ("LOGICAL_NAND", r"!&&"),  
+    ("LOGICAL_NAND", r"!&&"),
     ("LOGICAL_XOR", r"\^"),
     ("LOGICAL_NOR", r"\bnor\b"),
     ("AND", r"&&"),

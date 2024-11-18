@@ -112,6 +112,7 @@ class ForNode(MojoASTNode):
     def __repr__(self):
         return f"ForNode(loop_var={self.loop_var}, iterable={self.iterable}, body={self.body})"
 
+
 class WhileNode(MojoASTNode):
     def __init__(self, condition, body):
         self.condition = condition
@@ -248,13 +249,15 @@ class SwitchNode(MojoASTNode):
 
     def __repr__(self):
         return f"SwitchNode(expression={self.expression}, cases={self.cases})"
-    
+
+
 class PrintNode(MojoASTNode):
     def __init__(self, expression):
         self.expression = expression
 
     def __repr__(self):
         return f"PrintNode(expression={self.expression!r})"
+
 
 # AST node for string literals
 class StringLiteralNode(MojoASTNode):
@@ -263,4 +266,3 @@ class StringLiteralNode(MojoASTNode):
 
     def __repr__(self):
         return f"StringLiteralNode(value={self.value!r})"
-
