@@ -41,12 +41,17 @@ TOKENS = [
     ("MINUS_EQUALS", r"-="),
     ("MULTIPLY_EQUALS", r"\*="),
     ("DIVIDE_EQUALS", r"/="),
+    ("POINTER", r"->"),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
+    ("LOGICAL_NAND", r"!&&"),  
+    ("LOGICAL_XOR", r"\^"),
+    ("LOGICAL_NOR", r"\bnor\b"),
     ("AND", r"&&"),
     ("OR", r"\|\|"),
+    ("NOT", r"!"),
     ("DOT", r"\."),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
@@ -62,6 +67,7 @@ KEYWORDS = {
     "if": "IF",
     "else": "ELSE",
     "for": "FOR",
+    "in": "IN",
     "while": "WHILE",
     "import": "IMPORT",
     "def": "DEF",
@@ -69,6 +75,7 @@ KEYWORDS = {
     "Float": "FLOAT",
     "Bool": "BOOL",
     "String": "STRING",
+    "print": "PRINT",
 }
 
 
@@ -108,13 +115,40 @@ class MojoLexer:
 
 # Temp test sorry aha
 code = """
-struct MyStruct:
-    let x: Int
-    var y: Float
-    fn add() -> Int:
-        return self.x + y
+fn test_logical_operations() {
+    let a: Bool = true;
+    let b: Bool = false;
+    let c: Bool = true;
+    let d: Bool = false;
+    let e: Bool = true;
+    let f: Bool = false;
+    let g: Bool = true;
+
+    let result_and = a && b;
+    print("a AND b = ", result_and);
+
+    
+    let result_or = a || b;   
+    print("a OR b = ", result_or);
+
+    
+    let result_xor = a != b; 
+    print("a XOR b = ", result_xor);
+
+    
+    let result_not = !a;     
+    print("NOT a = ", result_not);
+
+    
+    let result_nand = !(a && b);  
+    print("a NAND b = ", result_nand);
+
+}
+
+
+test_logical_operations();
 """
 
 lexer = MojoLexer(code)
-for token in lexer.tokens:
-    print(token)
+# for token in lexer.tokens:
+#       print(token)

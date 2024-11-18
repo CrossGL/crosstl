@@ -1,5 +1,5 @@
-from MojoLexer import *
-from MojoAst import *
+from .MojoLexer import *
+from .MojoAst import *
 
 
 class MojoParser:
@@ -14,15 +14,19 @@ class MojoParser:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
+        #print(f"Current token before eating: {self.current_token}, Expected token type: {token_type}")
+
         if self.current_token[0] == token_type:
+            #print(f"Eating token: {self.current_token}")  # Log the token being consumed
             self.pos += 1
             self.current_token = (
                 self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
             )
             self.skip_comments()
+            #print(f"Next token after eating: {self.current_token}")  # Log the next token
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
-
+        
     def parse(self):
         module = self.parse_module()
         self.eat("EOF")
@@ -162,12 +166,23 @@ class MojoParser:
         params = self.parse_parameters()
         self.eat("RPAREN")
 
-        if self.current_token[0] == "MINUS":
-            self.eat("MINUS")
-            if self.current_token[0] == "GREATER_THAN":
-                self.eat("GREATER_THAN")
-                return_type = self.current_token[1]
-                self.eat(self.current_token[0])
+        # if self.current_token[0] == "MINUS":
+        #     self.eat("MINUS")
+        #     if self.current_token[0] == "GREATER_THAN":
+        #         self.eat("GREATER_THAN")
+        #         return_type = self.current_token[1]
+        #         self.eat(self.current_token[0])
+        
+        # Check for pointer in return type using the POINTER token
+        if self.current_token[0] == "POINTER":
+            self.eat("POINTER") 
+            # Expect the next token to be a type (IDENTIFIER) or FLOAT/INT etc.
+            if self.current_token[0] in ["IDENTIFIER", "FLOAT", "INT"]:
+                return_type = self.current_token[1]  
+                self.eat(self.current_token[0])  
+                return_type = f"{return_type}*"  
+            else:
+                raise SyntaxError(f"Expected IDENTIFIER or valid type after POINTER, got {self.current_token[0]}")
 
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
@@ -321,17 +336,22 @@ class MojoParser:
 
     def parse_for_statement(self):
         self.eat("FOR")
-        self.eat("LPAREN")
 
-        init = self.parse_variable_declaration_or_assignment()
-        self.eat("SEMICOLON")
-        condition = self.parse_expression()
-        self.eat("SEMICOLON")
-        update = self.parse_expression()
-        self.eat("RPAREN")
+        loop_var = self.current_token[1]
+        self.eat("IDENTIFIER")
+
+        if self.current_token[0] != "IN":
+            raise SyntaxError(f"Expected 'IN', got {self.current_token[0]}")
+
+        self.eat("IN")
+
+        iterable = self.parse_expression()
+
+        if self.current_token[0] != "COLON":
+            raise SyntaxError(f"Expected COLON, got {self.current_token[0]}")
+
         body = self.parse_block()
-
-        return ForNode(init, condition, update, body)
+        return ForNode(loop_var, iterable, body)
 
     def parse_while_statement(self):
         self.eat("WHILE")
@@ -385,7 +405,28 @@ class MojoParser:
         return expr
 
     def parse_expression(self):
+        if self.current_token[0] == "PRINT":
+            return self.parse_print_statement()
         return self.parse_assignment()
+    def parse_print_statement(self):
+        if self.current_token[0] != 'PRINT':
+            raise SyntaxError("Expected 'print' keyword")
+        self.eat("PRINT") 
+        self.eat("LPAREN")
+        args = []
+        while self.current_token[0] != "RPAREN":
+            if self.current_token[0] == "STRING_LITERAL":
+                string_node = self.parse_primary()
+                args.append(string_node)
+            elif self.current_token[0] == "IDENTIFIER":
+                identifier_node = self.parse_primary() 
+                args.append(identifier_node)
+            else:
+                raise SyntaxError(f"Unexpected token inside print: {self.current_token[0]}")
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+        self.eat("RPAREN")
+        return PrintNode(args)
 
     def parse_assignment(self):
         left = self.parse_logical_or()
@@ -409,19 +450,46 @@ class MojoParser:
         return left
 
     def parse_logical_or(self):
-        left = self.parse_logical_and()
+        left = self.parse_logical_nor()
         while self.current_token[0] == "OR":
             op = self.current_token[1]
             self.eat("OR")
+            right = self.parse_logical_nor()
+            left = BinaryOpNode(left, op, right)
+        return left
+    
+    def parse_logical_nor(self):
+        left = self.parse_logical_xor()  
+        while self.current_token[0] == "LOGICAL_NOR":
+            op = self.current_token[1]
+            self.eat("LOGICAL_NOR")
+            right = self.parse_logical_xor()  
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_logical_xor(self):
+        left = self.parse_logical_and()
+        while self.current_token[0] == "LOGICAL_XOR":
+            op = self.current_token[1]
+            self.eat("LOGICAL_XOR")
             right = self.parse_logical_and()
             left = BinaryOpNode(left, op, right)
         return left
 
     def parse_logical_and(self):
-        left = self.parse_equality()
+        left = self.parse_logical_nand()
         while self.current_token[0] == "AND":
             op = self.current_token[1]
             self.eat("AND")
+            right = self.parse_logical_nand()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_logical_nand(self):
+        left = self.parse_equality()
+        while self.current_token[0] == "LOGICAL_NAND":
+            op = self.current_token[1]
+            self.eat("LOGICAL_NAND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
         return left
@@ -442,6 +510,7 @@ class MojoParser:
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "POINTER",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -468,14 +537,25 @@ class MojoParser:
         return left
 
     def parse_unary(self):
-        if self.current_token[0] in ["PLUS", "MINUS"]:
+        if self.current_token[0] == "PLUS" or self.current_token[0] == "MINUS":
             op = self.current_token[1]
             self.eat(self.current_token[0])
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
+        elif self.current_token[0] == "NOT":
+            op = self.current_token[1]  # Get the 'not' token
+            self.eat("NOT")
+            operand = self.parse_unary()  # Recursively parse the operand after `not`
+            return UnaryOpNode(op, operand)
         return self.parse_primary()
 
+
     def parse_primary(self):
+        if self.current_token[0] == "STRING_LITERAL":
+                value = self.current_token[1]
+                self.eat("STRING_LITERAL")
+                return StringLiteralNode(value)
+        
         if self.current_token[0] in [
             "IDENTIFIER",
             "NUMBER",
@@ -498,6 +578,7 @@ class MojoParser:
                     return VariableNode(type_name, var_name)
                 elif self.current_token[0] == "LPAREN":
                     return self.parse_function_call_or_identifier()
+            
             elif self.current_token[0] == "NUMBER":
                 value = self.current_token[1]
                 self.eat("NUMBER")
@@ -604,28 +685,47 @@ class MojoParser:
 
 # Temp test
 code = """
-import MyModule as mm
+fn test_logical_operations() {
+    let a: Bool = true;
+    let b: Bool = false;
+    let c: Bool = true;
+    let d: Bool = false;
+    let e: Bool = true;
+    let f: Bool = false;
+    let g: Bool = true;
 
-@decorator_example
-class ExampleClass(BaseClass):
-    let x: Int
-    var y: Float = 0.0
+    let result_and = a && b;
+    print("a AND b = ", result_and);
 
-    fn add_values(self, a: Int, b: Float) -> Float:
-        return a + b + self.y
+    
+    let result_or = a || b;   
+    print("a OR b = ", result_or);
+
+    
+    let result_xor = a != b; 
+    print("a XOR b = ", result_xor);
+
+    
+    let result_not = !a;     
+    print("NOT a = ", result_not);
+
+    
+    let result_nand = !(a && b);  
+    print("a NAND b = ", result_nand);
+
+    let result_nor = !(a || b);
+    print("a NOR b = ", result_nor);
+
+}
 
 
-struct ExampleStruct:
-    let z: Float
+test_logical_operations();
 
-fn main():
-    let instance = ExampleClass(x: 10)
-    let result = instance.add_values(5 , 3.2)
-    return result
 """
 
 lexer = MojoLexer(code)
 parser = MojoParser(lexer.tokens)
 ast = parser.parse()
-
-print(ast)
+for token in lexer.tokens:
+    print(token)
+#print(ast)
