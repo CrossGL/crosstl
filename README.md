@@ -8,19 +8,19 @@
 <div style="display: block;" align="center">
     <img class="dark-light" width="5%" >
     <a href="https://crossgl.net/">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/web_icon.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/web_icon.png">
     </a>
     <img class="dark-light" width="5%" >
     <a href="https://crossgl.github.io/language.html">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/docs.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/docs.png">
     </a>
     <img class="dark-light" width="5%" >
     <a href="https://github.com/CrossGL/demos">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/written.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/written.png">
     </a>
     <img class="dark-light" width="5%" >
     <a href="https://crossgl.github.io/design.html">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/samthakur587/docs2.0/blob/main/strategic-plan.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/strategic-plan.png">
     </a>
 </div>
 
