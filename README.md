@@ -11,7 +11,7 @@
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/web_icon.png">
     </a>
     <img class="dark-light" width="5%" >
-    <a href="https://crossgl.github.io/language.html">
+    <a href="https://crossgl.github.io/crossgl-docs/language.html">
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/docs.png">
     </a>
     <img class="dark-light" width="5%" >
@@ -19,7 +19,7 @@
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/written.png">
     </a>
     <img class="dark-light" width="5%" >
-    <a href="https://crossgl.github.io/design.html">
+    <a href="https://crossgl.github.io/crossgl-docs/design.html">
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/strategic-plan.png">
     </a>
 </div>
