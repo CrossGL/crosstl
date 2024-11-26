@@ -32,3 +32,11 @@ def generate_code(ast_node):
     """
     codegen = SlangCodeGen()
     return codegen.generate(ast_node)
+
+# ToDO: Implement the tests
+def test_struct():
+    pass
+
+
+if __name__ == "__main__":
+    pytest.main()
