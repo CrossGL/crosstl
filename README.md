@@ -1,5 +1,5 @@
 <div style="display: block;" align="center">
-    <img class="only-dark" width="10%" height="10%" src="https://crossgl.github.io/_static/logo.png#gh-dark-mode-only"/>
+    <img class="only-dark" width="10%" height="10%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/logo.png#gh-dark-mode-only"/>
 </div>
 
 
