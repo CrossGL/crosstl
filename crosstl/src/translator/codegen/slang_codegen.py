@@ -12,6 +12,7 @@ from ..ast import (
     VariableNode,
 )
 
+
 # ToDO: Implement the SlangCodeGen class
 class SlangCodeGen:
-    pass    
+    pass
