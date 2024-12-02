@@ -596,5 +596,38 @@ def test_bitwise_and_operator():
         pytest.fail("Bitwise AND codegen not implemented")
 
 
+def test_double_data_type():
+    code = """
+    shader DoubleShader {
+        vertex {
+            input double position;
+            output double vDouble;
+
+            void main() {
+                vDouble = position * 2.0;
+                gl_Position = vec4(vDouble, 1.0);
+            }
+        }
+
+        fragment {
+            input double vDouble;
+            output vec4 fragColor;
+
+            void main() {
+                fragColor = vec4(vDouble, vDouble, vDouble, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+        assert "double" in generated_code
+    except SyntaxError:
+        pytest.fail("Double data type not supported.")
+
+
 if __name__ == "__main__":
     pytest.main()
