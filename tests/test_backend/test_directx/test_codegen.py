@@ -437,7 +437,19 @@ def test_assignment_ops_codegen():
             output.redValue << 1; // Shift left by 1
             output.redValue &= 0x3;
         }
-
+        
+        // Testing SHIFT_RIGHT (>>) operator on some condition
+        if (input.in_position.r == 0.25){
+            uint greenValue = asuint(output.out_color.g);
+            output.greenValue ^= 0x1; 
+            output.out_color.g = asfloat(greenValue)
+            
+            output.greenValue |= 0x4;
+            //Applying shift right operation
+            output.greenValue >> 1; // Shift right by 1
+            output.greenValue &= 0x7;
+        } 
+        
         // Testing BITWISE_XOR (^) operator on some condition
         if (input.in_position.r == 0.5) {
             uint redValue = asuint(output.out_color.r);

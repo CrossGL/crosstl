@@ -239,6 +239,7 @@ class HLSLParser:
                     "ASSIGN_OR",
                     "ASSIGN_AND",
                     "SHIFT_LEFT",
+                    "SHIFT_RIGHT",
                     "BITWISE_OR",
                     "BITWISE_XOR",
                 ]:
@@ -259,6 +260,7 @@ class HLSLParser:
                 "ASSIGN_OR",
                 "ASSIGN_AND",
                 "SHIFT_LEFT",
+                "SHIFT_RIGHT",
                 "BITWISE_OR",
                 "BITWISE_XOR",
             ]:
@@ -282,6 +284,7 @@ class HLSLParser:
                     "ASSIGN_OR",
                     "ASSIGN_AND",
                     "SHIFT_LEFT",
+                    "SHIFT_RIGHT",
                     "BITWISE_OR",
                     "BITWISE_XOR",
                 ]:
@@ -413,6 +416,7 @@ class HLSLParser:
             "ASSIGN_OR",
             "ASSIGN_AND",
             "SHIFT_LEFT",
+            "SHIFT_RIGHT",
             "BITWISE_OR",
             "BITWISE_XOR",
         ]:
@@ -454,6 +458,7 @@ class HLSLParser:
         while self.current_token[0] in [
             "LESS_THAN",
             "SHIFT_LEFT",
+            "SHIFT_RIGHT",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",

@@ -146,6 +146,20 @@ def test_assignment_ops_tokenization():
 
             redValue &= 0x3;
         }
+        
+        // Testing SHIFT RIGHT (>>) operator on some condition
+        if (input.in_position.r == 0.5) {
+            uint greenValue = asuint(output.out_color.g);
+            output.greenValue ^= 0x1; 
+            output.out_color.g = asfloat(greenValue);
+            output.greenValue |= 0x2;
+            
+            // Applying shift right operation
+            output.greenValue >> 1; // Shift right by 1
+            greenValue |= 0x2;
+            
+            greenValue &= 0x7;
+        }
 
 
         return output;
