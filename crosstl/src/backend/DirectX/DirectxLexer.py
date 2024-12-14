@@ -35,7 +35,7 @@ TOKENS = [
     ("COLON", r":"),
     ("QUESTION", r"\?"),
     ("SHIFT_LEFT", r"<<"),
-    ("SHIFT_RIGHT",r">>"),
+    ("SHIFT_RIGHT", r">>"),
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("LESS_THAN", r"<"),
