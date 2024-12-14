@@ -148,17 +148,17 @@ def test_assignment_ops_tokenization():
         }
         
         // Testing SHIFT RIGHT (>>) operator on some condition
-        if (input.in_position.r == 0.5) {
-            uint greenValue = asuint(output.out_color.g);
-            output.greenValue ^= 0x1; 
-            output.out_color.g = asfloat(greenValue);
-            output.greenValue |= 0x2;
-            
-            // Applying shift right operation
-            output.greenValue >> 1; // Shift right by 1
-            greenValue |= 0x2;
-            
-            greenValue &= 0x7;
+        if (input.in_position.r == 0.25) {
+            uint redValue = asuint(output.out_color.r);
+            output.redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+            output.redValue |= 0x2;
+
+            // Applying shift left operation
+            output.redValue >> 1; // Shift left by 1
+            redValue |= 0x2;
+
+            redValue &= 0x3;
         }
 
 
