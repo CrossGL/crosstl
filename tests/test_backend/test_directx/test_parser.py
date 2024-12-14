@@ -202,7 +202,7 @@ def test_assignment_ops_parsing():
             output.redValue &= 0x3;
         }
         
-        // Testing SHIFT_LEFT (>>) operator on some condition
+        // Testing SHIFT_RIGHT (>>) operator on some condition
         if (input.in_position.r == 0.25) {
             uint redValue = asuint(output.out_color.r);
             output.redValue ^= 0x1;
