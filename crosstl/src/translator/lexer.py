@@ -73,7 +73,7 @@ TOKENS = [
     ("BITWISE_OR", r"\|"),
     ("BITWISE_XOR", r"\^"),
     ("BITWISE_NOT", r"~"),
-    ("STATIC", r"\bstatic\b")
+    ("STATIC", r"\bstatic\b"),
 ]
 
 KEYWORDS = {
