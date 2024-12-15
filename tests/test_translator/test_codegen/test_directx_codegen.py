@@ -599,22 +599,25 @@ def test_bitwise_and_operator():
 def test_double_data_type():
     code = """
     shader DoubleShader {
-        vertex {
-            input double position;
-            output double vDouble;
+        struct VSInput {
+            double texCoord @ TEXCOORD0;
+        };
 
-            void main() {
-                vDouble = position * 2.0;
-                gl_Position = vec4(vDouble, 1.0);
+        struct VSOutput {
+            double color @ COLOR;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.color = input.texCoord * 2.0;
+                return output;
             }
         }
 
         fragment {
-            input double vDouble;
-            output vec4 fragColor;
-
-            void main() {
-                fragColor = vec4(vDouble, vDouble, vDouble, 1.0);
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.color, 0.0, 0.0, 1.0);
             }
         }
     }
@@ -627,6 +630,56 @@ def test_double_data_type():
         assert "double" in generated_code
     except SyntaxError:
         pytest.fail("Double data type not supported.")
+        
+# Test the codegen for the shift operators("<<", ">>")
+def test_shift_operators():
+    code = """
+    shader main {
+    
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+
+    sampler2D iChannel0;
+
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
+            uint a = 1 << 1;
+            uint b = 2 >> 1;
+            // Pass through texture coordinates as color
+            output.color = vec4(input.texCoord, 0.0, 1.0);
+            return output;
+        }
+    }
+
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            // Sample brightness and calculate bloom
+            float brightness = texture(iChannel0, input.color.xy).r;
+            float bloom = max(0.0, brightness - 0.5);
+            // Apply bloom to the texture color
+            uint a = 1 << 1;
+            uint b = 2 >> 1;
+            vec3 texColor = texture(iChannel0, input.color.xy).rgb;
+            vec3 colorWithBloom = texColor + vec3(bloom);
+            return vec4(colorWithBloom, 1.0);
+        }
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Shift right assignment operator codegen not implemented.")
 
 
 if __name__ == "__main__":

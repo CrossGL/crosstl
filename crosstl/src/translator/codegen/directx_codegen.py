@@ -278,6 +278,8 @@ class HLSLCodeGen:
             "ASSIGN_AND": "&=",
             "LOGICAL_AND": "&&",
             "ASSIGN_XOR": "^=",
+            "shift_left": "<<",
+            "shift_right": ">>",
         }
         return op_map.get(op, op)
 

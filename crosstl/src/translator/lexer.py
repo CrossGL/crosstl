@@ -73,6 +73,8 @@ TOKENS = [
     ("BITWISE_OR", r"\|"),
     ("BITWISE_XOR", r"\^"),
     ("BITWISE_NOT", r"~"),
+    ("shift_left", r"<<"),
+    ("shift_right", r">>"),
 ]
 
 KEYWORDS = {

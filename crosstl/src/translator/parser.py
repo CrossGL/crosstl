@@ -442,6 +442,8 @@ class Parser:
             "BITWISE_AND",
             "ASSIGN_SHIFT_LEFT",
             "ASSIGN_SHIFT_RIGHT",
+            "SHIFT_LEFT",
+            "SHIFT_RIGHT",
         ]:
             return self.parse_assignment(name)
         elif self.current_token[0] == "INCREMENT":

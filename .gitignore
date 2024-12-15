@@ -41,3 +41,7 @@ build
 /compiler/__pycache__
 *:Z*
 *workspace
+
+# Python
+crosstl.egg-info
+.vscode/settings.json
