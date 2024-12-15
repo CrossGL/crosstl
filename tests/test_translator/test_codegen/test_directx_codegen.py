@@ -630,7 +630,8 @@ def test_double_data_type():
         assert "double" in generated_code
     except SyntaxError:
         pytest.fail("Double data type not supported.")
-        
+
+
 # Test the codegen for the shift operators("<<", ">>")
 def test_shift_operators():
     code = """
