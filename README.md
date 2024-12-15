@@ -1,5 +1,5 @@
 <div style="display: block;" align="center">
-    <img class="only-dark" width="10%" height="10%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/logo.png#gh-dark-mode-only"/>
+    <img class="only-dark" width="10%" height="10%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/logo.png#gh-dark-mode-only"/>
 </div>
 
 
@@ -8,19 +8,19 @@
 <div style="display: block;" align="center">
     <img class="dark-light" width="5%" >
     <a href="https://crossgl.net/">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/web_icon.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/web_icon.png">
     </a>
     <img class="dark-light" width="5%" >
     <a href="https://crossgl.github.io/crossgl-docs/language.html">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/docs.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/docs.png">
     </a>
     <img class="dark-light" width="5%" >
     <a href="https://github.com/CrossGL/demos">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/written.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/written.png">
     </a>
     <img class="dark-light" width="5%" >
     <a href="https://crossgl.github.io/crossgl-docs/design.html">
-        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/source/_static/strategic-plan.png">
+        <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/strategic-plan.png">
     </a>
 </div>
 
