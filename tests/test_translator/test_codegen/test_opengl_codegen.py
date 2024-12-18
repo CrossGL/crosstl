@@ -1,8 +1,8 @@
-from crosstl.src.translator.lexer import Lexer
+from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
-from crosstl.src.translator.parser import Parser
-from crosstl.src.translator.codegen.opengl_codegen import GLSLCodeGen
+from crosstl.translator.parser import Parser
+from crosstl.translator.codegen.opengl_codegen import GLSLCodeGen
 
 
 def tokenize_code(code: str) -> List:

@@ -1,7 +1,7 @@
 import pytest
 from typing import List
-from crosstl.src.backend.Metal.MetalLexer import MetalLexer
-from crosstl.src.backend.Metal.MetalParser import MetalParser
+from crosstl.backend.Metal.MetalLexer import MetalLexer
+from crosstl.backend.Metal.MetalParser import MetalParser
 
 
 def tokenize_code(code: str) -> List:

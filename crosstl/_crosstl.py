@@ -1,12 +1,12 @@
-from .src import translator
-from .src.translator.lexer import Lexer
-from .src.translator.parser import Parser
-from .src.translator.codegen import directx_codegen, metal_codegen, opengl_codegen
-from .src.translator.ast import ASTNode
-from .src.backend.DirectX import *
-from .src.backend.Metal import *
-from .src.backend.Opengl import *
-from .src.backend.slang import *
+from . import translator
+from .translator.lexer import Lexer
+from .translator.parser import Parser
+from .translator.codegen import directx_codegen, metal_codegen, opengl_codegen
+from .translator.ast import ASTNode
+from .backend.DirectX import *
+from .backend.Metal import *
+from .backend.Opengl import *
+from .backend.slang import *
 
 
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:

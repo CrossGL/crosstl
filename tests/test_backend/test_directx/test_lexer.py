@@ -1,6 +1,6 @@
 import pytest
 from typing import List
-from crosstl.src.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 
 
 def tokenize_code(code: str) -> List:
