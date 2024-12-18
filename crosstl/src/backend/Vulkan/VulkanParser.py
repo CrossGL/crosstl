@@ -663,33 +663,3 @@ class VulkanParser:
         self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
         return UniformNode(name, var_type)
-
-
-# Testing the Parser
-sample_code = """
-    layout(push_constant, location = 0, binding = 1, offset = 16, set = 2, row_major) uniform Transform {
-        mat4 modelMatrix;
-        vec3 position;
-        vec3 rotation;
-    } transform;
-    struct Light {
-        vec3 color;
-        float intensity;
-    };
-    uniform mat4 viewMatrix;
-
-    void main() {
-        vec3 lightDir = normalize(vec3(0.0, 1.0, 0.0)) + b + c;
-        a ^= b;
-    }
-"""
-
-lexer = VulkanLexer(sample_code)
-
-# print("Tokens:")
-# for token in lexer.tokens:
-#     print(token)
-
-parser = VulkanParser(lexer.tokens)
-ast = parser.parse()
-print(ast)
