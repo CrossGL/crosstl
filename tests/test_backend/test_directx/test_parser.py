@@ -1,7 +1,7 @@
 import pytest
 from typing import List
-from crosstl.src.backend.DirectX.DirectxLexer import HLSLLexer
-from crosstl.src.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
 
 def parse_code(tokens: List):

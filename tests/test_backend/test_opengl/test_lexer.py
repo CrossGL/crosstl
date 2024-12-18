@@ -1,4 +1,4 @@
-from crosstl.src.backend.Opengl.OpenglLexer import GLSLLexer
+from crosstl.backend.Opengl.OpenglLexer import GLSLLexer
 import pytest
 from typing import List
 

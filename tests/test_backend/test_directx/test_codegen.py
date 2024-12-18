@@ -1,6 +1,6 @@
-from crosstl.src.backend.DirectX import DirectxCrossGLCodeGen
-from crosstl.src.backend.DirectX.DirectxLexer import HLSLLexer
-from crosstl.src.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.DirectX import DirectxCrossGLCodeGen
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 import pytest
 from typing import List
 
