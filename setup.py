@@ -1,8 +1,4 @@
-from setuptools import setup, find_packages
-
-
-def prep(line):
-    return line.split(" ")[0].split("#")[0].split(",")[0]
+from setuptools import setup
 
 
 setup(
@@ -25,7 +21,6 @@ setup(
     url="https://crossgl.net/",
     project_urls={"Documentation": "https://crossgl.github.io/index.html"},
     include_package_dats=True,
-    # packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
         "Operating System :: OS Independent",
