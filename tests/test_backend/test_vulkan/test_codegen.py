@@ -11,7 +11,6 @@ def generate_code(ast_node):
     Returns:
         str: The generated code from the abstract syntax tree
     """
-    pass
 
 
 def tokenize_code(code: str) -> List:
@@ -24,6 +23,7 @@ def parse_code(tokens: List):
     """Helper function to parse tokens into an AST."""
     parser = VulkanParser(tokens)
     return parser.parse()
+
 
 # ToDO: Implement the tests
 def test_struct():

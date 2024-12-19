@@ -8,6 +8,7 @@ def tokenize_code(code: str) -> List:
     lexer = VulkanLexer(code)
     return lexer.tokens
 
+
 # ToDO: Implement the tests
 def test_struct():
     pass
