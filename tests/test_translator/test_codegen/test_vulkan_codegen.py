@@ -2,7 +2,7 @@ from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
 from crosstl.translator.parser import Parser
-from crosstl.translator.codegen.vulkan_codegen import VulkanCodeGen
+from crosstl.translator.codegen.vulkan_codegen import VulkanSPIRVCodeGen
 
 
 def tokenize_code(code: str) -> List:
@@ -30,7 +30,7 @@ def generate_code(ast_node):
     Returns:
         str: The generated code from the abstract syntax tree
     """
-    codegen = VulkanCodeGen()
+    codegen = VulkanSPIRVCodeGen()
     return codegen.generate(ast_node)
 
 
