@@ -7,6 +7,8 @@ from .backend.DirectX import *
 from .backend.Metal import *
 from .backend.Opengl import *
 from .backend.slang import *
+from .backend.Vulkan import *
+from .backend.Mojo import *
 
 
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
@@ -41,6 +43,12 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
     elif file_path.endswith(".slang"):
         lexer = SlangLexer(shader_code)
         parser = SlangParser(lexer.tokens)
+    elif file_path.endswith(".spv"):
+        lexer = VulkanLexer(shader_code)
+        parser = VulkanParser(lexer.tokens)
+    elif file_path.endswith(".mojo"):
+        lexer = MojoLexer(shader_code)
+        parser = MojoParser(lexer.tokens)
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 

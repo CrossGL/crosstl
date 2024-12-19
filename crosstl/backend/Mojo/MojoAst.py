@@ -1,6 +1,3 @@
-# Ref from Modular docs.
-
-
 class MojoASTNode:
     pass
 

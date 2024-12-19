@@ -1,5 +1,5 @@
-from MojoLexer import *
-from MojoAst import *
+from .MojoLexer import *
+from .MojoAst import *
 
 
 class MojoParser:
@@ -600,32 +600,3 @@ class MojoParser:
                     self.eat("COMMA")
             self.eat("RPAREN")
         return DecoratorNode(name, args)
-
-
-# Temp test
-code = """
-import MyModule as mm
-
-@decorator_example
-class ExampleClass(BaseClass):
-    let x: Int
-    var y: Float = 0.0
-
-    fn add_values(self, a: Int, b: Float) -> Float:
-        return a + b + self.y
-
-
-struct ExampleStruct:
-    let z: Float
-
-fn main():
-    let instance = ExampleClass(x: 10)
-    let result = instance.add_values(5 , 3.2)
-    return result
-"""
-
-lexer = MojoLexer(code)
-parser = MojoParser(lexer.tokens)
-ast = parser.parse()
-
-print(ast)

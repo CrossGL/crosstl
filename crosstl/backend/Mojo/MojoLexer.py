@@ -104,17 +104,3 @@ class MojoLexer:
                 )
 
         self.tokens.append(("EOF", ""))
-
-
-# Temp test sorry aha
-code = """
-struct MyStruct:
-    let x: Int
-    var y: Float
-    fn add() -> Int:
-        return self.x + y
-"""
-
-lexer = MojoLexer(code)
-for token in lexer.tokens:
-    print(token)
