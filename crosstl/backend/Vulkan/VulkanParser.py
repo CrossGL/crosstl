@@ -1,5 +1,5 @@
-from VulkanLexer import *
-from VulkanAst import *
+from .VulkanLexer import *
+from .VulkanAst import *
 
 
 class VulkanParser:
