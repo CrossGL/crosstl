@@ -257,5 +257,33 @@ def test_bitwise_ops_parsing():
         pytest.fail("bitwise_op parsing not implemented.")
 
 
+def test_logical_ops_parsing():
+    code = """
+        PSOutput PSMain(PSInput input) {
+            PSOutput output;
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+
+            // Test case for logical AND
+            bool condition1 = true; // First condition
+            bool condition2 = false; // Second condition
+
+            if (condition1 && condition2) {
+                // If both conditions are true
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+            } else {
+                // If either or both conditions are false
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+            }
+
+            return output;
+        }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("logical_ops not implemented")
+
+
 if __name__ == "__main__":
     pytest.main()
