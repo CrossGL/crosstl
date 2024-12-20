@@ -87,6 +87,8 @@ KEYWORDS = {
     "for": "FOR",
     "return": "RETURN",
     "const": "CONST",
+    "double": "DOUBLE",
+    "uint": "UINT",
 }
 
 
