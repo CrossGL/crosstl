@@ -103,6 +103,24 @@ class DoWhileNode(ASTNode):
     def __repr__(self):
         return f"DoWhileNode(condition={self.condition}, body={self.body})"
 
+class SwitchNode(ASTNode):
+    def __init__(self, switch_expr, cases, default_body=None):
+        self.switch_expr = switch_expr  # The expression being evaluated
+        self.cases = cases              # List of CaseNode objects
+        self.default_body = default_body  # List of statements for the default block
+
+    def __repr__(self):
+        return (f"SwitchNode(switch_expr={self.switch_expr}, "
+                f"cases={self.cases}, "
+                f"default_body={self.default_body})")
+    
+class CaseNode(ASTNode):
+    def __init__(self, case_value, case_body):
+        self.case_value = case_value  # The value for this case (e.g., 1, 'A')
+        self.case_body = case_body    # List of statements inside the case block
+
+    def __repr__(self):
+        return f"CaseNode(case_value={self.case_value}, case_body={self.case_body})"
 
 class ReturnNode(ASTNode):
     def __init__(self, value):

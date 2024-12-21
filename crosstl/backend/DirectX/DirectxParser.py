@@ -4,6 +4,8 @@ from .DirectxAst import (
     ForNode,
     WhileNode,
     DoWhileNode,
+    SwitchNode,
+    CaseNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
@@ -389,6 +391,54 @@ class HLSLParser:
         self.eat("SEMICOLON")
 
         return DoWhileNode(condition, body)
+    
+    def parse_switch_statement(self):
+        """
+        Parses a 'switch' statement and returns a SwitchNode.  
+        """
+        # Match 'switch'
+        self.eat("SWITCH")
+        # Parse the expression being switched on
+        self.eat("LPAREN")
+        switch_expr = self.parse_expression()
+        self.eat("RPAREN")
+        # Parse the body of the switch statement
+        self.eat("LBRACE")  # Match opening brace '{'
+        cases = []
+        default_body = None
+         # Process each case or default block
+        while self.current_token.type != "RBRACE":  # Until we reach the closing '}'
+            if self.current_token.type == "CASE":
+                # Parse a case block
+                self.eat("CASE")
+                case_value = self.parse_expression()  # Parse the value after 'case'
+                self.eat("COLON")  # Match the colon after the case value
+                case_body = self.parse_case_body()
+                cases.append(CaseNode(case_value, case_body))
+                
+            elif self.current_token.type == "DEFAULT":
+                # Parse the default block
+                self.eat("DEFAULT")
+                self.eat("COLON")  # Match the colon after 'default'
+                if default_body is not None:
+                    raise SyntaxError("Multiple 'default' blocks are not allowed.")
+                default_body = self.parse_case_body()
+            else:
+                raise SyntaxError(f"Unexpected token: {self.current_token.type}")
+
+        self.eat("RBRACE")  # Match closing brace '}'
+
+        return SwitchNode(switch_expr, cases, default_body)
+
+    def parse_case_body(self):
+        """
+        Parses the body of a 'case' or 'default' block.
+        It collects statements until the next 'case', 'default', or closing '}'.
+        """
+        body = []
+        while self.current_token.type not in ("CASE", "DEFAULT", "RBRACE"):
+            body.append(self.parse_statement())
+        return body
 
     def parse_return_statement(self):
         self.eat("RETURN")

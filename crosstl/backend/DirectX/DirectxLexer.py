@@ -21,6 +21,9 @@ TOKENS = [
     ("FOR", r"\bfor\b"),
     ("WHILE", r"\b\while\b"),
     ("DO", r"\b\do\b"),
+    ("SWITCH", r"\b\switch\b"),
+    ("CASE", r"\bcase\b"),
+    ("DEFAULT", r"\b\default\b")
     ("REGISTER", r"\bregister\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("NUMBER", r"\d+(\.\d+)?"),
@@ -81,6 +84,9 @@ KEYWORDS = {
     "for": "FOR",
     "while": "WHILE",
     "do": "DO",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
     "register": "REGISTER",
 }
 

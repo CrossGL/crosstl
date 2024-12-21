@@ -146,7 +146,32 @@ class HLSLToCrossGLConverter:
                 code += self.generate_do_while_loop(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
+            elif isinstance(stmt, SwitchNode):
+                code += self.generate_switch_statement(stmt, indent, is_main)
         return code
+
+    def generate_switch_statement(self, switch_node, indent, is_main):
+        """
+        Generate code for a SwitchNode.
+        """
+        code = "    " * indent + f"switch ({self.generate_expression(switch_node.switch_expr, is_main)}) {{\n"
+        for case in switch_node.cases:
+            code += self.generate_case_statement(case, indent + 1, is_main)
+        if switch_node.default_body:
+            code += "    " * (indent + 1) + "default:\n"
+            code += self.generate_function_body(switch_node.default_body, indent + 2, is_main)
+            code += "    " * (indent + 2) + "break;\n"
+        code += "    " * indent + "}\n"
+        return code
+
+    def generate_case_statement(self, case_node, indent, is_main):
+        """
+        Generate code for a CaseNode.
+        """
+        code = "    " * indent + f"case {self.generate_expression(case_node.case_value, is_main)}:\n"
+        code += self.generate_function_body(case_node.case_body, indent + 1, is_main)
+        code += "    " * (indent + 1) + "break;\n"
+        return code 
 
     def generate_for_loop(self, node, indent, is_main):
         init = self.generate_expression(node.init, is_main)
