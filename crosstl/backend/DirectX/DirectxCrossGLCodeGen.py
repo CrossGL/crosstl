@@ -70,6 +70,8 @@ class HLSLToCrossGLConverter:
                 for member in node.members:
                     code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
                 code += "    }\n"
+            elif isinstance(node, IncludeNode):
+                code += f"    #include {node.path}\n"
         # Generate global variables
         for node in ast.global_variables:
             code += f"    {self.map_type(node.vtype)} {node.name};\n"
