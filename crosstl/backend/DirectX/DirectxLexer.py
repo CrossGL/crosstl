@@ -3,6 +3,7 @@ import re
 TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
+    ("PRAGMA", r"#\s*\bpragma\b"),
     ("STRUCT", r"\bstruct\b"),
     ("CBUFFER", r"\bcbuffer\b"),
     ("TEXTURE2D", r"\bTexture2D\b"),
