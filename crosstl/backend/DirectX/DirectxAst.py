@@ -160,16 +160,14 @@ class UnaryOpNode(ASTNode):
     def __str__(self):
         return f"({self.op}{self.operand})"
 
+
 class PragmaNode(ASTNode):
-    def __init__(self,directive,value):
+    def __init__(self, directive, value):
         self.directive = directive
         self.value = value
-    
+
     def __repr__(self):
         return f"PragmaNode(directive={self.directive}, value={self.value})"
 
     def __str__(self):
         return f"#pragma {self.directive} {self.value}"
-    
-    
-

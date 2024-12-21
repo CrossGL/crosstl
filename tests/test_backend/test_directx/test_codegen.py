@@ -546,6 +546,5 @@ def test_pragma_codegen():
         pytest.fail("For loop parsing or code generation not implemented.")
 
 
-
 if __name__ == "__main__":
     pytest.main()

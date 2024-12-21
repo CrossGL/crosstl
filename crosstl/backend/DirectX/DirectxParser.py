@@ -51,7 +51,7 @@ class HLSLParser:
         cbuffers = []
         global_variables = []
         while self.current_token[0] != "EOF":
-            
+
             if self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "CBUFFER":
