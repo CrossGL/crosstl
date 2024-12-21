@@ -391,10 +391,10 @@ class HLSLParser:
         self.eat("SEMICOLON")
 
         return DoWhileNode(condition, body)
-    
+
     def parse_switch_statement(self):
         """
-        Parses a 'switch' statement and returns a SwitchNode.  
+        Parses a 'switch' statement and returns a SwitchNode.
         """
         # Match 'switch'
         self.eat("SWITCH")
@@ -406,7 +406,7 @@ class HLSLParser:
         self.eat("LBRACE")  # Match opening brace '{'
         cases = []
         default_body = None
-         # Process each case or default block
+        # Process each case or default block
         while self.current_token.type != "RBRACE":  # Until we reach the closing '}'
             if self.current_token.type == "CASE":
                 # Parse a case block
@@ -415,7 +415,7 @@ class HLSLParser:
                 self.eat("COLON")  # Match the colon after the case value
                 case_body = self.parse_case_body()
                 cases.append(CaseNode(case_value, case_body))
-                
+
             elif self.current_token.type == "DEFAULT":
                 # Parse the default block
                 self.eat("DEFAULT")
