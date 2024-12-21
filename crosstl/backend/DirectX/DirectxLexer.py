@@ -61,7 +61,7 @@ TOKENS = [
     ("MINUS", r"-"),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
-    ("STRING", r"\"[^\"]*\""), # Added for string literals
+    ("STRING", r"\"[^\"]*\""),  # Added for string literals
 ]
 
 KEYWORDS = {
@@ -97,10 +97,10 @@ class HLSLLexer:
         pos = 0
         while pos < len(self.code):
             match = None
-            
+
             for token_type, pattern in TOKENS:
                 regex = re.compile(pattern)
-                
+
                 match = regex.match(self.code, pos)
                 if match:
                     text = match.group(0)

@@ -498,7 +498,6 @@ def test_bitwise_ops_codgen():
         pytest.fail("bitwise_op parsing or codegen not implemented.")
 
 
-
 def test_include_codegen():
     code = """
     #include "common.hlsl"
@@ -538,7 +537,6 @@ def test_include_codegen():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Include statement failed to parse or generate code.")
-
 
 
 if __name__ == "__main__":
