@@ -58,8 +58,6 @@ TOKENS = [
     ("NOT", r"!"),
     ("ASSIGN_MOD", r"%="),
     ("MOD", r"%"),
-    ("INCREMENT", r"\+\+"),
-    ("DECREMENT", r"\-\-"),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
@@ -91,46 +89,60 @@ KEYWORDS = {
 
 
 class Lexer:
-    """A simple lexer for the shader language
+    """
+    A simple lexer for the shader language
 
     This lexer tokenizes the input code into a list of tokens.
 
     Attributes:
         code (str): The input code to tokenize
         tokens (list): A list of tokens generated from the input code
-
+        token_cache (dict): A dictionary mapping to reuse frequently used tokens.
+        REGEX_CACHE (dict): A dictionary mapping to reuse frequently used regex patterns.
+        _compile_patterns (compilation): Pre-compilation of regex patterns.
     """
 
     def __init__(self, code):
         self.code = code
         self.tokens = []
-        self.tokenize()
+        self.token_cache = {}
+        self.REGEX_CACHE = {}
+        self._compile_patterns()
+
+    def _compile_patterns(self):
+        """Precompile all regex patterns for performance."""
+        for token_type, pattern in TOKENS:
+            self.REGEX_CACHE[token_type] = re.compile(pattern)
+
+    def _get_cache_token(self, token_type, value):
+        """Returns a cached token if available, otherwise creates and caches a new token."""
+        if (token_type, value) not in self.token_cache:
+            self.token_cache[(token_type, value)] = (token_type, value)
+        return self.token_cache[(token_type, value)]
 
     def tokenize(self):
+        """Tokenizes the input code."""
         pos = 0
         while pos < len(self.code):
             match = None
-            for token_type, pattern in TOKENS:
-                regex = re.compile(pattern)
+            for token_type, regex in self.REGEX_CACHE.items():
                 match = regex.match(self.code, pos)
                 if match:
                     text = match.group(0)
-                    if token_type == "IDENTIFIER" and text in KEYWORDS:
+                    if token_type == 'IDENTIFIER' and text in KEYWORDS:
                         token_type = KEYWORDS[text]
-                    if token_type != "WHITESPACE":  # Ignore whitespace tokens
-
-                        token = (token_type, text)
-
+                    if token_type != 'WHITESPACE':  # Ignore whitespace tokens
+                        token = self._get_cache_token(token_type, text)
                         self.tokens.append(token)
                     pos = match.end(0)
                     break
             if not match:
                 unmatched_char = self.code[pos]
                 highlighted_code = (
-                    self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1 :]
+                    self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1:]
                 )
                 raise SyntaxError(
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
 
-        self.tokens.append(("EOF", None))  # End of file token
+        self.tokens.append(('EOF', None))  # End of File token
