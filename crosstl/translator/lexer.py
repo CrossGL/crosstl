@@ -129,9 +129,9 @@ class Lexer:
                 match = regex.match(self.code, pos)
                 if match:
                     text = match.group(0)
-                    if token_type == 'IDENTIFIER' and text in KEYWORDS:
+                    if token_type == "IDENTIFIER" and text in KEYWORDS:
                         token_type = KEYWORDS[text]
-                    if token_type != 'WHITESPACE':  # Ignore whitespace tokens
+                    if token_type != "WHITESPACE":  # Ignore whitespace tokens
                         token = self._get_cache_token(token_type, text)
                         self.tokens.append(token)
                     pos = match.end(0)
@@ -139,10 +139,10 @@ class Lexer:
             if not match:
                 unmatched_char = self.code[pos]
                 highlighted_code = (
-                    self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1:]
+                    self.code[:pos] + "[" + self.code[pos] + "]" + self.code[pos + 1 :]
                 )
                 raise SyntaxError(
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
 
-        self.tokens.append(('EOF', None))  # End of File token
+        self.tokens.append(("EOF", None))  # End of File token
