@@ -15,7 +15,7 @@ from .DirectxAst import (
     VariableNode,
     VectorConstructorNode,
     SwitchNode,
-    CaseNode
+    CaseNode,
 )
 from .DirectxLexer import HLSLLexer
 

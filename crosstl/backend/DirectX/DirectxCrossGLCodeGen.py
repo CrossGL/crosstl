@@ -252,10 +252,16 @@ class HLSLToCrossGLConverter:
             return ""
 
     def generate_switch_statement(self, node, indent=1):
-        code = "    " * indent + f"switch ({self.generate_expression(node.condition)}) {{\n"
+        code = (
+            "    " * indent
+            + f"switch ({self.generate_expression(node.condition)}) {{\n"
+        )
 
         for case in node.cases:
-            code += "    " * (indent + 1) + f"case {self.generate_expression(case.value)}:\n"
+            code += (
+                "    " * (indent + 1)
+                + f"case {self.generate_expression(case.value)}:\n"
+            )
             code += self.generate_function_body(case.body, indent + 2)
             code += "    " * (indent + 2) + "break;\n"
 
