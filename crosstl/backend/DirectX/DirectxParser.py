@@ -14,6 +14,8 @@ from .DirectxAst import (
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
+    SwitchNode,
+    CaseNode
 )
 from .DirectxLexer import HLSLLexer
 
@@ -201,6 +203,8 @@ class HLSLParser:
             return self.parse_while_statement()
         elif self.current_token[0] == "DO":
             return self.parse_do_while_statement()
+        elif self.current_token[0] == "SWITCH":
+            return self.parse_switch_statement()
         else:
             return self.parse_expression_statement()
 
@@ -573,3 +577,40 @@ class HLSLParser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
+
+    def parse_switch_statement(self):
+        self.eat("SWITCH")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        self.eat("LBRACE")
+
+        cases = []
+        default_body = None
+
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "CASE":
+                self.eat("CASE")
+                case_value = self.parse_expression()
+                self.eat("COLON")
+                case_body = []
+                while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE"]:
+                    if self.current_token[0] == "BREAK":
+                        self.eat("BREAK")
+                        self.eat("SEMICOLON")
+                        break
+                    case_body.append(self.parse_statement())
+                cases.append(CaseNode(case_value, case_body))
+            elif self.current_token[0] == "DEFAULT":
+                self.eat("DEFAULT")
+                self.eat("COLON")
+                default_body = []
+                while self.current_token[0] not in ["CASE", "RBRACE"]:
+                    if self.current_token[0] == "BREAK":
+                        self.eat("BREAK")
+                        self.eat("SEMICOLON")
+                        break
+                    default_body.append(self.parse_statement())
+
+        self.eat("RBRACE")
+        return SwitchNode(condition, cases, default_body)

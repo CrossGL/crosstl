@@ -498,5 +498,41 @@ def test_bitwise_ops_codgen():
         pytest.fail("bitwise_op parsing or codegen not implemented.")
 
 
+def test_switch_case_codegen():
+    code = """
+    struct PSInput {
+        float4 in_position : TEXCOORD0;
+        int value : SV_InstanceID;
+    };
+
+    struct PSOutput {
+        float4 out_color : SV_Target;
+    };
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        switch (input.value) {
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0);
+                break;
+            case 2:
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0);
+                break;
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0);
+                break;
+        }
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Switch-case parsing or code generation not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

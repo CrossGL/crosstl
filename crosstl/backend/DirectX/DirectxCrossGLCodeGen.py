@@ -146,6 +146,8 @@ class HLSLToCrossGLConverter:
                 code += self.generate_do_while_loop(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
+            elif isinstance(stmt, SwitchNode):
+                code += self.generate_switch_statement(stmt, indent)
         return code
 
     def generate_for_loop(self, node, indent, is_main):
@@ -248,3 +250,18 @@ class HLSLToCrossGLConverter:
             return f"@ {self.semantic_map.get(semantic, semantic)}"
         else:
             return ""
+
+    def generate_switch_statement(self, node, indent=1):
+        code = "    " * indent + f"switch ({self.generate_expression(node.condition)}) {{\n"
+
+        for case in node.cases:
+            code += "    " * (indent + 1) + f"case {self.generate_expression(case.value)}:\n"
+            code += self.generate_function_body(case.body, indent + 2)
+            code += "    " * (indent + 2) + "break;\n"
+
+        if node.default_body:
+            code += "    " * (indent + 1) + "default:\n"
+            code += self.generate_function_body(node.default_body, indent + 2)
+
+        code += "    " * indent + "}\n"
+        return code

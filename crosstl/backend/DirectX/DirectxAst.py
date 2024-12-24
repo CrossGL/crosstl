@@ -159,3 +159,22 @@ class UnaryOpNode(ASTNode):
 
     def __str__(self):
         return f"({self.op}{self.operand})"
+
+
+class SwitchNode(ASTNode):
+    def __init__(self, condition, cases, default_body=None):
+        self.condition = condition
+        self.cases = cases
+        self.default_body = default_body
+
+    def __repr__(self):
+        return f"SwitchNode(condition={self.condition}, cases={self.cases}, default_body={self.default_body})"
+
+
+class CaseNode(ASTNode):
+    def __init__(self, value, body):
+        self.value = value
+        self.body = body
+
+    def __repr__(self):
+        return f"CaseNode(value={self.value}, body={self.body})"
