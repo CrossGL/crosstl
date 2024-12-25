@@ -182,5 +182,16 @@ def test_bitwise_or_tokenization():
         pytest.fail("bitwise_op tokenization is not implemented.")
 
 
+def test_logical_or_tokenization():
+    code = """
+        bool val_0 = 0
+        bool val_1 = val_0 || 1;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("logical_or tokenization is not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
