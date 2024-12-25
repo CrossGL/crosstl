@@ -97,6 +97,7 @@ KEYWORDS = {
 
 REGEX_CACHE = {}
 
+
 class Lexer:
     """A simple lexer for the shader language with optimizations
 
@@ -125,7 +126,7 @@ class Lexer:
             for token_type, pattern in TOKENS:
                 if token_type not in REGEX_CACHE:
                     REGEX_CACHE[token_type] = re.compile(pattern)
-            
+
             # Compile combined patterns
             for token_type, (pattern, _) in COMBINED_PATTERNS.items():
                 if token_type not in REGEX_CACHE:
@@ -142,7 +143,7 @@ class Lexer:
         pos = 0
         while pos < len(self.code):
             match = None
-            
+
             # First try combined patterns
             for token_type, (pattern, subtypes) in COMBINED_PATTERNS.items():
                 regex = REGEX_CACHE[token_type]
@@ -153,7 +154,7 @@ class Lexer:
                     self.tokens.append(token)
                     pos = match.end(0)
                     break
-            
+
             # If no combined pattern matched, try regular tokens
             if not match:
                 for token_type, _ in TOKENS:
@@ -179,4 +180,3 @@ class Lexer:
                 )
 
         self.tokens.append(self._get_cached_token(None, "EOF"))
-        
