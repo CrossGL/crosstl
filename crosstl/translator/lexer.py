@@ -77,6 +77,12 @@ TOKENS = [
     ("shift_right", r">>"),
 ]
 
+COMBINED_PATTERNS = {
+    "VECTOR": (r"\bvec[2-4]\b", ["vec2", "vec3", "vec4"]),
+    "MATRIX": (r"\bmat[2-4]\b", ["mat2", "mat3", "mat4"]),
+    "NUMBER": (r"\d+(\.\d+)?|\d*\.\d+", ["INTEGER", "FLOAT"]),
+}
+
 KEYWORDS = {
     "shader": "SHADER",
     "void": "VOID",
@@ -89,41 +95,80 @@ KEYWORDS = {
     "const": "CONST",
 }
 
+REGEX_CACHE = {}
 
 class Lexer:
-    """A simple lexer for the shader language
+    """A simple lexer for the shader language with optimizations
 
     This lexer tokenizes the input code into a list of tokens.
+    Includes optimizations:
+    - Token caching for frequently used tokens
+    - Combined regex patterns for similar tokens
+    - Precompiled regex patterns
 
     Attributes:
         code (str): The input code to tokenize
         tokens (list): A list of tokens generated from the input code
-
+        token_cache (dict): Cache for frequently used tokens
     """
 
     def __init__(self, code):
         self.code = code
         self.tokens = []
+        self.token_cache = {}
+        self._compile_patterns()
         self.tokenize()
+
+    def _compile_patterns(self):
+        """Pre-compile regex patterns for better performance"""
+        if not REGEX_CACHE:
+            for token_type, pattern in TOKENS:
+                if token_type not in REGEX_CACHE:
+                    REGEX_CACHE[token_type] = re.compile(pattern)
+            
+            # Compile combined patterns
+            for token_type, (pattern, _) in COMBINED_PATTERNS.items():
+                if token_type not in REGEX_CACHE:
+                    REGEX_CACHE[token_type] = re.compile(pattern)
+
+    def _get_cached_token(self, text, token_type):
+        """Get token from cache or create new one"""
+        cache_key = (text, token_type)
+        if cache_key not in self.token_cache:
+            self.token_cache[cache_key] = (token_type, text)
+        return self.token_cache[cache_key]
 
     def tokenize(self):
         pos = 0
         while pos < len(self.code):
             match = None
-            for token_type, pattern in TOKENS:
-                regex = re.compile(pattern)
+            
+            # First try combined patterns
+            for token_type, (pattern, subtypes) in COMBINED_PATTERNS.items():
+                regex = REGEX_CACHE[token_type]
                 match = regex.match(self.code, pos)
                 if match:
                     text = match.group(0)
-                    if token_type == "IDENTIFIER" and text in KEYWORDS:
-                        token_type = KEYWORDS[text]
-                    if token_type != "WHITESPACE":  # Ignore whitespace tokens
-
-                        token = (token_type, text)
-
-                        self.tokens.append(token)
+                    token = self._get_cached_token(text, token_type)
+                    self.tokens.append(token)
                     pos = match.end(0)
                     break
+            
+            # If no combined pattern matched, try regular tokens
+            if not match:
+                for token_type, _ in TOKENS:
+                    regex = REGEX_CACHE[token_type]
+                    match = regex.match(self.code, pos)
+                    if match:
+                        text = match.group(0)
+                        if token_type == "IDENTIFIER" and text in KEYWORDS:
+                            token_type = KEYWORDS[text]
+                        if token_type != "WHITESPACE":
+                            token = self._get_cached_token(text, token_type)
+                            self.tokens.append(token)
+                        pos = match.end(0)
+                        break
+
             if not match:
                 unmatched_char = self.code[pos]
                 highlighted_code = (
@@ -133,4 +178,5 @@ class Lexer:
                     f"Illegal character '{unmatched_char}' at position {pos}\n{highlighted_code}"
                 )
 
-        self.tokens.append(("EOF", None))  # End of file token
+        self.tokens.append(self._get_cached_token(None, "EOF"))
+        
