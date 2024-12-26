@@ -170,8 +170,8 @@ class IncludeNode(ASTNode):
 
     def __str__(self):
         return f"#include {self.path}"
-      
-      
+
+
 class SwitchNode(ASTNode):
     def __init__(self, condition, cases, default_body=None):
         self.condition = condition

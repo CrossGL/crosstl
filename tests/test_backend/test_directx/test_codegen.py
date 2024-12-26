@@ -537,8 +537,8 @@ def test_include_codegen():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Include statement failed to parse or generate code.")
-        
-        
+
+
 def test_switch_case_codegen():
     code = """
     struct PSInput {

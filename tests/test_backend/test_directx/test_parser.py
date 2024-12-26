@@ -305,8 +305,8 @@ def test_logical_and_ops_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("logical_and_ops not implemented.")
-        
-        
+
+
 def test_switch_case_parsing():
     code = """
     PSOutput PSMain(PSInput input) {

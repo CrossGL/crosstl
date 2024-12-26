@@ -61,7 +61,7 @@ TOKENS = [
     ("MINUS", r"-"),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
-    ("STRING", r"\"[^\"]*\""), 
+    ("STRING", r"\"[^\"]*\""),
     ("SWITCH", r"\bswitch\b"),
     ("CASE", r"\bcase\b"),
     ("DEFAULT", r"\bdefault\b"),
