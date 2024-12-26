@@ -14,6 +14,7 @@ from .DirectxAst import (
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
+    IncludeNode,
     SwitchNode,
     CaseNode,
 )
@@ -68,10 +69,19 @@ class HLSLParser:
                     functions.append(self.parse_function())
                 else:
                     global_variables.append(self.parse_global_variable())
+            elif self.current_token[0] == "INCLUDE":
+                structs.append(self.parse_include())
+
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
         return ShaderNode(structs, functions, global_variables, cbuffers)
+
+    def parse_include(self):
+        self.eat("INCLUDE")
+        path = self.current_token[1]
+        self.eat("STRING")
+        return IncludeNode(path)
 
     def is_function(self):
         current_pos = self.pos
@@ -441,9 +451,9 @@ class HLSLParser:
 
     def parse_logical_and(self):
         left = self.parse_equality()
-        while self.current_token[0] == "AND":
+        while self.current_token[0] == "LOGICAL_AND":
             op = self.current_token[1]
-            self.eat("AND")
+            self.eat("LOGICAL_AND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
         return left
