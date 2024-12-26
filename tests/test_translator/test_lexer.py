@@ -1,13 +1,11 @@
-from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
-
+from crosstl.translator.lexer import Lexer
 
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
     return lexer.tokens
-
 
 def test_struct_tokenization():
     code = """
@@ -21,10 +19,10 @@ def test_struct_tokenization():
 
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "STRUCT" for t in tokens), "Missing 'STRUCT' token"
     except SyntaxError:
         pytest.fail("Struct tokenization not implemented.")
-
 
 def test_if_statement_tokenization():
     code = """
@@ -35,10 +33,11 @@ def test_if_statement_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "IF" for t in tokens), "Missing 'IF' token"
+        assert any(t[0] == "ELSE" for t in tokens), "Missing 'ELSE' token"
     except SyntaxError:
         pytest.fail("if tokenization not implemented.")
-
 
 def test_for_statement_tokenization():
     code = """
@@ -47,10 +46,10 @@ def test_for_statement_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "FOR" for t in tokens), "Missing 'FOR' token"
     except SyntaxError:
         pytest.fail("for tokenization not implemented.")
-
 
 def test_else_statement_tokenization():
     code = """
@@ -61,10 +60,10 @@ def test_else_statement_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "ELSE" for t in tokens), "Missing 'ELSE' token"
     except SyntaxError:
         pytest.fail("else tokenization not implemented.")
-
 
 def test_else_if_statement_tokenization():
     code = """
@@ -82,10 +81,10 @@ def test_else_if_statement_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert tokens, "No tokens generated"
     except SyntaxError:
-        pytest.fail("else if  tokenization not implemented.")
-
+        pytest.fail("else if tokenization not implemented.")
 
 def test_function_call_tokenization():
     code = """
@@ -98,11 +97,9 @@ shader main {
     
     fragment {
         vec4 main(VSOutput input) @ gl_FragColor {
-            // Sample brightness and calculate bloom
             float brightness = texture(iChannel0, input.color.xy).r;
             float bloom = max(0.0, brightness - 0.5);
             bloom = perlinNoise(input.color.xy);
-            // Apply bloom to the texture color
             vec3 texColor = texture(iChannel0, input.color.xy).rgb;
             vec3 colorWithBloom = texColor + vec3(bloom);
 
@@ -112,28 +109,32 @@ shader main {
 }
 """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "SHADER" for t in tokens), "Missing 'SHADER' token"
+        assert any(t[0] == "FRAGMENT" for t in tokens), "Missing 'FRAGMENT' token"
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
-
 
 def test_bitwise_operator_tokenization():
     code = """
     int a = 60; // 60 = 0011 1100
     int b = 13; // 13 = 0000 1101
     int c = 0;
-    c = a & b; // 12 = 0000 1100
-    c = a | b; // 61 = 0011 1101
-    c = a ^ b; // 49 = 0011 0001
-    c = ~a; // -61 = 1100 0011
-    c = a << 2; // 240 = 1111 0000
-    c = a >> 2; // 15 = 0000 1111
-      """
+    c = a & b; 
+    c = a | b; 
+    c = a ^ b; 
+    c = ~a; 
+    c = a << 2; 
+    c = a >> 2; 
+    """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "BITWISE_AND" for t in tokens), "Missing '&' token"
+        assert any(t[0] == "BITWISE_OR" for t in tokens), "Missing '|' token"
+        assert any(t[0] == "BITWISE_XOR" for t in tokens), "Missing '^' token"
+        assert any(t[0] == "BITWISE_NOT" for t in tokens), "Missing '~' token"
     except SyntaxError:
         pytest.fail("Bitwise operator tokenization not implemented.")
-
 
 def test_data_types_tokenization():
     code = """
@@ -144,25 +145,33 @@ def test_data_types_tokenization():
     bool e;
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "INT" for t in tokens), "Missing 'INT' token"
+        assert any(t[0] == "UINT" for t in tokens), "Missing 'UINT' token"
+        assert any(t[0] == "FLOAT" for t in tokens), "Missing 'FLOAT' token"
+        assert any(t[0] == "DOUBLE" for t in tokens), "Missing 'DOUBLE' token"
+        assert any(t[0] == "BOOL" for t in tokens), "Missing 'BOOL' token"
     except SyntaxError:
         pytest.fail("Data types tokenization not implemented.")
-
 
 def test_operators_tokenization():
     code = """
     int a;
     a = 2 + 1;
-    a = a -  2;
+    a = a - 2;
     a = a / 1;
     a = a * 2;
     a = a % 2;
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "PLUS" for t in tokens), "Missing '+' token"
+        assert any(t[0] == "MINUS" for t in tokens), "Missing '-' token"
+        assert any(t[0] == "DIVIDE" for t in tokens), "Missing '/' token"
+        assert any(t[0] == "MULTIPLY" for t in tokens), "Missing '*' token"
+        assert any(t[0] == "MOD" for t in tokens), "Missing '%' token"
     except SyntaxError:
         pytest.fail("Operators tokenization not implemented.")
-
 
 def test_logical_operators_tokenization():
     code = """
@@ -173,22 +182,23 @@ def test_logical_operators_tokenization():
     }
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "LOGICAL_OR" for t in tokens), "Missing '||' token"
+        assert any(t[0] == "LOGICAL_AND" for t in tokens), "Missing '&&' token"
     except SyntaxError:
         pytest.fail("Logical Operators tokenization not implemented.")
-
 
 def test_assignment_shift_operators():
     code = """
     a >>= 1;
     b <<= 1;
-        """
-
+    """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "ASSIGN_SHIFT_RIGHT" for t in tokens), "Missing '>>=' token"
+        assert any(t[0] == "ASSIGN_SHIFT_LEFT" for t in tokens), "Missing '<<=' token"
     except SyntaxError:
         pytest.fail("Shift operators tokenization failed.")
-
 
 def test_assignment_operators_tokenization():
     code = """
@@ -203,21 +213,32 @@ def test_assignment_operators_tokenization():
     a ^= 1;
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "ASSIGN_ADD" for t in tokens), "Missing '+=' token"
+        assert any(t[0] == "ASSIGN_MUL" for t in tokens), "Missing '*=' token"
+        assert any(t[0] == "ASSIGN_DIV" for t in tokens), "Missing '/=' token"
+        assert any(t[0] == "ASSIGN_SUB" for t in tokens), "Missing '-=' token"
+        assert any(t[0] == "ASSIGN_MOD" for t in tokens), "Missing '%=' token"
+        assert any(t[0] == "ASSIGN_AND" for t in tokens), "Missing '&=' token"
+        assert any(t[0] == "ASSIGN_OR" for t in tokens), "Missing '|=' token"
+        assert any(t[0] == "ASSIGN_XOR" for t in tokens), "Missing '^=' token"
     except SyntaxError:
         pytest.fail("Assignment operators tokenization not implemented.")
-
 
 def test_const_tokenization():
     code = """
     const int a;
     """
-
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert any(t[0] == "CONST" for t in tokens), "Missing 'CONST' token"
     except SyntaxError:
         pytest.fail("Const keyword tokenization failed")
 
+def test_illegal_character():
+    code = "int a = 1 @#"
+    with pytest.raises(SyntaxError):
+        tokenize_code(code)
 
 if __name__ == "__main__":
     pytest.main()
