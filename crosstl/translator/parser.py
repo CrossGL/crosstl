@@ -113,7 +113,9 @@ class Parser:
                 else:
                     global_variables.append(self.parse_global_variable())
             else:
-                warnings.warn(f"Skipping unexpected token {self.current_token[0]}", SyntaxWarning)
+                warnings.warn(
+                    f"Skipping unexpected token {self.current_token[0]}", SyntaxWarning
+                )
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
         return ShaderNode(structs, functions, global_variables, cbuffers)
