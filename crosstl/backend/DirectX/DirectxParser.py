@@ -432,9 +432,9 @@ class HLSLParser:
 
     def parse_logical_or(self):
         left = self.parse_logical_and()
-        while self.current_token[0] == "OR":
+        while self.current_token[0] == "LOGICAL_OR":
             op = self.current_token[1]
-            self.eat("OR")
+            self.eat("LOGICAL_OR")
             right = self.parse_logical_and()
             left = BinaryOpNode(left, op, right)
         return left
