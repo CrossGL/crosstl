@@ -161,7 +161,6 @@ class UnaryOpNode(ASTNode):
         return f"({self.op}{self.operand})"
 
 
-
 class PragmaNode(ASTNode):
     def __init__(self, directive, value):
         self.directive = directive
@@ -173,6 +172,7 @@ class PragmaNode(ASTNode):
     def __str__(self):
         return f"#pragma {self.directive} {self.value}"
 
+
 class IncludeNode(ASTNode):
     def __init__(self, path):
         self.path = path
@@ -182,4 +182,3 @@ class IncludeNode(ASTNode):
 
     def __str__(self):
         return f"#include {self.path}"
-

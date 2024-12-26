@@ -16,7 +16,6 @@ from .DirectxAst import (
     VectorConstructorNode,
     PragmaNode,
     IncludeNode,
-
 )
 from .DirectxLexer import HLSLLexer
 
