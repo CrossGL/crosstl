@@ -502,6 +502,9 @@ def test_bitwise_ops_codgen():
 def test_pragma_codegen():
     code = """
     #pragma exclude_renderers vulkan;
+def test_include_codegen():
+    code = """
+    #include "common.hlsl"
     struct VSInput {
     float4 position : POSITION;
     float4 color : TEXCOORD0;
@@ -514,9 +517,11 @@ def test_pragma_codegen():
     VSOutput VSMain(VSInput input) {
         VSOutput output;
         output.out_position =  input.position;
+
         for (int i = 0; i < 10; i=i+1) {
             output.out_position = input.color;
         }
+
         return output;
     }
 
@@ -531,9 +536,11 @@ def test_pragma_codegen():
     PSOutput PSMain(PSInput input) {
         PSOutput output;
         output.out_color =  input.in_position;
+
         for (int i = 0; i < 10; i=i+1) {
             output.out_color = float4(1.0, 1.0, 1.0, 1.0);
         }
+
         return output;
     }
     """
@@ -544,6 +551,8 @@ def test_pragma_codegen():
         print(generated_code)
     except SyntaxError:
         pytest.fail("For loop parsing or code generation not implemented.")
+        pytest.fail("Include statement failed to parse or generate code.")
+
 
 
 if __name__ == "__main__":

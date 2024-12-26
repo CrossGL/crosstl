@@ -15,6 +15,8 @@ from .DirectxAst import (
     VariableNode,
     VectorConstructorNode,
     PragmaNode,
+    IncludeNode,
+
 )
 from .DirectxLexer import HLSLLexer
 
@@ -70,10 +72,20 @@ class HLSLParser:
                     global_variables.append(self.parse_global_variable())
             elif self.current_token[0] == "PRAGMA":
                 structs.append(self.parse_pragma())
+
+            elif self.current_token[0] == "INCLUDE":
+                structs.append(self.parse_include())
+
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
         return ShaderNode(structs, functions, global_variables, cbuffers)
+
+    def parse_include(self):
+        self.eat("INCLUDE")
+        path = self.current_token[1]
+        self.eat("STRING")
+        return IncludeNode(path)
 
     def is_function(self):
         current_pos = self.pos
@@ -441,18 +453,18 @@ class HLSLParser:
 
     def parse_logical_or(self):
         left = self.parse_logical_and()
-        while self.current_token[0] == "OR":
+        while self.current_token[0] == "LOGICAL_OR":
             op = self.current_token[1]
-            self.eat("OR")
+            self.eat("LOGICAL_OR")
             right = self.parse_logical_and()
             left = BinaryOpNode(left, op, right)
         return left
 
     def parse_logical_and(self):
         left = self.parse_equality()
-        while self.current_token[0] == "AND":
+        while self.current_token[0] == "LOGICAL_AND":
             op = self.current_token[1]
-            self.eat("AND")
+            self.eat("LOGICAL_AND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
         return left

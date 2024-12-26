@@ -4,6 +4,7 @@ TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("PRAGMA", r"#\s*\bpragma\b"),
+    ("INCLUDE", r"\#include\b"),
     ("STRUCT", r"\bstruct\b"),
     ("CBUFFER", r"\bcbuffer\b"),
     ("TEXTURE2D", r"\bTexture2D\b"),
@@ -51,8 +52,8 @@ TOKENS = [
     ("ASSIGN_OR", r"\|="),
     ("ASSIGN_AND", r"\&="),
     ("BITWISE_XOR", r"\^"),
-    ("AND", r"&&"),
-    ("OR", r"\|\|"),
+    ("LOGICAL_AND", r"&&"),
+    ("LOGICAL_OR", r"\|\|"),
     ("BITWISE_OR", r"\|"),
     ("DOT", r"\."),
     ("MULTIPLY", r"\*"),
@@ -61,6 +62,7 @@ TOKENS = [
     ("MINUS", r"-"),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
+    ("STRING", r"\"[^\"]*\""),  # Added for string literals
 ]
 
 KEYWORDS = {
@@ -96,8 +98,10 @@ class HLSLLexer:
         pos = 0
         while pos < len(self.code):
             match = None
+
             for token_type, pattern in TOKENS:
                 regex = re.compile(pattern)
+
                 match = regex.match(self.code, pos)
                 if match:
                     text = match.group(0)
