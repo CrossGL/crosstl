@@ -50,7 +50,7 @@ TOKENS = [
     ("ASSIGN_OR", r"\|="),
     ("ASSIGN_AND", r"\&="),
     ("BITWISE_XOR", r"\^"),
-    ("AND", r"&&"),
+    ("LOGICAL_AND", r"&&"),
     ("LOGICAL_OR", r"\|\|"),
     ("BITWISE_OR", r"\|"),
     ("DOT", r"\."),
