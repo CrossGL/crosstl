@@ -16,6 +16,7 @@ from .ast import (
 )
 
 from .lexer import Lexer
+import warnings
 
 
 class Parser:
@@ -112,7 +113,7 @@ class Parser:
                 else:
                     global_variables.append(self.parse_global_variable())
             else:
-                print(f"Warning: Skipping unexpected token {self.current_token[0]}")
+                warnings.warn(f"Skipping unexpected token {self.current_token[0]}", SyntaxWarning)
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
         return ShaderNode(structs, functions, global_variables, cbuffers)
