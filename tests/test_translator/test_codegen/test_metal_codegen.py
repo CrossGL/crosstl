@@ -402,5 +402,6 @@ def test_bitwise_or_operator():
     except SyntaxError:
         pytest.fail("Bitwise OR codegen not implemented")
 
+
 if __name__ == "__main__":
     pytest.main()
