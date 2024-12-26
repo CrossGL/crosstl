@@ -365,7 +365,6 @@ class MetalCodeGen:
             "ASSIGN_SHIFT_RIGHT": ">>=",
             "ASSIGN_AND": "&=",
             "LOGICAL_AND": "&&",
-            "ASSIGN_XOR": "^=",
             "BITWISE_SHIFT_RIGHT": ">>",
             "BITWISE_SHIFT_LEFT": "<<",
         }
