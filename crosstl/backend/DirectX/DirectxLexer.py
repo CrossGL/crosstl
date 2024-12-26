@@ -61,7 +61,11 @@ TOKENS = [
     ("MINUS", r"-"),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
-    ("STRING", r"\"[^\"]*\""),  # Added for string literals
+    ("STRING", r"\"[^\"]*\""),
+    ("SWITCH", r"\bswitch\b"),
+    ("CASE", r"\bcase\b"),
+    ("DEFAULT", r"\bdefault\b"),
+    ("BREAK", r"\bbreak\b"),
 ]
 
 KEYWORDS = {
@@ -84,6 +88,10 @@ KEYWORDS = {
     "while": "WHILE",
     "do": "DO",
     "register": "REGISTER",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
+    "break": "BREAK",
 }
 
 

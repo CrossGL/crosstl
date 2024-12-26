@@ -204,5 +204,29 @@ def test_logical_and_tokenization():
         pytest.fail("logical_and tokenization is not implemented.")
 
 
+def test_switch_case_tokenization():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        switch (input.value) {
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0);
+                break;
+            case 2:
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0);
+                break;
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0);
+                break;
+        }
+        return output;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("switch-case tokenization not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

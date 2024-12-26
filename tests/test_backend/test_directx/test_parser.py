@@ -307,5 +307,30 @@ def test_logical_and_ops_parsing():
         pytest.fail("logical_and_ops not implemented.")
 
 
+def test_switch_case_parsing():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        switch (input.value) {
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0);
+                break;
+            case 2:
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0);
+                break;
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0);
+                break;
+        }
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("switch-case parsing not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
