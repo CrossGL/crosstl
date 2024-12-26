@@ -541,7 +541,7 @@ def test_pragma_codegen():
         return output;
     }
     """
-    
+
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
@@ -551,7 +551,6 @@ def test_pragma_codegen():
         pytest.fail("For loop parsing or code generation not implemented.")
         pytest.fail("Include statement failed to parse or generate code.")
 
-    
 
 def test_include_codegen():
     code = """
@@ -595,7 +594,7 @@ def test_include_codegen():
         return output;
     }
     """
-    
+
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
@@ -604,7 +603,6 @@ def test_include_codegen():
     except SyntaxError:
         pytest.fail("For loop parsing or code generation not implemented.")
         pytest.fail("Include statement failed to parse or generate code.")
-
 
 
 if __name__ == "__main__":
