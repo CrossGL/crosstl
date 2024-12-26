@@ -191,8 +191,8 @@ def test_logical_or_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("logical_or tokenization is not implemented.")
-        
-        
+
+
 def test_switch_case_tokenization():
     code = """
     PSOutput PSMain(PSInput input) {
