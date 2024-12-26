@@ -437,9 +437,9 @@ class HLSLParser:
 
     def parse_logical_and(self):
         left = self.parse_equality()
-        while self.current_token[0] == "AND":
+        while self.current_token[0] == "LOGICAL_AND":
             op = self.current_token[1]
-            self.eat("AND")
+            self.eat("LOGICAL_AND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
         return left

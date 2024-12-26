@@ -282,5 +282,30 @@ def test_logical_or_ops_parsing():
         pytest.fail("logical_or_ops not implemented.")
 
 
+def test_logical_and_ops_parsing():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                // Test case for logical AND
+                bool condition1 = true; // First condition
+                bool condition2 = false; // Second condition
+                if (condition1 && condition2) {
+                    // both the condition is true
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    // any one of the condition is false
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("logical_and_ops not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
