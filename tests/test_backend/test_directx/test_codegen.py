@@ -498,5 +498,46 @@ def test_bitwise_ops_codgen():
         pytest.fail("bitwise_op parsing or codegen not implemented.")
 
 
+def test_include_codegen():
+    code = """
+    #include "common.hlsl"
+    struct VSInput {
+    float4 position : POSITION;
+    float4 color : TEXCOORD0;
+    };
+
+    struct VSOutput {
+        float4 out_position : TEXCOORD0;
+    };
+
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        output.out_position =  input.position;
+        return output;
+    }
+
+    struct PSInput {
+        float4 in_position : TEXCOORD0;
+    };
+
+    struct PSOutput {
+        float4 out_color : SV_TARGET0;
+    };
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color =  input.in_position;
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Include statement failed to parse or generate code.")
+
+
 if __name__ == "__main__":
     pytest.main()
