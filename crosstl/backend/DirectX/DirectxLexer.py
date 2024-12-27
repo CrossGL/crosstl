@@ -54,6 +54,7 @@ TOKENS = [
     ("LOGICAL_AND", r"&&"),
     ("LOGICAL_OR", r"\|\|"),
     ("BITWISE_OR", r"\|"),
+    ("BITWISE_AND",r"&"),
     ("DOT", r"\."),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),

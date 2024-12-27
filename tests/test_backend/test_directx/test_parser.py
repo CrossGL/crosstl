@@ -332,5 +332,29 @@ def test_switch_case_parsing():
         pytest.fail("switch-case parsing not implemented.")
 
 
+def test_bitwise_and_parsing():
+    code = """
+        PSOutput PSMain(PSInput input) {
+            PSOutput output;
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+            uint val = 0x01;
+            if (val & 0x02) {
+                // Test case for bitwise AND
+            }
+            uint filterA = 0b0001; // First filter
+            uint filterB = 0b1000; // Second filter
+
+            // Merge both filters
+            uint combinedFilter = filterA & filterB; // combinedFilter becomes 0b1001
+            return output;
+        }
+        """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("bitwise_and_op parsing not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

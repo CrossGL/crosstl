@@ -228,5 +228,16 @@ def test_switch_case_tokenization():
         pytest.fail("switch-case tokenization not implemented.")
 
 
+def test_bitwise_and_tokenization():
+    code = """
+        uint val = 0x01;
+        val = val & 0x02;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("bitwise_and_op tokenization is not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
