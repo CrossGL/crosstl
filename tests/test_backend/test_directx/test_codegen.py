@@ -592,7 +592,7 @@ def test_double_dtype_codegen():
             }
         """
     try:
-        tokens = tokenize_code(code) 
+        tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)

@@ -349,7 +349,7 @@ def test_double_dtype_parsing():
             }
         """
     try:
-        tokens = tokenize_code(code) 
+        tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("double dtype not implemented.")
