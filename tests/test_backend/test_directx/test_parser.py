@@ -332,5 +332,28 @@ def test_switch_case_parsing():
         pytest.fail("switch-case parsing not implemented.")
 
 
+def test_double_dtype_parsing():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                double value1 = 3.14159; // First double value
+                double value2 = 2.71828; // Second double value
+                double result = value1 + value2; // Adding two doubles
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("double dtype not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

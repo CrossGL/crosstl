@@ -228,5 +228,27 @@ def test_switch_case_tokenization():
         pytest.fail("switch-case tokenization not implemented.")
 
 
+def test_double_dtype_tokenization():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                double value1 = 3.14159; // First double value
+                double value2 = 2.71828; // Second double value
+                double result = value1 + value2; // Adding two doubles
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("double dtype tokenization is not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
