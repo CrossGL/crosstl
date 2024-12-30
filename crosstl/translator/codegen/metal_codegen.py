@@ -343,6 +343,7 @@ class MetalCodeGen:
             "MULTIPLY": "*",
             "DIVIDE": "/",
             "BITWISE_XOR": "^",
+            "BITWISE_OR": "|",
             "BITWISE_AND": "&",
             "LESS_THAN": "<",
             "GREATER_THAN": ">",
@@ -364,7 +365,6 @@ class MetalCodeGen:
             "ASSIGN_SHIFT_RIGHT": ">>=",
             "ASSIGN_AND": "&=",
             "LOGICAL_AND": "&&",
-            "ASSIGN_XOR": "^=",
             "BITWISE_SHIFT_RIGHT": ">>",
             "BITWISE_SHIFT_LEFT": "<<",
         }

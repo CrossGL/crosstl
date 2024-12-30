@@ -182,5 +182,73 @@ def test_bitwise_or_tokenization():
         pytest.fail("bitwise_op tokenization is not implemented.")
 
 
+def test_logical_or_tokenization():
+    code = """
+        bool val_0 = true;
+        bool val_1 = val_0 || false;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("logical_or tokenization is not implemented.")
+
+
+def test_logical_and_tokenization():
+    code = """
+        bool val_0 = true;
+        bool val_1 = val_0 && false;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("logical_and tokenization is not implemented.")
+
+
+def test_switch_case_tokenization():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        switch (input.value) {
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0);
+                break;
+            case 2:
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0);
+                break;
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0);
+                break;
+        }
+        return output;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("switch-case tokenization not implemented.")
+
+
+def test_double_dtype_tokenization():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                double value1 = 3.14159; // First double value
+                double value2 = 2.71828; // Second double value
+                double result = value1 + value2; // Adding two doubles
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("double dtype tokenization is not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()
