@@ -597,11 +597,11 @@ def test_bitwise_and_ops_codgen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print(generated_code)        
-    except SyntaxError: 
+        print(generated_code)
+    except SyntaxError:
         pytest.fail("bitwise_and_op codegen not implemented.")
-        
-        
+
+
 def test_double_dtype_codegen():
     code = """
             PSOutput PSMain(PSInput input) {

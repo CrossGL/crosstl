@@ -354,8 +354,8 @@ def test_bitwise_and_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("bitwise_and_op parsing not implemented.")
-        
-        
+
+
 def test_double_dtype_parsing():
     code = """
             PSOutput PSMain(PSInput input) {

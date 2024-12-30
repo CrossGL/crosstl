@@ -238,7 +238,7 @@ def test_bitwise_and_tokenization():
     except SyntaxError:
         pytest.fail("bitwise_and_op tokenization is not implemented.")
 
-        
+
 def test_double_dtype_tokenization():
     code = """
             PSOutput PSMain(PSInput input) {
