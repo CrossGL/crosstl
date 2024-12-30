@@ -498,5 +498,107 @@ def test_bitwise_ops_codgen():
         pytest.fail("bitwise_op parsing or codegen not implemented.")
 
 
+def test_include_codegen():
+    code = """
+    #include "common.hlsl"
+    struct VSInput {
+    float4 position : POSITION;
+    float4 color : TEXCOORD0;
+    };
+
+    struct VSOutput {
+        float4 out_position : TEXCOORD0;
+    };
+
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        output.out_position =  input.position;
+        return output;
+    }
+
+    struct PSInput {
+        float4 in_position : TEXCOORD0;
+    };
+
+    struct PSOutput {
+        float4 out_color : SV_TARGET0;
+    };
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color =  input.in_position;
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Include statement failed to parse or generate code.")
+
+
+def test_switch_case_codegen():
+    code = """
+    struct PSInput {
+        float4 in_position : TEXCOORD0;
+        int value : SV_InstanceID;
+    };
+
+    struct PSOutput {
+        float4 out_color : SV_Target;
+    };
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        switch (input.value) {
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0);
+                break;
+            case 2:
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0);
+                break;
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0);
+                break;
+        }
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Switch-case parsing or code generation not implemented.")
+
+
+def test_double_dtype_codegen():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                double value1 = 3.14159; // First double value
+                double value2 = 2.71828; // Second double value
+                double result = value1 + value2; // Adding two doubles
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("double dtype parsing or code generation not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

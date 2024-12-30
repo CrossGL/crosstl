@@ -3,12 +3,14 @@ import re
 TOKENS = [
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
+    ("INCLUDE", r"\#include\b"),
     ("STRUCT", r"\bstruct\b"),
     ("CBUFFER", r"\bcbuffer\b"),
     ("TEXTURE2D", r"\bTexture2D\b"),
     ("SAMPLER_STATE", r"\bSamplerState\b"),
     ("FVECTOR", r"\bfloat[2-4]\b"),
     ("FLOAT", r"\bfloat\b"),
+    ("DOUBLE", r"\bdouble\b"),
     ("INT", r"\bint\b"),
     ("UINT", r"\buint\b"),
     ("BOOL", r"\bbool\b"),
@@ -50,8 +52,8 @@ TOKENS = [
     ("ASSIGN_OR", r"\|="),
     ("ASSIGN_AND", r"\&="),
     ("BITWISE_XOR", r"\^"),
-    ("AND", r"&&"),
-    ("OR", r"\|\|"),
+    ("LOGICAL_AND", r"&&"),
+    ("LOGICAL_OR", r"\|\|"),
     ("BITWISE_OR", r"\|"),
     ("DOT", r"\."),
     ("MULTIPLY", r"\*"),
@@ -60,6 +62,11 @@ TOKENS = [
     ("MINUS", r"-"),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
+    ("STRING", r"\"[^\"]*\""),
+    ("SWITCH", r"\bswitch\b"),
+    ("CASE", r"\bcase\b"),
+    ("DEFAULT", r"\bdefault\b"),
+    ("BREAK", r"\bbreak\b"),
 ]
 
 KEYWORDS = {
@@ -71,6 +78,7 @@ KEYWORDS = {
     "float2": "FVECTOR",
     "float3": "FVECTOR",
     "float4": "FVECTOR",
+    "double": "DOUBLE",
     "int": "INT",
     "uint": "UINT",
     "bool": "BOOL",
@@ -82,6 +90,10 @@ KEYWORDS = {
     "while": "WHILE",
     "do": "DO",
     "register": "REGISTER",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
+    "break": "BREAK",
 }
 
 
@@ -95,8 +107,10 @@ class HLSLLexer:
         pos = 0
         while pos < len(self.code):
             match = None
+
             for token_type, pattern in TOKENS:
                 regex = re.compile(pattern)
+
                 match = regex.match(self.code, pos)
                 if match:
                     text = match.group(0)
