@@ -102,12 +102,25 @@ def test_function_call_tokenization():
         vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
         fragColor = vec4(color, 1.0);
     }
-    
     """
     try:
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_double_dtype_tokenization():
+    code = """
+    double ComputeArea(double radius) {
+        double pi = 3.14159265359;
+        double area = pi * radius * radius;
+        return area;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("double tokenization not implemented")
 
 
 if __name__ == "__main__":

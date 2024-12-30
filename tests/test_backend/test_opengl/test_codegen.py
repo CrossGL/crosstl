@@ -187,5 +187,22 @@ def test_function_call():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_double_dtype_codegen():
+    code = """
+    double ComputeArea(double radius) {
+        double pi = 3.14159265359;
+        double area = pi * radius * radius;
+        return area;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("double tokenization not implemented")
+
+
 if __name__ == "__main__":
     pytest.main()
