@@ -517,7 +517,13 @@ class HLSLParser:
         return self.parse_primary()
 
     def parse_primary(self):
-        if self.current_token[0] in ["IDENTIFIER", "FLOAT", "FVECTOR", "DOUBLE", "HALF"]:
+        if self.current_token[0] in [
+            "IDENTIFIER",
+            "FLOAT",
+            "FVECTOR",
+            "DOUBLE",
+            "HALF",
+        ]:
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
