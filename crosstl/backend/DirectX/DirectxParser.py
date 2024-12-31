@@ -61,6 +61,7 @@ class HLSLParser:
                 "VOID",
                 "FLOAT",
                 "DOUBLE",
+                "HALF",
                 "FVECTOR",
                 "IDENTIFIER",
                 "TEXTURE2D",
@@ -198,6 +199,7 @@ class HLSLParser:
         if self.current_token[0] in [
             "FLOAT",
             "DOUBLE",
+            "HALF",
             "FVECTOR",
             "INT",
             "UINT",
@@ -224,6 +226,7 @@ class HLSLParser:
         if self.current_token[0] in [
             "FLOAT",
             "DOUBLE",
+            "HALF",
             "FVECTOR",
             "INT",
             "UINT",
@@ -352,7 +355,7 @@ class HLSLParser:
         self.eat("LPAREN")
 
         # Parse initialization
-        if self.current_token[0] in ["INT", "FLOAT", "FVECTOR", "DOUBLE"]:
+        if self.current_token[0] in ["INT", "FLOAT", "FVECTOR", "DOUBLE", "HALF"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             var_name = self.current_token[1]
@@ -514,7 +517,7 @@ class HLSLParser:
         return self.parse_primary()
 
     def parse_primary(self):
-        if self.current_token[0] in ["IDENTIFIER", "FLOAT", "FVECTOR", "DOUBLE"]:
+        if self.current_token[0] in ["IDENTIFIER", "FLOAT", "FVECTOR", "DOUBLE", "HALF"]:
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
@@ -523,7 +526,7 @@ class HLSLParser:
                 elif self.current_token[0] == "DOT":
                     return self.parse_member_access(name)
                 return VariableNode("", name)
-            if self.current_token[0] in ["FLOAT", "FVECTOR", "DOUBLE"]:
+            if self.current_token[0] in ["FLOAT", "FVECTOR", "DOUBLE", "HALF"]:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
                 if self.current_token[0] == "LPAREN":
