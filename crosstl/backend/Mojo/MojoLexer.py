@@ -50,6 +50,8 @@ TOKENS = [
     ("DOT", r"\."),
     ("EQUALS", r"="),
     ("WHITESPACE", r"\s+"),
+    ("MOD", r"%"),
+    
 ]
 
 # Define keywords specific to mojo

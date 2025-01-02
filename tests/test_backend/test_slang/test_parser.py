@@ -117,5 +117,21 @@ def test_function_call_parsing():
         pytest.fail("function call parsing not implemented.")
 
 
+def test_mod_parsing():
+    code = """
+    [shader("vertex")]
+    VertexStageOutput vertexMain(AssembledVertex assembledVertex) {
+        VertexStageOutput output;
+        int a = 10 % 3;  // Basic modulus
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -126,5 +126,21 @@ def test_if_else_tokenization():
         pytest.fail("If-else statement tokenization not implemented.")
 
 
+def test_mod_tokenization():
+    code = """
+        int a = 10 % 3;  // Basic modulus
+    """
+    tokens = tokenize_code(code)
+    
+    # Find the modulus operator in tokens
+    has_mod = False
+    for token in tokens:
+        if token == ("MOD", "%"):
+            has_mod = True
+            break
+    
+    assert has_mod, "Modulus operator (%) not tokenized correctly"
+
+
 if __name__ == "__main__":
     pytest.main()

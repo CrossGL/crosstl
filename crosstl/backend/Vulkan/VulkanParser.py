@@ -466,9 +466,9 @@ class VulkanParser:
 
     def parse_multiplicative(self):
         left = self.parse_primary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE"]:
-            op = self.current_token[0]
-            self.eat(op)
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
             right = self.parse_primary()
             left = BinaryOpNode(left, op, right)
         return left

@@ -22,9 +22,18 @@ def tokenize_code(code: str) -> List:
     return lexer.tokens
 
 
-# ToDO: Implement the tests
-def test_struct():
-    pass
+def test_mod_parsing():
+    code = """
+    
+    void main() {
+        int a = 10 % 3;  // Basic modulus
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
 
 
 if __name__ == "__main__":

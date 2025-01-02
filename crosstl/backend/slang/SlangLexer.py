@@ -72,6 +72,8 @@ TOKENS = [
     ("CONSTEXPR", r"\bconstexpr\b"),
     ("STATIC", r"\bstatic\b"),
     ("INLINE", r"\binline\b"),
+    ("MOD", r"%"),                # Add modulus operator
+# Add modulus assignment
 ]
 
 # Keywords map for matching identifiers to token types
