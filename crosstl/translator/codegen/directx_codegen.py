@@ -12,7 +12,6 @@ from ..ast import (
     VariableNode,
 )
 
-
 class HLSLCodeGen:
     def __init__(self):
         self.type_mapping = {
@@ -152,7 +151,8 @@ class HLSLCodeGen:
             return handler(stmt)
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
-       def generate_assignment(self, node):
+
+    def generate_assignment(self, node):
         lhs = self.generate_expression(node.left)
         rhs = self.generate_expression(node.right)
         op = node.operator
@@ -180,7 +180,6 @@ class HLSLCodeGen:
             code += f"{indent_str}}}"
         code += "\n"
         return code
-
 
     def generate_for(self, node, indent):
         indent_str = "    " * indent
