@@ -255,14 +255,14 @@ def test_mod_tokenization():
         int a = 10 % 3;  // Basic modulus
     """
     tokens = tokenize_code(code)
-    
+
     # Find the modulus operator in tokens
     has_mod = False
     for token in tokens:
         if token == ("MOD", "%"):
             has_mod = True
             break
-    
+
     assert has_mod, "Modulus operator (%) not tokenized correctly"
 
 

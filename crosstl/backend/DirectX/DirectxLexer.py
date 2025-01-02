@@ -68,7 +68,6 @@ TOKENS = [
     ("DEFAULT", r"\bdefault\b"),
     ("BREAK", r"\bbreak\b"),
     ("MOD", r"%"),
-    
 ]
 
 KEYWORDS = {

@@ -162,7 +162,7 @@ def test_mod_parsing():
     """
     try:
         tokens = tokenize_code(code)
-        ast = parse_code(tokens)
+        parse_code(tokens)
     except SyntaxError:
         pytest.fail("Modulus operator parsing not implemented")
 

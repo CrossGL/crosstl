@@ -712,7 +712,7 @@ class GLSLParser:
 
         """
         expr = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE","MOD"]:
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_unary()

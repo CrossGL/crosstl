@@ -36,7 +36,6 @@ TOKENS = [
     ("MINUS", r"-"),
     ("MULTIPLY", r"\*"),
     ("DIVIDE", r"/"),
-    
     ("LESS_EQUAL", r"<="),
     ("GREATER_EQUAL", r">="),
     ("NOT_EQUAL", r"!="),
@@ -51,7 +50,6 @@ TOKENS = [
     ("QUESTION", r"\?"),
     ("COLON", r":"),
     ("MOD", r"%"),
-    
 ]
 
 KEYWORDS = {
