@@ -1,6 +1,39 @@
 import re
+from typing import Iterator, Tuple, List
 
-TOKENS = [
+# using sets for faster lookup
+SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
+
+# define keywords dictionary
+KEYWORDS = {
+    "struct": "STRUCT",
+    "cbuffer": "CBUFFER",
+    "Texture2D": "TEXTURE2D",
+    "SamplerState": "SAMPLER_STATE",
+    "float": "FLOAT",
+    "float2": "FVECTOR",
+    "float3": "FVECTOR",
+    "float4": "FVECTOR",
+    "double": "DOUBLE",
+    "int": "INT",
+    "uint": "UINT",
+    "bool": "BOOL",
+    "void": "VOID",
+    "return": "RETURN",
+    "if": "IF",
+    "else": "ELSE",
+    "for": "FOR",
+    "while": "WHILE",
+    "do": "DO",
+    "register": "REGISTER",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
+    "break": "BREAK",
+}
+
+# use tuple for immutable token types that won't change
+TOKENS = tuple([
     ("COMMENT_SINGLE", r"//.*"),
     ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
     ("INCLUDE", r"\#include\b"),
@@ -67,67 +100,52 @@ TOKENS = [
     ("CASE", r"\bcase\b"),
     ("DEFAULT", r"\bdefault\b"),
     ("BREAK", r"\bbreak\b"),
-]
-
-KEYWORDS = {
-    "struct": "STRUCT",
-    "cbuffer": "CBUFFER",
-    "Texture2D": "TEXTURE2D",
-    "SamplerState": "SAMPLER_STATE",
-    "float": "FLOAT",
-    "float2": "FVECTOR",
-    "float3": "FVECTOR",
-    "float4": "FVECTOR",
-    "double": "DOUBLE",
-    "int": "INT",
-    "uint": "UINT",
-    "bool": "BOOL",
-    "void": "VOID",
-    "return": "RETURN",
-    "if": "IF",
-    "else": "ELSE",
-    "for": "FOR",
-    "while": "WHILE",
-    "do": "DO",
-    "register": "REGISTER",
-    "switch": "SWITCH",
-    "case": "CASE",
-    "default": "DEFAULT",
-    "break": "BREAK",
-}
-
+])
 
 class HLSLLexer:
-    def __init__(self, code):
+    def __init__(self, code: str):
+        self._token_patterns = [
+            (name, re.compile(pattern))
+            for name, pattern in TOKENS
+        ]
         self.code = code
-        self.tokens = []
-        self.tokenize()
-
-    def tokenize(self):
+        self._length = len(code)
+        
+    def tokenize(self) -> List[Tuple[str, str]]:
+        # tokenize the input code and return list of tokens
+        return list(self.token_generator())
+    
+    def token_generator(self) -> Iterator[Tuple[str, str]]:
+        # function that yields tokens one at a time
         pos = 0
-        while pos < len(self.code):
-            match = None
-
-            for token_type, pattern in TOKENS:
-                regex = re.compile(pattern)
-
-                match = regex.match(self.code, pos)
-                if match:
-                    text = match.group(0)
-                    if token_type == "IDENTIFIER" and text in KEYWORDS:
-                        token_type = KEYWORDS[text]
-                    if token_type not in [
-                        "WHITESPACE",
-                        "COMMENT_SINGLE",
-                        "COMMENT_MULTI",
-                    ]:
-                        token = (token_type, text)
-                        self.tokens.append(token)
-                    pos = match.end(0)
-                    break
-            if not match:
+        while pos < self._length:
+            token = self._next_token(pos)
+            if token is None:
                 raise SyntaxError(
                     f"Illegal character '{self.code[pos]}' at position {pos}"
                 )
-
-        self.tokens.append(("EOF", ""))
+            new_pos, token_type, text = token
+            
+            if token_type == "IDENTIFIER" and text in KEYWORDS:
+                token_type = KEYWORDS[text]
+                
+            if token_type not in SKIP_TOKENS:
+                yield (token_type, text)
+                
+            pos = new_pos
+            
+        yield ("EOF", "")
+    
+    def _next_token(self, pos: int) -> Tuple[int, str, str]:
+        # find the next token starting at the given position
+        for token_type, pattern in self._token_patterns:
+            match = pattern.match(self.code, pos)
+            if match:
+                return match.end(0), token_type, match.group(0)
+        return None
+    
+    @classmethod
+    def from_file(cls, filepath: str, chunk_size: int = 8192) -> 'HLSLLexer':
+        # create a lexer instance from a file, reading in chunks 
+        with open(filepath, 'r') as f:
+            return cls(f.read())
