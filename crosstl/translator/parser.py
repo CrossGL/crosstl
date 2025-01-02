@@ -653,7 +653,7 @@ class Parser:
 
         """
         expr = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE"]:
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_unary()
@@ -803,6 +803,8 @@ class Parser:
             "BITWISE_AND",
             "ASSIGN_SHIFT_RIGHT",
             "ASSIGN_SHIFT_LEFT",
+            "MOD"
+            
         ]:
             op = self.current_token[0]
             self.eat(op)
