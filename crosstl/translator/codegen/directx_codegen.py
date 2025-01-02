@@ -195,6 +195,14 @@ class HLSLCodeGen:
             code += self.generate_statement(stmt, indent + 1)
         code += f"{indent_str}}}\n"
         return code
+    def generate_return(self, node, indent):
+        indent_str = "    " * indent
+        code = ""
+        for i, return_stmt in enumerate(node.value):
+            code += f"{self.generate_expression(return_stmt)}"
+            if i < len(node.value) - 1:
+                code += ", "
+        return f"{indent_str}return {code};\n"
 
     def generate_expression(self, expr):
         if isinstance(expr, str):
