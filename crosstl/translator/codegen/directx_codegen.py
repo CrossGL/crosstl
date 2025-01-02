@@ -152,6 +152,34 @@ class HLSLCodeGen:
             return handler(stmt)
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+     def generate_assignment(self, node):
+        lhs = self.generate_expression(node.left)
+        rhs = self.generate_expression(node.right)
+        op = node.operator
+        return f"{lhs} {op} {rhs}"
+
+    def generate_if(self, node, indent):
+        indent_str = "    " * indent
+        code = f"{indent_str}if ({self.generate_expression(node.if_condition)}) {{\n"
+        for stmt in node.if_body:
+            code += self.generate_statement(stmt, indent + 1)
+        code += f"{indent_str}}}"
+
+        for else_if_condition, else_if_body in zip(
+            node.else_if_conditions, node.else_if_bodies
+        ):
+            code += f" else if ({self.generate_expression(else_if_condition)}) {{\n"
+            for stmt in else_if_body:
+                code += self.generate_statement(stmt, indent + 1)
+            code += f"{indent_str}}}"
+
+        if node.else_body:
+            code += " else {\n"
+            for stmt in node.else_body:
+                code += self.generate_statement(stmt, indent + 1)
+            code += f"{indent_str}}}"
+        code += "\n"
+        return code
 
     def generate_for(self, node, indent):
         indent_str = "    " * indent
