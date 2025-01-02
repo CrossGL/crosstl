@@ -12,6 +12,7 @@ from ..ast import (
     VariableNode,
 )
 
+
 class HLSLCodeGen:
     def __init__(self):
         self.type_mapping = {
