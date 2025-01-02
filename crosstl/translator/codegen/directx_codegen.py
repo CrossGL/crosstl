@@ -11,6 +11,8 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+
+
 class HLSLCodeGen:
     def __init__(self):
         self.type_mapping = {
