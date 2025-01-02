@@ -803,8 +803,7 @@ class Parser:
             "BITWISE_AND",
             "ASSIGN_SHIFT_RIGHT",
             "ASSIGN_SHIFT_LEFT",
-            "MOD"
-            
+            "MOD",
         ]:
             op = self.current_token[0]
             self.eat(op)
