@@ -132,12 +132,17 @@ class HLSLCodeGen:
             f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.semantic)}"
             for p in func.params
         )
-        if shader_type == "vertex":
-            code += f"{self.map_type(func.return_type)} VSMain({params}) {self.map_semantic(func.semantic)} {{\n"
-        elif shader_type == "fragment":
-            code += f"{self.map_type(func.return_type)} PSMain({params}) {self.map_semantic(func.semantic)} {{\n"
-        elif shader_type == "compute":
-            code += f"{self.map_type(func.return_type)} CSMain({params}) {self.map_semantic(func.semantic)} {{\n"
+        shader_map = {
+            "vertex": "VSMain",
+            "fragment": "PSMain",
+            "compute": "CSMain" }
+        
+        if func.qualifier in shader_map:
+            code += f"// {func.qualifier.capitalize()} Shader\n"
+            code += self.generate_function(func, shader_type=shader_map[func.qualifier])
+        else:
+            code += self.generate_function(func)
+
         else:
             code += f"{self.map_type(func.return_type)} {func.name}({params}) {self.map_semantic(func.semantic)} {{\n"
 
@@ -149,23 +154,20 @@ class HLSLCodeGen:
 
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
-        if isinstance(stmt, VariableNode):
-            return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
-        elif isinstance(stmt, AssignmentNode):
-            return f"{indent_str}{self.generate_assignment(stmt)};\n"
-        elif isinstance(stmt, IfNode):
-            return self.generate_if(stmt, indent)
-        elif isinstance(stmt, ForNode):
-            return self.generate_for(stmt, indent)
-        elif isinstance(stmt, ReturnNode):
-            code = ""
-            for i, return_stmt in enumerate(stmt.value):
-                code += f"{self.generate_expression(return_stmt)}"
-                if i < len(stmt.value) - 1:
-                    code += ", "
-            return f"{indent_str}return {code};\n"
+       statement_handlers = {
+        VariableNode: lambda stmt: f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n",
+        AssignmentNode: lambda stmt: f"{indent_str}{self.generate_assignment(stmt)};\n",
+        IfNode: lambda stmt: self.generate_if(stmt, indent),
+        ForNode: lambda stmt: self.generate_for(stmt, indent),
+        ReturnNode: lambda stmt: self.generate_return(stmt, indent),
+        }
+
+        handler = statement_handlers.get(type(stmt))
+        if handler:
+            return handler(stmt)
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
 
     def generate_assignment(self, node):
         lhs = self.generate_expression(node.left)
@@ -180,13 +182,13 @@ class HLSLCodeGen:
             code += self.generate_statement(stmt, indent + 1)
         code += f"{indent_str}}}"
 
-        for else_if_condition, else_if_body in zip(
-            node.else_if_conditions, node.else_if_bodies
-        ):
+        for idx, else_if_condition in enumerate(node.else_if_conditions):
+            else_if_body = node.else_if_bodies[idx] if idx < len(node.else_if_bodies) else []
             code += f" else if ({self.generate_expression(else_if_condition)}) {{\n"
             for stmt in else_if_body:
                 code += self.generate_statement(stmt, indent + 1)
             code += f"{indent_str}}}"
+
 
         if node.else_body:
             code += " else {\n"
