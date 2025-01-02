@@ -195,6 +195,7 @@ class HLSLCodeGen:
             code += self.generate_statement(stmt, indent + 1)
         code += f"{indent_str}}}\n"
         return code
+
     def generate_return(self, node, indent):
         indent_str = "    " * indent
         code = ""
