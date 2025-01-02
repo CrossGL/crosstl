@@ -70,7 +70,7 @@ class HLSLCodeGen:
                 code += f"{self.map_type(node.vtype)} {node.name} :register(s{i});\n"
             else:
                 code += f"{self.map_type(node.vtype)} {node.name};\n"
-        
+
         # Generate cbuffers
         if ast.cbuffers:
             code += "// Constant Buffers\n"
@@ -109,11 +109,7 @@ class HLSLCodeGen:
             f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.semantic)}"
             for p in func.params
         )
-        shader_map = {
-            "vertex": "VSMain",
-            "fragment": "PSMain",
-            "compute": "CSMain"
-        }
+        shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
 
         if func.qualifier in shader_map:
             code += f"// {func.qualifier.capitalize()} Shader\n"
