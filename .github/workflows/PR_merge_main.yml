@@ -13,10 +13,16 @@ jobs:
 
       - name: Fetch PR branch and main
         run: |
-          # Fetch the PR branch and the main branch
+          # Check if the branch already exists and delete it if necessary
+          if git rev-parse --verify pr-branch; then
+            git branch -D pr-branch
+          fi
+          # Fetch the PR branch and create a local branch
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr-branch
-          git fetch origin main
           git checkout -b pr-branch FETCH_HEAD
+          # Fetch the main branch
+          git fetch origin main
+        
 
       - name: Set git user
         run: |
