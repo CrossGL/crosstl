@@ -19,6 +19,7 @@ jobs:
 
       - name: Push changes
         run: |
-          git push origin ${{ github.head_ref }}
+          branch_name=${{ github.head_ref || github.ref_name }}
+          git push origin $branch_name
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
