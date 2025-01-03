@@ -355,5 +355,18 @@ def test_double_dtype_parsing():
         pytest.fail("double dtype not implemented.")
 
 
+def test_mod_parsing():
+    code = """
+    void main() {
+        int a = 10 % 3;  // Basic modulus
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
+
+
 if __name__ == "__main__":
     pytest.main()

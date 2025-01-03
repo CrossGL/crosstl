@@ -153,5 +153,19 @@ def test_if_else():
         pytest.fail("If-else statement parsing not implemented.")
 
 
+def test_mod_parsing():
+    code = """
+    fragment float4 fragmentMain() {
+        int a = 10 % 3;  // Basic modulus
+        return float4(1.0);
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
+
+
 if __name__ == "__main__":
     pytest.main()
