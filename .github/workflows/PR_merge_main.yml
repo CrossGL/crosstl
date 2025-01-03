@@ -26,9 +26,9 @@ jobs:
           # Merge the main branch into the PR branch
           git merge origin/main
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.OWNER_TOKEN }}
 
       - name: Push changes
         run: |
           # Push the updated PR branch back to the forked repository
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} pr-branch:refs/heads/${{ github.event.pull_request.head.ref }}
+          git push https://x-access-token:${{ secrets.OWNER_TOKEN }}@github.com/${{ github.repository }} pr-branch:refs/heads/${{ github.event.pull_request.head.ref }}
