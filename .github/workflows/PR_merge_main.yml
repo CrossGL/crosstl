@@ -14,6 +14,11 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr-branch
           git fetch origin main
 
+      - name: Set git user
+        run: |
+          git config --global user.email "nripesh@crossgl.net"
+          git config --global user.name "NripeshN"
+
       - name: Merge main into PR branch
         run: |
           # Checkout the PR branch
@@ -22,11 +27,6 @@ jobs:
           git merge origin/main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set git user
-        run: |
-          git config --global user.email "nripesh@crossgl.net"
-          git config --global user.name "NripeshN"
 
       - name: Push changes
         run: |
