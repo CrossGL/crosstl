@@ -1,6 +1,7 @@
 import re
 from collections import OrderedDict
 
+
 TOKENS = OrderedDict(
     [
         ("COMMENT_SINGLE", r"//.*"),
@@ -77,6 +78,7 @@ TOKENS = OrderedDict(
         ("BITWISE_NOT", r"~"),
     ]
 )
+
 
 KEYWORDS = {
     "shader": "SHADER",

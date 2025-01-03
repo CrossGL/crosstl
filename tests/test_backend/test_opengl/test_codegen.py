@@ -16,7 +16,7 @@ def tokenize_code(code: str) -> List:
 
     """
     lexer = GLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def parse_code(Tokens: List, shader_type="vertex") -> List:
