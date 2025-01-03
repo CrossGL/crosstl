@@ -6,7 +6,7 @@ from crosstl.backend.Mojo.MojoLexer import MojoLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = MojoLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_mod_tokenization():
