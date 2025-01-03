@@ -14,7 +14,7 @@ def tokenize_code(code: str) -> List:
 
     """
     lexer = GLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_input_output_tokenization():
