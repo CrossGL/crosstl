@@ -76,6 +76,7 @@ TOKENS = OrderedDict(
         ("BITWISE_OR", r"\|"),
         ("BITWISE_XOR", r"\^"),
         ("BITWISE_NOT", r"~"),
+        ("STATIC", r"\bstatic\b"),
     ]
 )
 
@@ -90,6 +91,7 @@ KEYWORDS = {
     "for": "FOR",
     "return": "RETURN",
     "const": "CONST",
+    "static": "STATIC",
 }
 
 
