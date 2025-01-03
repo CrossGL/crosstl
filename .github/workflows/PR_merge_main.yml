@@ -8,16 +8,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fetch PR branch and main
+        run: |
+          # Fetch the PR branch and the main branch
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr-branch
+          git fetch origin main
+
+      - name: Set git user
+        run: |
+          git config --global user.email "${{secrets.OWNER_EMAIL}}"
+          git config --global user.name "Nripesh Niketan"
+
       - name: Merge main into PR branch
         run: |
-          git fetch origin main
-          git checkout ${{ github.head_ref }}
+          # Checkout the PR branch
+          git checkout pr-branch
+          # Merge the main branch into the PR branch
           git merge origin/main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push changes
         run: |
-          git push origin ${{ github.head_ref }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Push the updated PR branch back to the forked repository
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} pr-branch:refs/heads/${{ github.event.pull_request.head.ref }}
