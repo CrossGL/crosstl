@@ -29,7 +29,7 @@ jobs:
       - name: Set git user
         run: |
           git config --global user.email "${{ secrets.OWNER_EMAIL }}"
-          git config --global user.name "GitHub Action Bot"
+          git config --global user.name "Nripesh Niketan"
 
       - name: Merge main into PR branch
         run: |
