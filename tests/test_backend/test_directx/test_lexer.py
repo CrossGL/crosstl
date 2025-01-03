@@ -6,7 +6,7 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = HLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_struct_tokenization():
