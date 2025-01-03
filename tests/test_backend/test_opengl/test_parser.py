@@ -1,7 +1,7 @@
-from crosstl.src.backend.Opengl.OpenglLexer import GLSLLexer
+from crosstl.backend.Opengl.OpenglLexer import GLSLLexer
 import pytest
 from typing import List
-from crosstl.src.backend.Opengl.OpenglParser import GLSLParser
+from crosstl.backend.Opengl.OpenglParser import GLSLParser
 
 
 def tokenize_code(code: str) -> List:
@@ -180,6 +180,34 @@ def test_function_call():
         parse_code(tokens, "vertex")
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_double_dtype_tokenization():
+    code = """
+    double ComputeArea(double radius) {
+        double pi = 3.14159265359;
+        double area = pi * radius * radius;
+        return area;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("double tokenization not implemented")
+
+
+def test_mod_parsing():
+    code = """
+    void main() {
+        int a = 10 % 3;  // Basic modulus
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
 
 
 if __name__ == "__main__":

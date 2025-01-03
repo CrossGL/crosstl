@@ -1,6 +1,6 @@
-from crosstl.src.backend.slang import SlangCrossGLCodeGen
-from crosstl.src.backend.slang import SlangLexer
-from crosstl.src.backend.slang import SlangParser
+from crosstl.backend.slang import SlangCrossGLCodeGen
+from crosstl.backend.slang import SlangLexer
+from crosstl.backend.slang import SlangParser
 import pytest
 from typing import List
 

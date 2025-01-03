@@ -1,4 +1,3 @@
-
 # 🚀 Contribution Guidelines
 
 Thank you for your interest in contributing to **CrossTL**! By contributing, you help improve the project and make it more robust and useful for everyone. 🎉
@@ -61,6 +60,24 @@ git push origin feature-name
 ### 8. 🔄 Open a Pull Request
 
 Open a pull request on the original repository. Provide a detailed description of your changes, why they are necessary, and any additional information that may be useful for the reviewers.
+
+### 🔖 Assigning or Creating Issues
+
+If you're looking for something to work on, check out the open issues on our repository! You can assign yourself to an issue by simply commenting:
+
+```plaintext
+@CrossGL-issue-bot assign me
+```
+
+The bot will automatically assign the issue to you.
+
+If you'd like to propose a new feature or identify a bug that you'd like to work on, you can create a new issue. Provide as much detail as possible in the issue description, then comment on it with:
+
+```plaintext
+@CrossGL-issue-bot assign me
+```
+
+This makes it easy for contributors to collaborate and track who is working on what. 🎯
 
 ## Contribution Pipeline
 

@@ -1,8 +1,8 @@
-from crosstl.src.translator.lexer import Lexer
+from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
-from crosstl.src.translator.parser import Parser
-from crosstl.src.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.parser import Parser
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 
 
 def tokenize_code(code: str) -> List:
@@ -364,6 +364,43 @@ def test_bitwise_operators():
         print(code)
     except SyntaxError:
         pytest.fail("Bitwise Shift codegen not implemented.")
+
+
+def test_bitwise_or_operator():
+    code = """
+    shader main {
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+    sampler2D iChannel0;
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            // Use bitwise AND on texture coordinates (for testing purposes)
+            output.color = vec4(float(int(input.texCoord.x * 100.0) | 15), 
+                                float(int(input.texCoord.y * 100.0) | 15), 
+                                0.0, 1.0);
+            return output;
+        }
+    }
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            // Simple fragment shader to display the result of the AND operation
+            return vec4(input.color.rgb, 1.0);
+        }
+    }
+}
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Bitwise OR codegen not implemented")
 
 
 if __name__ == "__main__":

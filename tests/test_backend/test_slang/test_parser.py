@@ -1,7 +1,7 @@
 import pytest
 from typing import List
-from crosstl.src.backend.slang import SlangLexer
-from crosstl.src.backend.slang import SlangParser
+from crosstl.backend.slang import SlangLexer
+from crosstl.backend.slang import SlangParser
 
 
 def parse_code(tokens: List):
@@ -115,6 +115,22 @@ def test_function_call_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("function call parsing not implemented.")
+
+
+def test_mod_parsing():
+    code = """
+    [shader("vertex")]
+    VertexStageOutput vertexMain(AssembledVertex assembledVertex) {
+        VertexStageOutput output;
+        int a = 10 % 3;  // Basic modulus
+        return output;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
 
 
 if __name__ == "__main__":

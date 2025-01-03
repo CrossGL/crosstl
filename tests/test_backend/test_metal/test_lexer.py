@@ -1,6 +1,6 @@
 import pytest
 from typing import List
-from crosstl.src.backend.Metal.MetalLexer import MetalLexer
+from crosstl.backend.Metal.MetalLexer import MetalLexer
 
 
 def tokenize_code(code: str) -> List:
@@ -124,6 +124,22 @@ def test_if_else_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("If-else statement tokenization not implemented.")
+
+
+def test_mod_tokenization():
+    code = """
+        int a = 10 % 3;  // Basic modulus
+    """
+    tokens = tokenize_code(code)
+
+    # Find the modulus operator in tokens
+    has_mod = False
+    for token in tokens:
+        if token == ("MOD", "%"):
+            has_mod = True
+            break
+
+    assert has_mod, "Modulus operator (%) not tokenized correctly"
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 import pytest
 from typing import List
-from crosstl.src.backend.Metal.MetalLexer import MetalLexer
-from crosstl.src.backend.Metal.MetalParser import MetalParser
-from crosstl.src.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+from crosstl.backend.Metal.MetalLexer import MetalLexer
+from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 
 
 def tokenize_code(code: str) -> List:

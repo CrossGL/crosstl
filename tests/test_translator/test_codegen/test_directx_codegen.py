@@ -1,8 +1,8 @@
-from crosstl.src.translator.lexer import Lexer
+from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
-from crosstl.src.translator.parser import Parser
-from crosstl.src.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.parser import Parser
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 
 
 def tokenize_code(code: str) -> List:
@@ -594,6 +594,130 @@ def test_bitwise_and_operator():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Bitwise AND codegen not implemented")
+
+
+def test_double_data_type():
+    code = """
+    shader DoubleShader {
+        struct VSInput {
+            double texCoord @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            double color @ COLOR;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.color = input.texCoord * 2.0;
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.color, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+        assert "double" in generated_code
+    except SyntaxError:
+        pytest.fail("Double data type not supported.")
+
+
+# Test the codegen for the shift operators("<<", ">>")
+def test_shift_operators():
+    code = """
+    shader main {
+    
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+
+    sampler2D iChannel0;
+
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
+            uint a = 1 << 1;
+            uint b = 2 >> 1;
+            // Pass through texture coordinates as color
+            output.color = vec4(input.texCoord, 0.0, 1.0);
+            return output;
+        }
+    }
+
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            // Sample brightness and calculate bloom
+            float brightness = texture(iChannel0, input.color.xy).r;
+            float bloom = max(0.0, brightness - 0.5);
+            // Apply bloom to the texture color
+            uint a = 1 << 1;
+            uint b = 2 >> 1;
+            vec3 texColor = texture(iChannel0, input.color.xy).rgb;
+            vec3 colorWithBloom = texColor + vec3(bloom);
+            return vec4(colorWithBloom, 1.0);
+        }
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Shift right assignment operator codegen not implemented.")
+
+
+def test_bitwise_or_operator():
+    code = """
+    shader main {
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+    sampler2D iChannel0;
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            // Use bitwise OR on texture coordinates (for testing purposes)
+            output.color = vec4(float(int(input.texCoord.x * 100.0) | 15), 
+                                float(int(input.texCoord.y * 100.0) | 15), 
+                                0.0, 1.0);
+            return output;
+        }
+    }
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            // Simple fragment shader to display the result of the AND operation
+            return vec4(input.color.rgb, 1.0);
+        }
+    }
+}
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Bitwise OR codegen not implemented")
 
 
 if __name__ == "__main__":

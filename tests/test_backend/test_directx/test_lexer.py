@@ -1,12 +1,12 @@
 import pytest
 from typing import List
-from crosstl.src.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 
 
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = HLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_struct_tokenization():
@@ -146,6 +146,20 @@ def test_assignment_ops_tokenization():
 
             redValue &= 0x3;
         }
+        
+        // Testing SHIFT RIGHT (>>) operator on some condition
+        if (input.in_position.r == 0.25) {
+            uint redValue = asuint(output.out_color.r);
+            output.redValue ^= 0x1;
+            output.out_color.r = asfloat(redValue);
+            output.redValue |= 0x2;
+
+            // Applying shift left operation
+            output.redValue >> 1; // Shift left by 1
+            redValue |= 0x2;
+
+            redValue &= 0x3;
+        }
 
 
         return output;
@@ -166,6 +180,90 @@ def test_bitwise_or_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("bitwise_op tokenization is not implemented.")
+
+
+def test_logical_or_tokenization():
+    code = """
+        bool val_0 = true;
+        bool val_1 = val_0 || false;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("logical_or tokenization is not implemented.")
+
+
+def test_logical_and_tokenization():
+    code = """
+        bool val_0 = true;
+        bool val_1 = val_0 && false;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("logical_and tokenization is not implemented.")
+
+
+def test_switch_case_tokenization():
+    code = """
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        switch (input.value) {
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0);
+                break;
+            case 2:
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0);
+                break;
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0);
+                break;
+        }
+        return output;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("switch-case tokenization not implemented.")
+
+
+def test_double_dtype_tokenization():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                double value1 = 3.14159; // First double value
+                double value2 = 2.71828; // Second double value
+                double result = value1 + value2; // Adding two doubles
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("double dtype tokenization is not implemented.")
+
+
+def test_mod_tokenization():
+    code = """
+        int a = 10 % 3;  // Basic modulus
+    """
+    tokens = tokenize_code(code)
+
+    # Find the modulus operator in tokens
+    has_mod = False
+    for token in tokens:
+        if token == ("MOD", "%"):
+            has_mod = True
+            break
+
+    assert has_mod, "Modulus operator (%) not tokenized correctly"
 
 
 if __name__ == "__main__":

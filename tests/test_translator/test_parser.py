@@ -1,7 +1,7 @@
-from crosstl.src.translator.lexer import Lexer
+from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
-from crosstl.src.translator.parser import Parser
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -584,6 +584,41 @@ def test_and_operator():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Bitwise AND not working")
+
+
+def test_modulus_operations():
+    code = """
+    shader main {
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+    sampler2D iChannel0;
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            // Test modulus operations
+            int value = 1200;
+            value = value % 10;      // Basic modulus
+            value %= 5;              // Modulus assignment
+            output.color = vec4(float(value) / 10.0, 0.0, 0.0, 1.0);
+            return output;
+        }
+    }
+    fragment {
+        vec4 main(VSOutput input) @ gl_FragColor {
+            return vec4(input.color.rgb, 1.0);
+        }
+    }
+}
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operations not working")
 
 
 if __name__ == "__main__":

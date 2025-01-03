@@ -1,8 +1,8 @@
-from crosstl.src.backend.Opengl.OpenglLexer import GLSLLexer
+from crosstl.backend.Opengl.OpenglLexer import GLSLLexer
 import pytest
 from typing import List
-from crosstl.src.backend.Opengl.OpenglParser import GLSLParser
-from crosstl.src.backend.Opengl.openglCrossglCodegen import GLSLToCrossGLConverter
+from crosstl.backend.Opengl.OpenglParser import GLSLParser
+from crosstl.backend.Opengl.openglCrossglCodegen import GLSLToCrossGLConverter
 
 
 def tokenize_code(code: str) -> List:
@@ -185,6 +185,23 @@ def test_function_call():
         print(code)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_double_dtype_codegen():
+    code = """
+    double ComputeArea(double radius) {
+        double pi = 3.14159265359;
+        double area = pi * radius * radius;
+        return area;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("double tokenization not implemented")
 
 
 if __name__ == "__main__":
