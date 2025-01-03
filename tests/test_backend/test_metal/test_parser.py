@@ -7,7 +7,7 @@ from crosstl.backend.Metal.MetalParser import MetalParser
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = MetalLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def parse_code(tokens: List):
@@ -151,6 +151,20 @@ def test_if_else():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("If-else statement parsing not implemented.")
+
+
+def test_mod_parsing():
+    code = """
+    fragment float4 fragmentMain() {
+        int a = 10 % 3;  // Basic modulus
+        return float4(1.0);
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
 
 
 if __name__ == "__main__":

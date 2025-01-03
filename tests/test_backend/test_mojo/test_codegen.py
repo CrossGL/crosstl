@@ -16,7 +16,7 @@ def generate_code(ast_node):
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = MojoLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def parse_code(tokens: List):
