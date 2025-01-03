@@ -19,12 +19,19 @@ def parse_code(tokens: List):
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = MojoLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
-# ToDO: Implement the tests
-def test_struct():
-    pass
+def test_mod_parsing():
+    code = """
+    fn main():
+        let a: Int = 10 % 3  # Basic modulus
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
 
 
 if __name__ == "__main__":
