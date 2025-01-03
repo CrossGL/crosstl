@@ -16,8 +16,8 @@ jobs:
 
       - name: Set git user
         run: |
-          git config --global user.email "nripesh@crossgl.net"
-          git config --global user.name "NripeshN"
+          git config --global user.email "${{secrets.OWNER_EMAIL}}"
+          git config --global user.name "Nripesh Niketan"
 
       - name: Merge main into PR branch
         run: |
