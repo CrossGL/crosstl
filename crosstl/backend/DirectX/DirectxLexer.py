@@ -56,8 +56,8 @@ TOKENS = tuple(
         ("ELSE_IF", r"\belse\sif\b"),
         ("ELSE", r"\belse\b"),
         ("FOR", r"\bfor\b"),
-        ("WHILE", r"\b\while\b"),
-        ("DO", r"\b\do\b"),
+        ("WHILE", r"\bwhile\b"),
+        ("DO", r"\bdo\b"),
         ("REGISTER", r"\bregister\b"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         ("NUMBER", r"\d+(\.\d+)?"),
@@ -102,6 +102,7 @@ TOKENS = tuple(
         ("CASE", r"\bcase\b"),
         ("DEFAULT", r"\bdefault\b"),
         ("BREAK", r"\bbreak\b"),
+        ("MOD", r"%"),
     ]
 )
 
