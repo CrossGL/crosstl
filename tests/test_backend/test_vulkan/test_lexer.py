@@ -6,7 +6,7 @@ from crosstl.backend.Vulkan.VulkanLexer import VulkanLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = VulkanLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_mod_tokenization():
