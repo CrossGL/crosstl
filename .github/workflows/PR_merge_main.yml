@@ -1,0 +1,23 @@
+name: PR Merge Main
+on:
+  pull_request:
+
+jobs:
+  update-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Merge main into PR branch
+        run: |
+          git fetch origin main
+          git checkout ${{ github.head_ref }}
+          git merge origin/main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push changes
+        run: |
+          git push origin ${{ github.head_ref }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

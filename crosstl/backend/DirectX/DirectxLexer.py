@@ -1,6 +1,7 @@
 import re
 from typing import Iterator, Tuple, List
 
+
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
