@@ -6,7 +6,7 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = HLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_struct_tokenization():
@@ -248,6 +248,22 @@ def test_double_dtype_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("double dtype tokenization is not implemented.")
+
+
+def test_mod_tokenization():
+    code = """
+        int a = 10 % 3;  // Basic modulus
+    """
+    tokens = tokenize_code(code)
+
+    # Find the modulus operator in tokens
+    has_mod = False
+    for token in tokens:
+        if token == ("MOD", "%"):
+            has_mod = True
+            break
+
+    assert has_mod, "Modulus operator (%) not tokenized correctly"
 
 
 def test_half_dtype_tokenization():
