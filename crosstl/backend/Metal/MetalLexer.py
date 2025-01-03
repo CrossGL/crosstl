@@ -64,6 +64,8 @@ TOKENS = [
     ("EQUALS", r"="),
     ("bitwise_and", r"&"),
     ("WHITESPACE", r"\s+"),
+    ("MOD", r"%"),
+    ("ASSIGN_MOD", r"%="),
 ]
 
 KEYWORDS = {

@@ -19,7 +19,7 @@ def parse_code(tokens: List):
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = HLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_struct_parsing():
@@ -353,6 +353,19 @@ def test_double_dtype_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("double dtype not implemented.")
+
+
+def test_mod_parsing():
+    code = """
+    void main() {
+        int a = 10 % 3;  // Basic modulus
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
 
 
 if __name__ == "__main__":
