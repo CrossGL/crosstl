@@ -258,6 +258,7 @@ class HLSLParser:
                     "SHIFT_LEFT",
                     "SHIFT_RIGHT",
                     "BITWISE_OR",
+                    "BITWISE_AND",
                     "BITWISE_XOR",
                 ]:
                     # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
@@ -279,6 +280,7 @@ class HLSLParser:
                 "SHIFT_LEFT",
                 "SHIFT_RIGHT",
                 "BITWISE_OR",
+                "BITWISE_AND",
                 "BITWISE_XOR",
             ]:
                 # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
@@ -303,6 +305,7 @@ class HLSLParser:
                     "SHIFT_LEFT",
                     "SHIFT_RIGHT",
                     "BITWISE_OR",
+                    "BITWISE_AND",
                     "BITWISE_XOR",
                 ]:
                     op = self.current_token[1]
@@ -435,6 +438,7 @@ class HLSLParser:
             "SHIFT_LEFT",
             "SHIFT_RIGHT",
             "BITWISE_OR",
+            "BITWISE_AND",
             "BITWISE_XOR",
         ]:
             op = self.current_token[1]
