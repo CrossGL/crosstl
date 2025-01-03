@@ -6,23 +6,25 @@ jobs:
   update-pr:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR branch
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch PR branch and main
+      - name: Remove old pr-branch (if any)
         run: |
-          # Check if the branch already exists and delete it if necessary
-          if git rev-parse --verify pr-branch; then
+          if git rev-parse --verify pr-branch 2>/dev/null; then
             git branch -D pr-branch
           fi
-          # Fetch the PR branch and create a local branch
-          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr-branch
+
+      - name: Fetch PR branch into FETCH_HEAD
+        run: |
+          git fetch origin pull/${{ github.event.pull_request.number }}/head
           git checkout -b pr-branch FETCH_HEAD
-          # Fetch the main branch
+
+      - name: Fetch main
+        run: |
           git fetch origin main
-        
 
       - name: Set git user
         run: |
@@ -31,12 +33,12 @@ jobs:
 
       - name: Merge main into PR branch
         run: |
-          # Merge the main branch into the PR branch
-          git merge origin/main || exit 1
+          git merge origin/main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push changes
+      - name: Push changes back to the PR
         run: |
-          # Push the updated PR branch back to the forked repository
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} pr-branch:refs/heads/${{ github.event.pull_request.head.ref }}
+          git push \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" \
+            pr-branch:refs/heads/${{ github.event.pull_request.head.ref }}
