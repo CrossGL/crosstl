@@ -11,7 +11,8 @@ jobs:
       - name: Merge main into PR branch
         run: |
           git fetch origin main
-          git checkout ${{ github.head_ref }}
+          branch_name=${{ github.head_ref || github.ref_name }}
+          git checkout $branch_name
           git merge origin/main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
