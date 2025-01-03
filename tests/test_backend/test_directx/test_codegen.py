@@ -116,6 +116,7 @@ def test_if_codegen():
 
 def test_for_codegen():
     code = """
+    #pragma exclude_renderers vulkan;
     struct VSInput {
     float4 position : POSITION;
     float4 color : TEXCOORD0;
@@ -498,6 +499,59 @@ def test_bitwise_ops_codgen():
         pytest.fail("bitwise_op parsing or codegen not implemented.")
 
 
+def test_pragma_codegen():
+    code = """
+    #pragma exclude_renderers vulkan;
+    struct VSInput {
+    float4 position : POSITION;
+    float4 color : TEXCOORD0;
+    };
+
+    struct VSOutput {
+        float4 out_position : TEXCOORD0;
+    };
+
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        output.out_position =  input.position;
+
+        for (int i = 0; i < 10; i=i+1) {
+            output.out_position = input.color;
+        }
+
+        return output;
+    }
+
+    struct PSInput {
+        float4 in_position : TEXCOORD0;
+    };
+
+    struct PSOutput {
+        float4 out_color : SV_TARGET0;
+    };
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.out_color =  input.in_position;
+
+        for (int i = 0; i < 10; i=i+1) {
+            output.out_color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+
+        return output;
+    }
+    """
+
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("For loop parsing or code generation not implemented.")
+        pytest.fail("Include statement failed to parse or generate code.")
+
+
 def test_include_codegen():
     code = """
     #include "common.hlsl"
@@ -513,6 +567,11 @@ def test_include_codegen():
     VSOutput VSMain(VSInput input) {
         VSOutput output;
         output.out_position =  input.position;
+
+        for (int i = 0; i < 10; i=i+1) {
+            output.out_position = input.color;
+        }
+
         return output;
     }
 
@@ -527,15 +586,22 @@ def test_include_codegen():
     PSOutput PSMain(PSInput input) {
         PSOutput output;
         output.out_color =  input.in_position;
+
+        for (int i = 0; i < 10; i=i+1) {
+            output.out_color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+
         return output;
     }
     """
+
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
     except SyntaxError:
+        pytest.fail("For loop parsing or code generation not implemented.")
         pytest.fail("Include statement failed to parse or generate code.")
 
 
