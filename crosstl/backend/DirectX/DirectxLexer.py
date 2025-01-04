@@ -76,6 +76,7 @@ TOKENS = tuple(
         ("BREAK", r"\bbreak\b"),
         ("MOD", r"%"),
         ("HALF", r"\bhalf\b"),
+        ("BITWISE_AND", r"&"),
     ]
 )
 
