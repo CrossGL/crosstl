@@ -20,3 +20,5 @@ def test_include_directive(converter):
     output = converter.convert(ast)
     
     # Check if the included file path is part of the output
+    assert "// Included file: common.hlsl" in output
+=======
