@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, mock_open
 from DirectxPreprocessor import DirectxPreprocessor
-import os
+
 
 class TestDirectxPreprocessor(unittest.TestCase):
     def setUp(self):
@@ -10,8 +10,10 @@ class TestDirectxPreprocessor(unittest.TestCase):
 
     def test_include_directive(self):
         """Test proper handling of #include directives."""
-        shader_code = '#include "common.hlsl"\nfloat4 main() : SV_POSITION { return 0; }'
-        include_content = 'float4 commonFunc() { return float4(1.0); }'
+        shader_code = (
+            '#include "common.hlsl"\nfloat4 main() : SV_POSITION { return 0; }'
+        )
+        include_content = "float4 commonFunc() { return float4(1.0); }"
 
         with patch("builtins.open", mock_open(read_data=include_content)):
             result = self.preprocessor.preprocess(shader_code)
@@ -20,7 +22,7 @@ class TestDirectxPreprocessor(unittest.TestCase):
 
     def test_define_macro(self):
         """Test macro definition and substitution."""
-        shader_code = '#define PI 3.14\nfloat piValue = PI;'
+        shader_code = "#define PI 3.14\nfloat piValue = PI;"
         result = self.preprocessor.preprocess(shader_code)
         self.assertIn("float piValue = 3.14;", result)
 
@@ -40,7 +42,7 @@ class TestDirectxPreprocessor(unittest.TestCase):
 
     def test_undefined_macro_error(self):
         """Test error handling for undefined macros."""
-        shader_code = 'float value = UNDEFINED_MACRO;'
+        shader_code = "float value = UNDEFINED_MACRO;"
         with self.assertRaises(ValueError):
             self.preprocessor.preprocess(shader_code)
 
@@ -48,12 +50,15 @@ class TestDirectxPreprocessor(unittest.TestCase):
         """Test handling of nested include directives."""
         main_shader = '#include "file1.hlsl"'
         file1_content = '#include "file2.hlsl"\nfloat file1Value = 1.0;'
-        file2_content = 'float file2Value = 2.0;'
+        file2_content = "float file2Value = 2.0;"
 
-        with patch("builtins.open", side_effect=[
-            mock_open(read_data=file1_content).return_value,
-            mock_open(read_data=file2_content).return_value,
-        ]):
+        with patch(
+            "builtins.open",
+            side_effect=[
+                mock_open(read_data=file1_content).return_value,
+                mock_open(read_data=file2_content).return_value,
+            ],
+        ):
             result = self.preprocessor.preprocess(main_shader)
             self.assertIn("float file1Value = 1.0;", result)
             self.assertIn("float file2Value = 2.0;", result)
@@ -70,10 +75,13 @@ class TestDirectxPreprocessor(unittest.TestCase):
         file1_content = '#include "file2.hlsl"'
         file2_content = '#include "file1.hlsl"'
 
-        with patch("builtins.open", side_effect=[
-            mock_open(read_data=file1_content).return_value,
-            mock_open(read_data=file2_content).return_value,
-        ]):
+        with patch(
+            "builtins.open",
+            side_effect=[
+                mock_open(read_data=file1_content).return_value,
+                mock_open(read_data=file2_content).return_value,
+            ],
+        ):
             with self.assertRaises(RecursionError):
                 self.preprocessor.preprocess(main_shader)
 
@@ -95,7 +103,9 @@ class TestDirectxPreprocessor(unittest.TestCase):
         float featureValue = 0.0;
         #endif
         """
-        self.preprocessor.handle_define("#define FEATURE 1")  # Ensure the macro is defined
+        self.preprocessor.handle_define(
+            "#define FEATURE 1"
+        )  # Ensure the macro is defined
         result = self.preprocessor.preprocess(shader_code)
         self.assertIn("float featureValue = 1.0;", result)
         self.assertNotIn("float featureValue = 0.0;", result)
@@ -105,6 +115,7 @@ class TestDirectxPreprocessor(unittest.TestCase):
         shader_code = ""
         result = self.preprocessor.preprocess(shader_code)
         self.assertEqual(result, "")
+
 
 if __name__ == "__main__":
     unittest.main()
