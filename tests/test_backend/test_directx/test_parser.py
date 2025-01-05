@@ -332,6 +332,30 @@ def test_switch_case_parsing():
         pytest.fail("switch-case parsing not implemented.")
 
 
+def test_bitwise_and_parsing():
+    code = """
+        PSOutput PSMain(PSInput input) {
+            PSOutput output;
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+            uint val = 0x01;
+            if (val & 0x02) {
+                // Test case for bitwise AND
+            }
+            uint filterA = 0b0001; // First filter
+            uint filterB = 0b1000; // Second filter
+
+            // Merge both filters
+            uint combinedFilter = filterA & filterB; // combinedFilter becomes 0b1001
+            return output;
+        }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("bitwise_and_op parsing not implemented.")
+
+
 def test_double_dtype_parsing():
     code = """
             PSOutput PSMain(PSInput input) {
@@ -366,6 +390,29 @@ def test_mod_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Modulus operator parsing not implemented")
+
+
+def test_double_dtype_parsing():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                half value1 = 3.14159; // First half value
+                half value2 = 2.71828; // Second half value
+                half result = value1 + value2; // Adding them
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("half dtype not implemented.")
 
 
 if __name__ == "__main__":

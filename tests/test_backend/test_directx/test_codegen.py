@@ -575,6 +575,33 @@ def test_switch_case_codegen():
         pytest.fail("Switch-case parsing or code generation not implemented.")
 
 
+def test_bitwise_and_ops_codgen():
+    code = """
+        PSOutput PSMain(PSInput input) {
+            PSOutput output;
+            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+            uint val = 0x01;
+            if (val & 0x02) {
+                // Test case for bitwise AND
+            }
+            uint filterA = 0b0001; // First filter
+            uint filterB = 0b1000; // Second filter
+
+            // Merge both filters
+            uint combinedFilter = filterA & filterB; // combinedFilter becomes 0b1001
+            return output;
+        }
+        
+        """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("bitwise_and_op codegen not implemented.")
+
+
 def test_double_dtype_codegen():
     code = """
             PSOutput PSMain(PSInput input) {
@@ -598,6 +625,31 @@ def test_double_dtype_codegen():
         print(generated_code)
     except SyntaxError:
         pytest.fail("double dtype parsing or code generation not implemented.")
+
+
+def test_half_dtype_codegen():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                half value1 = 3.14159; // First half value
+                half value2 = 2.71828; // Second half value
+                half result = value1 + value2; // Adding them
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("half dtype parsing or code generation not implemented.")
 
 
 if __name__ == "__main__":
