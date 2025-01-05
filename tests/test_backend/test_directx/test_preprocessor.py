@@ -4,18 +4,20 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
+
 @pytest.fixture
 def converter():
     return HLSLToCrossGLConverter()
 
+
 # Mocking the file handling directly in the preprocessor
-@patch('crosstl.backend.Directx.DirectxPreprocessor.DirectxPreprocessor.handle_include')
+@patch("crosstl.backend.Directx.DirectxPreprocessor.DirectxPreprocessor.handle_include")
 def test_include_directive(mock_handle_include, converter):
     # Define mock content for the #include directive
     mock_handle_include.return_value = "// Mocked content of common.hlsl"
 
     shader_code = '#include "common.hlsl"\nfloat4 main() : SV_Target { return 0; }'
-    
+
     # Expected output should include the mocked content
     expected_output = (
         "// Mocked content of common.hlsl\nfloat4 main() : SV_Target { return 0; }"
