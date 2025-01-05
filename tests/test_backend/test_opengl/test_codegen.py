@@ -204,5 +204,24 @@ def test_double_dtype_codegen():
         pytest.fail("double tokenization not implemented")
 
 
+def test_unsigned_int_dtype_codegen():
+    code = """
+    double ComputeArea(double radius) {
+        uint a = 3;
+        uint b = 4;
+        
+        uint ans = a + b;
+        return ans;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("unsigned integer tokenization not implemented.")
+
+
 if __name__ == "__main__":
     pytest.main()

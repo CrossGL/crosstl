@@ -10,4 +10,3 @@ def process_shader(shader_code):
     ast = parser.parse()
     converter = HLSLToCrossGLConverter()
     return converter.convert(ast)
-

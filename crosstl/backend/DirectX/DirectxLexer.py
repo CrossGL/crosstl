@@ -5,34 +5,6 @@ from .DirectxPreprocessor import DirectxPreprocessor
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
-# define keywords dictionary
-KEYWORDS = {
-    "struct": "STRUCT",
-    "cbuffer": "CBUFFER",
-    "Texture2D": "TEXTURE2D",
-    "SamplerState": "SAMPLER_STATE",
-    "float": "FLOAT",
-    "float2": "FVECTOR",
-    "float3": "FVECTOR",
-    "float4": "FVECTOR",
-    "double": "DOUBLE",
-    "int": "INT",
-    "uint": "UINT",
-    "bool": "BOOL",
-    "void": "VOID",
-    "return": "RETURN",
-    "if": "IF",
-    "else": "ELSE",
-    "for": "FOR",
-    "while": "WHILE",
-    "do": "DO",
-    "register": "REGISTER",
-    "switch": "SWITCH",
-    "case": "CASE",
-    "default": "DEFAULT",
-    "break": "BREAK",
-}
-
 # use tuple for immutable token types that won't change
 TOKENS = tuple(
     [
@@ -103,8 +75,38 @@ TOKENS = tuple(
         ("DEFAULT", r"\bdefault\b"),
         ("BREAK", r"\bbreak\b"),
         ("MOD", r"%"),
+        ("HALF", r"\bhalf\b"),
+        ("BITWISE_AND", r"&"),
     ]
 )
+
+KEYWORDS = {
+    "struct": "STRUCT",
+    "cbuffer": "CBUFFER",
+    "Texture2D": "TEXTURE2D",
+    "SamplerState": "SAMPLER_STATE",
+    "float": "FLOAT",
+    "float2": "FVECTOR",
+    "float3": "FVECTOR",
+    "float4": "FVECTOR",
+    "double": "DOUBLE",
+    "half": "HALF",
+    "int": "INT",
+    "uint": "UINT",
+    "bool": "BOOL",
+    "void": "VOID",
+    "return": "RETURN",
+    "if": "IF",
+    "else": "ELSE",
+    "for": "FOR",
+    "while": "WHILE",
+    "do": "DO",
+    "register": "REGISTER",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
+    "break": "BREAK",
+}
 
 
 class HLSLLexer:
@@ -115,7 +117,7 @@ class HLSLLexer:
 
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self._length = len(self.code)
-        
+
     def tokenize(self) -> List[Tuple[str, str]]:
         # tokenize the input code and return list of tokens
         return list(self.token_generator())
