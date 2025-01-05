@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, mock_open
-from DirectxPreprocessor import DirectxPreprocessor
+from crosstl.backend.DirectX.DirectxPreprocessor import DirectxPreprocessor
 
 
 class TestDirectxPreprocessor(unittest.TestCase):
