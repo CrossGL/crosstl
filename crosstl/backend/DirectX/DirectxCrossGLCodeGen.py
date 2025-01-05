@@ -62,9 +62,9 @@ class HLSLToCrossGLConverter:
         }
 
     def convert(self, ast):
-        
-        #Converts the provided AST to target GLSL code.
-    
+
+        # Converts the provided AST to target GLSL code.
+
         code = []
         for node in ast.nodes:
             if isinstance(node, IncludeNode):
@@ -75,10 +75,10 @@ class HLSLToCrossGLConverter:
         return "\n".join(code)
 
     def handle_include_node(self, node):
-        
-        #Handles `IncludeNode` specific conversion.
+
+        # Handles `IncludeNode` specific conversion.
         return f"// Included file: {node.path}"
-    
+
     def generate(self, ast):
         code = "shader main {\n"
         # Generate structs

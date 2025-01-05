@@ -1,6 +1,8 @@
 from .DirectxLexer import HLSLLexer
 from .DirectxParser import HLSLParser
 from .DirectxCrossGLCodeGen import HLSLToCrossGLConverter
+
+
 def process_shader(shader_code):
     """
     Process an HLSL shader code through the DirectX pipeline:
