@@ -8,10 +8,10 @@ from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 def converter():
     return HLSLToCrossGLConverter()
 
-# Mocking the file handling directly in the preprocessor
+# Mocking the handle_include method to bypass file system checks
 @patch('crosstl.backend.Directx.DirectxPreprocessor.DirectxPreprocessor.handle_include')
 def test_include_directive(mock_handle_include, converter):
-    # Define mock content for the #include directive
+    # Mock the content that would be returned from the #include directive
     mock_handle_include.return_value = "// Mocked content of common.hlsl"
 
     shader_code = '#include "common.hlsl"\nfloat4 main() : SV_Target { return 0; }'
