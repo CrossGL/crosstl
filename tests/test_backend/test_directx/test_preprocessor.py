@@ -1,4 +1,32 @@
 import unittest
+from DirectxPreprocessor import DirectxPreprocessor
+
+class TestDirectxPreprocessor(unittest.TestCase):
+    def setUp(self):
+        """Set up the preprocessor."""
+        self.preprocessor = DirectxPreprocessor()
+
+    def test_macro_expansion(self):
+        """Test basic macro expansion."""
+        shader_code = """
+        #define MY_MACRO 10
+        float value = MY_MACRO;
+        """
+        expected_result = """
+        float value = 10;
+        """
+        
+        result = self.preprocessor.preprocess(shader_code)
+        self.assertEqual(result.strip(), expected_result.strip())
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+
+
+
+'''import unittest
 from unittest.mock import patch, mock_open
 from DirectxPreprocessor import DirectxPreprocessor
 import os
@@ -108,4 +136,4 @@ class TestDirectxPreprocessor(unittest.TestCase):
         self.assertEqual(result, "")
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main()'''
