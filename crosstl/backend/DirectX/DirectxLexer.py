@@ -115,7 +115,7 @@ class HLSLLexer:
 
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self._length = len(self.code)
-        
+
     def tokenize(self) -> List[Tuple[str, str]]:
         # tokenize the input code and return list of tokens
         return list(self.token_generator())
