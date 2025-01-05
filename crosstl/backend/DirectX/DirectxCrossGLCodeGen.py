@@ -61,6 +61,24 @@ class HLSLToCrossGLConverter:
             "SV_DEPTH7": "gl_FragDepth7",
         }
 
+    def convert(self, ast):
+        
+        #Converts the provided AST to target GLSL code.
+    
+        code = []
+        for node in ast.nodes:
+            if isinstance(node, IncludeNode):
+                code.append(self.handle_include_node(node))
+            # Handle other nodes with existing logic
+            else:
+                code.append(self.generate_function(node))
+        return "\n".join(code)
+
+    def handle_include_node(self, node):
+        
+        #Handles `IncludeNode` specific conversion.
+        return f"// Included file: {node.path}"
+    
     def generate(self, ast):
         code = "shader main {\n"
         # Generate structs

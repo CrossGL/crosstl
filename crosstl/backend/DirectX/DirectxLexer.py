@@ -1,6 +1,6 @@
 import re
 from typing import Iterator, Tuple, List
-
+from .DirectxPreprocessor import DirectxPreprocessor
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -109,9 +109,12 @@ TOKENS = tuple(
 
 class HLSLLexer:
     def __init__(self, code: str):
+        # Integrating the preprocessor
+        preprocessor = DirectxPreprocessor()
+        self.code = preprocessor.preprocess(code)
+
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
-        self.code = code
-        self._length = len(code)
+        self._length = len(self.code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
         # tokenize the input code and return list of tokens
