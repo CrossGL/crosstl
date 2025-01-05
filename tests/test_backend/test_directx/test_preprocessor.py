@@ -3,6 +3,7 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
+
 class TestHLSLPreprocessor:
     def setup_method(self):
         
@@ -21,10 +22,10 @@ class TestHLSLPreprocessor:
         assert "// Included file: common.hlsl" in output
 
     def test_define_directive(self):
-        shader_code = '#define MAX_LIGHTS 10\nfloat4 main() : SV_Target { return MAX_LIGHTS; }'
-        expected_output = (
-            "float4 main() : SV_Target { return 10; }"
+        shader_code = (
+            "#define MAX_LIGHTS 10\nfloat4 main() : SV_Target { return MAX_LIGHTS; }"
         )
+        expected_output = "float4 main() : SV_Target { return 10; }"
         lexer = HLSLLexer(shader_code)
         tokens = lexer.tokenize()
         parser = HLSLParser(tokens)
@@ -33,10 +34,8 @@ class TestHLSLPreprocessor:
         assert "float4 main() : SV_Target { return 10; }" in output
 
     def test_ifdef_directive(self):
-        shader_code = '#ifdef MAX_LIGHTS\nfloat4 main() : SV_Target { return MAX_LIGHTS; }\n#endif'
-        expected_output = (
-            "float4 main() : SV_Target { return MAX_LIGHTS; }"
-        )
+        shader_code = "#ifdef MAX_LIGHTS\nfloat4 main() : SV_Target { return MAX_LIGHTS; }\n#endif"
+        expected_output = "float4 main() : SV_Target { return MAX_LIGHTS; }"
         lexer = HLSLLexer(shader_code)
         tokens = lexer.tokenize()
         parser = HLSLParser(tokens)
@@ -45,14 +44,12 @@ class TestHLSLPreprocessor:
         assert "float4 main() : SV_Target { return MAX_LIGHTS; }" in output
 
     def test_else_directive(self):
-        shader_code = '''#ifdef MAX_LIGHTS
+        shader_code = """#ifdef MAX_LIGHTS
 float4 main() : SV_Target { return MAX_LIGHTS; }
 #else
 float4 main() : SV_Target { return 0; }
-#endif'''
-        expected_output = (
-            "float4 main() : SV_Target { return MAX_LIGHTS; }"
-        )
+#endif"""
+        expected_output = "float4 main() : SV_Target { return MAX_LIGHTS; }"
         lexer = HLSLLexer(shader_code)
         tokens = lexer.tokenize()
         parser = HLSLParser(tokens)
@@ -61,12 +58,10 @@ float4 main() : SV_Target { return 0; }
         assert "float4 main() : SV_Target { return MAX_LIGHTS; }" in output
 
     def test_endif_directive(self):
-        shader_code = '''#ifdef MAX_LIGHTS
+        shader_code = """#ifdef MAX_LIGHTS
 float4 main() : SV_Target { return MAX_LIGHTS; }
-#endif'''
-        expected_output = (
-            "float4 main() : SV_Target { return MAX_LIGHTS; }"
-        )
+#endif"""
+        expected_output = "float4 main() : SV_Target { return MAX_LIGHTS; }"
         lexer = HLSLLexer(shader_code)
         tokens = lexer.tokenize()
         parser = HLSLParser(tokens)
