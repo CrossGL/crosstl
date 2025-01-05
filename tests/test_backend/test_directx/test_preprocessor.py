@@ -20,7 +20,6 @@ def test_include_directive(mock_handle_include, converter):
     expected_output = (
         "// Mocked content of common.hlsl\nfloat4 main() : SV_Target { return 0; }"
     )
-
     lexer = HLSLLexer(shader_code)
     tokens = lexer.tokenize()
     parser = HLSLParser(tokens)
@@ -29,4 +28,3 @@ def test_include_directive(mock_handle_include, converter):
 
     # Check if the mocked content is part of the output
     assert "// Mocked content of common.hlsl" in output
-    # Additional assertions can be added here to verify the correctness of the output
