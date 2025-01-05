@@ -1,6 +1,5 @@
 import os
 
-
 class DirectxPreprocessor:
     def __init__(self):
         self.macros = {}
@@ -64,4 +63,9 @@ class DirectxPreprocessor:
         # Expand defined macros in the line.
         for macro, value in self.macros.items():
             line = line.replace(macro, value)
+
+        # Check for undefined macros.
+        if any(macro not in self.macros for macro in line.split()):
+            raise ValueError(f"Undefined macro encountered in line: {line}")
+
         return line
