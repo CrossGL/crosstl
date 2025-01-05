@@ -8,23 +8,31 @@ from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 def converter():
     return HLSLToCrossGLConverter()
 
-# Mocking the handle_include method to bypass file system checks
-@patch('crosstl.backend.Directx.DirectxPreprocessor.DirectxPreprocessor.handle_include')
-def test_include_directive(mock_handle_include, converter):
-    # Mock the content that would be returned from the #include directive
-    mock_handle_include.return_value = "// Mocked content of common.hlsl"
+@patch('crosstl.backend.DirectX.DirectxPreprocessor.DirectxPreprocessor.handle_include')
+def test_include_codegen(mock_handle_include, converter):
+    mock_handle_include.return_value = "// Mocked content for common.hlsl"
 
-    shader_code = '#include "common.hlsl"\nfloat4 main() : SV_Target { return 0; }'
-    
-    # Expected output should include the mocked content
-    expected_output = (
-        "// Mocked content of common.hlsl\nfloat4 main() : SV_Target { return 0; }"
-    )
+    shader_code = '''
+    #include "common.hlsl"
+    struct VSInput {
+        float4 position : POSITION;
+        float4 color : TEXCOORD0;
+    };
+
+    struct VSOutput {
+        float4 out_position : TEXCOORD0;
+    };
+
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        output.out_position = input.position;
+        return output;
+    }
+    '''
     lexer = HLSLLexer(shader_code)
     tokens = lexer.tokenize()
     parser = HLSLParser(tokens)
     ast = parser.parse()
     output = converter.convert(ast)
 
-    # Check if the mocked content is part of the output
-    assert "// Mocked content of common.hlsl" in output
+    assert "// Mocked content for common.hlsl" in output
