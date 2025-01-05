@@ -1,10 +1,11 @@
 import pytest
-from crosstl.backend.Directx.DirectxLexer import HLSLLexer
-from crosstl.backend.Directx.DirectxParser import HLSLParser
-from crosstl.backend.Directx.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
 class TestHLSLPreprocessor:
     def setup_method(self):
+        
         self.converter = HLSLToCrossGLConverter()
 
     def test_include_directive(self):
