@@ -4,15 +4,17 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
+
 @pytest.fixture
 def converter():
     return HLSLToCrossGLConverter()
 
-@patch('crosstl.backend.DirectX.DirectxPreprocessor.DirectxPreprocessor.handle_include')
+
+@patch("crosstl.backend.DirectX.DirectxPreprocessor.DirectxPreprocessor.handle_include")
 def test_include_codegen(mock_handle_include, converter):
     mock_handle_include.return_value = "// Mocked content for common.hlsl"
 
-    shader_code = '''
+    shader_code = """
     #include "common.hlsl"
     struct VSInput {
         float4 position : POSITION;
@@ -28,7 +30,7 @@ def test_include_codegen(mock_handle_include, converter):
         output.out_position = input.position;
         return output;
     }
-    '''
+    """
     lexer = HLSLLexer(shader_code)
     tokens = lexer.tokenize()
     parser = HLSLParser(tokens)
