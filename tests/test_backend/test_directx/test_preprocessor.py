@@ -7,7 +7,6 @@ from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 def converter():
     return HLSLToCrossGLConverter()
 
-<<<<<<< HEAD
 def test_include_directive(converter):
     shader_code = '#include "common.hlsl"\nfloat4 main() : SV_Target { return 0; }'
     expected_output = (
@@ -21,4 +20,3 @@ def test_include_directive(converter):
     
     # Check if the included file path is part of the output
     assert "// Included file: common.hlsl" in output
-=======
