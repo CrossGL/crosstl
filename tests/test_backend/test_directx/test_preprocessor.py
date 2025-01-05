@@ -2,6 +2,7 @@ import unittest
 from DirectxLexer import HLSLLexer
 from DirectxParser import HLSLParser
 from DirectxCrossGLCodeGen import HLSLToCrossGLConverter
+from crosstl.backend.Directx.DirectxLexer import HLSLLexer
 
 class TestHLSLPreprocessor(unittest.TestCase):
     def setUp(self):
