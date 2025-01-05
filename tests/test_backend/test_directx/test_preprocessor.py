@@ -1,6 +1,7 @@
 import unittest
 from DirectxPreprocessor import DirectxPreprocessor
 
+
 class TestDirectxPreprocessor(unittest.TestCase):
     def setUp(self):
         """Set up the preprocessor."""
@@ -15,15 +16,13 @@ class TestDirectxPreprocessor(unittest.TestCase):
         expected_result = """
         float value = 10;
         """
-        
+
         result = self.preprocessor.preprocess(shader_code)
         self.assertEqual(result.strip(), expected_result.strip())
 
+
 if __name__ == "__main__":
     unittest.main()
-
-
-
 
 
 '''import unittest
