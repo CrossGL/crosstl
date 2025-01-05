@@ -6,7 +6,7 @@ from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
 class TestHLSLPreprocessor:
     def setup_method(self):
-        
+
         self.converter = HLSLToCrossGLConverter()
 
     def test_include_directive(self):
