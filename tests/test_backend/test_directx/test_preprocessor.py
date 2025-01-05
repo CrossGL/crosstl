@@ -1,5 +1,6 @@
 import pytest
 from DirectxLexer import HLSLLexer
+from crosstl.backend.Directx.DirectxLexer import HLSLLexer
 from DirectxParser import HLSLParser
 from DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
