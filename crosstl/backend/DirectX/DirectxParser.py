@@ -14,6 +14,7 @@ from .DirectxAst import (
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
+    PragmaNode,
     IncludeNode,
     SwitchNode,
     CaseNode,
@@ -53,6 +54,7 @@ class HLSLParser:
         cbuffers = []
         global_variables = []
         while self.current_token[0] != "EOF":
+
             if self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "CBUFFER":
@@ -71,6 +73,9 @@ class HLSLParser:
                     functions.append(self.parse_function())
                 else:
                     global_variables.append(self.parse_global_variable())
+            elif self.current_token[0] == "PRAGMA":
+                structs.append(self.parse_pragma())
+
             elif self.current_token[0] == "INCLUDE":
                 structs.append(self.parse_include())
 
@@ -221,6 +226,15 @@ class HLSLParser:
             return self.parse_switch_statement()
         else:
             return self.parse_expression_statement()
+
+    def parse_pragma(self):
+        self.eat("PRAGMA")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        value = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("SEMICOLON")
+        return PragmaNode(name, value)
 
     def parse_variable_declaration_or_assignment(self):
         if self.current_token[0] in [

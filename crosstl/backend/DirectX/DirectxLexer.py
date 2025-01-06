@@ -1,7 +1,6 @@
 import re
 from typing import Iterator, Tuple, List
 
-
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
@@ -77,6 +76,7 @@ TOKENS = tuple(
         ("MOD", r"%"),
         ("HALF", r"\bhalf\b"),
         ("BITWISE_AND", r"&"),
+        ("PRAGMA", r"#\s*\bpragma\b"),
     ]
 )
 
