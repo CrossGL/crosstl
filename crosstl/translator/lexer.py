@@ -1,6 +1,7 @@
 import re
 from collections import OrderedDict
 
+
 TOKENS = OrderedDict(
     [
         ("COMMENT_SINGLE", r"//.*"),
@@ -79,6 +80,7 @@ TOKENS = OrderedDict(
         ("UNSIGNED_INT", r"\bunsigned int\b"),
     ]
 )
+
 
 KEYWORDS = {
     "shader": "SHADER",

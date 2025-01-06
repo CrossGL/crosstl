@@ -6,7 +6,7 @@ from crosstl.backend.slang.SlangLexer import SlangLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = SlangLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_struct_tokenization():
@@ -99,6 +99,22 @@ def test_function_call_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_mod_tokenization():
+    code = """
+        int a = 10 % 3;  // Basic modulus
+    """
+    tokens = tokenize_code(code)
+
+    # Find the modulus operator in tokens
+    has_mod = False
+    for token in tokens:
+        if token == ("MOD", "%"):
+            has_mod = True
+            break
+
+    assert has_mod, "Modulus operator (%) not tokenized correctly"
 
 
 if __name__ == "__main__":
