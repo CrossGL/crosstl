@@ -3,7 +3,7 @@ from DirectxPreprocessor import DirectxPreprocessor
 
 
 class TestDirectxPreprocessor(unittest.TestCase):
-    
+
     def test_preprocessor_with_defines_and_ifdef(self):
         shader_code = """
         #define PI 3.14159
@@ -36,7 +36,7 @@ class TestDirectxPreprocessor(unittest.TestCase):
         expected_output = expected_output.strip()
 
         self.assertEqual(result, expected_output)
-    
+
     def test_preprocessor_with_no_debug(self):
         shader_code = """
         #define PI 3.14159
