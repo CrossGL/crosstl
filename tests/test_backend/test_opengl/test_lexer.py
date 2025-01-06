@@ -14,7 +14,7 @@ def tokenize_code(code: str) -> List:
 
     """
     lexer = GLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_input_output_tokenization():
@@ -102,12 +102,57 @@ def test_function_call_tokenization():
         vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
         fragColor = vec4(color, 1.0);
     }
-    
     """
     try:
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("Function call tokenization not implemented.")
+
+
+def test_double_dtype_tokenization():
+    code = """
+    double ComputeArea(double radius) {
+        double pi = 3.14159265359;
+        double area = pi * radius * radius;
+        return area;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("double tokenization not implemented")
+
+
+def test_mod_tokenization():
+    code = """
+        int a = 10 % 3;  // Basic modulus
+    """
+    tokens = tokenize_code(code)
+
+    # Find the modulus operator in tokens
+    has_mod = False
+    for token in tokens:
+        if token == ("MOD", "%"):
+            has_mod = True
+            break
+
+    assert has_mod, "Modulus operator (%) not tokenized correctly"
+
+
+def test_unsigned_int_dtype_tokenization():
+    code = """
+    double ComputeArea(double radius) {
+        uint a = 3;
+        uint b = 4;
+        
+        uint ans = a + b;
+        return ans;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("unsigned integer parsing not implemented.")
 
 
 if __name__ == "__main__":

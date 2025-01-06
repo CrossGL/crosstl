@@ -1,0 +1,18 @@
+name: Assign issue to contributor
+on:
+  issue_comment:
+
+jobs:
+  assign:
+    name: Take an issue
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: take the issue
+        uses: bdougie/take-action@main
+        with:
+          message: Thank you for taking on this issue! If you have any questions or need assistance, feel free to ask.
+          trigger: "@CrossGL-issue-bot assign me"
+          token: ${{ secrets.ACCESS_TOKEN }}
+          

@@ -16,6 +16,8 @@ from .DirectxAst import (
     VectorConstructorNode,
     PragmaNode,
     IncludeNode,
+    SwitchNode,
+    CaseNode,
 )
 from .DirectxLexer import HLSLLexer
 
@@ -60,6 +62,8 @@ class HLSLParser:
             elif self.current_token[0] in [
                 "VOID",
                 "FLOAT",
+                "DOUBLE",
+                "HALF",
                 "FVECTOR",
                 "IDENTIFIER",
                 "TEXTURE2D",
@@ -199,6 +203,8 @@ class HLSLParser:
     def parse_statement(self):
         if self.current_token[0] in [
             "FLOAT",
+            "DOUBLE",
+            "HALF",
             "FVECTOR",
             "INT",
             "UINT",
@@ -216,6 +222,8 @@ class HLSLParser:
             return self.parse_while_statement()
         elif self.current_token[0] == "DO":
             return self.parse_do_while_statement()
+        elif self.current_token[0] == "SWITCH":
+            return self.parse_switch_statement()
         else:
             return self.parse_expression_statement()
 
@@ -231,6 +239,8 @@ class HLSLParser:
     def parse_variable_declaration_or_assignment(self):
         if self.current_token[0] in [
             "FLOAT",
+            "DOUBLE",
+            "HALF",
             "FVECTOR",
             "INT",
             "UINT",
@@ -265,6 +275,7 @@ class HLSLParser:
                     "SHIFT_LEFT",
                     "SHIFT_RIGHT",
                     "BITWISE_OR",
+                    "BITWISE_AND",
                     "BITWISE_XOR",
                 ]:
                     # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
@@ -286,6 +297,7 @@ class HLSLParser:
                 "SHIFT_LEFT",
                 "SHIFT_RIGHT",
                 "BITWISE_OR",
+                "BITWISE_AND",
                 "BITWISE_XOR",
             ]:
                 # Handle assignment operators (e.g., =, +=, -=, ^=, etc.)
@@ -310,6 +322,7 @@ class HLSLParser:
                     "SHIFT_LEFT",
                     "SHIFT_RIGHT",
                     "BITWISE_OR",
+                    "BITWISE_AND",
                     "BITWISE_XOR",
                 ]:
                     op = self.current_token[1]
@@ -359,7 +372,7 @@ class HLSLParser:
         self.eat("LPAREN")
 
         # Parse initialization
-        if self.current_token[0] in ["INT", "FLOAT", "FVECTOR"]:
+        if self.current_token[0] in ["INT", "FLOAT", "FVECTOR", "DOUBLE", "HALF"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             var_name = self.current_token[1]
@@ -442,6 +455,7 @@ class HLSLParser:
             "SHIFT_LEFT",
             "SHIFT_RIGHT",
             "BITWISE_OR",
+            "BITWISE_AND",
             "BITWISE_XOR",
         ]:
             op = self.current_token[1]
@@ -505,7 +519,7 @@ class HLSLParser:
 
     def parse_multiplicative(self):
         left = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE"]:
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()
@@ -521,7 +535,13 @@ class HLSLParser:
         return self.parse_primary()
 
     def parse_primary(self):
-        if self.current_token[0] in ["IDENTIFIER", "FLOAT", "FVECTOR"]:
+        if self.current_token[0] in [
+            "IDENTIFIER",
+            "FLOAT",
+            "FVECTOR",
+            "DOUBLE",
+            "HALF",
+        ]:
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
@@ -530,7 +550,7 @@ class HLSLParser:
                 elif self.current_token[0] == "DOT":
                     return self.parse_member_access(name)
                 return VariableNode("", name)
-            if self.current_token[0] in ["FLOAT", "FVECTOR"]:
+            if self.current_token[0] in ["FLOAT", "FVECTOR", "DOUBLE", "HALF"]:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
                 if self.current_token[0] == "LPAREN":
@@ -597,3 +617,40 @@ class HLSLParser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
+
+    def parse_switch_statement(self):
+        self.eat("SWITCH")
+        self.eat("LPAREN")
+        condition = self.parse_expression()
+        self.eat("RPAREN")
+        self.eat("LBRACE")
+
+        cases = []
+        default_body = None
+
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "CASE":
+                self.eat("CASE")
+                case_value = self.parse_expression()
+                self.eat("COLON")
+                case_body = []
+                while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE"]:
+                    if self.current_token[0] == "BREAK":
+                        self.eat("BREAK")
+                        self.eat("SEMICOLON")
+                        break
+                    case_body.append(self.parse_statement())
+                cases.append(CaseNode(case_value, case_body))
+            elif self.current_token[0] == "DEFAULT":
+                self.eat("DEFAULT")
+                self.eat("COLON")
+                default_body = []
+                while self.current_token[0] not in ["CASE", "RBRACE"]:
+                    if self.current_token[0] == "BREAK":
+                        self.eat("BREAK")
+                        self.eat("SEMICOLON")
+                        break
+                    default_body.append(self.parse_statement())
+
+        self.eat("RBRACE")
+        return SwitchNode(condition, cases, default_body)

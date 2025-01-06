@@ -55,6 +55,7 @@ class GLSLParser:
                 "VOID",
                 "FLOAT",
                 "INT",
+                "DOUBLE",
                 "VECTOR",
                 "MATRIX",
                 "IDENTIFIER",
@@ -118,7 +119,7 @@ class GLSLParser:
 
     def parse_global_variable(self):
         type_name = ""
-        if self.current_token[0] in ["FLOAT", "INT", "MATRIX", "VECTOR"]:
+        if self.current_token[0] in ["FLOAT", "INT", "DOUBLE", "MATRIX", "VECTOR"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
         if self.current_token[0] == "IDENTIFIER":
@@ -711,7 +712,7 @@ class GLSLParser:
 
         """
         expr = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE"]:
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_unary()
