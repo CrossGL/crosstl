@@ -16,7 +16,7 @@ def tokenize_code(code: str) -> List:
 
     """
     lexer = GLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def parse_code(Tokens: List, shader_type="vertex") -> List:
@@ -202,6 +202,25 @@ def test_double_dtype_codegen():
         print(code)
     except SyntaxError:
         pytest.fail("double tokenization not implemented")
+
+
+def test_unsigned_int_dtype_codegen():
+    code = """
+    double ComputeArea(double radius) {
+        uint a = 3;
+        uint b = 4;
+        
+        uint ans = a + b;
+        return ans;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        print(code)
+    except SyntaxError:
+        pytest.fail("unsigned integer tokenization not implemented.")
 
 
 if __name__ == "__main__":

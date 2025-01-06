@@ -6,7 +6,7 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = HLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def test_struct_tokenization():
@@ -228,6 +228,17 @@ def test_switch_case_tokenization():
         pytest.fail("switch-case tokenization not implemented.")
 
 
+def test_bitwise_and_tokenization():
+    code = """
+        uint val = 0x01;
+        val = val & 0x02;
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("bitwise_and_op tokenization is not implemented.")
+
+
 def test_double_dtype_tokenization():
     code = """
             PSOutput PSMain(PSInput input) {
@@ -248,6 +259,44 @@ def test_double_dtype_tokenization():
         tokenize_code(code)
     except SyntaxError:
         pytest.fail("double dtype tokenization is not implemented.")
+
+
+def test_mod_tokenization():
+    code = """
+        int a = 10 % 3;  // Basic modulus
+    """
+    tokens = tokenize_code(code)
+
+    # Find the modulus operator in tokens
+    has_mod = False
+    for token in tokens:
+        if token == ("MOD", "%"):
+            has_mod = True
+            break
+
+    assert has_mod, "Modulus operator (%) not tokenized correctly"
+
+
+def test_half_dtype_tokenization():
+    code = """
+            PSOutput PSMain(PSInput input) {
+                PSOutput output;
+                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
+                half value1 = 3.14159; // First half value
+                half value2 = 2.71828; // Second half value
+                half result = value1 + value2; // Adding them
+                if (result > 6.0) {
+                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
+                } else {
+                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
+                }
+                return output;
+            }
+        """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("half dtype tokenization is not implemented.")
 
 
 if __name__ == "__main__":

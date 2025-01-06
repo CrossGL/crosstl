@@ -8,7 +8,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = MetalLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def parse_code(tokens: List):
