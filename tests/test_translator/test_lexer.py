@@ -152,6 +152,7 @@ def test_data_types_tokenization():
     float c;
     double d;
     bool e;
+    unsigned int f;
     """
     try:
         tokens = tokenize_code(code)
@@ -160,6 +161,7 @@ def test_data_types_tokenization():
         assert any(t[0] == "FLOAT" for t in tokens), "Missing 'FLOAT' token"
         assert any(t[0] == "DOUBLE" for t in tokens), "Missing 'DOUBLE' token"
         assert any(t[0] == "BOOL" for t in tokens), "Missing 'BOOL' token"
+        assert any(t[0]== "UNSIGNED_INT" for t in tokens), "Missing 'UNSIGNED INT' token"
     except SyntaxError:
         pytest.fail("Data types tokenization not implemented.")
 
