@@ -15,7 +15,7 @@ def tokenize_code(code: str) -> List:
 
     """
     lexer = GLSLLexer(code)
-    return lexer.tokens
+    return lexer.tokenize()
 
 
 def parse_code(Tokens: List, shader_type="vertex") -> List:
@@ -195,6 +195,35 @@ def test_double_dtype_tokenization():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("double tokenization not implemented")
+
+
+def test_mod_parsing():
+    code = """
+    void main() {
+        int a = 10 % 3;  // Basic modulus
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Modulus operator parsing not implemented")
+
+
+def test_unsigned_int_dtype_tokenization():
+    code = """
+    double ComputeArea(double radius) {
+        uint a = 3;
+        uint b = 4;
+        
+        uint ans = a + b;
+        return ans;
+    }
+    """
+    try:
+        tokenize_code(code)
+    except SyntaxError:
+        pytest.fail("unsigned integer parsing not implemented.")
 
 
 if __name__ == "__main__":

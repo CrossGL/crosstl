@@ -489,7 +489,7 @@ class SlangParser:
 
     def parse_multiplicative(self):
         left = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE"]:
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()
