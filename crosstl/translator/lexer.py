@@ -75,6 +75,8 @@ TOKENS = OrderedDict(
         ("BITWISE_OR", r"\|"),
         ("BITWISE_XOR", r"\^"),
         ("BITWISE_NOT", r"~"),
+        ("DOUBLE", r"\bdouble\b"),
+        ("UNSIGNED_INT", r"\bunsigned int\b"),
     ]
 )
 
