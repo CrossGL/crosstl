@@ -690,11 +690,9 @@ class Parser:
         This method parses a unary expression in the shader code.
 
         Returns:
-
             ASTNode: An ASTNode object representing the unary expression
-
         """
-        if self.current_token[0] in ["PLUS", "MINUS"]:
+        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT"]:
             op = self.current_token[0]
             self.eat(op)
             expr = self.parse_unary()

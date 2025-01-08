@@ -415,5 +415,19 @@ def test_double_dtype_parsing():
         pytest.fail("half dtype not implemented.")
 
 
+def test_bitwise_not_parsing():
+    code = """
+    void main() {
+        int a = 5;
+        int b = ~a;  // Bitwise NOT
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Bitwise NOT operator parsing not implemented")
+
+
 if __name__ == "__main__":
     pytest.main()

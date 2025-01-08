@@ -445,6 +445,11 @@ class VulkanParser:
             value = self.parse_primary()
             return UnaryOpNode("-", value)
 
+        if self.current_token[0] == "BITWISE_NOT":
+            self.eat("BITWISE_NOT")
+            value = self.parse_primary()
+            return UnaryOpNode("~", value)
+
         if (
             self.current_token[0] == "IDENTIFIER"
             or self.current_token[1] in VALID_DATA_TYPES
@@ -663,3 +668,11 @@ class VulkanParser:
         self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
         return UniformNode(name, var_type)
+
+    def parse_unary(self):
+        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            operand = self.parse_unary()
+            return UnaryOpNode(op, operand)
+        return self.parse_primary()

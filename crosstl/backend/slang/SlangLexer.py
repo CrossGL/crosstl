@@ -8,6 +8,7 @@ TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"//.*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
+        ("BITWISE_NOT", r"~"),
         ("STRUCT", r"\bstruct\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("TYPE_SHADER", r'\[shader\("(vertex|fragment|compute)"\)\]'),
