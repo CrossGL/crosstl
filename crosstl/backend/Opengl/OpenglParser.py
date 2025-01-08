@@ -729,11 +729,11 @@ class GLSLParser:
             ASTNode: An ASTNode object representing the unary expression
 
         """
-        if self.current_token[0] in ["PLUS", "MINUS"]:
-            op = self.current_token[0]
-            self.eat(op)
-            expr = self.parse_unary()
-            return UnaryOpNode(op, expr)
+        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            operand = self.parse_unary()
+            return UnaryOpNode(op, operand)
         return self.parse_primary()
 
     def parse_primary(self):

@@ -460,7 +460,7 @@ class MetalParser:
         return left
 
     def parse_unary(self):
-        if self.current_token[0] in ["PLUS", "MINUS"]:
+        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             operand = self.parse_unary()
