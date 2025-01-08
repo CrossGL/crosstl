@@ -304,13 +304,13 @@ def test_bitwise_not_tokenization():
         int a = ~5;  // Bitwise NOT
     """
     tokens = tokenize_code(code)
-    
+
     has_not = False
     for token in tokens:
         if token == ("BITWISE_NOT", "~"):
             has_not = True
             break
-            
+
     assert has_not, "Bitwise NOT operator (~) not tokenized correctly"
 
 
