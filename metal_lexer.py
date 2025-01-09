@@ -1,5 +1,6 @@
 import re
 
+
 class MetalLexer:
     def __init__(self, code, tokens):
         self.code = code
@@ -8,14 +9,18 @@ class MetalLexer:
 
         # Combine all patterns into a single regex
         self.master_regex = re.compile(
-            "|".join(f"(?P<{token_type}>{pattern})" for token_type, pattern in self.tokens)
+            "|".join(
+                f"(?P<{token_type}>{pattern})" for token_type, pattern in self.tokens
+            )
         )
 
     def tokenize(self):
         while self.pos < len(self.code):
             match = self.master_regex.match(self.code, self.pos)
             if not match:
-                raise ValueError(f"Unexpected character at position {self.pos}: {self.code[self.pos]}")
+                raise ValueError(
+                    f"Unexpected character at position {self.pos}: {self.code[self.pos]}"
+                )
 
             token_type = match.lastgroup
             token_value = match.group(token_type)
@@ -24,6 +29,7 @@ class MetalLexer:
 
             # Update position
             self.pos = match.end()
+
 
 # Example usage
 TOKENS = [
@@ -40,4 +46,3 @@ tokens = list(lexer.tokenize())
 for token_type, token_value in tokens:
     if token_type != "WHITESPACE":  # Optionally skip whitespace tokens
         print(f"{token_type}: {token_value}")
-
