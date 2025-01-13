@@ -1,5 +1,6 @@
 import unittest
-from DirectxPreprocessor import DirectxPreprocessor
+from crosstl.backend.DirectX.DirectxPreprocessor import DirectxPreprocessor
+
 
 class TestDirectxPreprocessor(unittest.TestCase):
 
@@ -18,6 +19,7 @@ class TestDirectxPreprocessor(unittest.TestCase):
             return PI * radius * radius;
         }
         """
+
         expected_output = """
             float debugValue = 1.0;
 
@@ -25,6 +27,7 @@ class TestDirectxPreprocessor(unittest.TestCase):
                 return 3.14159 * radius * radius;
             }
         """
+
         preprocessor = DirectxPreprocessor()
         result = preprocessor.preprocess(shader_code)
 
@@ -101,9 +104,9 @@ class TestDirectxPreprocessor(unittest.TestCase):
 
         preprocessor = DirectxPreprocessor()
 
-        # We expect a FileNotFoundError to be raised when an invalid file is included
         with self.assertRaises(FileNotFoundError):
             preprocessor.preprocess(shader_code)
+
 
 if __name__ == "__main__":
     unittest.main()
