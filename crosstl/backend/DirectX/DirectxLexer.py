@@ -77,6 +77,7 @@ TOKENS = tuple(
         ("MOD", r"%"),
         ("HALF", r"\bhalf\b"),
         ("BITWISE_AND", r"&"),
+        ("PRAGMA", r"#\s*\bpragma\b"),
     ]
 )
 
