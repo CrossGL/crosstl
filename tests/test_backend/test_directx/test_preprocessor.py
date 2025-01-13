@@ -104,11 +104,9 @@ class TestDirectxPreprocessor(unittest.TestCase):
 
         preprocessor = DirectxPreprocessor()
 
+        # We expect a FileNotFoundError to be raised when an invalid file is included
         with self.assertRaises(FileNotFoundError):
             preprocessor.preprocess(shader_code)
-        result = self.preprocessor.preprocess(shader_code)
-        self.assertEqual(result.strip(), expected_result.strip())
-
 
 if __name__ == "__main__":
     unittest.main()
