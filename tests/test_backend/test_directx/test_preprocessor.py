@@ -1,7 +1,6 @@
 import unittest
 from DirectxPreprocessor import DirectxPreprocessor
 
-
 class TestDirectxPreprocessor(unittest.TestCase):
 
     def test_preprocessor_with_defines_and_ifdef(self):
@@ -19,7 +18,6 @@ class TestDirectxPreprocessor(unittest.TestCase):
             return PI * radius * radius;
         }
         """
-
         expected_output = """
             float debugValue = 1.0;
 
@@ -27,7 +25,6 @@ class TestDirectxPreprocessor(unittest.TestCase):
                 return 3.14159 * radius * radius;
             }
         """
-
         preprocessor = DirectxPreprocessor()
         result = preprocessor.preprocess(shader_code)
 
