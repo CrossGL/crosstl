@@ -1,4 +1,6 @@
 import os
+
+
 class DirectxPreprocessor:
     def __init__(self):
         self.macros = {}
