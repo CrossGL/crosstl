@@ -10,7 +10,6 @@ from .backend.slang import *
 from .backend.Vulkan import *
 from .backend.Mojo import *
 
-
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
     """Translate a shader file to another language.
 
