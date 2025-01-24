@@ -8,6 +8,7 @@ TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"#.*"),
         ("COMMENT_MULTI", r'"""[\s\S]*?"""'),
+        ("BITWISE_NOT", r"~"),
         ("STRUCT", r"\bstruct\b"),
         ("LET", r"\blet\b"),
         ("VAR", r"\bvar\b"),

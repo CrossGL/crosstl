@@ -2,6 +2,7 @@ from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
 from crosstl.translator.parser import Parser
+from crosstl.translator.ast import ShaderNode
 
 
 def tokenize_code(code: str) -> List:
@@ -619,6 +620,43 @@ def test_modulus_operations():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Modulus operations not working")
+
+
+def test_bitwise_not():
+    code = """
+    shader test {
+        void main() {
+            int a = 5;
+            int b = ~a;  // Bitwise NOT
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        assert isinstance(ast, ShaderNode)
+    except SyntaxError:
+        pytest.fail("Bitwise NOT operator parsing failed")
+
+
+def test_bitwise_expressions():
+    code = """
+    shader test {
+        void main() {
+            int a = 5;
+            int b = ~a;  // Bitwise NOT
+            int c = a & b;  // Bitwise AND
+            int d = a | b;  // Bitwise OR
+            int e = a ^ b;  // Bitwise XOR
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        assert isinstance(ast, ShaderNode)
+    except SyntaxError:
+        pytest.fail("Bitwise expressions parsing failed")
 
 
 if __name__ == "__main__":

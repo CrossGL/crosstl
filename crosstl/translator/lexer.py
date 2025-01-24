@@ -7,6 +7,7 @@ TOKENS = OrderedDict(
         ("COMMENT_SINGLE", r"//.*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
         ("SHADER", r"\bshader\b"),
+        ("BITWISE_NOT", r"~"),
         ("VOID", r"\bvoid\b"),
         ("STRUCT", r"\bstruct\b"),
         ("CBUFFER", r"\bcbuffer\b"),
