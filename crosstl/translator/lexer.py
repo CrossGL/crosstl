@@ -21,6 +21,7 @@ TOKENS = OrderedDict(
         ("FRAGMENT", r"\bfragment\b"),
         ("FLOAT_NUMBER", r"\d*\.\d+|\d+\.\d*"),
         ("FLOAT", r"\bfloat\b"),
+        ("UNSIGNED_INT", r"\bunsigned int\b"),
         ("INT", r"\bint\b"),
         ("UINT", r"\buint\b"),
         ("DOUBLE", r"\bdouble\b"),
@@ -77,6 +78,7 @@ TOKENS = OrderedDict(
         ("BITWISE_OR", r"\|"),
         ("BITWISE_XOR", r"\^"),
         ("BITWISE_NOT", r"~"),
+        ("DOUBLE", r"\bdouble\b"),
     ]
 )
 
