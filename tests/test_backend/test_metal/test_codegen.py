@@ -331,5 +331,21 @@ def test_else_if():
     print(generated_code)
 
 
+def test_bitwise_not_codegen():
+    code = """
+    void main() {
+        int a = 5;
+        int b = ~a;  // Bitwise NOT
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError:
+        pytest.fail("Bitwise NOT operator code generation not implemented")
+
+
 if __name__ == "__main__":
     pytest.main()
