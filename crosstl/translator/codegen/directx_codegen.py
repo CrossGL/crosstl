@@ -140,8 +140,12 @@ class HLSLCodeGen:
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
         statement_handlers = {
-            VariableNode: lambda stmt: f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n",
-            AssignmentNode: lambda stmt: f"{indent_str}{self.generate_assignment(stmt)};\n",
+            VariableNode: (
+                lambda stmt: f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
+            ),
+            AssignmentNode: (
+                lambda stmt: f"{indent_str}{self.generate_assignment(stmt)};\n"
+            ),
             IfNode: lambda stmt: self.generate_if(stmt, indent),
             ForNode: lambda stmt: self.generate_for(stmt, indent),
             ReturnNode: lambda stmt: self.generate_return(stmt, indent),
