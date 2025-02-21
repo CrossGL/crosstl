@@ -1,7 +1,6 @@
 import re
 from collections import OrderedDict
 
-
 TOKENS = OrderedDict(
     [
         ("COMMENT_SINGLE", r"//.*"),
