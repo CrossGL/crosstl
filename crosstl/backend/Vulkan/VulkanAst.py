@@ -13,37 +13,56 @@ class TernaryOpNode(ASTNode):
         self.false_expr = false_expr
 
     def __repr__(self) -> str:
-        return (f"TernaryOpNode(condition={self.condition}, "
-                f"true_expr={self.true_expr}, false_expr={self.false_expr})")
+        return (
+            f"TernaryOpNode(condition={self.condition}, "
+            f"true_expr={self.true_expr}, false_expr={self.false_expr})"
+        )
 
 
 class ShaderNode(ASTNode):
-    def __init__(self, spirv_version: str, descriptor_sets: list, shader_stages: list, functions: list):
+    def __init__(
+        self,
+        spirv_version: str,
+        descriptor_sets: list,
+        shader_stages: list,
+        functions: list,
+    ):
         self.spirv_version = spirv_version
         self.descriptor_sets = descriptor_sets
         self.shader_stages = shader_stages
         self.functions = functions
 
     def __repr__(self) -> str:
-        return (f"ShaderNode(spirv_version={self.spirv_version}, "
-                f"descriptor_sets={self.descriptor_sets}, "
-                f"shader_stages={self.shader_stages}, functions={self.functions})")
+        return (
+            f"ShaderNode(spirv_version={self.spirv_version}, "
+            f"descriptor_sets={self.descriptor_sets}, "
+            f"shader_stages={self.shader_stages}, functions={self.functions})"
+        )
 
 
 class IfNode(ASTNode):
-    def __init__(self, if_condition: ASTNode, if_body: list, 
-                 else_if_conditions: list = None, else_if_bodies: list = None, 
-                 else_body: list = None):
+    def __init__(
+        self,
+        if_condition: ASTNode,
+        if_body: list,
+        else_if_conditions: list = None,
+        else_if_bodies: list = None,
+        else_body: list = None,
+    ):
         self.if_condition = if_condition
         self.if_body = if_body
-        self.else_if_conditions = else_if_conditions if else_if_conditions is not None else []
+        self.else_if_conditions = (
+            else_if_conditions if else_if_conditions is not None else []
+        )
         self.else_if_bodies = else_if_bodies if else_if_bodies is not None else []
         self.else_body = else_body
 
     def __repr__(self) -> str:
-        return (f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, "
-                f"else_if_conditions={self.else_if_conditions}, "
-                f"else_if_bodies={self.else_if_bodies}, else_body={self.else_body})")
+        return (
+            f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, "
+            f"else_if_conditions={self.else_if_conditions}, "
+            f"else_if_bodies={self.else_if_bodies}, else_body={self.else_body})"
+        )
 
 
 class ForNode(ASTNode):
@@ -54,8 +73,10 @@ class ForNode(ASTNode):
         self.body = body
 
     def __repr__(self) -> str:
-        return (f"ForNode(init={self.init}, condition={self.condition}, "
-                f"update={self.update}, body={self.body})")
+        return (
+            f"ForNode(init={self.init}, condition={self.condition}, "
+            f"update={self.update}, body={self.body})"
+        )
 
 
 class ReturnNode(ASTNode):
@@ -82,7 +103,7 @@ class BinaryOpNode(ASTNode):
         self.right = right
 
     def __repr__(self) -> str:
-        return (f"BinaryOpNode(left={self.left}, op={self.op}, right={self.right})")
+        return f"BinaryOpNode(left={self.left}, op={self.op}, right={self.right})"
 
 
 class UnaryOpNode(ASTNode):
@@ -100,12 +121,21 @@ class DescriptorSetNode(ASTNode):
         self.bindings = bindings
 
     def __repr__(self) -> str:
-        return (f"DescriptorSetNode(set_number={self.set_number}, bindings={self.bindings})")
+        return (
+            f"DescriptorSetNode(set_number={self.set_number}, bindings={self.bindings})"
+        )
 
 
 class LayoutNode(ASTNode):
-    def __init__(self, bindings: list, push_constant: bool, layout_type: str, 
-                 data_type: str, variable_name: str, struct_fields: list):
+    def __init__(
+        self,
+        bindings: list,
+        push_constant: bool,
+        layout_type: str,
+        data_type: str,
+        variable_name: str,
+        struct_fields: list,
+    ):
         self.bindings = bindings
         self.push_constant = push_constant
         self.layout_type = layout_type
@@ -114,9 +144,11 @@ class LayoutNode(ASTNode):
         self.struct_fields = struct_fields
 
     def __repr__(self) -> str:
-        return (f"LayoutNode(bindings={self.bindings}, push_constant={self.push_constant}, "
-                f"layout_type={self.layout_type}, data_type={self.data_type}, "
-                f"variable_name={self.variable_name}, struct_fields={self.struct_fields})")
+        return (
+            f"LayoutNode(bindings={self.bindings}, push_constant={self.push_constant}, "
+            f"layout_type={self.layout_type}, data_type={self.data_type}, "
+            f"variable_name={self.variable_name}, struct_fields={self.struct_fields})"
+        )
 
 
 class UniformNode(ASTNode):
@@ -164,8 +196,10 @@ class FunctionNode(ASTNode):
         self.body = body
 
     def __repr__(self) -> str:
-        return (f"FunctionNode(name={self.name}, return_type={self.return_type}, "
-                f"parameters={self.parameters}, body={self.body})")
+        return (
+            f"FunctionNode(name={self.name}, return_type={self.return_type}, "
+            f"parameters={self.parameters}, body={self.body})"
+        )
 
 
 class MemberAccessNode(ASTNode):
