@@ -1,3 +1,4 @@
+from typing import Any, List, Optional, Union, Dict, Tuple
 class ASTNode:
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"
