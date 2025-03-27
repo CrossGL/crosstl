@@ -311,7 +311,7 @@ class VulkanSPIRVCodeGen:
                 return f"%{self.variable_ids[expr]}"
             elif expr.startswith("vec"):
                 # Vector constructor
-                components = int(expr[-1])
+                components = int(expr[3:])
                 result_id = self.get_id()
                 init_values = " ".join(
                     [f"%float_0" for _ in range(components - 1)] + ["%float_1"]
