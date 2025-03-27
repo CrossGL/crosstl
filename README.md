@@ -2,8 +2,7 @@
     <img class="only-dark" width="10%" height="10%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/logo.png#gh-dark-mode-only"/>
 </div>
 
-
-------------------------------------------------------------------------
+---
 
 <div style="display: block;" align="center">
     <img class="dark-light" width="5%" >
@@ -66,7 +65,7 @@ Imagine writing a shader _once_ and deploying it across:
 - 🎮 **DirectX**
 - 🖥️ **OpenGL**
 - 🖥️ **Vulkan**
-- ⚙️  **Slang** 
+- ⚙️ **Slang**
 - 🔥 **Mojo**
 
 ...all without changing a single line of code!
@@ -77,7 +76,6 @@ Imagine writing a shader _once_ and deploying it across:
 - DirectX
 - OpenGL
 - Slang
-
 
 ## 💡 Key Benefits
 
@@ -135,7 +133,6 @@ shader main {
 ```
 
 # Getting started
-
 
 First, install CrossGL's translation library using pip:
 
@@ -263,9 +260,55 @@ With these examples, you can easily get started with CrossGL, translating betwee
 
 For more deep dive into crosstl , check out our [Getting Started Notebook](https://colab.research.google.com/drive/1reF8usj2CA5R6M5JSrBKOQBtU4WW-si2?usp=sharing#scrollTo=D7qkQrpcQ7zF).
 
+## 🧩 Code Structure and Import Strategy
+
+### Module Organization
+
+CrossGL Translator is structured to prevent circular imports and ensure compatibility across different operating systems:
+
+```
+crosstl/
+├── backend/
+│   ├── DirectX/
+│   ├── Metal/
+│   ├── OpenGL/
+│   ├── Slang/
+│   ├── Vulkan/
+│   └── Mojo/
+└── translator/
+    ├── codegen/
+    ├── ast.py
+    ├── lexer.py
+    └── parser.py
+```
+
+### Import Strategy
+
+To maintain compatibility across case-sensitive (Linux) and case-insensitive (Windows, macOS) filesystems, we follow these practices:
+
+1. **Lazy Loading**: Backend modules are imported only when needed, not globally at the top of files
+2. **Direct Class Imports**: We import specific classes rather than entire modules when possible
+3. **Consistent Capitalization**: Directory and module names use consistent case (e.g., `OpenGL`, not `opengl`)
+
+Example of recommended import style:
+
+```python
+# ❌ Avoid importing entire modules at the top level
+# from .backend import DirectX, OpenGL
+
+# ✅ Import specific classes when needed
+def process_hlsl(code):
+    from .backend.DirectX.DirectxLexer import HLSLLexer
+    from .backend.DirectX.DirectxParser import HLSLParser
+
+    lexer = HLSLLexer(code)
+    parser = HLSLParser(lexer.tokenize())
+    return parser.parse()
+```
+
+This approach prevents circular dependencies and ensures consistent behavior across all operating systems.
 
 # Contributing
-
 
 We believe that everyone can contribute and make a difference. Whether
 it\'s writing code, fixing bugs, or simply sharing feedback,
@@ -276,8 +319,6 @@ find out more info in our [Contributing guide](CONTRIBUTING.md)
 <a href="https://github.com/CrossGL/crosstl/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=CrossGL/crosstl" />
 </a>
-
-
 
 # Community
 
@@ -292,7 +333,6 @@ find out more info in our [Contributing guide](CONTRIBUTING.md)
 <br>
 
 <br>
-
 
 ## License
 
