@@ -1,14 +1,19 @@
+#!/usr/bin/env python
+"""
+Test for the OpenGL code generator.
+"""
+import os
+import sys
 import pytest
 
-# Try both import paths
-try:
-    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
-    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
-    from crosstl.backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
-except ImportError:
-    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
-    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
-    from crosstl.backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
+# Add the project root to the path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+sys.path.insert(0, project_root)
+
+# Now import the modules
+from crosstl.backend.OpenGL.opengllexer import GLSLLexer
+from crosstl.backend.OpenGL.openglparser import GLSLParser
+from crosstl.backend.OpenGL.openglcrossglcodegen import GLSLToCrossGLConverter
 
 
 def test_struct_definition():
@@ -39,4 +44,5 @@ def test_struct_definition():
 
 
 if __name__ == "__main__":
-    pytest.main()
+    test_struct_definition()
+    print("All tests passed!")

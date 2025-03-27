@@ -1,5 +1,5 @@
-from .SlangLexer import *
-from .SlangAst import *
+from .slanglexer import *
+from .slangast import *
 
 
 class SlangParser:

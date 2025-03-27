@@ -1,14 +1,19 @@
+#!/usr/bin/env python
+"""
+Test for the Slang code generator.
+"""
+import os
+import sys
 import pytest
 
-# Try both import paths
-try:
-    from crosstl.backend.Slang.SlangLexer import SlangLexer
-    from crosstl.backend.Slang.SlangParser import SlangParser
-    from crosstl.backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
-except ImportError:
-    from crosstl.backend.Slang.SlangLexer import SlangLexer
-    from crosstl.backend.Slang.SlangParser import SlangParser
-    from crosstl.backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+# Add the project root to the path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+sys.path.insert(0, project_root)
+
+# Now import the modules
+from crosstl.backend.Slang.slanglexer import SlangLexer
+from crosstl.backend.Slang.slangparser import SlangParser
+from crosstl.backend.Slang.slangcrossglcodegen import SlangToCrossGLConverter
 
 
 def test_struct_definition():
@@ -41,4 +46,5 @@ def test_struct_definition():
 
 
 if __name__ == "__main__":
-    pytest.main()
+    test_struct_definition()
+    print("All tests passed!")

@@ -1,10 +1,17 @@
+#!/usr/bin/env python
+"""
+Test for the Slang lexer.
+"""
+import os
+import sys
 import pytest
 
-# Try both import paths
-try:
-    from crosstl.backend.Slang.SlangLexer import SlangLexer
-except ImportError:
-    from crosstl.backend.Slang.SlangLexer import SlangLexer
+# Add the project root to the path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+sys.path.insert(0, project_root)
+
+# Now import the module
+from crosstl.backend.Slang.slanglexer import SlangLexer
 
 
 def test_basic_lexing():
@@ -30,4 +37,5 @@ def test_basic_lexing():
 
 
 if __name__ == "__main__":
-    pytest.main()
+    test_basic_lexing()
+    print("All tests passed!")

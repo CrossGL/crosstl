@@ -2,7 +2,7 @@
 Slang backend module for CrossGL Translator
 """
 
-from .SlangLexer import SlangLexer
-from .SlangParser import SlangParser
-from .SlangCrossGLCodeGen import SlangToCrossGLConverter
-from .SlangAst import *
+from .slanglexer import SlangLexer
+from .slangparser import SlangParser
+from .slangcrossglcodegen import SlangToCrossGLConverter
+from .slangast import *

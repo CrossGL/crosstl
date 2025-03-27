@@ -1,4 +1,4 @@
-from .OpenglAst import (
+from .openglast import (
     ShaderNode,
     VariableNode,
     AssignmentNode,
@@ -17,7 +17,7 @@ from .OpenglAst import (
     TernaryOpNode,
     StructNode,
 )
-from .OpenglLexer import GLSLLexer
+from .opengllexer import GLSLLexer
 
 
 class GLSLParser:

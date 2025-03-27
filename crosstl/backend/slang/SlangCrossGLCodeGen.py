@@ -1,6 +1,6 @@
-from .SlangAst import *
-from .SlangParser import *
-from .SlangLexer import *
+from .slangast import *
+from .slangparser import *
+from .slanglexer import *
 
 
 class SlangToCrossGLConverter:

@@ -2,7 +2,7 @@
 OpenGL backend module for CrossGL Translator
 """
 
-from .OpenglLexer import GLSLLexer
-from .OpenglParser import GLSLParser
-from .OpenglCrossGLCodeGen import GLSLToCrossGLConverter
-from .OpenglAst import *
+from .opengllexer import GLSLLexer
+from .openglparser import GLSLParser
+from .openglcrossglcodegen import GLSLToCrossGLConverter
+from .openglast import *

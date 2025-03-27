@@ -1,12 +1,18 @@
+#!/usr/bin/env python
+"""
+Test for the OpenGL parser.
+"""
+import os
+import sys
 import pytest
 
-# Try both import paths
-try:
-    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
-    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
-except ImportError:
-    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
-    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
+# Add the project root to the path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+sys.path.insert(0, project_root)
+
+# Now import the modules
+from crosstl.backend.OpenGL.opengllexer import GLSLLexer
+from crosstl.backend.OpenGL.openglparser import GLSLParser
 
 
 def test_basic_parsing():
@@ -72,4 +78,7 @@ def test_bitwise_not_parsing():
 
 
 if __name__ == "__main__":
-    pytest.main()
+    test_basic_parsing()
+    test_mod_parsing()
+    test_bitwise_not_parsing()
+    print("All tests passed!")

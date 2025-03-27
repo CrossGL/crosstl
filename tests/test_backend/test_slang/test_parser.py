@@ -1,13 +1,19 @@
-import pytest
+#!/usr/bin/env python
+"""
+Test for the Slang parser.
+"""
+import os
+import sys
 from typing import List
+import pytest
 
-# Try both import paths
-try:
-    from crosstl.backend.Slang.SlangLexer import SlangLexer
-    from crosstl.backend.Slang.SlangParser import SlangParser
-except ImportError:
-    from crosstl.backend.Slang.SlangLexer import SlangLexer
-    from crosstl.backend.Slang.SlangParser import SlangParser
+# Add the project root to the path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+sys.path.insert(0, project_root)
+
+# Now import the modules
+from crosstl.backend.Slang.slanglexer import SlangLexer
+from crosstl.backend.Slang.slangparser import SlangParser
 
 
 def parse_code(tokens: List):
@@ -87,4 +93,7 @@ def test_basic_parsing():
 
 
 if __name__ == "__main__":
-    pytest.main()
+    test_mod_parsing()
+    test_bitwise_not_parsing()
+    test_basic_parsing()
+    print("All tests passed!")

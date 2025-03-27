@@ -7,17 +7,12 @@ import os
 import platform
 import pytest
 import re
-import importlib.util
 import subprocess
 from pathlib import Path
 
 # Add the project root to the Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
-
-# Import our custom import hooks for case-insensitive module handling
-from tests import import_hooks
-
 
 # Run setup script to create proper test directories
 def pytest_sessionstart(session):
@@ -30,83 +25,25 @@ def pytest_sessionstart(session):
             print("Warning: Failed to set up test directories")
 
 
-# Hook to handle case-insensitive test path collection
-def pytest_configure(config):
-    """Configure pytest with import mappings for case sensitivity."""
-    # Create an import hook for backend modules with proper capitalization
-    sys.meta_path.append(CaseSensitiveImportFinder())
-
-
-class CaseSensitiveImportFinder:
-    """Custom import finder that redirects lowercase module names to proper capitalized versions."""
-
-    def find_spec(self, fullname, path, target=None):
-        # Handle only our specific modules
-        if fullname.startswith("crosstl.backend."):
-            parts = fullname.split(".")
-            if len(parts) >= 3:
-                # Map common lowercase module names to their capitalized versions
-                backends = {
-                    "opengl": "OpenGL",
-                    "directx": "DirectX",
-                    "slang": "Slang",
-                    "metal": "Metal",
-                    "vulkan": "Vulkan",
-                    "mojo": "Mojo",
-                }
-
-                # Check if we need to correct the case
-                if (
-                    parts[2].lower() in backends
-                    and parts[2] != backends[parts[2].lower()]
-                ):
-                    # Reconstruct the fullname with proper capitalization
-                    parts[2] = backends[parts[2].lower()]
-                    corrected_name = ".".join(parts)
-
-                    # Redirect to the properly capitalized module
-                    try:
-                        return importlib.util.find_spec(corrected_name)
-                    except (ImportError, AttributeError):
-                        return None
-        return None
-
-
 @pytest.fixture(scope="session", autouse=True)
 def check_backend_modules():
     """Verify that all backend modules exist with the correct case."""
     if platform.system() == "Linux":  # Only check on case-sensitive filesystems
         backend_dirs = [
-            "crosstl/backend/DirectX",
-            "crosstl/backend/Metal",
-            "crosstl/backend/OpenGL",
-            "crosstl/backend/Slang",
-            "crosstl/backend/Vulkan",
-            "crosstl/backend/Mojo",
+            "crosstl/backend/directx",
+            "crosstl/backend/metal",
+            "crosstl/backend/opengl",
+            "crosstl/backend/slang",
+            "crosstl/backend/vulkan",
+            "crosstl/backend/mojo",
         ]
 
         for dir_path in backend_dirs:
             full_path = os.path.join(project_root, dir_path)
             if not os.path.isdir(full_path):
                 print(
-                    f"Warning: {dir_path} directory does not exist or has incorrect case"
+                    f"Warning: {dir_path} directory does not exist"
                 )
-
-                # Check if the directory exists with a different case
-                parent_dir = os.path.dirname(full_path)
-                if os.path.isdir(parent_dir):
-                    expected_name = os.path.basename(dir_path)
-                    for item in os.listdir(parent_dir):
-                        if (
-                            item.lower() == expected_name.lower()
-                            and item != expected_name
-                        ):
-                            print(
-                                f"  Found directory with different case: {os.path.join(parent_dir, item)}"
-                            )
-                            print(
-                                f"  Please rename to match expected case: {expected_name}"
-                            )
 
 
 # Define a mapping of lowercase to proper capitalization

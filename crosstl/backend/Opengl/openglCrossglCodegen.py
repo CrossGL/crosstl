@@ -5,7 +5,7 @@ This module implements a converter from GLSL to CrossGL syntax.
 It translates GLSL AST structures into CrossGL code.
 """
 
-from .OpenglAst import (
+from .openglast import (
     ShaderNode,
     VariableNode,
     AssignmentNode,
