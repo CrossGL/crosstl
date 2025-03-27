@@ -1,6 +1,6 @@
-from .VulkanLexer import VulkanLexer
-from .VulkanParser import VulkanParser
-from .VulkanAst import ASTNode, ShaderNode, FunctionNode
+from .VulkanLexer import *
+from .VulkanParser import *
+from .VulkanAst import *
 
 
 # Add a stub converter class
