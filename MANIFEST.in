@@ -1,13 +1,19 @@
 include README.md
 include LICENSE
-include backend/DirectX/*.py
-include backend/Metal/*.py
-include backend/OpenGL/*.py
-include translator/*.py
-include translator/codegen/*.py
-include crosstl.py
-include crosstl
-include corsstl/
 include requirements.txt
+
+# Include all Python files recursively
 recursive-include crosstl *.py
+
+# Include individual backend modules with proper casing
+include crosstl/backend/DirectX/*.py
+include crosstl/backend/Metal/*.py
+include crosstl/backend/OpenGL/*.py
+include crosstl/backend/Slang/*.py
+include crosstl/backend/Vulkan/*.py
+include crosstl/backend/Mojo/*.py
+include crosstl/translator/*.py
+include crosstl/translator/codegen/*.py
+
+# Include test files
 recursive-include tests *.py

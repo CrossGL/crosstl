@@ -8,12 +8,33 @@ from .translator.codegen import (
     vulkan_codegen,
 )
 from .translator.ast import ASTNode
-from .backend.DirectX import *
-from .backend.Metal import *
-from .backend.OpenGL import *
-from .backend.Slang import *
-from .backend.Vulkan import *
-from .backend.Mojo import *
+
+# Import backend modules with careful handling of case sensitivity
+try:
+    # Import each needed symbol explicitly to avoid issues with case sensitivity
+    from .backend.DirectX.HLSLLexer import HLSLLexer
+    from .backend.DirectX.HLSLParser import HLSLParser
+    from .backend.DirectX.DirectXCrossGLCodeGen import HLSLToCrossGLConverter
+
+    from .backend.Metal.MetalLexer import MetalLexer
+    from .backend.Metal.MetalParser import MetalParser
+    from .backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+
+    from .backend.OpenGL.OpenglLexer import GLSLLexer
+    from .backend.OpenGL.OpenglParser import GLSLParser
+    from .backend.OpenGL.OpenGLCrossGLCodeGen import GLSLToCrossGLConverter
+
+    from .backend.Slang.SlangLexer import SlangLexer
+    from .backend.Slang.SlangParser import SlangParser
+    from .backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+
+    from .backend.Vulkan.VulkanLexer import VulkanLexer
+    from .backend.Vulkan.VulkanParser import VulkanParser
+except ImportError as e:
+    # Log the import error to help with debugging
+    import sys
+    print(f"Import error in _crosstl.py: {e}", file=sys.stderr)
+    raise
 
 
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
