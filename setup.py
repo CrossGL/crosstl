@@ -1,6 +1,7 @@
 from setuptools import setup, find_packages
 import os
 import sys
+import subprocess
 
 # Ensure we have all necessary __init__.py files
 backend_dirs = [
@@ -47,6 +48,14 @@ for dir_path in backend_dirs:
     if not os.path.exists(init_file):
         with open(init_file, "w") as f:
             f.write('"""Package initialization for {}"""\n'.format(dir_path))
+
+# Set up test directory symlinks for case-insensitive paths
+test_setup_script = os.path.join("tests", "setup_tests.py")
+if os.path.exists(test_setup_script):
+    try:
+        subprocess.run([sys.executable, test_setup_script], check=True)
+    except subprocess.CalledProcessError:
+        print("Warning: Failed to set up test directory symlinks")
 
 setup(
     name="crosstl",

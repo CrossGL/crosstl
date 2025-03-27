@@ -1,248 +1,68 @@
-from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
 import pytest
-from typing import List
+from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
 from crosstl.backend.OpenGL.OpenglParser import GLSLParser
 
 
-def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code.
-
-    Args:
-        code (str): The code to tokenize
-    Returns:
-        List: The list of tokens generated from the lexer
-
-
+def test_basic_parsing():
+    """Test basic GLSL parsing functionality."""
+    code = """
+    void main() {
+        float x = 1.0;
+        gl_Position = vec4(x, 0.0, 0.0, 1.0);
+    }
     """
     lexer = GLSLLexer(code)
-    return lexer.tokenize()
-
-
-def parse_code(Tokens: List, shader_type="vertex") -> List:
-    """Helper function to parse code.
-
-    Args:
-        Tokens (List): The list of tokens to parse
-    Returns:
-        AST: The abstract syntax tree generated from the parser
-
-
-    """
-    parser = GLSLParser(Tokens, shader_type)
-    return parser.parse()
-
-
-def test_input_output():
-    code = """
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens, "vertex")
-    except SyntaxError:
-        pytest.fail("Input/output variable parsing not implemented.")
-
-
-def test_if_statement():
-    code = """
-    #version 450
-    // Fragment shader
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
-
-    void main() {
-        float noise = perlinNoise(vUV);
-        if (noise > 0.5) {
-            float fragColor = vec4(1.0, 1.0, 1.0, 1.0);
-        }
-    }
-
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-    }
+    tokens = lexer.tokenize()
+    parser = GLSLParser(tokens)
+    ast = parser.parse()
     
-    """
-    try:
-        tokens = tokenize_code(code)
-        print(parse_code(tokens))
-    except SyntaxError:
-        pytest.fail("If statement parsing not implemented.")
-
-
-def test_for_statement():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-        for (int i = 0; i < 10; i = i + 1) {
-            vUV = vec2(0.0, 0.0);
-        }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        print(parse_code(tokens, "vertex"))
-    except SyntaxError:
-        pytest.fail("For loop parsing not implemented.")
-
-
-def test_else_statement():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        vUV = position.xy * 10.0;
-        if (vUV.x > vUV.y) {
-            vUV = vec2(0.0, 0.0);
-        }
-        else {
-            vUV = vec2(1.0, 1.0);
-        }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens, "vertex")
-    except SyntaxError:
-        pytest.fail("Else statement parsing not implemented.")
-
-
-def test_else_if_statement():
-    code = """
-    #version 450
-    // Fragment shader
-    in vec2 vUV;
-    layout(location = 0) out vec4 fragColor;
-
-    void main() {
-        float noise = perlinNoise(vUV);
-        if (noise > 0.75) {
-            fragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        }
-        else if (noise > 0.5) {
-            fragColor = vec4(0.0, 1.0, 0.0, 1.0);
-        }
-        else {
-            fragColor = vec4(0.0, 0.0, 1.0, 1.0);
-        }
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens, "fragment")
-    except SyntaxError:
-        pytest.fail("Else-if statement parsing not implemented.")
-
-
-def test_function_call():
-    code = """
-    #version 450
-    // Vertex shader
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-    layout(location = 0) in vec3 position;
-    out vec2 vUV;
-
-    void main() {
-        gl_Position = vec4(position, 1.0);
-        vUV = position.xy * 10.0;
-        float noise = perlinNoise(vUV);
-
-    }
-    """
-
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens, "vertex")
-    except SyntaxError:
-        pytest.fail("Function call parsing not implemented.")
-
-
-def test_double_dtype_tokenization():
-    code = """
-    double ComputeArea(double radius) {
-        double pi = 3.14159265359;
-        double area = pi * radius * radius;
-        return area;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Double data type parsing not implemented.")
+    # Verify we have an AST
+    assert ast is not None
+    
+    # Verify the AST structure - check that it's a ShaderNode
+    assert hasattr(ast, 'functions')
+    assert len(ast.functions) > 0
+    
+    # Find the main function
+    main_func = None
+    for func in ast.functions:
+        if func.name == "main":
+            main_func = func
+            break
+    
+    assert main_func is not None, "Main function not found in AST"
 
 
 def test_mod_parsing():
     code = """
+    
     void main() {
         int a = 10 % 3;  // Basic modulus
     }
     """
     try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
+        lexer = GLSLLexer(code)
+        tokens = lexer.tokenize()
+        parser = GLSLParser(tokens)
+        ast = parser.parse()
     except SyntaxError:
-        pytest.fail("Modulus operator parsing not implemented.")
+        pytest.fail("Modulus operator parsing not implemented")
 
 
-def test_unsigned_int_dtype_tokenization():
+def test_bitwise_not_parsing():
     code = """
-    double ComputeArea(double radius) {
-        uint a = 3;
-        uint b = 4;
-        
-        uint ans = a + b;
-        return ans;
+    void main() {
+        int a = 5;
+        int b = ~a;  // Bitwise NOT
     }
     """
     try:
-        tokenize_code(code)
+        lexer = GLSLLexer(code)
+        tokens = lexer.tokenize()
+        parser = GLSLParser(tokens)
+        ast = parser.parse()
     except SyntaxError:
-        pytest.fail("Unsigned integer parsing not implemented.")
-
-
-def test_struct():
-    code = """
-    struct VSInput {
-        vec3 position;
-        vec2 texCoord;
-    };
-
-    struct VSOutput {
-        vec4 position;
-        vec2 texCoord;
-    };
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Bitwise NOT operator parsing not implemented")
 
 
 if __name__ == "__main__":

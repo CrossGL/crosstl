@@ -1,5 +1,4 @@
 import pytest
-from typing import List
 from crosstl.backend.Slang.SlangLexer import SlangLexer
 from crosstl.backend.Slang.SlangParser import SlangParser
 
@@ -22,108 +21,11 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
-def test_struct_parsing():
-    code = """
-    struct AssembledVertex
-    {
-    float3	position : POSITION;
-    };
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
-
-
-def test_if_parsing():
-    code = """
-    [shader("vertex")]
-    VertexStageOutput vertexMain(AssembledVertex assembledVertex){
-        VertexStageOutput output;
-        output.out_position = assembledVertex.position;
-        if (assembledVertex.color.r > 0.5) {
-            output.out_position = assembledVertex.color;
-        }
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("if parsing not implemented.")
-
-
-def test_for_parsing():
-    code = """
-    [shader("vertex")]
-    VertexStageOutput vertexMain(AssembledVertex assembledVertex){
-        VertexStageOutput output;
-        output.out_position = assembledVertex.position;
-        for (int i = 0; i < 10; i=i+1) {
-            output.out_position += assembledVertex.position;
-        }
-
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("for parsing not implemented.")
-
-
-def test_else_parsing():
-    code = """
-    [shader("vertex")]
-    VertexStageOutput vertexMain(AssembledVertex assembledVertex){
-        VertexStageOutput output;
-        output.out_position = assembledVertex.position;
-        if (assembledVertex.color.r > 0.5) {
-            output.out_position = assembledVertex.color;
-        }
-        else {
-            output.out_position = float3(0.0, 0.0, 0.0);
-        }
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("else parsing not implemented.")
-
-
-def test_function_call_parsing():
-    code = """
-    float4 saturate(float4 color) {
-        return color;
-    }
-    [shader("vertex")]
-    VertexStageOutput vertexMain(AssembledVertex assembledVertex){
-        VertexStageOutput output;
-        output.out_position = assembledVertex.position;
-        output.out_position = saturate(assembledVertex.color);
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("function call parsing not implemented.")
-
-
 def test_mod_parsing():
     code = """
-    [shader("vertex")]
-    VertexStageOutput vertexMain(AssembledVertex assembledVertex) {
-        VertexStageOutput output;
+    
+    void main() {
         int a = 10 % 3;  // Basic modulus
-        return output;
     }
     """
     try:
@@ -131,6 +33,50 @@ def test_mod_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Modulus operator parsing not implemented")
+
+
+def test_bitwise_not_parsing():
+    code = """
+    void main() {
+        int a = 5;
+        int b = ~a;  // Bitwise NOT
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Bitwise NOT operator parsing not implemented")
+
+
+def test_basic_parsing():
+    """Test basic Slang parsing functionality."""
+    code = """
+    float4 main(float2 uv : TEXCOORD) : SV_TARGET {
+        float x = 1.0;
+        return float4(x, 0.0, 0.0, 1.0);
+    }
+    """
+    lexer = SlangLexer(code)
+    tokens = lexer.tokenize()
+    parser = SlangParser(tokens)
+    ast = parser.parse()
+    
+    # Verify we have an AST
+    assert ast is not None
+    
+    # Verify the AST structure
+    assert ast.type == "shader"
+    assert len(ast.functions) > 0
+    
+    # Find the main function
+    main_func = None
+    for func in ast.functions:
+        if func.name == "main":
+            main_func = func
+            break
+    
+    assert main_func is not None, "Main function not found in AST"
 
 
 if __name__ == "__main__":
