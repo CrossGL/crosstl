@@ -16,7 +16,6 @@ from .ast import (
 )
 
 from .lexer import Lexer
-import warnings
 
 
 class Parser:

@@ -32,16 +32,16 @@ class VulkanSPIRVCodeGen:
         # Extract struct information to determine inputs and outputs
         self.shader_inputs = []
         self.shader_outputs = []
-        
+
         # Analyze structures to identify inputs and outputs
         for struct in node.structs:
             if struct.name.startswith("VS"):
                 for member in struct.members:
-                    if hasattr(member, 'semantic') and member.semantic:
+                    if hasattr(member, "semantic") and member.semantic:
                         self.shader_inputs.append((member.vtype, member.name))
             elif struct.name.endswith("Output"):
                 for member in struct.members:
-                    if hasattr(member, 'semantic') and member.semantic:
+                    if hasattr(member, "semantic") and member.semantic:
                         self.shader_outputs.append((member.vtype, member.name))
 
         self.id_counter = 1
@@ -134,7 +134,7 @@ class VulkanSPIRVCodeGen:
 
     def declare_function(self, node):
         return_type = self.map_type(node.return_type)
-        
+
         # Handle parameters which are VariableNode objects
         param_types = []
         if node.params:
@@ -144,7 +144,7 @@ class VulkanSPIRVCodeGen:
             else:
                 # Handle tuples of (type, name)
                 param_types = [self.map_type(param[0]) for param in node.params]
-                
+
         function_type_id = self.get_id()
         self.function_types[node.name] = function_type_id
 
@@ -272,12 +272,12 @@ class VulkanSPIRVCodeGen:
             right_id = self.generate_expression(expr.right)
             result_id = self.get_id()
             op = self.map_operator(expr.op)
-            
+
             # Determine result type - default to float for simplicity
             result_type = "float"
-            if hasattr(expr, 'type'):
+            if hasattr(expr, "type"):
                 result_type = expr.type
-                
+
             return f"%{result_id} = {op} %{result_type} {left_id} {right_id}\n"
         elif isinstance(expr, FunctionCallNode):
             if expr.name in ["vec2", "vec3", "vec4"]:
@@ -285,7 +285,9 @@ class VulkanSPIRVCodeGen:
                 args = [self.generate_expression(arg) for arg in expr.args]
                 result_id = self.get_id()
                 components = " ".join(args)
-                return f"%{result_id} = OpCompositeConstruct %{expr.name} {components}\n"
+                return (
+                    f"%{result_id} = OpCompositeConstruct %{expr.name} {components}\n"
+                )
             else:
                 result_id = self.get_id()
                 args = [self.generate_expression(arg) for arg in expr.args]

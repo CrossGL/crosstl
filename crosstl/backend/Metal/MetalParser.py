@@ -287,7 +287,12 @@ class MetalParser:
                     right = self.parse_expression()
                     self.eat("SEMICOLON")
                     return AssignmentNode(left, right)
-                elif self.current_token[0] in ["PLUS_EQUALS", "MINUS_EQUALS", "MULTIPLY_EQUALS", "DIVIDE_EQUALS"]:
+                elif self.current_token[0] in [
+                    "PLUS_EQUALS",
+                    "MINUS_EQUALS",
+                    "MULTIPLY_EQUALS",
+                    "DIVIDE_EQUALS",
+                ]:
                     op = self.current_token[1]
                     self.eat(self.current_token[0])
                     right = self.parse_expression()

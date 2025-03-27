@@ -47,7 +47,14 @@ class LayoutNode:
 
 class ShaderNode(ASTNode):
     def __init__(
-        self, io_variables, constant, uniforms, global_variables, functions, shader_type, structs=[]
+        self,
+        io_variables,
+        constant,
+        uniforms,
+        global_variables,
+        functions,
+        shader_type,
+        structs=[],
     ):
         self.io_variables = io_variables
         self.constant = constant
