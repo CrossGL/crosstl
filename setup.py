@@ -1,7 +1,6 @@
 from setuptools import setup, find_packages
 import os
 import sys
-import subprocess
 
 # Ensure we have all necessary __init__.py files
 backend_dirs = [
@@ -16,29 +15,6 @@ backend_dirs = [
     "crosstl/translator/codegen",
 ]
 
-# Verify directories exist with correct case on case-sensitive filesystems
-if sys.platform.startswith("linux"):  # Linux is case-sensitive
-    for dir_path in backend_dirs:
-        if not os.path.isdir(dir_path):
-            print(
-                f"Warning: Directory '{dir_path}' does not exist or has incorrect case."
-            )
-            parent_dir = os.path.dirname(dir_path)
-            if os.path.isdir(parent_dir):
-                dir_name = os.path.basename(dir_path)
-                # Check if the directory exists with a different case
-                for item in os.listdir(parent_dir):
-                    if item.lower() == dir_name.lower() and item != dir_name:
-                        print(
-                            f"  Found directory with different case: '{os.path.join(parent_dir, item)}'"
-                        )
-                        print(
-                            f"  Please rename directories to match the expected case."
-                        )
-                        break
-            else:
-                print(f"  Parent directory '{parent_dir}' does not exist.")
-
 # Create __init__.py files where needed
 for dir_path in backend_dirs:
     # Ensure directory exists first
@@ -48,14 +24,6 @@ for dir_path in backend_dirs:
     if not os.path.exists(init_file):
         with open(init_file, "w") as f:
             f.write('"""Package initialization for {}"""\n'.format(dir_path))
-
-# Set up test directory symlinks for case-insensitive paths
-test_setup_script = os.path.join("tests", "setup_tests.py")
-if os.path.exists(test_setup_script):
-    try:
-        subprocess.run([sys.executable, test_setup_script], check=True)
-    except subprocess.CalledProcessError:
-        print("Warning: Failed to set up test directory symlinks")
 
 setup(
     name="crosstl",

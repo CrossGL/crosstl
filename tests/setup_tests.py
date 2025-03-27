@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Setup script for cross-platform testing.
+Setup script for CrossGL Translator tests.
 Creates proper __init__.py files in test directories.
 """
 
@@ -18,14 +18,14 @@ def setup_test_directories():
         with open(init_file, "w") as f:
             f.write('"""Test backend module."""\n')
 
-    # Define lowercase test directories
+    # Define test directories with proper capitalization
     backend_dirs = [
-        "test_opengl",
-        "test_directx",
-        "test_slang",
-        "test_metal",
-        "test_vulkan",
-        "test_mojo",
+        "test_OpenGL",
+        "test_DirectX",
+        "test_Slang",
+        "test_Metal",
+        "test_Vulkan",
+        "test_Mojo",
     ]
 
     # Create or update directories and __init__.py files
@@ -37,7 +37,8 @@ def setup_test_directories():
         # Create __init__.py in the directory
         init_file = os.path.join(dir_path, "__init__.py")
         if not os.path.exists(init_file):
-            backend_name = dir_name[5:]  # Remove "test_" prefix
+            # Remove "test_" prefix and get backend name
+            backend_name = dir_name[5:]
             with open(init_file, "w") as f:
                 f.write(f'"""Test module for {backend_name}."""\n')
 
