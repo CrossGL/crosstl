@@ -16,8 +16,8 @@ backend_dirs = [
 
 for dir_path in backend_dirs:
     init_file = os.path.join(dir_path, "__init__.py")
+    os.makedirs(os.path.dirname(init_file), exist_ok=True)
     if not os.path.exists(init_file):
-        # Create an empty __init__.py file if it doesn't exist
         with open(init_file, "w") as f:
             f.write('"""Package initialization for {}"""\n'.format(dir_path))
 
