@@ -117,7 +117,7 @@ class Parser:
             elif self.current_token[0] == "RBRACE":
                 self.eat("RBRACE")
             else:
-                print(f"DEBUG: Skipping unexpected token {self.current_token[0]}")
+                logging.debug(f"Skipping unexpected token {self.current_token[0]}")
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
         return ShaderNode(structs, functions, global_variables, cbuffers)
