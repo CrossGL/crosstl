@@ -9,9 +9,8 @@ from .translator.codegen import (
 )
 from .translator.ast import ASTNode
 
-# Import backend modules
-# The imports below reference the class names that are re-exported in each backend's __init__.py
-from .backend import DirectX, Metal, OpenGL, Slang, Vulkan, Mojo
+# Remove direct imports to avoid circular dependencies
+# from .backend import DirectX, Metal, OpenGL, Slang, Vulkan, Mojo
 
 
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
@@ -35,20 +34,36 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
         lexer = Lexer(shader_code)
         parser = Parser(lexer.tokens)
     elif file_path.endswith(".hlsl"):
-        lexer = DirectX.HLSLLexer(shader_code)
-        parser = DirectX.HLSLParser(lexer.tokenize())
+        # Import modules only when needed
+        from .backend.DirectX.DirectxLexer import HLSLLexer
+        from .backend.DirectX.DirectxParser import HLSLParser
+
+        lexer = HLSLLexer(shader_code)
+        parser = HLSLParser(lexer.tokenize())
     elif file_path.endswith(".metal"):
-        lexer = Metal.MetalLexer(shader_code)
-        parser = Metal.MetalParser(lexer.tokenize())
+        from .backend.Metal.MetalLexer import MetalLexer
+        from .backend.Metal.MetalParser import MetalParser
+
+        lexer = MetalLexer(shader_code)
+        parser = MetalParser(lexer.tokenize())
     elif file_path.endswith(".glsl"):
-        lexer = OpenGL.GLSLLexer(shader_code)
-        parser = OpenGL.GLSLParser(lexer.tokenize())
+        from .backend.OpenGL.OpenglLexer import GLSLLexer
+        from .backend.OpenGL.OpenglParser import GLSLParser
+
+        lexer = GLSLLexer(shader_code)
+        parser = GLSLParser(lexer.tokenize())
     elif file_path.endswith(".slang"):
-        lexer = Slang.SlangLexer(shader_code)
-        parser = Slang.SlangParser(lexer.tokenize())
+        from .backend.Slang.SlangLexer import SlangLexer
+        from .backend.Slang.SlangParser import SlangParser
+
+        lexer = SlangLexer(shader_code)
+        parser = SlangParser(lexer.tokenize())
     elif file_path.endswith(".spv"):
-        lexer = Vulkan.VulkanLexer(shader_code)
-        parser = Vulkan.VulkanParser(lexer.tokenize())
+        from .backend.Vulkan.VulkanLexer import VulkanLexer
+        from .backend.Vulkan.VulkanParser import VulkanParser
+
+        lexer = VulkanLexer(shader_code)
+        parser = VulkanParser(lexer.tokenize())
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -68,13 +83,23 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
     else:
         if backend == "cgl":
             if file_path.endswith(".hlsl"):
-                codegen = DirectX.HLSLToCrossGLConverter()
+                from .backend.DirectX.DirectxCrossGLCodeGen import (
+                    HLSLToCrossGLConverter,
+                )
+
+                codegen = HLSLToCrossGLConverter()
             elif file_path.endswith(".metal"):
-                codegen = Metal.MetalToCrossGLConverter()
+                from .backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+
+                codegen = MetalToCrossGLConverter()
             elif file_path.endswith(".glsl"):
-                codegen = OpenGL.GLSLToCrossGLConverter()
+                from .backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
+
+                codegen = GLSLToCrossGLConverter()
             elif file_path.endswith(".slang"):
-                codegen = Slang.SlangToCrossGLConverter()
+                from .backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+
+                codegen = SlangToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
         else:
