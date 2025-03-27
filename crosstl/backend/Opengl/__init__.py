@@ -13,4 +13,4 @@ from .OpenGLCrossGLCodeGen import GLSLToCrossGLConverter
 from .OpenglAst import ASTNode
 
 # Define __all__ to explicitly control what gets imported with "from .backend.OpenGL import *"
-__all__ = ['GLSLLexer', 'GLSLParser', 'GLSLToCrossGLConverter', 'ASTNode']
+__all__ = ["GLSLLexer", "GLSLParser", "GLSLToCrossGLConverter", "ASTNode"]
