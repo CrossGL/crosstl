@@ -12,16 +12,16 @@ def test_basic_lexing():
     """
     lexer = SlangLexer(code)
     tokens = lexer.tokenize()
-    
+
     # Verify we have tokens
     assert len(tokens) > 0
-    
+
     # Check for specific tokens
     token_types = [t.type for t in tokens]
-    assert 'IDENTIFIER' in token_types  # 'main', 'float4', etc.
-    assert 'FLOAT' in token_types or 'FLOAT_KW' in token_types
-    assert 'EQUALS' in token_types
-    assert 'NUMBER' in token_types  # 1.0
+    assert "IDENTIFIER" in token_types  # 'main', 'float4', etc.
+    assert "FLOAT" in token_types or "FLOAT_KW" in token_types
+    assert "EQUALS" in token_types
+    assert "NUMBER" in token_types  # 1.0
 
 
 if __name__ == "__main__":

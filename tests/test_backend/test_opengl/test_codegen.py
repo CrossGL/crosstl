@@ -26,7 +26,7 @@ def test_struct_definition():
     ast = parser.parse()
     converter = GLSLToCrossGLConverter()
     result = converter.generate(ast)
-    
+
     assert "struct Material" in result
     assert "diffuse" in result
     assert "shininess" in result

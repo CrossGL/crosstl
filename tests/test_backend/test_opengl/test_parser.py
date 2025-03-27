@@ -15,21 +15,21 @@ def test_basic_parsing():
     tokens = lexer.tokenize()
     parser = GLSLParser(tokens)
     ast = parser.parse()
-    
+
     # Verify we have an AST
     assert ast is not None
-    
+
     # Verify the AST structure - check that it's a ShaderNode
-    assert hasattr(ast, 'functions')
+    assert hasattr(ast, "functions")
     assert len(ast.functions) > 0
-    
+
     # Find the main function
     main_func = None
     for func in ast.functions:
         if func.name == "main":
             main_func = func
             break
-    
+
     assert main_func is not None, "Main function not found in AST"
 
 
@@ -44,7 +44,7 @@ def test_mod_parsing():
         lexer = GLSLLexer(code)
         tokens = lexer.tokenize()
         parser = GLSLParser(tokens)
-        ast = parser.parse()
+        parser.parse()
     except SyntaxError:
         pytest.fail("Modulus operator parsing not implemented")
 
@@ -60,7 +60,7 @@ def test_bitwise_not_parsing():
         lexer = GLSLLexer(code)
         tokens = lexer.tokenize()
         parser = GLSLParser(tokens)
-        ast = parser.parse()
+        parser.parse()
     except SyntaxError:
         pytest.fail("Bitwise NOT operator parsing not implemented")
 

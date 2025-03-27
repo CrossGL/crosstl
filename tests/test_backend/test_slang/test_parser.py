@@ -61,21 +61,21 @@ def test_basic_parsing():
     tokens = lexer.tokenize()
     parser = SlangParser(tokens)
     ast = parser.parse()
-    
+
     # Verify we have an AST
     assert ast is not None
-    
+
     # Verify the AST structure
     assert ast.type == "shader"
     assert len(ast.functions) > 0
-    
+
     # Find the main function
     main_func = None
     for func in ast.functions:
         if func.name == "main":
             main_func = func
             break
-    
+
     assert main_func is not None, "Main function not found in AST"
 
 

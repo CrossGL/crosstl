@@ -12,17 +12,17 @@ def test_basic_lexing():
     """
     lexer = GLSLLexer(code)
     tokens = lexer.tokenize()
-    
+
     # Verify we have tokens
     assert len(tokens) > 0
-    
+
     # Check for specific tokens
     token_types = [t[0] for t in tokens]  # tokens are (type, value) tuples
-    assert 'VOID' in token_types
-    assert 'IDENTIFIER' in token_types  # 'main'
-    assert 'FLOAT' in token_types
-    assert 'EQUALS' in token_types
-    assert 'NUMBER' in token_types  # 1.0
+    assert "VOID" in token_types
+    assert "IDENTIFIER" in token_types  # 'main'
+    assert "FLOAT" in token_types
+    assert "EQUALS" in token_types
+    assert "NUMBER" in token_types  # 1.0
 
 
 if __name__ == "__main__":
