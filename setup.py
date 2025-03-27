@@ -16,18 +16,24 @@ backend_dirs = [
 ]
 
 # Verify directories exist with correct case on case-sensitive filesystems
-if sys.platform.startswith('linux'):  # Linux is case-sensitive
+if sys.platform.startswith("linux"):  # Linux is case-sensitive
     for dir_path in backend_dirs:
         if not os.path.isdir(dir_path):
-            print(f"Warning: Directory '{dir_path}' does not exist or has incorrect case.")
+            print(
+                f"Warning: Directory '{dir_path}' does not exist or has incorrect case."
+            )
             parent_dir = os.path.dirname(dir_path)
             if os.path.isdir(parent_dir):
                 dir_name = os.path.basename(dir_path)
                 # Check if the directory exists with a different case
                 for item in os.listdir(parent_dir):
                     if item.lower() == dir_name.lower() and item != dir_name:
-                        print(f"  Found directory with different case: '{os.path.join(parent_dir, item)}'")
-                        print(f"  Please rename directories to match the expected case.")
+                        print(
+                            f"  Found directory with different case: '{os.path.join(parent_dir, item)}'"
+                        )
+                        print(
+                            f"  Please rename directories to match the expected case."
+                        )
                         break
             else:
                 print(f"  Parent directory '{parent_dir}' does not exist.")
@@ -36,7 +42,7 @@ if sys.platform.startswith('linux'):  # Linux is case-sensitive
 for dir_path in backend_dirs:
     # Ensure directory exists first
     os.makedirs(dir_path, exist_ok=True)
-    
+
     init_file = os.path.join(dir_path, "__init__.py")
     if not os.path.exists(init_file):
         with open(init_file, "w") as f:

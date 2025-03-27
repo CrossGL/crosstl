@@ -36,26 +36,31 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
     elif file_path.endswith(".hlsl"):
         from .backend.DirectX.DirectxLexer import HLSLLexer
         from .backend.DirectX.DirectxParser import HLSLParser
+
         lexer = HLSLLexer(shader_code)
         parser = HLSLParser(lexer.tokenize())
     elif file_path.endswith(".metal"):
         from .backend.Metal.MetalLexer import MetalLexer
         from .backend.Metal.MetalParser import MetalParser
+
         lexer = MetalLexer(shader_code)
         parser = MetalParser(lexer.tokenize())
     elif file_path.endswith(".glsl"):
         from .backend.OpenGL.OpenglLexer import GLSLLexer
         from .backend.OpenGL.OpenglParser import GLSLParser
+
         lexer = GLSLLexer(shader_code)
         parser = GLSLParser(lexer.tokenize())
     elif file_path.endswith(".slang"):
         from .backend.Slang.SlangLexer import SlangLexer
         from .backend.Slang.SlangParser import SlangParser
+
         lexer = SlangLexer(shader_code)
         parser = SlangParser(lexer.tokenize())
     elif file_path.endswith(".spv"):
         from .backend.Vulkan.VulkanLexer import VulkanLexer
         from .backend.Vulkan.VulkanParser import VulkanParser
+
         lexer = VulkanLexer(shader_code)
         parser = VulkanParser(lexer.tokenize())
     else:
@@ -77,16 +82,22 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
     else:
         if backend == "cgl":
             if file_path.endswith(".hlsl"):
-                from .backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
+                from .backend.DirectX.DirectxCrossGLCodeGen import (
+                    HLSLToCrossGLConverter,
+                )
+
                 codegen = HLSLToCrossGLConverter()
             elif file_path.endswith(".metal"):
                 from .backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+
                 codegen = MetalToCrossGLConverter()
             elif file_path.endswith(".glsl"):
                 from .backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
+
                 codegen = GLSLToCrossGLConverter()
             elif file_path.endswith(".slang"):
                 from .backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+
                 codegen = SlangToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
