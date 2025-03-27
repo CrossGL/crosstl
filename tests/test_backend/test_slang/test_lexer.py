@@ -17,7 +17,7 @@ def test_basic_lexing():
     assert len(tokens) > 0
 
     # Check for specific tokens
-    token_types = [t.type for t in tokens]
+    token_types = [t[0] for t in tokens]  # tokens are (type, value) tuples
     assert "IDENTIFIER" in token_types  # 'main', 'float4', etc.
     assert "FLOAT" in token_types or "FLOAT_KW" in token_types
     assert "EQUALS" in token_types
