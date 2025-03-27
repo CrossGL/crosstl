@@ -14,6 +14,7 @@ from pathlib import Path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
+
 # Run setup script to create proper test directories
 def pytest_sessionstart(session):
     """Run setup script to prepare test directories."""
@@ -41,9 +42,7 @@ def check_backend_modules():
         for dir_path in backend_dirs:
             full_path = os.path.join(project_root, dir_path)
             if not os.path.isdir(full_path):
-                print(
-                    f"Warning: {dir_path} directory does not exist"
-                )
+                print(f"Warning: {dir_path} directory does not exist")
 
 
 # Define a mapping of lowercase to proper capitalization

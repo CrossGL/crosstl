@@ -21,7 +21,7 @@ def setup_test_directories():
     # Define lowercase test directories
     backend_dirs = [
         "test_opengl",
-        "test_directx", 
+        "test_directx",
         "test_slang",
         "test_metal",
         "test_vulkan",
@@ -33,7 +33,7 @@ def setup_test_directories():
         # Ensure the directory exists
         dir_path = os.path.join(test_backend_dir, dir_name)
         os.makedirs(dir_path, exist_ok=True)
-        
+
         # Create __init__.py in the directory
         init_file = os.path.join(dir_path, "__init__.py")
         if not os.path.exists(init_file):
