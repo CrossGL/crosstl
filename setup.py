@@ -1,19 +1,8 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name="crosstl",
-    packages=[
-        "crosstl",
-        "crosstl/translator/",
-        "crosstl/translator/codegen/",
-        "crosstl/backend",
-        "crosstl/backend/DirectX",
-        "crosstl/backend/Metal/",
-        "crosstl/backend/OpenGL/",
-        "crosstl/backend/Slang/",
-        "crosstl/backend/Vulkan/",
-        "crosstl/backend/Mojo/",
-    ],
+    packages=find_packages(),
     version="0.0.1.3",
     author="CrossGL team",
     author_email="nripesh@crossgl.net",

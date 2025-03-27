@@ -8,3 +8,6 @@ include translator/codegen/*.py
 include crosstl.py
 include crosstl
 include corsstl/
+include requirements.txt
+recursive-include crosstl *.py
+recursive-include tests *.py
