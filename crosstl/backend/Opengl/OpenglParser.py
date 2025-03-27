@@ -230,7 +230,7 @@ class GLSLParser:
         self.eat(self.current_token[0])
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        
+
         # Check if this is an array declaration
         array_size = None
         if self.current_token[0] == "LBRACKET":
@@ -238,7 +238,7 @@ class GLSLParser:
             array_size = int(self.current_token[1])
             self.eat("NUMBER")
             self.eat("RBRACKET")
-            
+
         self.eat("SEMICOLON")
         return VariableNode(dtype, name, array_size=array_size)
 
@@ -437,7 +437,7 @@ class GLSLParser:
             self.eat(self.current_token[0])
 
         init = self.parse_variable_declaration(init_type)
-        
+
         # Parse condition (e.g. i < 10)
         condition = self.parse_expression()
         self.eat("SEMICOLON")
@@ -447,7 +447,7 @@ class GLSLParser:
         if self.current_token[0] == "IDENTIFIER":
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            
+
             if self.current_token[0] == "PLUS" and self.peak(1)[0] == "PLUS":
                 # Handle i++
                 self.eat("PLUS")
@@ -601,12 +601,12 @@ class GLSLParser:
         ):
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            
+
             # Check if the next expression involves array access
             if self.current_token[0] == "IDENTIFIER":
                 identifier = self.current_token[1]
                 self.eat("IDENTIFIER")
-                
+
                 if self.current_token[0] == "LBRACKET":
                     # We have an array access
                     self.eat("LBRACKET")
@@ -620,7 +620,7 @@ class GLSLParser:
                     value = self.parse_expression()
             else:
                 value = self.parse_expression()
-                
+
             if self.current_token[0] == "DOT":
                 value = self.parse_member_access(value)
             if self.current_token[0] == "SEMICOLON":
@@ -669,17 +669,17 @@ class GLSLParser:
         """
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        
+
         # Handle array access after variable name
         if self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
             index = self.parse_expression()
             self.eat("RBRACKET")
             name = ArrayAccessNode(name, index)
-            
+
         if self.current_token[0] == "DOT":
             name = self.parse_member_access(name)
-            
+
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
@@ -711,12 +711,12 @@ class GLSLParser:
         ):
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            
+
             # Check if the next expression involves array access
             if self.current_token[0] == "IDENTIFIER":
                 identifier = self.current_token[1]
                 self.eat("IDENTIFIER")
-                
+
                 if self.current_token[0] == "LBRACKET":
                     # We have an array access
                     self.eat("LBRACKET")

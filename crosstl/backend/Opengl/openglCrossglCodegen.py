@@ -333,15 +333,15 @@ class GLSLToCrossGLConverter:
             str: The CrossGL struct definition
         """
         result = f"struct {node.name} {{\n"
-        
+
         self.increase_indent()
         for field in node.fields:
-            var_type = self.convert_type(field['type'])
-            var_name = field['name']
+            var_type = self.convert_type(field["type"])
+            var_name = field["name"]
             semantic = ""
             result += self.indent() + f"{var_type} {var_name}{semantic};\n"
         self.decrease_indent()
-        
+
         result += self.indent() + "};"
         return result
 
@@ -381,7 +381,7 @@ class GLSLToCrossGLConverter:
 
     def generate_statement(self, node):
         """Generate CrossGL code for a statement
-        
+
         Args:
             node: The AST node representing a statement
 
@@ -417,15 +417,15 @@ class GLSLToCrossGLConverter:
 
     def generate_assignment(self, node):
         """Generate CrossGL code for an assignment
-        
+
         Args:
             node: AssignmentNode representing a GLSL assignment
-            
+
         Returns:
             str: The CrossGL assignment
         """
         # Handle the old AssignmentNode structure
-        if hasattr(node, 'name') and hasattr(node, 'value'):
+        if hasattr(node, "name") and hasattr(node, "value"):
             left = ""
             if isinstance(node.name, VariableNode):
                 # Variable declaration with initialization
@@ -443,15 +443,15 @@ class GLSLToCrossGLConverter:
 
             operator = self.operator_map.get(node.operator, node.operator)
             right = self.generate_expression(node.value)
-            
+
             return f"{left} {operator} {right}"
-        
+
         # Handle the BinaryOpNode-based assignments
-        elif hasattr(node, 'left') and hasattr(node, 'right'):
+        elif hasattr(node, "left") and hasattr(node, "right"):
             lhs = node.left
             op = self.operator_map.get(node.op, node.op)
             rhs = node.right
-            
+
             # If lhs is a VariableNode with a type, it's a variable declaration
             if isinstance(lhs, VariableNode) and lhs.vtype:
                 var_type = self.convert_type(lhs.vtype)
@@ -462,7 +462,7 @@ class GLSLToCrossGLConverter:
                 left_expr = self.generate_expression(lhs)
                 right_expr = self.generate_expression(rhs)
                 return f"({left_expr} {op} {right_expr})"
-        
+
         # Default fallback
         return f"{self.generate_expression(node)}"
 
@@ -697,10 +697,10 @@ class GLSLToCrossGLConverter:
 
     def generate_variable_declaration(self, node):
         """Generate CrossGL code for a variable declaration
-        
+
         Args:
             node: VariableNode representing a GLSL variable declaration
-            
+
         Returns:
             str: The CrossGL variable declaration
         """

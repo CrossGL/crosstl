@@ -259,7 +259,7 @@ def test_ternary_operator():
     result = process_glsl(glsl_code)
     assert "?" in result
     assert ":" in result
-    assert ("x" in result and "0.5" in result)
+    assert "x" in result and "0.5" in result
 
 
 def test_member_access():
