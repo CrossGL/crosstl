@@ -9,7 +9,7 @@ OpenGL backend implementation for CrossGL Translator
 # Import all the necessary components with explicit imports that match the filesystem case
 from .OpenglLexer import GLSLLexer
 from .OpenglParser import GLSLParser
-from .OpenGLCrossGLCodeGen import GLSLToCrossGLConverter
+from .OpenglCrossGLCodeGen import GLSLToCrossGLConverter
 from .OpenglAst import ASTNode
 
 # Define __all__ to explicitly control what gets imported with "from .backend.OpenGL import *"

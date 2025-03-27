@@ -9,34 +9,9 @@ from .translator.codegen import (
 )
 from .translator.ast import ASTNode
 
-# Import backend modules with careful handling of case sensitivity
-try:
-    # Import each needed symbol explicitly to avoid issues with case sensitivity
-    from .backend.DirectX.HLSLLexer import HLSLLexer
-    from .backend.DirectX.HLSLParser import HLSLParser
-    from .backend.DirectX.DirectXCrossGLCodeGen import HLSLToCrossGLConverter
-
-    from .backend.Metal.MetalLexer import MetalLexer
-    from .backend.Metal.MetalParser import MetalParser
-    from .backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
-
-    from .backend.OpenGL.OpenglLexer import GLSLLexer
-    from .backend.OpenGL.OpenglParser import GLSLParser
-    from .backend.OpenGL.OpenGLCrossGLCodeGen import GLSLToCrossGLConverter
-
-    from .backend.Slang.SlangLexer import SlangLexer
-    from .backend.Slang.SlangParser import SlangParser
-    from .backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
-
-    from .backend.Vulkan.VulkanLexer import VulkanLexer
-    from .backend.Vulkan.VulkanParser import VulkanParser
-except ImportError as e:
-    # Log the import error to help with debugging
-    import sys
-
-    print(f"Import error in _crosstl.py: {e}", file=sys.stderr)
-    raise
-
+# Import backend modules
+# The imports below reference the class names that are re-exported in each backend's __init__.py
+from .backend import DirectX, Metal, OpenGL, Slang, Vulkan, Mojo
 
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
     """Translate a shader file to another language.
@@ -59,20 +34,20 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
         lexer = Lexer(shader_code)
         parser = Parser(lexer.tokens)
     elif file_path.endswith(".hlsl"):
-        lexer = HLSLLexer(shader_code)
-        parser = HLSLParser(lexer.tokenize())
+        lexer = DirectX.HLSLLexer(shader_code)
+        parser = DirectX.HLSLParser(lexer.tokenize())
     elif file_path.endswith(".metal"):
-        lexer = MetalLexer(shader_code)
-        parser = MetalParser(lexer.tokenize())
+        lexer = Metal.MetalLexer(shader_code)
+        parser = Metal.MetalParser(lexer.tokenize())
     elif file_path.endswith(".glsl"):
-        lexer = GLSLLexer(shader_code)
-        parser = GLSLParser(lexer.tokenize())
+        lexer = OpenGL.GLSLLexer(shader_code)
+        parser = OpenGL.GLSLParser(lexer.tokenize())
     elif file_path.endswith(".slang"):
-        lexer = SlangLexer(shader_code)
-        parser = SlangParser(lexer.tokenize())
+        lexer = Slang.SlangLexer(shader_code)
+        parser = Slang.SlangParser(lexer.tokenize())
     elif file_path.endswith(".spv"):
-        lexer = VulkanLexer(shader_code)
-        parser = VulkanParser(lexer.tokenize())
+        lexer = Vulkan.VulkanLexer(shader_code)
+        parser = Vulkan.VulkanParser(lexer.tokenize())
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -92,13 +67,13 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
     else:
         if backend == "cgl":
             if file_path.endswith(".hlsl"):
-                codegen = HLSLToCrossGLConverter()
+                codegen = DirectX.HLSLToCrossGLConverter()
             elif file_path.endswith(".metal"):
-                codegen = MetalToCrossGLConverter()
+                codegen = Metal.MetalToCrossGLConverter()
             elif file_path.endswith(".glsl"):
-                codegen = GLSLToCrossGLConverter()
+                codegen = OpenGL.GLSLToCrossGLConverter()
             elif file_path.endswith(".slang"):
-                codegen = SlangToCrossGLConverter()
+                codegen = Slang.SlangToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
         else:
