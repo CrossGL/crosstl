@@ -1,12 +1,17 @@
 from . import translator
 from .translator.lexer import Lexer
 from .translator.parser import Parser
-from .translator.codegen import directx_codegen, metal_codegen, opengl_codegen
+from .translator.codegen import (
+    directx_codegen,
+    metal_codegen,
+    opengl_codegen,
+    vulkan_codegen,
+)
 from .translator.ast import ASTNode
 from .backend.DirectX import *
 from .backend.Metal import *
-from .backend.Opengl import *
-from .backend.slang import *
+from .backend.OpenGL import *
+from .backend.Slang import *
 from .backend.Vulkan import *
 from .backend.Mojo import *
 
@@ -33,22 +38,19 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
         parser = Parser(lexer.tokens)
     elif file_path.endswith(".hlsl"):
         lexer = HLSLLexer(shader_code)
-        parser = HLSLParser(lexer.tokens)
+        parser = HLSLParser(lexer.tokenize())
     elif file_path.endswith(".metal"):
         lexer = MetalLexer(shader_code)
-        parser = MetalParser(lexer.tokens)
+        parser = MetalParser(lexer.tokenize())
     elif file_path.endswith(".glsl"):
         lexer = GLSLLexer(shader_code)
-        parser = GLSLParser(lexer.tokens)
+        parser = GLSLParser(lexer.tokenize())
     elif file_path.endswith(".slang"):
         lexer = SlangLexer(shader_code)
-        parser = SlangParser(lexer.tokens)
+        parser = SlangParser(lexer.tokenize())
     elif file_path.endswith(".spv"):
         lexer = VulkanLexer(shader_code)
-        parser = VulkanParser(lexer.tokens)
-    elif file_path.endswith(".mojo"):
-        lexer = MojoLexer(shader_code)
-        parser = MojoParser(lexer.tokens)
+        parser = VulkanParser(lexer.tokenize())
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -61,6 +63,8 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
             codegen = directx_codegen.HLSLCodeGen()
         elif backend == "opengl":
             codegen = opengl_codegen.GLSLCodeGen()
+        elif backend == "vulkan":
+            codegen = vulkan_codegen.VulkanSPIRVCodeGen()
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
