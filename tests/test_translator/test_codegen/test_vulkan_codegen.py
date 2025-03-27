@@ -34,9 +34,58 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
-# ToDO: Implement the tests
 def test_struct():
-    pass
+    code = """
+    struct VSInput {
+        vec2 texCoord @ TEXCOORD0;
+    };
+
+    struct VSOutput {
+        vec4 color @ COLOR;
+    };
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        assert code is not None
+    except SyntaxError:
+        pytest.fail("Vulkan struct codegen not implemented.")
+
+
+def test_basic_shader():
+    code = """
+    shader main {
+        struct VSInput {
+            vec2 texCoord @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            vec4 color @ COLOR;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.color = vec4(input.texCoord, 0.0, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return input.color;
+            }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        code = generate_code(ast)
+        assert code is not None
+    except SyntaxError:
+        pytest.fail("Vulkan basic shader codegen not implemented.")
 
 
 if __name__ == "__main__":

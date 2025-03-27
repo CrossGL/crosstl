@@ -1,6 +1,6 @@
 import pytest
 from typing import List
-from crosstl.backend.slang.SlangLexer import SlangLexer
+from crosstl.backend.Slang.SlangLexer import SlangLexer
 
 
 def tokenize_code(code: str) -> List:

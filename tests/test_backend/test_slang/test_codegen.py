@@ -1,6 +1,6 @@
-from crosstl.backend.slang import SlangCrossGLCodeGen
-from crosstl.backend.slang import SlangLexer
-from crosstl.backend.slang import SlangParser
+from crosstl.backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+from crosstl.backend.Slang.SlangLexer import SlangLexer
+from crosstl.backend.Slang.SlangParser import SlangParser
 import pytest
 from typing import List
 
@@ -12,7 +12,7 @@ def generate_code(ast_node):
     Returns:
         str: The generated code from the abstract syntax tree
     """
-    codegen = SlangCrossGLCodeGen.SlangToCrossGLConverter()
+    codegen = SlangToCrossGLConverter()
     return codegen.generate(ast_node)
 
 

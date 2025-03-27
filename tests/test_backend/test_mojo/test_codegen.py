@@ -1,5 +1,5 @@
-from crosstl.backend.Mojo import MojoLexer
-from crosstl.backend.Mojo import MojoParser
+from crosstl.backend.Mojo.MojoLexer import MojoLexer
+from crosstl.backend.Mojo.MojoParser import MojoParser
 import pytest
 from typing import List
 

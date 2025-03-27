@@ -1,7 +1,7 @@
 import pytest
 from typing import List
-from crosstl.backend.slang import SlangLexer
-from crosstl.backend.slang import SlangParser
+from crosstl.backend.Slang.SlangLexer import SlangLexer
+from crosstl.backend.Slang.SlangParser import SlangParser
 
 
 def parse_code(tokens: List):

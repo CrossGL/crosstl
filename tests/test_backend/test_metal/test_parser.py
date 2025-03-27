@@ -53,14 +53,14 @@ def test_if():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("If statement parsing not implemented.")
 
 
 def test_for():
     code = """
     float perlinNoise(float2 p) {
-    if (p.x == p.y) {
-        return 0.0;
+    for (int i = 0; i < 10; i = i + 1) {
+        p.x += 0.1;
     }
     return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
     }
@@ -69,7 +69,7 @@ def test_for():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("For loop parsing not implemented.")
 
 
 def test_else():
@@ -87,7 +87,7 @@ def test_else():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Else statement parsing not implemented.")
 
 
 def test_function_call():
@@ -121,7 +121,7 @@ def test_function_call():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Function call parsing not implemented.")
 
 
 def test_if_else():

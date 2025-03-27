@@ -1,7 +1,7 @@
-from crosstl.backend.Opengl.OpenglLexer import GLSLLexer
+from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
 import pytest
 from typing import List
-from crosstl.backend.Opengl.OpenglParser import GLSLParser
+from crosstl.backend.OpenGL.OpenglParser import GLSLParser
 
 
 def tokenize_code(code: str) -> List:
@@ -43,7 +43,7 @@ def test_input_output():
         tokens = tokenize_code(code)
         parse_code(tokens, "vertex")
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Input/output variable parsing not implemented.")
 
 
 def test_if_statement():
@@ -76,7 +76,7 @@ def test_if_statement():
         tokens = tokenize_code(code)
         print(parse_code(tokens))
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("If statement parsing not implemented.")
 
 
 def test_for_statement():
@@ -100,7 +100,7 @@ def test_for_statement():
         tokens = tokenize_code(code)
         print(parse_code(tokens, "vertex"))
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("For loop parsing not implemented.")
 
 
 def test_else_statement():
@@ -127,7 +127,7 @@ def test_else_statement():
         tokens = tokenize_code(code)
         parse_code(tokens, "vertex")
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Else statement parsing not implemented.")
 
 
 def test_else_if_statement():
@@ -154,7 +154,7 @@ def test_else_if_statement():
         tokens = tokenize_code(code)
         parse_code(tokens, "fragment")
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Else-if statement parsing not implemented.")
 
 
 def test_function_call():
@@ -179,7 +179,7 @@ def test_function_call():
         tokens = tokenize_code(code)
         parse_code(tokens, "vertex")
     except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+        pytest.fail("Function call parsing not implemented.")
 
 
 def test_double_dtype_tokenization():
@@ -194,7 +194,7 @@ def test_double_dtype_tokenization():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("double tokenization not implemented")
+        pytest.fail("Double data type parsing not implemented.")
 
 
 def test_mod_parsing():
@@ -207,7 +207,7 @@ def test_mod_parsing():
         tokens = tokenize_code(code)
         parse_code(tokens)
     except SyntaxError:
-        pytest.fail("Modulus operator parsing not implemented")
+        pytest.fail("Modulus operator parsing not implemented.")
 
 
 def test_unsigned_int_dtype_tokenization():
@@ -223,7 +223,26 @@ def test_unsigned_int_dtype_tokenization():
     try:
         tokenize_code(code)
     except SyntaxError:
-        pytest.fail("unsigned integer parsing not implemented.")
+        pytest.fail("Unsigned integer parsing not implemented.")
+
+
+def test_struct():
+    code = """
+    struct VSInput {
+        vec3 position;
+        vec2 texCoord;
+    };
+
+    struct VSOutput {
+        vec4 position;
+        vec2 texCoord;
+    };
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError:
+        pytest.fail("Struct parsing not implemented.")
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@ class LayoutNode:
 
 class ShaderNode(ASTNode):
     def __init__(
-        self, io_variables, constant, uniforms, global_variables, functions, shader_type
+        self, io_variables, constant, uniforms, global_variables, functions, shader_type, structs=[]
     ):
         self.io_variables = io_variables
         self.constant = constant
@@ -55,9 +55,10 @@ class ShaderNode(ASTNode):
         self.global_variables = global_variables
         self.functions = functions
         self.shader_type = shader_type
+        self.structs = structs
 
     def __repr__(self):
-        return f"ShaderNode(io_variables={self.io_variables}, constant={self.constant},uniforms={self.uniforms} , global_variables={self.global_variables}, functions={self.functions}, shader_type={self.shader_type})"
+        return f"ShaderNode(io_variables={self.io_variables}, constant={self.constant},uniforms={self.uniforms}, global_variables={self.global_variables}, functions={self.functions}, shader_type={self.shader_type}, structs={self.structs})"
 
 
 class FunctionNode(ASTNode):
@@ -187,3 +188,12 @@ class UnaryOpNode(ASTNode):
 
     def __str__(self):
         return f"({self.op}{self.operand})"
+
+
+class StructNode(ASTNode):
+    def __init__(self, name, fields):
+        self.name = name
+        self.fields = fields
+
+    def __repr__(self):
+        return f"StructNode(name='{self.name}', fields={self.fields})"

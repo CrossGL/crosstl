@@ -1,8 +1,8 @@
-from crosstl.backend.Opengl.OpenglLexer import GLSLLexer
+from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
 import pytest
 from typing import List
-from crosstl.backend.Opengl.OpenglParser import GLSLParser
-from crosstl.backend.Opengl.openglCrossglCodegen import GLSLToCrossGLConverter
+from crosstl.backend.OpenGL.OpenglParser import GLSLParser
+from crosstl.backend.OpenGL.OpenGLCrossGLCodeGen import GLSLToCrossGLConverter
 
 
 def tokenize_code(code: str) -> List:
