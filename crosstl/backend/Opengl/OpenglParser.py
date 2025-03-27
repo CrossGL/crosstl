@@ -112,7 +112,6 @@ class GLSLParser:
         vtype = self.current_token[1]
         self.eat(self.current_token[0])
         name = self.current_token[1]
-        self.eat("IDENTIFIER")
         self.eat("EQUALS")
         value = self.parse_expression()
         self.eat("SEMICOLON")
@@ -217,13 +216,31 @@ class GLSLParser:
         )
 
     def parse_uniform(self):
+        """Parse a uniform declaration
+
+        This method parses a uniform declaration in the shader code.
+
+        Returns:
+
+            VariableNode: A VariableNode object representing the uniform declaration
+
+        """
         self.eat("UNIFORM")
         dtype = self.current_token[1]
         self.eat(self.current_token[0])
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        
+        # Check if this is an array declaration
+        array_size = None
+        if self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            array_size = int(self.current_token[1])
+            self.eat("NUMBER")
+            self.eat("RBRACKET")
+            
         self.eat("SEMICOLON")
-        return VariableNode(dtype, name)
+        return VariableNode(dtype, name, array_size=array_size)
 
     def parse_function(self):
         return_type = self.current_token[1]
@@ -410,25 +427,64 @@ class GLSLParser:
             ForNode: A ForNode object representing the for loop
 
         """
-
         self.eat("FOR")
         self.eat("LPAREN")
 
-        init = self.parse_assignment_or_function_call()
+        # Parse initialization (e.g. int i = 0)
+        init_type = ""
+        if self.current_token[0] in ["INT", "FLOAT", "DOUBLE", "VECTOR", "MATRIX"]:
+            init_type = self.current_token[1]
+            self.eat(self.current_token[0])
 
-        condition = self.parse_assignment_or_function_call()
+        init = self.parse_variable_declaration(init_type)
+        
+        # Parse condition (e.g. i < 10)
+        condition = self.parse_expression()
+        self.eat("SEMICOLON")
 
-        if self.peak(2)[0] == "RPAREN":
-            update = self.parse_update()
+        # Parse update (e.g. i++)
+        # Extract identifier for handling i++, i+=1, etc.
+        if self.current_token[0] == "IDENTIFIER":
+            var_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            
+            if self.current_token[0] == "PLUS" and self.peak(1)[0] == "PLUS":
+                # Handle i++
+                self.eat("PLUS")
+                self.eat("PLUS")
+                update = BinaryOpNode(VariableNode("", var_name), "+=", 1)
+            elif self.current_token[0] == "MINUS" and self.peak(1)[0] == "MINUS":
+                # Handle i--
+                self.eat("MINUS")
+                self.eat("MINUS")
+                update = BinaryOpNode(VariableNode("", var_name), "-=", 1)
+            elif self.current_token[0] == "PLUS_EQUALS":
+                # Handle i+=1
+                self.eat("PLUS_EQUALS")
+                value = self.parse_expression()
+                update = BinaryOpNode(VariableNode("", var_name), "+=", value)
+            elif self.current_token[0] == "MINUS_EQUALS":
+                # Handle i-=1
+                self.eat("MINUS_EQUALS")
+                value = self.parse_expression()
+                update = BinaryOpNode(VariableNode("", var_name), "-=", value)
+            elif self.current_token[0] == "EQUALS":
+                # Handle i=i+1
+                self.eat("EQUALS")
+                value = self.parse_expression()
+                update = BinaryOpNode(VariableNode("", var_name), "=", value)
+            else:
+                # Reset position and try the general approach
+                self.pos -= 1  # Go back to the identifier
+                self.current_token = self.tokens[self.pos]
+                update = self.parse_assignment_or_function_call(update_condition=True)
         else:
             update = self.parse_assignment_or_function_call(update_condition=True)
 
         self.eat("RPAREN")
         self.eat("LBRACE")
-
         body = self.parse_body()
         self.eat("RBRACE")
-
         return ForNode(init, condition, update, body)
 
     def parse_update(self):
@@ -518,26 +574,66 @@ class GLSLParser:
         self.eat("IDENTIFIER")
         if inc_dec:
             name = VariableNode(type_name, VariableNode("", inc_dec_op + name))
-        if self.current_token[0] in [
-            "EQUALS",
+        if self.current_token[0] in (
             "ASSIGN_ADD",
             "ASSIGN_SUB",
             "ASSIGN_MUL",
             "ASSIGN_DIV",
+            "EQUALS",
             "LESS_THAN",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
+            "BITWISE_SHIFT_RIGHT",
+            "BITWISE_SHIFT_LEFT",
+            "BITWISE_XOR",
+            "EQUAL",
             "ASSIGN_AND",
             "ASSIGN_OR",
             "ASSIGN_XOR",
             "ASSIGN_MOD",
-            "BITWISE_SHIFT_RIGHT",
-            "BITWISE_SHIFT_LEFT",
-            "BITWISE_XOR",
-            "ASSIGN_SHIFT_LEFT" "ASSIGN_SHIFT_RIGHT",
-        ]:
-            return self.parse_assignment(name)
+            "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_SHIFT_LEFT",
+            "PLUS_EQUALS",
+            "MINUS_EQUALS",
+            "MULTIPLY_EQUALS",
+            "DIVIDE_EQUALS",
+        ):
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            
+            # Check if the next expression involves array access
+            if self.current_token[0] == "IDENTIFIER":
+                identifier = self.current_token[1]
+                self.eat("IDENTIFIER")
+                
+                if self.current_token[0] == "LBRACKET":
+                    # We have an array access
+                    self.eat("LBRACKET")
+                    index = self.parse_expression()
+                    self.eat("RBRACKET")
+                    value = ArrayAccessNode(identifier, index)
+                else:
+                    # Go back to just after the operator
+                    self.pos -= 1
+                    self.current_token = self.tokens[self.pos]
+                    value = self.parse_expression()
+            else:
+                value = self.parse_expression()
+                
+            if self.current_token[0] == "DOT":
+                value = self.parse_member_access(value)
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                return BinaryOpNode(VariableNode(type_name, name), op, value)
+
+            else:
+                if update_condition:
+                    return BinaryOpNode(VariableNode(type_name, name), op, value)
+                else:
+                    raise SyntaxError(
+                        f"Expected ';' after variable assignment, found: {self.current_token[0]}"
+                    )
         elif self.current_token[0] == "INCREMENT":
             self.eat("INCREMENT")
             op_name = self.current_token[1]
@@ -573,48 +669,20 @@ class GLSLParser:
         """
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        
+        # Handle array access after variable name
+        if self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            index = self.parse_expression()
+            self.eat("RBRACKET")
+            name = ArrayAccessNode(name, index)
+            
         if self.current_token[0] == "DOT":
             name = self.parse_member_access(name)
+            
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
-
-        elif self.current_token[0] in [
-            "EQUALS",
-            "ASSIGN_ADD",
-            "ASSIGN_SUB",
-            "ASSIGN_MUL",
-            "ASSIGN_DIV",
-            "EQUAL",
-            "LESS_THAN",
-            "GREATER_THAN",
-            "LESS_EQUAL",
-            "GREATER_EQUAL",
-            "ASSIGN_AND",
-            "ASSIGN_OR",
-            "ASSIGN_XOR",
-            "ASSIGN_MOD",
-            "BITWISE_SHIFT_RIGHT",
-            "BITWISE_SHIFT_LEFT",
-            "BITWISE_XOR",
-            "ASSIGN_SHIFT_LEFT" "ASSIGN_SHIFT_RIGHT",
-        ]:
-            op = self.current_token[1]
-            self.eat(self.current_token[0])
-            value = self.parse_expression()
-            if self.current_token[0] == "DOT":
-                value = self.parse_member_access(value)
-            if self.current_token[0] == "SEMICOLON":
-                self.eat("SEMICOLON")
-                return BinaryOpNode(VariableNode(type_name, name), op, value)
-
-            else:
-                if update_condition:
-                    return BinaryOpNode(VariableNode(type_name, name), op, value)
-                else:
-                    raise SyntaxError(
-                        f"Expected ';' after variable assignment, found: {self.current_token[0]}"
-                    )
 
         elif self.current_token[0] in (
             "ASSIGN_ADD",
@@ -636,17 +704,46 @@ class GLSLParser:
             "ASSIGN_MOD",
             "ASSIGN_SHIFT_RIGHT",
             "ASSIGN_SHIFT_LEFT",
+            "PLUS_EQUALS",
+            "MINUS_EQUALS",
+            "MULTIPLY_EQUALS",
+            "DIVIDE_EQUALS",
         ):
-            op = self.current_token[0]
-            self.eat(op)
-            value = self.parse_expression()
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            
+            # Check if the next expression involves array access
+            if self.current_token[0] == "IDENTIFIER":
+                identifier = self.current_token[1]
+                self.eat("IDENTIFIER")
+                
+                if self.current_token[0] == "LBRACKET":
+                    # We have an array access
+                    self.eat("LBRACKET")
+                    index = self.parse_expression()
+                    self.eat("RBRACKET")
+                    value = ArrayAccessNode(identifier, index)
+                else:
+                    # Go back to just after the operator
+                    self.pos -= 1
+                    self.current_token = self.tokens[self.pos]
+                    value = self.parse_expression()
+            else:
+                value = self.parse_expression()
+
+            if self.current_token[0] == "DOT":
+                value = self.parse_member_access(value)
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op, value)
+
             else:
-                raise SyntaxError(
-                    f"Expected ';' after compound assignment, found: {self.current_token[0]}"
-                )
+                if update_condition:
+                    return BinaryOpNode(VariableNode(type_name, name), op, value)
+                else:
+                    raise SyntaxError(
+                        f"Expected ';' after variable assignment, found: {self.current_token[0]}"
+                    )
 
         else:
             raise SyntaxError(
@@ -845,7 +942,6 @@ class GLSLParser:
             "MINUS",
             "MULTIPLY",
             "DIVIDE",
-            "EQUALS",
             "ASSIGN_ADD",
             "ASSIGN_SUB",
             "ASSIGN_MUL",

@@ -13,6 +13,7 @@ from .translator.ast import ASTNode
 # The imports below reference the class names that are re-exported in each backend's __init__.py
 from .backend import DirectX, Metal, OpenGL, Slang, Vulkan, Mojo
 
+
 def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
     """Translate a shader file to another language.
 

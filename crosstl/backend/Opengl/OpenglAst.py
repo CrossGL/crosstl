@@ -90,14 +90,20 @@ class ArrayAccessNode(ASTNode):
 
 
 class VariableNode(ASTNode):
-    def __init__(self, vtype, name, io_type=None, semantic=None):
+    def __init__(self, vtype, name, io_type=None, semantic=None, array_size=None):
         self.vtype = vtype
         self.name = name
         self.io_type = io_type
         self.semantic = semantic
+        self.array_size = array_size
 
     def __repr__(self):
-        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', io_type={self.io_type}, semantic={self.semantic})"
+        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', io_type={self.io_type}, semantic={self.semantic}, array_size={self.array_size})"
+
+    def __str__(self):
+        if self.array_size is not None:
+            return f"{self.vtype} {self.name}[{self.array_size}]"
+        return f"{self.vtype} {self.name}"
 
 
 class AssignmentNode(ASTNode):
