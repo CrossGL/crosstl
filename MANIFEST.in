@@ -2,7 +2,7 @@ include README.md
 include LICENSE
 include backend/DirectX/*.py
 include backend/Metal/*.py
-include backend/Opengl/*.py
+include backend/OpenGL/*.py
 include translator/*.py
 include translator/codegen/*.py
 include crosstl.py
