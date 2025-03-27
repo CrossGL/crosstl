@@ -276,8 +276,7 @@ class VulkanSPIRVCodeGen:
             # Determine result type - default to float for simplicity
             result_type = "float"
             if hasattr(expr, "type"):
-                result_type = expr.type
-
+                result_type = self.map_type(expr.type)
             return f"%{result_id} = {op} %{result_type} {left_id} {right_id}\n"
         elif isinstance(expr, FunctionCallNode):
             if expr.name in ["vec2", "vec3", "vec4"]:
