@@ -1,7 +1,13 @@
 import pytest
 from typing import List
-from crosstl.backend.Slang.SlangLexer import SlangLexer
-from crosstl.backend.Slang.SlangParser import SlangParser
+
+# Try both import paths
+try:
+    from crosstl.backend.Slang.SlangLexer import SlangLexer
+    from crosstl.backend.Slang.SlangParser import SlangParser
+except ImportError:
+    from crosstl.backend.Slang.SlangLexer import SlangLexer
+    from crosstl.backend.Slang.SlangParser import SlangParser
 
 
 def parse_code(tokens: List):
@@ -62,21 +68,21 @@ def test_basic_parsing():
     tokens = lexer.tokenize()
     parser = SlangParser(tokens)
     ast = parser.parse()
-    
+
     # Verify we have an AST
     assert ast is not None
-    
+
     # Verify the AST structure - check that it's a ShaderNode
-    assert hasattr(ast, 'functions')
+    assert hasattr(ast, "functions")
     assert len(ast.functions) > 0
-    
+
     # Find the main function
     main_func = None
     for func in ast.functions:
         if func.name == "main":
             main_func = func
             break
-    
+
     assert main_func is not None, "Main function not found in AST"
 
 

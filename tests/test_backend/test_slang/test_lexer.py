@@ -1,5 +1,10 @@
 import pytest
-from crosstl.backend.Slang.SlangLexer import SlangLexer
+
+# Try both import paths
+try:
+    from crosstl.backend.Slang.SlangLexer import SlangLexer
+except ImportError:
+    from crosstl.backend.Slang.SlangLexer import SlangLexer
 
 
 def test_basic_lexing():

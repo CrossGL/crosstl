@@ -1,8 +1,14 @@
 import pytest
 
-from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
-from crosstl.backend.OpenGL.OpenglParser import GLSLParser
-from crosstl.backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
+# Try both import paths
+try:
+    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
+    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
+    from crosstl.backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
+except ImportError:
+    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
+    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
+    from crosstl.backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
 
 
 def test_struct_definition():

@@ -35,9 +35,10 @@ class CaseSensitiveBackendFinder(importlib.abc.MetaPathFinder):
 
         self.in_find_spec = True
         try:
-            # Only handle crosstl.backend.X modules
-            if not fullname.startswith("crosstl.backend.") and not fullname.startswith(
-                "tests.test_backend.test_"
+            # Only handle crosstl.backend.X modules or test modules
+            if not (
+                fullname.startswith("crosstl.backend.")
+                or fullname.startswith("tests.test_backend.test_")
             ):
                 return None
 
@@ -55,10 +56,20 @@ class CaseSensitiveBackendFinder(importlib.abc.MetaPathFinder):
                 ):
                     # Create the properly capitalized name
                     parts[2] = self.backend_mappings[backend_name]
-                    ".".join(parts)
+                    corrected_name = ".".join(parts)
 
-                    # Let the next finder handle it
-                    return None
+                    # Try to find the spec with the corrected name
+                    spec = None
+                    for finder in sys.meta_path:
+                        if finder is self:
+                            continue
+                        try:
+                            spec = finder.find_spec(corrected_name, path, target)
+                            if spec is not None:
+                                return spec
+                        except (AttributeError, ImportError):
+                            pass
+                    return spec
 
             # Case 2: Handle tests.test_backend.test_xxx imports
             elif fullname.startswith("tests.test_backend.test_") and len(parts) >= 3:
@@ -70,12 +81,28 @@ class CaseSensitiveBackendFinder(importlib.abc.MetaPathFinder):
 
                     # Check if we need to correct the case
                     if backend_name in self.backend_mappings:
-                        # Create the properly capitalized name
-                        parts[2] = f"test_{self.backend_mappings[backend_name]}"
-                        ".".join(parts)
+                        # Try both capitalizations - the original and the corrected one
+                        specs_to_try = []
 
-                        # Let the next finder handle it
-                        return None
+                        # Try original path first (might be correctly capitalized)
+                        specs_to_try.append(fullname)
+
+                        # Try corrected path
+                        parts[2] = f"test_{self.backend_mappings[backend_name]}"
+                        corrected_name = ".".join(parts)
+                        specs_to_try.append(corrected_name)
+
+                        # Try both paths
+                        for name_to_try in specs_to_try:
+                            for finder in sys.meta_path:
+                                if finder is self:
+                                    continue
+                                try:
+                                    spec = finder.find_spec(name_to_try, path, target)
+                                    if spec is not None:
+                                        return spec
+                                except (AttributeError, ImportError):
+                                    pass
 
             # No match or correction needed
             return None

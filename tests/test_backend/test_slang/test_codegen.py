@@ -1,8 +1,14 @@
 import pytest
 
-from crosstl.backend.Slang.SlangLexer import SlangLexer
-from crosstl.backend.Slang.SlangParser import SlangParser
-from crosstl.backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+# Try both import paths
+try:
+    from crosstl.backend.Slang.SlangLexer import SlangLexer
+    from crosstl.backend.Slang.SlangParser import SlangParser
+    from crosstl.backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+except ImportError:
+    from crosstl.backend.Slang.SlangLexer import SlangLexer
+    from crosstl.backend.Slang.SlangParser import SlangParser
+    from crosstl.backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
 
 
 def test_struct_definition():

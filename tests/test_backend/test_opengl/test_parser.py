@@ -1,6 +1,12 @@
 import pytest
-from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
-from crosstl.backend.OpenGL.OpenglParser import GLSLParser
+
+# Try both import paths
+try:
+    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
+    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
+except ImportError:
+    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
+    from crosstl.backend.OpenGL.OpenglParser import GLSLParser
 
 
 def test_basic_parsing():

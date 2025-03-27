@@ -1,5 +1,10 @@
 import pytest
-from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
+
+# Try both import paths
+try:
+    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
+except ImportError:
+    from crosstl.backend.OpenGL.OpenglLexer import GLSLLexer
 
 
 def test_basic_lexing():

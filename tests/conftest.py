@@ -9,6 +9,7 @@ import pytest
 import re
 import importlib.util
 import subprocess
+from pathlib import Path
 
 # Add the project root to the Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -108,41 +109,57 @@ def check_backend_modules():
                             )
 
 
+# Define a mapping of lowercase to proper capitalization
+BACKEND_NAMES = {
+    "opengl": "OpenGL",
+    "directx": "DirectX",
+    "slang": "Slang",
+    "metal": "Metal",
+    "vulkan": "Vulkan",
+    "mojo": "Mojo",
+}
+
+
 # Add hook to handle test path collection with case-insensitive matching
 def pytest_ignore_collect(collection_path, config):
     """Special hook to handle case-insensitive test directories."""
-    # Check if the path exists with proper capitalization
-    if not os.path.exists(collection_path):
-        # For test_backend/test_X paths
-        if "test_backend/test_" in str(collection_path):
-            path_str = str(collection_path)
+    # Convert to string for consistency
+    path_str = str(collection_path)
 
-            # Extract the backend name from path
-            match = re.search(r"test_backend/test_([^/]+)", path_str)
-            if match:
-                backend_name = match.group(1).lower()
+    # Skip if not in test_backend area
+    if "test_backend/test_" not in path_str.replace("\\", "/"):
+        return False
 
-                # Map of lowercase to proper capitalization
-                backends = {
-                    "opengl": "OpenGL",
-                    "directx": "DirectX",
-                    "slang": "Slang",
-                    "metal": "Metal",
-                    "vulkan": "Vulkan",
-                    "mojo": "Mojo",
-                }
+    # Get the lowercase version of the path
+    path_str.lower()
 
-                # Check if we have a capitalized version
-                if backend_name in backends:
-                    # Replace with the proper capitalization in the path
-                    correct_path = path_str.replace(
-                        f"test_backend/test_{backend_name}",
-                        f"test_backend/test_{backends[backend_name]}",
-                    )
+    # Extract the backend name from path
+    match = re.search(
+        r"test_backend/test_([^/\\]+)", path_str.replace("\\", "/"), re.IGNORECASE
+    )
+    if not match:
+        return False
 
-                    # If the correct path exists, ignore this path
-                    if os.path.exists(correct_path):
-                        return True
+    backend_name = match.group(1).lower()
+
+    # Check if this is a known backend
+    if backend_name in BACKEND_NAMES:
+        # If path doesn't exist but we're processing a known backend directory
+        if not os.path.exists(path_str):
+            # Check if the capitalized version exists
+            cap_name = BACKEND_NAMES[backend_name]
+            correct_dir = re.sub(
+                rf"test_backend/test_{backend_name}",
+                f"test_backend/test_{cap_name}",
+                path_str.replace("\\", "/"),
+                flags=re.IGNORECASE,
+            ).replace("/", os.sep)
+
+            # If the capitalized version exists, let pytest collect from there instead
+            if os.path.exists(correct_dir):
+                return (
+                    True  # Ignore this path, we'll collect from the capitalized version
+                )
 
     return False
 
@@ -151,24 +168,17 @@ def pytest_ignore_collect(collection_path, config):
 def pytest_collect_file(parent, path):
     """Handle collection of test files with proper module imports."""
     # Path may be a different type depending on pytest version
+    # Convert to Path object for consistency
+    if not isinstance(path, Path):
+        path = Path(str(path))
+
     path_str = str(path)
-    if (
-        os.path.isfile(path_str)
-        and os.path.basename(path_str).startswith("test_")
-        and path_str.endswith(".py")
-    ):
+    if path.is_file() and path.name.startswith("test_") and path.suffix == ".py":
         # Create module mappings for test imports
-        backend_modules = {
-            "opengl": "OpenGL",
-            "directx": "DirectX",
-            "slang": "Slang",
-            "metal": "Metal",
-            "vulkan": "Vulkan",
-            "mojo": "Mojo",
-        }
+        backend_modules = BACKEND_NAMES.copy()
 
         # Process the file content to fix imports
-        if "test_backend/test_" in path_str:
+        if "test_backend/test_" in path_str.replace("\\", "/"):
             try:
                 with open(path_str, "r", encoding="utf-8") as f:
                     file_content = f.read()
