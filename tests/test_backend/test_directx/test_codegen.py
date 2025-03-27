@@ -1,8 +1,10 @@
-from crosstl.backend.DirectX import DirectxCrossGLCodeGen
-from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
-from crosstl.backend.DirectX.DirectxParser import HLSLParser
 import pytest
 from typing import List
+
+# Update imports to use the correct capitalization and path
+from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
 
 def generate_code(ast_node):
@@ -12,7 +14,7 @@ def generate_code(ast_node):
     Returns:
         str: The generated code from the abstract syntax tree
     """
-    codegen = DirectxCrossGLCodeGen.HLSLToCrossGLConverter()
+    codegen = HLSLToCrossGLConverter()
     return codegen.generate(ast_node)
 
 
