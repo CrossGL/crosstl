@@ -6,7 +6,6 @@ import sys
 import os
 import pytest
 import subprocess
-from pathlib import Path
 
 # Add the project root to the Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

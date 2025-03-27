@@ -1,6 +1,5 @@
 from setuptools import setup, find_packages
 import os
-import sys
 
 # Ensure we have all necessary __init__.py files
 backend_dirs = [
