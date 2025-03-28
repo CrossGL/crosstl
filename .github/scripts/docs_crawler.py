@@ -33,7 +33,7 @@ import nltk
 from nltk.tokenize import sent_tokenize
 import spacy
 
-# Setup logging 
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
