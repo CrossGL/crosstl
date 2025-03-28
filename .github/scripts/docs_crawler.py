@@ -51,11 +51,11 @@ os.makedirs(".github/logs", exist_ok=True)
 
 # Load NLP models
 try:
-    nlp = spacy.load("en_core_web_sm")
+    nlp = spacy.load("en_core_web_lg")
 except OSError:
     logger.warning("Spacy model not found, downloading...")
-    os.system("python -m spacy download en_core_web_sm")
-    nlp = spacy.load("en_core_web_sm")
+    os.system("python -m spacy download en_core_web_lg")
+    nlp = spacy.load("en_core_web_lg")
 
 # Documentation sources configuration
 DOCUMENTATION_SOURCES = {
