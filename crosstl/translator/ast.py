@@ -86,7 +86,7 @@ class IfNode(ASTNode):
         self.if_condition = if_condition
         self.if_body = if_body
         self.else_if_conditions = else_if_conditions
-        self.else_if_bodies = ([] if else_if_bodies is None else else_if_bodies)
+        self.else_if_bodies = [] if else_if_bodies is None else else_if_bodies
         self.else_body = else_body
 
     def __repr__(self):

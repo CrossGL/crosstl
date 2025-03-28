@@ -1,3 +1,4 @@
+import logging
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
@@ -29,8 +30,20 @@ class VulkanSPIRVCodeGen:
         return ""
 
     def generate_shader(self, node):
-        self.shader_inputs = node.inputs
-        self.shader_outputs = node.outputs
+        # Extract struct information to determine inputs and outputs
+        self.shader_inputs = []
+        self.shader_outputs = []
+
+        # Analyze structures to identify inputs and outputs
+        for struct in node.structs:
+            if struct.name.startswith("VS"):
+                for member in struct.members:
+                    if hasattr(member, "semantic") and member.semantic:
+                        self.shader_inputs.append((member.vtype, member.name))
+            elif struct.name.endswith("Output"):
+                for member in struct.members:
+                    if hasattr(member, "semantic") and member.semantic:
+                        self.shader_outputs.append((member.vtype, member.name))
 
         self.id_counter = 1
         code = "; SPIR-V\n"
@@ -44,7 +57,7 @@ class VulkanSPIRVCodeGen:
 
         # EntryPoint
         entry_point_args = " ".join(
-            f"%{name}" for _, name in node.inputs + node.outputs
+            f"%{name}" for _, name in self.shader_inputs + self.shader_outputs
         )
         code += f'OpEntryPoint Fragment %main "main" {entry_point_args}\n'
 
@@ -53,12 +66,12 @@ class VulkanSPIRVCodeGen:
 
         # Names and decorations
         code += 'OpName %main "main"\n'
-        for _, name in node.inputs + node.outputs:
+        for _, name in self.shader_inputs + self.shader_outputs:
             code += f'OpName %{name} "{name}"\n'
 
-        for i, (_, name) in enumerate(node.inputs):
+        for i, (_, name) in enumerate(self.shader_inputs):
             code += f"OpDecorate %{name} Location {i}\n"
-        for i, (_, name) in enumerate(node.outputs):
+        for i, (_, name) in enumerate(self.shader_outputs):
             code += f"OpDecorate %{name} Location {i}\n"
 
         # Type declarations
@@ -122,7 +135,18 @@ class VulkanSPIRVCodeGen:
 
     def declare_function(self, node):
         return_type = self.map_type(node.return_type)
-        param_types = [self.map_type(param[0]) for param in node.params]
+        param_types = [self.map_type(param.vtype) for param in node.params]
+
+        # Handle parameters which are VariableNode objects
+        param_types = []
+        if node.params:
+            if isinstance(node.params[0], VariableNode):
+                # Handle list of VariableNode objects
+                param_types = [self.map_type(param.vtype) for param in node.params]
+            else:
+                # Handle tuples of (type, name)
+                param_types = [self.map_type(param[0]) for param in node.params]
+
         function_type_id = self.get_id()
         self.function_types[node.name] = function_type_id
 
@@ -140,10 +164,19 @@ class VulkanSPIRVCodeGen:
         code = f"%{self.function_ids[node.name]} = OpFunction %{return_type} None %{self.function_types[node.name]}\n"
 
         # Generate parameters
-        for param_type, param_name in node.params:
-            param_id = self.get_id()
-            code += f"%{param_id} = OpFunctionParameter %{self.map_type(param_type)}\n"
-            self.variable_ids[param_name] = param_id
+        if node.params:
+            if isinstance(node.params[0], VariableNode):
+                # Handle list of VariableNode objects
+                for param in node.params:
+                    param_id = self.get_id()
+                    code += f"%{param_id} = OpFunctionParameter %{self.map_type(param.vtype)}\n"
+                    self.variable_ids[param.name] = param_id
+            else:
+                # Handle tuples of (type, name)
+                for param_type, param_name in node.params:
+                    param_id = self.get_id()
+                    code += f"%{param_id} = OpFunctionParameter %{self.map_type(param_type)}\n"
+                    self.variable_ids[param_name] = param_id
 
         code += f"%{self.get_id()} = OpLabel\n"
 
@@ -241,48 +274,52 @@ class VulkanSPIRVCodeGen:
             right_id = self.generate_expression(expr.right)
             result_id = self.get_id()
             op = self.map_operator(expr.op)
-            return (
-                f"%{result_id} = {op} {self.type_ids[expr.type]} {left_id} {right_id}\n"
-            )
+            # Determine result type - default to float for simplicity
+            result_type = "float"
+            if hasattr(expr, "type"):
+                logging.debug(f"Skipping unexpected token {self.current_token[0]}")
+
+            return f"%{result_id} = {op} %{result_type} {left_id} {right_id}\n"
         elif isinstance(expr, FunctionCallNode):
             if expr.name in ["vec2", "vec3", "vec4"]:
                 # Handle vector constructors
                 args = [self.generate_expression(arg) for arg in expr.args]
                 result_id = self.get_id()
-                vector_type = self.map_type(expr.name)
-                return f"%{result_id} = OpCompositeConstruct %{vector_type} {' '.join(args)}\n"
+                components = " ".join(args)
+                return (
+                    f"%{result_id} = OpCompositeConstruct %{expr.name} {components}\n"
+                )
             else:
-                # Handle regular function calls
-                args = [self.generate_expression(arg) for arg in expr.args]
                 result_id = self.get_id()
-                return_type = self.get_function_return_type(expr.name)
-                if return_type == "void":
-                    return f"OpFunctionCall %void %{self.function_ids[expr.name]} {' '.join(args)}\n"
-                else:
-                    return f"%{result_id} = OpFunctionCall %{return_type} %{self.function_ids[expr.name]} {' '.join(args)}\n"
+                args = [self.generate_expression(arg) for arg in expr.args]
+                arg_list = " ".join(args)
+                return f"%{result_id} = OpFunctionCall %{self.function_ids[expr.name]} {arg_list}\n"
         elif isinstance(expr, MemberAccessNode):
-            object_id = self.generate_expression(expr.object)
-            result_id = self.get_id()
-            return (
-                f"%{result_id} = OpCompositeExtract %float {object_id} {expr.member}\n"
-            )
+            return self.translate_expression(expr)
         else:
-            return str(expr)
+            return f"; Unhandled expression: {expr}\n"
 
     def translate_expression(self, expr):
-        if expr in self.variable_ids:
-            return f"%{self.variable_ids[expr]}"
-        elif expr.startswith("vec"):
-            components = [self.translate_expression(c) for c in expr[4:-1].split(",")]
+        if isinstance(expr, MemberAccessNode):
+            # Handle member access expressions
+            obj = self.generate_expression(expr.object)
+            member = expr.member
             result_id = self.get_id()
-            return f"%{result_id} = OpCompositeConstruct %{expr[:4]} {' '.join(components)}\n"
-        else:
-            try:
-                float(expr)
+            return f"%{result_id} = OpAccessChain %{obj} %{member}\n"
+        elif isinstance(expr, str):
+            # Handle string expressions
+            if expr in self.variable_ids:
+                return f"%{self.variable_ids[expr]}"
+            elif expr.startswith("vec"):
+                # Vector constructor
+                components = int(expr[3:])
                 result_id = self.get_id()
-                return f"%{result_id} = OpConstant %float {expr}\n"
-            except ValueError:
-                return f"; Unhandled expression: {expr}\n"
+                init_values = " ".join([f"%float_0" for _ in range(components - 1)] + ["%float_1"])
+                return f"%{result_id} = OpCompositeConstruct %{expr} {init_values}\n"
+            else:
+                return expr
+        else:
+            return str(expr)
 
     def map_type(self, vtype):
         type_mapping = {

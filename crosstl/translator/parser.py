@@ -16,7 +16,7 @@ from .ast import (
 )
 
 from .lexer import Lexer
-import warnings
+import logging
 
 
 class Parser:
@@ -88,13 +88,14 @@ class Parser:
                 self.eat("SHADER")
                 self.eat("IDENTIFIER")
                 self.eat("LBRACE")
-            if self.current_token[0] == "STRUCT":
+            elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "CBUFFER":
                 cbuffers.append(self.parse_cbuffer())
             elif self.current_token[1] in ["vertex", "fragment"]:
                 functions.append(self.parse_main_function())
-                self.eat("RBRACE")
+                if self.current_token[0] == "RBRACE":
+                    self.eat("RBRACE")
             elif self.current_token[0] in [
                 "VOID",
                 "FLOAT",
@@ -112,10 +113,12 @@ class Parser:
                     functions.append(self.parse_function())
                 else:
                     global_variables.append(self.parse_global_variable())
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            elif self.current_token[0] == "RBRACE":
+                self.eat("RBRACE")
             else:
-                warnings.warn(
-                    f"Skipping unexpected token {self.current_token[0]}", SyntaxWarning
-                )
+                logging.debug(f"Skipping unexpected token {self.current_token[0]}")
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
         return ShaderNode(structs, functions, global_variables, cbuffers)

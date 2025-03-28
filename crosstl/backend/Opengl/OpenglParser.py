@@ -39,6 +39,7 @@ class GLSLParser:
         uniforms = []
         global_variables = []
         functions = []
+        structs = []
 
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "VERSION":
@@ -51,6 +52,8 @@ class GLSLParser:
                 constant.append(self.parse_constant())
             elif self.current_token[0] == "UNIFORM":
                 uniforms.append(self.parse_uniform())
+            elif self.current_token[0] == "STRUCT":
+                structs.append(self.parse_struct())
             elif self.current_token[0] in [
                 "VOID",
                 "FLOAT",
@@ -74,6 +77,7 @@ class GLSLParser:
             global_variables,
             functions,
             self.shader_type,
+            structs,
         )
 
     def is_function(self):
@@ -924,3 +928,28 @@ class GLSLParser:
             return self.parse_member_access(MemberAccessNode(object, member))
 
         return MemberAccessNode(object, member)
+
+    def parse_struct(self):
+        """Parse a struct declaration in GLSL.
+
+        Returns:
+            StructNode: A node representing the struct declaration
+        """
+        self.eat("STRUCT")
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("LBRACE")
+
+        fields = []
+        while self.current_token[0] != "RBRACE":
+            field_type = self.current_token[1]
+            self.eat(self.current_token[0])
+            field_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.eat("SEMICOLON")
+            fields.append({"type": field_type, "name": field_name})
+
+        self.eat("RBRACE")
+        self.eat("SEMICOLON")
+
+        return StructNode(name, fields)

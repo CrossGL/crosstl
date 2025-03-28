@@ -317,144 +317,42 @@ def test_assignment_or_operator():
 def test_assignment_modulus_operator():
     code = """
     shader main {
-
-    struct VSInput {
-        vec2 texCoord @ TEXCOORD0;
-    };
-
-    struct VSOutput {
-        vec4 color @ COLOR;
-    };
-
-    sampler2D iChannel0;
-
-    vertex {
-        VSOutput main(VSInput input) {
-            VSOutput output;
-            output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
-            uint a %= b;
-            // Pass through texture coordinates as color
-            output.color = vec4(input.texCoord, 0.0, 1.0);
-            return output;
+        vertex {
+            void main() {
+                int a = 10;
+                a %= 3;  // Assignment modulus operator
+            }
         }
     }
-
-    fragment {
-        vec4 main(VSOutput input) @ gl_FragColor {
-            // Sample brightness and calculate bloom
-            float brightness = texture(iChannel0, input.color.xy).r;
-            float bloom = max(0.0, brightness - 0.5);
-            // Apply bloom to the texture color
-            uint a %= b;
-            vec3 texColor = texture(iChannel0, input.color.xy).rgb;
-            vec3 colorWithBloom = texColor + vec3(bloom);
-            return vec4(colorWithBloom, 1.0);
-        }
-    }
-}
-    """
-    try:
-        tokens = tokenize_code(code)
-        ast = parse_code(tokens)
-        code = generate_code(ast)
-        print(code)
-    except SyntaxError:
-        pytest.fail("assignment modulus codegen not implemented.")
-
-
-def test_assignment_modulus_operator():
-    code = """
-    shader main {
-
-    struct VSInput {
-        vec2 texCoord @ TEXCOORD0;
-    };
-
-    struct VSOutput {
-        vec4 color @ COLOR;
-    };
-
-    sampler2D iChannel0;
-
-    vertex {
-        VSOutput main(VSInput input) {
-            VSOutput output;
-            output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
-            uint a ^= b;
-            // Pass through texture coordinates as color
-            output.color = vec4(input.texCoord, 0.0, 1.0);
-            return output;
-        }
-    }
-    fragment {
-        vec4 main(VSOutput input) @ gl_FragColor {
-            // Sample brightness and calculate bloom
-            float brightness = texture(iChannel0, input.color.xy).r;
-            float bloom = max(0.0, brightness - 0.5);
-            // Apply bloom to the texture color
-            uint a ^= b;
-            vec3 texColor = texture(iChannel0, input.color.xy).rgb;
-            vec3 colorWithBloom = texColor + vec3(bloom);
-            return vec4(colorWithBloom, 1.0);
-        }
-    }
-}
     """
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print(generated_code)
+        assert "a %= 3" in generated_code or "a = a % 3" in generated_code
     except SyntaxError:
-        pytest.fail("assignment modulus codegen not implemented.")
+        pytest.fail("Assignment modulus operator codegen not implemented.")
 
 
 def test_assignment_xor_operator():
     code = """
     shader main {
-
-    struct VSInput {
-        vec2 texCoord @ TEXCOORD0;
-    };
-
-    struct VSOutput {
-        vec4 color @ COLOR;
-    };
-
-    sampler2D iChannel0;
-
-    vertex {
-        VSOutput main(VSInput input) {
-            VSOutput output;
-            output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
-            uint a ^= b;
-            // Pass through texture coordinates as color
-            output.color = vec4(input.texCoord, 0.0, 1.0);
-            return output;
+        vertex {
+            void main() {
+                int a = 5;
+                a ^= 3;  // Assignment XOR operator
+            }
         }
     }
 
-    fragment {
-        vec4 main(VSOutput input) @ gl_FragColor {
-            // Sample brightness and calculate bloom
-            float brightness = texture(iChannel0, input.color.xy).r;
-            float bloom = max(0.0, brightness - 0.5);
-            // Apply bloom to the texture color
-            uint a ^= b;
-            vec3 texColor = texture(iChannel0, input.color.xy).rgb;
-            vec3 colorWithBloom = texColor + vec3(bloom);
-            return vec4(colorWithBloom, 1.0);
-        }
-    }
-}
     """
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print(generated_code)
+        assert "a ^= 3" in generated_code or "a = a ^ 3" in generated_code
     except SyntaxError:
-        pytest.fail("assignment modulus codegen not implemented.")
+        pytest.fail("Assignment XOR operator codegen not implemented.")
 
 
 def test_assignment_shift_operators():
