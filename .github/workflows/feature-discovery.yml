@@ -6,7 +6,7 @@ on:
     - cron: "0 0 * * *"
   pull_request:
     branches:
-      - main    
+      - main
   workflow_dispatch: # Allow manual triggering
     inputs:
       languages:
@@ -36,12 +36,9 @@ jobs:
         run: |
           LANGUAGES="${{ github.event.inputs.languages }}"
           if [ -z "$LANGUAGES" ]; then
-            # Default to all supported languages
             LANGUAGES="metal,directx,opengl,vulkan,slang,mojo"
           fi
-
-          # Convert to JSON array for matrix
-          JSON_ARRAY=$(echo $LANGUAGES | tr ',' '\n' | jq -R . | jq -s .)
+          JSON_ARRAY=$(echo "$LANGUAGES" | tr ',' '\n' | jq -R . | jq -s -c .)
           echo "matrix={\"language\":$JSON_ARRAY}" >> $GITHUB_OUTPUT
 
   analyze-documentation:
