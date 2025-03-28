@@ -49,18 +49,18 @@ def pytest_sessionstart(session):
     # Set up aliases for lowercase directory imports
     test_dir = os.path.dirname(__file__)
     test_backend_dir = os.path.join(test_dir, "test_backend")
-    
+
     for lowercase, proper in backend_modules.items():
         # For each backend module type (OpenGL, Slang, etc.)
         uppercase_dir = os.path.join(test_backend_dir, f"test_{proper}")
         lowercase_dir = os.path.join(test_backend_dir, f"test_{lowercase}")
-        
+
         # If both directories exist, create bidirectional aliases
         if os.path.exists(uppercase_dir) and os.path.exists(lowercase_dir):
             # Create the module aliases
             lowercase_module = f"tests.test_backend.test_{lowercase}"
             proper_module = f"tests.test_backend.test_{proper}"
-            
+
             # Try to import the proper module first
             try:
                 proper_mod = importlib.import_module(proper_module)
@@ -68,7 +68,7 @@ def pytest_sessionstart(session):
                     sys.modules[lowercase_module] = proper_mod
             except ImportError:
                 pass
-                
+
             # If we still don't have the lowercase module, try direct import
             if lowercase_module not in sys.modules:
                 try:
@@ -77,19 +77,25 @@ def pytest_sessionstart(session):
                         sys.modules[proper_module] = lowercase_mod
                 except ImportError:
                     pass
-            
+
             # Set up aliases for test files
             for item in os.listdir(uppercase_dir):
-                if item.endswith('.py') and item.startswith('test_'):
+                if item.endswith(".py") and item.startswith("test_"):
                     # Get module name without extension
                     modname = item[:-3]
-                    
+
                     # Set up aliases for the test modules
                     upper_mod_name = f"{proper_module}.{modname}"
                     lower_mod_name = f"{lowercase_module}.{modname}"
-                    
+
                     # Create bidirectional aliases
-                    if upper_mod_name in sys.modules and lower_mod_name not in sys.modules:
+                    if (
+                        upper_mod_name in sys.modules
+                        and lower_mod_name not in sys.modules
+                    ):
                         sys.modules[lower_mod_name] = sys.modules[upper_mod_name]
-                    elif lower_mod_name in sys.modules and upper_mod_name not in sys.modules:
+                    elif (
+                        lower_mod_name in sys.modules
+                        and upper_mod_name not in sys.modules
+                    ):
                         sys.modules[upper_mod_name] = sys.modules[lower_mod_name]
