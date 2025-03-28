@@ -49,6 +49,7 @@ TOKENS = tuple(
         ("STRING", r'"[^"]*"'),
         ("COMMA", r","),
         ("COLON", r":"),
+        ("QUESTION", r"\?"),
         ("LESS_EQUAL", r"<="),
         ("GREATER_EQUAL", r">="),
         ("LESS_THAN", r"<"),

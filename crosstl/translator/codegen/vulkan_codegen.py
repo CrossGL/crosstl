@@ -314,7 +314,9 @@ class VulkanSPIRVCodeGen:
                 # Vector constructor
                 components = int(expr[3:])
                 result_id = self.get_id()
-                init_values = " ".join([f"%float_0" for _ in range(components - 1)] + ["%float_1"])
+                init_values = " ".join(
+                    [f"%float_0" for _ in range(components - 1)] + ["%float_1"]
+                )
                 return f"%{result_id} = OpCompositeConstruct %{expr} {init_values}\n"
             else:
                 return expr

@@ -1,323 +1,712 @@
-from .OpenglAst import *
-from .OpenglParser import *
-from .OpenglLexer import *
+"""
+OpenGL to CrossGL converter implementation
+
+This module implements a converter from GLSL to CrossGL syntax.
+It translates GLSL AST structures into CrossGL code.
+"""
+
+from .OpenglAst import (
+    ShaderNode,
+    VariableNode,
+    AssignmentNode,
+    FunctionNode,
+    BinaryOpNode,
+    UnaryOpNode,
+    ReturnNode,
+    FunctionCallNode,
+    IfNode,
+    ForNode,
+    LayoutNode,
+    VectorConstructorNode,
+    ConstantNode,
+    MemberAccessNode,
+    TernaryOpNode,
+    ArrayAccessNode,
+    StructNode,
+    UniformNode,
+)
 
 
 class GLSLToCrossGLConverter:
+    """Convert GLSL shaders to CrossGL format"""
+
     def __init__(self, shader_type="vertex"):
         self.shader_type = shader_type
-        self.structures = {"VSInput": [], "PSOutput": [], "PSInput": [], "VSOutput": []}
-        self.gl_position = False
-        self.type_mapping = {}
-        self.semantic_map = {
-            "gl_VertexID": "gl_VertexID",
-            "gl_InstanceID": "gl_InstanceID",
-            "gl_FrontFacing": "gl_IsFrontFace",
-            "gl_PrimitiveID": "gl_PrimitiveID",
-            "layout(location = 8)": "TEXCOORD3",
-            "layout(location = 9)": "TEXCOORD4",
-            "layout(location = 10)": "TEXCOORD5",
-            "layout(location = 11)": "TEXCOORD6",
-            "layout(location = 12)": "TEXCOORD7",
-            "gl_Position": "gl_Position",
-            "gl_PointSize": "gl_PointSize",
-            "gl_ClipDistance": "gl_ClipDistance",
-            "layout(location = 0)": "gl_FragColor",
-            "layout(location = 1)": "gl_FragColor1",
-            "layout(location = 2)": "gl_FragColor2",
-            "layout(location = 3)": "gl_FragColor3",
-            "layout(location = 4)": "gl_FragColor4",
-            "layout(location = 5)": "gl_FragColor5",
-            "layout(location = 6)": "gl_FragColor6",
-            "layout(location = 7)": "gl_FragColor7",
-            "gl_FragDepth": "gl_FragDepth",
-            "gl_FragCoord": "gl_FragCoord",
-            "gl_PointCoord": "gl_PointCoord",
-            "gl_GlobalInvocationID": "gl_GlobalInvocationID",
-            "gl_LocalInvocationID": "gl_LocalInvocationID",
-            "gl_WorkGroupID": "gl_WorkGroupID",
-            "gl_LocalInvocationIndex": "gl_LocalInvocationIndex",
-            "gl_WorkGroupSize": "gl_WorkGroupSize",
-            "gl_NumWorkGroups": "gl_NumWorkGroups",
+        self.indent_level = 0
+        self.indent_str = "    "  # 4 spaces for indentation
+
+        # Mapping of GLSL built-in functions to CrossGL equivalents
+        self.function_map = {
+            "dot": "dot",
+            "normalize": "normalize",
+            "sin": "sin",
+            "cos": "cos",
+            "tan": "tan",
+            "asin": "asin",
+            "acos": "acos",
+            "atan": "atan",
+            "pow": "pow",
+            "exp": "exp",
+            "log": "log",
+            "sqrt": "sqrt",
+            "inversesqrt": "inverseSqrt",
+            "abs": "abs",
+            "sign": "sign",
+            "floor": "floor",
+            "ceil": "ceil",
+            "fract": "fract",
+            "mod": "mod",
+            "min": "min",
+            "max": "max",
+            "clamp": "clamp",
+            "mix": "mix",
+            "step": "step",
+            "smoothstep": "smoothstep",
+            "length": "length",
+            "distance": "distance",
+            "reflect": "reflect",
+            "refract": "refract",
+            "texture": "sample",
+            "texture2D": "sample",
+            "textureCube": "sample",
         }
 
-    def generate(self, ast):
-        self.gl_position = False
-        code = "shader main {\n"
-        # Generate custom functions
-        code += " \n"
-        self.check_for_gl_position(ast)
-        if self.gl_position:
-            self.structures["VSOutput"].append(("vec4", "position", None))
-        for uniform in ast.uniforms:
-            code += f"    cbuffer uniforms {{\n"
-            if isinstance(uniform, UniformNode):
-                code += f"        {uniform.vtype} {uniform.name};\n"
-            code += "    }\n\n"
+        # Mapping of GLSL types to CrossGL types
+        self.type_map = {
+            "float": "float",
+            "int": "int",
+            "uint": "uint",
+            "bool": "bool",
+            "vec2": "vec2",
+            "vec3": "vec3",
+            "vec4": "vec4",
+            "ivec2": "ivec2",
+            "ivec3": "ivec3",
+            "ivec4": "ivec4",
+            "bvec2": "bvec2",
+            "bvec3": "bvec3",
+            "bvec4": "bvec4",
+            "mat2": "mat2",
+            "mat3": "mat3",
+            "mat4": "mat4",
+            "sampler2D": "Texture2D",
+            "samplerCube": "TextureCube",
+            "void": "void",
+        }
 
-        for var in ast.io_variables:
-            if isinstance(var, LayoutNode):
-                if var.io_type == "vertex_IN":
-                    self.structures["VSInput"].append(
-                        (var.dtype, var.name, var.semantic)
-                    )
-                elif var.io_type == "vertex_OUT":
-                    self.structures["VSOutput"].append(
-                        (var.dtype, var.name, var.semantic)
-                    )
-                elif var.io_type == "fragment_IN":
-                    self.structures["PSInput"].append(
-                        (var.dtype, var.name, var.semantic)
-                    )
-                elif var.io_type == "fragment_OUT":
-                    self.structures["PSOutput"].append(
-                        (var.dtype, var.name, var.semantic)
-                    )
-            elif isinstance(var, VariableNode):
-                if var.io_type == "vertex_IN":
-                    self.structures["VSInput"].append(
-                        (var.vtype, var.name, var.semantic)
-                    )
-                elif var.io_type == "vertex_OUT":
-                    self.structures["VSOutput"].append(
-                        (var.vtype, var.name, var.semantic)
-                    )
-                elif var.io_type == "fragment_IN":
-                    self.structures["PSInput"].append(
-                        (var.vtype, var.name, var.semantic)
-                    )
-                elif var.io_type == "fragment_OUT":
-                    self.structures["PSOutput"].append(
-                        (var.vtype, var.name, var.semantic)
-                    )
-            else:
-                raise ValueError("Invalid io type")
-        for struct_name, members in self.structures.items():
-            if members:
-                code += f"struct {struct_name} {{\n"
-                for i, (dtype, name, semantic) in enumerate(members):
-                    if struct_name == "VSInput":
-                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
-                    elif struct_name == "VSOutput":
-                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
-                    elif struct_name == "PSInput":
-                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
-                    elif struct_name == "PSOutput":
-                        code += f"    {dtype} {name} {self.map_semantic(semantic,i)};\n"
-                code += "};\n\n"
-
-        for constant in ast.constant:
-            code += f"    static {constant.vtype} {constant.name} = {constant.value};\n"
-        code += " \n"
-
-        for global_variable in ast.global_variables:
-            code += f"    {global_variable.vtype} {global_variable.name};\n"
-        for f in ast.functions:
-            code += self.generate_functions(f)
-        code += "}\n"
-        return code
-
-    def check_for_gl_position(self, ast):
-        for f in ast.functions:
-            if f.name == "main":
-                for stmt in f.body:
-                    if isinstance(stmt, BinaryOpNode):
-                        if isinstance(stmt.left, str) and stmt.left == "gl_Position":
-                            self.gl_position = True
-                        elif (
-                            isinstance(stmt.left, VariableNode)
-                            and stmt.left.name == "gl_Position"
-                        ):
-                            self.gl_position = True
-
-    def generate_functions(self, functions):
-        code = ""
-        if functions.qualifier == "vertex":
-            code += "vertex {\n"
-            code += "      VSOutput main(VSInput input) {\n"
-            code += "         VSOutput output;\n"
-        elif functions.qualifier == "fragment":
-            code += "fragment {\n"
-            code += "       PSOutput main(PSInput input) {\n"
-            code += "        PSOutput output;\n"
-        else:
-            params = ", ".join(
-                f"{self.map_type(param[0])} {param[1]}" for param in functions.params
-            )
-            return_type = self.map_type(functions.return_type)
-            code += f"{return_type} {functions.name}({params}) {{\n"
-        for stmt in functions.body:
-            code += self.generate_statement(stmt, 2)
-        if functions.name == "main":
-            code += "        return output;\n"
-            code += "        }\n"
-            code += "    }\n"
-        else:
-            code += "        }\n\n"
-
-        return code
-
-    def generate_statement(self, stmt, indent=0, shader_type=None):
-        indent_str = "    " * indent
-        if isinstance(stmt, VariableNode):
-            return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
-        elif isinstance(stmt, AssignmentNode):
-            return f"{indent_str}{self.generate_assignment(stmt, shader_type)};\n"
-        elif isinstance(stmt, IfNode):
-            return self.generate_if(stmt, indent, shader_type)
-        elif isinstance(stmt, ForNode):
-            return self.generate_for(stmt, indent, shader_type)
-        elif isinstance(stmt, ReturnNode):
-            code = ""
-            for i, return_stmt in enumerate(stmt.value):
-                code += f"{self.generate_expression(return_stmt, shader_type)}"
-                if i < len(stmt.value) - 1:
-                    code += ", "
-            return f"{indent_str}return {code};\n"
-        else:
-            return f"{indent_str}{self.generate_expression(stmt, shader_type)};\n"
-
-    def generate_assignment(self, node, shader_type=None):
-        if shader_type in ["vertex", "fragment"] and isinstance(node.name, str):
-            if (
-                node.name in self.structures["VSOutput"]
-                or node.name in self.structures["PSOutput"]
-            ):
-                return f"output.{node.name} = {self.generate_expression(node.value, shader_type)}"
-        if isinstance(node.name, VariableNode) and node.name.vtype:
-            return f"{self.map_type(node.name.vtype)} {node.name.name} = {self.generate_expression(node.value, shader_type)}"
-        else:
-            lhs = self.generate_expression(node.name, shader_type)
-            if lhs == "gl_Position" or lhs == "gl_position":
-                return f"output.position = {self.generate_expression(node.value, shader_type)}"
-            return f"{lhs} = {self.generate_expression(node.value, shader_type)}"
-
-    def generate_if(self, node, indent, shader_type=None):
-        indent_str = "    " * indent
-        code = f"{indent_str}if ({self.generate_expression(node.if_condition, shader_type)}) {{\n"
-        for stmt in node.if_body:
-            code += self.generate_statement(stmt, indent + 1, shader_type)
-        code += f"{indent_str}}}"
-
-        for else_if_condition, else_if_body in zip(
-            node.else_if_conditions, node.else_if_bodies
-        ):
-            code += f" else if ({self.generate_expression(else_if_condition, shader_type)}) {{\n"
-            for stmt in else_if_body:
-                code += self.generate_statement(stmt, indent + 1, shader_type)
-            code += f"{indent_str}}}"
-
-        if node.else_body:
-            code += " else {\n"
-            for stmt in node.else_body:
-                code += self.generate_statement(stmt, indent + 1, shader_type)
-            code += f"{indent_str}}}"
-        code += "\n"
-        return code
-
-    def generate_for(self, node, indent, shader_type=None):
-        indent_str = "    " * indent
-
-        init = self.generate_statement(node.init, 0, shader_type).strip()[
-            :-1
-        ]  # Remove trailing semicolon
-
-        condition = self.generate_statement(node.condition, 0, shader_type).strip()[
-            :-1
-        ]  # Remove trailing semicolon
-
-        update = self.generate_statement(node.update, 0, shader_type).strip()[:-1]
-
-        code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
-        for stmt in node.body:
-            code += self.generate_statement(stmt, indent + 1, shader_type)
-        code += f"{indent_str}}}\n"
-        return code
-
-    def generate_expression(self, expr, shader_type=None):
-        if isinstance(expr, str):
-            return self.translate_expression(expr, shader_type)
-        elif isinstance(expr, VariableNode):
-            if isinstance(expr.name, str):
-                return f"{self.map_type(expr.vtype)} {self.translate_expression(expr.name, shader_type)}"
-            else:
-                return f"{self.map_type(expr.vtype)} {self.generate_expression(expr.name, shader_type)}"
-        elif isinstance(expr, BinaryOpNode):
-            return f"{self.generate_expression(expr.left, shader_type)} {self.map_operator(expr.op)} {self.generate_expression(expr.right, shader_type)}"
-        elif isinstance(expr, FunctionCallNode):
-            args = ", ".join(
-                self.generate_expression(arg, shader_type) for arg in expr.args
-            )
-            if expr.name in self.type_mapping.keys():
-                return f"{self.map_type(expr.name)}({args})"
-            else:
-                func_name = self.translate_expression(expr.name, shader_type)
-                return f"{func_name}({args})"
-        elif isinstance(expr, UnaryOpNode):
-            return f"{self.map_operator(expr.op)} {self.generate_expression(expr.operand, shader_type)}"
-        elif isinstance(expr, TernaryOpNode):
-            return f"{self.generate_expression(expr.condition, shader_type)} ? {self.generate_expression(expr.true_expr, shader_type)} : {self.generate_expression(expr.false_expr, shader_type)}"
-        elif isinstance(expr, MemberAccessNode):
-            return f"{self.generate_expression(expr.object, shader_type)}.{expr.member}"
-        else:
-            return str(expr)
-
-    def translate_expression(self, expr, shader_type):
-        if shader_type == "vertex":
-            if expr == "gl_Position":
-                return "output.position"
-            for vsinput in self.structures["VSInput"]:
-                if vsinput[1] == expr:
-                    return f"input.{expr}"
-            for vsoutput in self.structures["VSOutput"]:
-                if vsoutput[1] == expr:
-                    return f"output.{expr}"
-        elif shader_type == "fragment":
-            for psinput in self.structures["PSInput"]:
-                if psinput[1] == expr:
-                    return f"input.{expr}"
-            for psoutput in self.structures["PSOutput"]:
-                if psoutput[1] == expr:
-                    return f"output.{expr}"
-        return self.type_mapping.get(expr, expr)
-
-    def map_type(self, vtype):
-        if vtype == "":
-            return ""
-        else:
-            return self.type_mapping.get(vtype, vtype)
-
-    def map_operator(self, op):
-        op_map = {
+        # Map of GLSL operators to CrossGL operators
+        self.operator_map = {
             "PLUS": "+",
             "MINUS": "-",
             "MULTIPLY": "*",
             "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "LESS_THAN": "<",
             "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
+            "LESS_THAN": "<",
             "LESS_EQUAL": "<=",
             "GREATER_EQUAL": ">=",
             "EQUAL": "==",
             "NOT_EQUAL": "!=",
-            "AND": "&&",
-            "OR": "||",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
+            "LOGICAL_AND": "&&",
+            "LOGICAL_OR": "||",
+            "ASSIGN_ADD": "+=",
+            "ASSIGN_SUB": "-=",
+            "ASSIGN_MUL": "*=",
+            "ASSIGN_DIV": "/=",
+            "ASSIGN_MOD": "%=",
+            "MOD": "%",
             "BITWISE_SHIFT_RIGHT": ">>",
             "BITWISE_SHIFT_LEFT": "<<",
+            "BITWISE_XOR": "^",
+            "ASSIGN_SHIFT_RIGHT": ">>=",
+            "ASSIGN_SHIFT_LEFT": "<<=",
+            "ASSIGN_AND": "&=",
+            "ASSIGN_OR": "|=",
+            "ASSIGN_XOR": "^=",
         }
-        return op_map.get(op, op)
 
-    def map_semantic(self, semantic, i):
-        if semantic is not None:
-            return f"@ {self.semantic_map.get(semantic, semantic)}"
+        # Shader-specific info
+        self.uniform_vars = []
+        self.inputs = []
+        self.outputs = []
+        self.local_vars = []
+
+    def indent(self):
+        """Return the current indentation string"""
+        return self.indent_str * self.indent_level
+
+    def increase_indent(self):
+        """Increase the indentation level"""
+        self.indent_level += 1
+
+    def decrease_indent(self):
+        """Decrease the indentation level"""
+        self.indent_level -= 1
+
+    def generate(self, ast):
+        """Generate CrossGL code from a GLSL AST
+
+        Args:
+            ast: The abstract syntax tree representing the GLSL shader
+
+        Returns:
+            str: The equivalent CrossGL code
+        """
+        if ast is None:
+            return "// Empty shader"
+
+        if not isinstance(ast, ShaderNode):
+            return f"// Unexpected AST node type: {type(ast)}"
+
+        # Process the shader node
+        return self.generate_shader(ast)
+
+    def generate_shader(self, node):
+        """Generate CrossGL code for a shader
+
+        Args:
+            node: ShaderNode representing a GLSL shader
+
+        Returns:
+            str: The CrossGL shader code
+        """
+        # Reset shader-specific info
+        self.uniform_vars = []
+        self.inputs = []
+        self.outputs = []
+        self.local_vars = []
+
+        # Collect shader inputs and outputs
+        for var in node.io_variables:
+            if isinstance(var, LayoutNode) or isinstance(var, VariableNode):
+                io_type = getattr(var, "io_type", None)
+                if io_type and "IN" in io_type:
+                    self.inputs.append(var)
+                elif io_type and "OUT" in io_type:
+                    self.outputs.append(var)
+
+        # Collect uniforms
+        for uniform in node.uniforms:
+            self.uniform_vars.append(uniform)
+
+        # Start building the shader
+        result = "shader main {\n"
+
+        # Generate struct definitions
+        for struct in node.structs:
+            result += self.indent_str + self.generate_struct(struct) + "\n\n"
+
+        # Generate input struct if needed
+        if self.inputs:
+            result += (
+                self.indent_str + f"struct {self.shader_type.capitalize()}Input {{\n"
+            )
+            self.increase_indent()
+            for input_var in self.inputs:
+                var_type = self.convert_type(
+                    input_var.dtype if hasattr(input_var, "dtype") else input_var.vtype
+                )
+                var_name = input_var.name
+                semantic = ""
+                if hasattr(input_var, "semantic") and input_var.semantic:
+                    semantic = f" @ {input_var.semantic}"
+                result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+            self.decrease_indent()
+            result += self.indent_str + "};\n\n"
+
+        # Generate output struct if needed
+        if self.outputs:
+            result += (
+                self.indent_str + f"struct {self.shader_type.capitalize()}Output {{\n"
+            )
+            self.increase_indent()
+            for output_var in self.outputs:
+                var_type = self.convert_type(
+                    output_var.dtype
+                    if hasattr(output_var, "dtype")
+                    else output_var.vtype
+                )
+                var_name = output_var.name
+                semantic = ""
+                if hasattr(output_var, "semantic") and output_var.semantic:
+                    semantic = f" @ {output_var.semantic}"
+                result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+            self.decrease_indent()
+            result += self.indent_str + "};\n\n"
+
+        # Generate uniform block if needed
+        if self.uniform_vars:
+            result += self.indent_str + "cbuffer Uniforms {\n"
+            self.increase_indent()
+            for uniform in self.uniform_vars:
+                var_type = self.convert_type(uniform.vtype)
+                var_name = uniform.name
+                result += self.indent() + f"{var_type} {var_name};\n"
+            self.decrease_indent()
+            result += self.indent_str + "};\n\n"
+
+        # Generate shader function
+        result += self.indent_str + f"{self.shader_type} {{\n"
+
+        # Find the main function and other functions
+        main_function = None
+        other_functions = []
+
+        for function in node.functions:
+            if function.name == "main":
+                main_function = function
+            else:
+                other_functions.append(function)
+
+        # Generate auxiliary functions first
+        for function in other_functions:
+            self.increase_indent()
+            result += self.indent() + self.generate_function(function) + "\n\n"
+            self.decrease_indent()
+
+        # Generate the main function if it exists
+        if main_function:
+            self.increase_indent()
+
+            # Determine function signature based on shader type
+            if self.shader_type == "vertex":
+                result += (
+                    self.indent()
+                    + f"{self.shader_type.capitalize()}Output main({self.shader_type.capitalize()}Input input)"
+                )
+            elif self.shader_type == "fragment":
+                if self.outputs:
+                    output_type = self.convert_type(
+                        self.outputs[0].dtype
+                        if hasattr(self.outputs[0], "dtype")
+                        else self.outputs[0].vtype
+                    )
+                    output_name = self.outputs[0].name
+                    result += (
+                        self.indent()
+                        + f"{output_type} main({self.shader_type.capitalize()}Input input) @ {output_name}"
+                    )
+                else:
+                    result += (
+                        self.indent()
+                        + f"vec4 main({self.shader_type.capitalize()}Input input) @ gl_FragColor"
+                    )
+
+            result += " {\n"
+
+            # Generate function body
+            self.increase_indent()
+
+            # For vertex shaders, create the output struct
+            if self.shader_type == "vertex":
+                result += (
+                    self.indent() + f"{self.shader_type.capitalize()}Output output;\n"
+                )
+
+            # Generate statements for the main function
+            for statement in main_function.body:
+                result += self.indent() + self.generate_statement(statement) + "\n"
+
+            # Add implicit return for vertex shaders if not present
+            if self.shader_type == "vertex" and not any(
+                isinstance(stmt, ReturnNode) for stmt in main_function.body
+            ):
+                result += self.indent() + "return output;\n"
+
+            self.decrease_indent()
+            result += self.indent() + "}\n"
+            self.decrease_indent()
+
+        result += self.indent_str + "}\n"
+
+        # Close the shader
+        result += "}\n"
+
+        return result
+
+    def generate_struct(self, node):
+        """Generate CrossGL code for a struct definition
+
+        Args:
+            node: StructNode representing a GLSL struct
+
+        Returns:
+            str: The CrossGL struct definition
+        """
+        result = f"struct {node.name} {{\n"
+
+        self.increase_indent()
+        for field in node.fields:
+            var_type = self.convert_type(field["type"])
+            var_name = field["name"]
+            semantic = ""
+            result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+        self.decrease_indent()
+
+        result += self.indent() + "};"
+        return result
+
+    def generate_function(self, node):
+        """Generate CrossGL code for a function definition
+
+        Args:
+            node: FunctionNode representing a GLSL function
+
+        Returns:
+            str: The CrossGL function definition
+        """
+        return_type = self.convert_type(node.return_type)
+        name = node.name
+
+        # Process parameters
+        params = []
+        for param in node.params:
+            if isinstance(param, tuple):  # (type, name)
+                param_type, param_name = param
+                params.append(f"{self.convert_type(param_type)} {param_name}")
+            elif isinstance(param, VariableNode):
+                params.append(f"{self.convert_type(param.vtype)} {param.name}")
+
+        params_str = ", ".join(params)
+
+        result = f"{return_type} {name}({params_str}) {{\n"
+
+        # Generate function body
+        self.increase_indent()
+        for statement in node.body:
+            result += self.indent() + self.generate_statement(statement) + "\n"
+        self.decrease_indent()
+
+        result += self.indent() + "}"
+        return result
+
+    def generate_statement(self, node):
+        """Generate CrossGL code for a statement
+
+        Args:
+            node: The AST node representing a statement
+
+        Returns:
+            str: The CrossGL statement
+        """
+        if isinstance(node, AssignmentNode):
+            # Check if this is a variable declaration and initialization
+            if isinstance(node.left, VariableNode) and node.left.vtype:
+                var_type = self.convert_type(node.left.vtype)
+                var_name = node.left.name
+                value = self.generate_expression(node.right)
+                return f"{var_type} {var_name} = {value};"
+            else:
+                return self.generate_assignment(node) + ";"
+        elif isinstance(node, IfNode):
+            return self.generate_if(node)
+        elif isinstance(node, ForNode):
+            return self.generate_for(node)
+        elif isinstance(node, ReturnNode):
+            return self.generate_return(node) + ";"
+        elif isinstance(node, VariableNode):
+            # Variable declaration
+            var_type = self.convert_type(node.vtype)
+            var_name = node.name
+            return f"{var_type} {var_name};"
+        elif isinstance(node, FunctionCallNode):
+            # Function call as a statement
+            return self.generate_function_call(node) + ";"
         else:
-            return f"@ TEXCOORD{i}"
+            # Generic expression statement
+            return self.generate_expression(node) + ";"
+
+    def generate_assignment(self, node):
+        """Generate CrossGL code for an assignment
+
+        Args:
+            node: AssignmentNode representing a GLSL assignment
+
+        Returns:
+            str: The CrossGL assignment
+        """
+        # Handle the old AssignmentNode structure
+        if hasattr(node, "name") and hasattr(node, "value"):
+            left = ""
+            if isinstance(node.name, VariableNode):
+                # Variable declaration with initialization
+                left = f"{self.convert_type(node.name.vtype)} {node.name.name}"
+                self.local_vars.append(node.name.name)
+            elif isinstance(node.name, MemberAccessNode):
+                # Member access (e.g., struct.field)
+                left = self.generate_member_access(node.name)
+            elif isinstance(node.name, ArrayAccessNode):
+                # Array access (e.g., array[index])
+                left = self.generate_array_access(node.name)
+            else:
+                # Simple variable
+                left = str(node.name)
+
+            operator = self.operator_map.get(node.operator, node.operator)
+            right = self.generate_expression(node.value)
+
+            return f"{left} {operator} {right}"
+
+        # Handle the BinaryOpNode-based assignments
+        elif hasattr(node, "left") and hasattr(node, "right"):
+            lhs = node.left
+            op = self.operator_map.get(node.op, node.op)
+            rhs = node.right
+
+            # If lhs is a VariableNode with a type, it's a variable declaration
+            if isinstance(lhs, VariableNode) and lhs.vtype:
+                var_type = self.convert_type(lhs.vtype)
+                var_name = lhs.name
+                value = self.generate_expression(rhs)
+                return f"{var_type} {var_name} = {value}"
+            else:
+                left_expr = self.generate_expression(lhs)
+                right_expr = self.generate_expression(rhs)
+                return f"({left_expr} {op} {right_expr})"
+
+        # Default fallback
+        return f"{self.generate_expression(node)}"
+
+    def generate_if(self, node):
+        """Generate CrossGL code for an if statement
+
+        Args:
+            node: IfNode representing a GLSL if statement
+
+        Returns:
+            str: The CrossGL if statement
+        """
+        condition = self.generate_expression(node.if_condition)
+        result = f"if ({condition}) {{\n"
+
+        # Generate if body
+        self.increase_indent()
+        for statement in node.if_body:
+            result += self.indent() + self.generate_statement(statement) + "\n"
+        self.decrease_indent()
+
+        result += self.indent() + "}"
+
+        # Generate else-if blocks
+        for i, elif_condition in enumerate(node.else_if_conditions):
+            elif_cond = self.generate_expression(elif_condition)
+            result += f" else if ({elif_cond}) {{\n"
+
+            self.increase_indent()
+            for statement in node.else_if_bodies[i]:
+                result += self.indent() + self.generate_statement(statement) + "\n"
+            self.decrease_indent()
+
+            result += self.indent() + "}"
+
+        # Generate else block if present
+        if node.else_body:
+            result += " else {\n"
+
+            self.increase_indent()
+            for statement in node.else_body:
+                result += self.indent() + self.generate_statement(statement) + "\n"
+            self.decrease_indent()
+
+            result += self.indent() + "}"
+
+        return result
+
+    def generate_for(self, node):
+        """Generate CrossGL code for a for loop
+
+        Args:
+            node: ForNode representing a GLSL for loop
+
+        Returns:
+            str: The CrossGL for loop
+        """
+        init = self.generate_statement(node.init).rstrip(";")
+        condition = self.generate_expression(node.condition)
+        update = self.generate_statement(node.update).rstrip(";")
+
+        result = f"for ({init}; {condition}; {update}) {{\n"
+
+        # Generate loop body
+        self.increase_indent()
+        for statement in node.body:
+            result += self.indent() + self.generate_statement(statement) + "\n"
+        self.decrease_indent()
+
+        result += self.indent() + "}"
+        return result
+
+    def generate_return(self, node):
+        """Generate CrossGL code for a return statement
+
+        Args:
+            node: ReturnNode representing a GLSL return statement
+
+        Returns:
+            str: The CrossGL return statement
+        """
+        if node.value is None:
+            return "return"
+        return f"return {self.generate_expression(node.value)}"
+
+    def generate_expression(self, node):
+        """Generate CrossGL code for an expression
+
+        Args:
+            node: The AST node representing a GLSL expression
+
+        Returns:
+            str: The CrossGL expression
+        """
+        if node is None:
+            return ""
+
+        if isinstance(node, str):
+            # Literal string value
+            return node
+        elif isinstance(node, (int, float)):
+            # Numeric literal
+            return str(node)
+        elif isinstance(node, VariableNode):
+            # Variable reference
+            if self.shader_type == "vertex" and any(
+                var.name == node.name for var in self.inputs
+            ):
+                return f"input.{node.name}"
+            elif self.shader_type == "vertex" and any(
+                var.name == node.name for var in self.outputs
+            ):
+                return f"output.{node.name}"
+            else:
+                return node.name
+        elif isinstance(node, BinaryOpNode):
+            # Binary operation
+            left = self.generate_expression(node.left)
+            right = self.generate_expression(node.right)
+            operator = self.operator_map.get(node.op, node.op)
+            return f"({left} {operator} {right})"
+        elif isinstance(node, UnaryOpNode):
+            # Unary operation
+            operand = self.generate_expression(node.operand)
+            operator = self.operator_map.get(node.op, node.op)
+            return f"({operator}{operand})"
+        elif isinstance(node, FunctionCallNode):
+            # Function call
+            return self.generate_function_call(node)
+        elif isinstance(node, MemberAccessNode):
+            # Member access (e.g., struct.field)
+            return self.generate_member_access(node)
+        elif isinstance(node, ArrayAccessNode):
+            # Array access (e.g., array[index])
+            return self.generate_array_access(node)
+        elif isinstance(node, TernaryOpNode):
+            # Ternary conditional (cond ? true_expr : false_expr)
+            condition = self.generate_expression(node.condition)
+            true_expr = self.generate_expression(node.true_expr)
+            false_expr = self.generate_expression(node.false_expr)
+            return f"({condition} ? {true_expr} : {false_expr})"
+        elif isinstance(node, VectorConstructorNode):
+            # Vector constructor (e.g., vec3(1.0, 2.0, 3.0))
+            args = ", ".join(self.generate_expression(arg) for arg in node.args)
+            return f"{self.convert_type(node.type_name)}({args})"
+        else:
+            # Generic expression
+            return str(node)
+
+    def generate_function_call(self, node):
+        """Generate CrossGL code for a function call
+
+        Args:
+            node: FunctionCallNode representing a GLSL function call
+
+        Returns:
+            str: The CrossGL function call
+        """
+        # Check if this is a vector constructor
+        if node.name in [
+            "vec2",
+            "vec3",
+            "vec4",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "bvec2",
+            "bvec3",
+            "bvec4",
+        ]:
+            args = ", ".join(self.generate_expression(arg) for arg in node.args)
+            return f"{self.convert_type(node.name)}({args})"
+
+        # Check if this is a built-in function that needs to be mapped
+        mapped_name = self.function_map.get(node.name, node.name)
+
+        # Generate argument list
+        args = ", ".join(self.generate_expression(arg) for arg in node.args)
+
+        return f"{mapped_name}({args})"
+
+    def generate_member_access(self, node):
+        """Generate CrossGL code for a member access expression
+
+        Args:
+            node: MemberAccessNode representing a GLSL member access
+
+        Returns:
+            str: The CrossGL member access expression
+        """
+        # Special case for vertex shader input/output access
+        object_name = ""
+        if isinstance(node.object, VariableNode):
+            if self.shader_type == "vertex" and any(
+                var.name == node.object.name for var in self.inputs
+            ):
+                object_name = f"input.{node.object.name}"
+            elif self.shader_type == "vertex" and any(
+                var.name == node.object.name for var in self.outputs
+            ):
+                object_name = f"output.{node.object.name}"
+            else:
+                object_name = node.object.name
+        else:
+            object_name = self.generate_expression(node.object)
+
+        return f"{object_name}.{node.member}"
+
+    def generate_array_access(self, node):
+        """Generate CrossGL code for an array access expression
+
+        Args:
+            node: ArrayAccessNode representing a GLSL array access
+
+        Returns:
+            str: The CrossGL array access expression
+        """
+        array = self.generate_expression(node.array)
+        index = self.generate_expression(node.index)
+        return f"{array}[{index}]"
+
+    def convert_type(self, type_name):
+        """Convert a GLSL type to its CrossGL equivalent
+
+        Args:
+            type_name: The GLSL type name
+
+        Returns:
+            str: The equivalent CrossGL type name
+        """
+        return self.type_map.get(type_name, type_name)
+
+    def generate_variable_declaration(self, node):
+        """Generate CrossGL code for a variable declaration
+
+        Args:
+            node: VariableNode representing a GLSL variable declaration
+
+        Returns:
+            str: The CrossGL variable declaration
+        """
+        var_type = self.convert_type(node.vtype)
+        var_name = node.name
+        array_suffix = ""
+        if node.array_size is not None:
+            array_suffix = f"[{node.array_size}]"
+        return f"{var_type} {var_name}{array_suffix}"
