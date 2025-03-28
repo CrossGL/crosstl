@@ -84,11 +84,11 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
 
                 codegen = MetalToCrossGLConverter()
             elif file_path.endswith(".glsl"):
-                from .backend.OpenGL.OpenglCrossGLCodeGen import GLSLToCrossGLConverter
+                from .backend.Opengl.openglCrossglCodegen import GLSLToCrossGLConverter
 
                 codegen = GLSLToCrossGLConverter()
             elif file_path.endswith(".slang"):
-                from .backend.Slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
+                from .backend.slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
 
                 codegen = SlangToCrossGLConverter()
             else:
