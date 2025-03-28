@@ -612,7 +612,7 @@ def main():
         logger.error("GITHUB_TOKEN environment variable is not set")
         return 1
 
-    repo_name = os.environ.get("GITHUB_REPOSITORY", "CrossGL/CrossGL-Translator")
+    repo_name = os.environ.get("CrossGL/Issue-Bot")
 
     try:
         issue_generator = IssueGenerator(github_token, repo_name)
