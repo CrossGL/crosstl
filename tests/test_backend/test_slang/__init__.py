@@ -1,1 +1,1 @@
-"""Test module for slang."""
+"""Test module for slang (lowercase alias)."""

@@ -39,4 +39,4 @@ def test_basic_lexing():
 
 if __name__ == "__main__":
     test_basic_lexing()
-    print("All tests passed!")
+    print("All tests passed!") 

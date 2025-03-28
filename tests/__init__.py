@@ -1,1 +1,1 @@
-"""Tests for CrossGL Translator."""
+"""Test module for CrossGL Translator."""

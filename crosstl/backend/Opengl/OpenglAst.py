@@ -1,212 +1,136 @@
+"""
+OpenGL Abstract Syntax Tree (AST) implementation
+"""
+
+
 class ASTNode:
+    """Base class for all AST nodes."""
     pass
 
 
-class UniformNode(ASTNode):
-    def __init__(self, vtype, name):
-        self.vtype = vtype
-        self.name = name
+class ShaderNode(ASTNode):
+    """Root node for a shader program."""
+    def __init__(self, functions=None, variables=None, structs=None):
+        self.functions = functions or []
+        self.variables = variables or []
+        self.structs = structs or []
 
-    def __repr__(self):
-        return f"UniformNode(vtype={self.vtype}, name={self.name})"
 
-
-class ConstantNode(ASTNode):
-    def __init__(self, vtype, name, value):
-        self.vtype = vtype
+class VariableNode(ASTNode):
+    """Node representing a variable declaration."""
+    def __init__(self, type_name, name, value=None, qualifiers=None, array_size=None):
+        self.type_name = type_name
         self.name = name
         self.value = value
-
-    def __repr__(self):
-        return (
-            f"ConstantNode(vtype={self.vtype}, name ={self.name} ,value={self.value})"
-        )
+        self.qualifiers = qualifiers or []
+        self.array_size = array_size
 
 
-class TernaryOpNode:
-    def __init__(self, condition, true_expr, false_expr):
-        self.condition = condition
-        self.true_expr = true_expr
-        self.false_expr = false_expr
-
-    def __repr__(self):
-        return f"TernaryOpNode(condition={self.condition}, true_expr={self.true_expr}, false_expr={self.false_expr})"
-
-
-class LayoutNode:
-    def __init__(self, location_number, dtype, name, io_type, semantic=None):
-        self.location_number = location_number
-        self.dtype = dtype
-        self.name = name
-        self.io_type = io_type
-        self.semantic = semantic
-
-    def __repr__(self):
-        return f"LayoutNode(location_number={self.location_number}, dtype={self.dtype}, name={self.name}, io_type={self.io_type}, semantic={self.semantic})"
-
-
-class ShaderNode(ASTNode):
-    def __init__(
-        self,
-        io_variables,
-        constant,
-        uniforms,
-        global_variables,
-        functions,
-        shader_type,
-        structs=[],
-    ):
-        self.io_variables = io_variables
-        self.constant = constant
-        self.uniforms = uniforms
-        self.global_variables = global_variables
-        self.functions = functions
-        self.shader_type = shader_type
-        self.structs = structs
-
-    def __repr__(self):
-        return f"ShaderNode(io_variables={self.io_variables}, constant={self.constant},uniforms={self.uniforms}, global_variables={self.global_variables}, functions={self.functions}, shader_type={self.shader_type}, structs={self.structs})"
+class AssignmentNode(ASTNode):
+    """Node representing a variable assignment."""
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, return_type, name, params, body, qualifier=None):
+    """Node representing a function declaration/definition."""
+    def __init__(self, return_type, name, parameters, body):
         self.return_type = return_type
         self.name = name
-        self.params = params
-        self.body = body
-        self.qualifier = qualifier
-
-    def __repr__(self):
-        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, qualifier={self.qualifier})"
+        self.parameters = parameters or []
+        self.body = body or []
 
 
 class ArrayAccessNode(ASTNode):
+    """Node representing array access (array[index])."""
     def __init__(self, array, index):
         self.array = array
         self.index = index
 
-    def __repr__(self):
-        return f"ArrayAccessNode(array={self.array}, index={self.index})"
 
-
-class VariableNode(ASTNode):
-    def __init__(self, vtype, name, io_type=None, semantic=None, array_size=None):
-        self.vtype = vtype
-        self.name = name
-        self.io_type = io_type
-        self.semantic = semantic
-        self.array_size = array_size
-
-    def __repr__(self):
-        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', io_type={self.io_type}, semantic={self.semantic}, array_size={self.array_size})"
-
-    def __str__(self):
-        if self.array_size is not None:
-            return f"{self.vtype} {self.name}[{self.array_size}]"
-        return f"{self.vtype} {self.name}"
-
-
-class AssignmentNode(ASTNode):
-    def __init__(self, name, value, operator="="):
-        self.name = name
-        self.value = value
+class BinaryOpNode(ASTNode):
+    """Node representing a binary operation (a + b)."""
+    def __init__(self, left, operator, right):
+        self.left = left
         self.operator = operator
-
-    def __repr__(self):
-        return f"AssignmentNode(name={self.name}, value={self.value}, operator='{self.operator}')"
+        self.right = right
 
 
-class VectorConstructorNode:
-    def __init__(self, type_name, args):
-        self.type_name = type_name
-        self.args = args
+class UnaryOpNode(ASTNode):
+    """Node representing a unary operation (!a, -b)."""
+    def __init__(self, operator, operand):
+        self.operator = operator
+        self.operand = operand
 
-    def __repr__(self):
-        return f"VectorConstructorNode(type_name={self.type_name}, args={self.args})"
+
+class ReturnNode(ASTNode):
+    """Node representing a return statement."""
+    def __init__(self, value=None):
+        self.value = value
+
+
+class FunctionCallNode(ASTNode):
+    """Node representing a function call."""
+    def __init__(self, function, arguments):
+        self.function = function
+        self.arguments = arguments or []
 
 
 class IfNode(ASTNode):
-    def __init__(
-        self,
-        if_condition,
-        if_body,
-        else_if_conditions=[],
-        else_if_bodies=[],
-        else_body=None,
-    ):
-        self.if_condition = if_condition
-        self.if_body = if_body
-        self.else_if_conditions = else_if_conditions
-        self.else_if_bodies = else_if_bodies
-        self.else_body = else_body
-
-    def __repr__(self):
-        return f"IfNode(if_condition={self.if_condition}, if_body={self.if_body}, else_if_conditions={self.else_if_conditions}, else_if_bodies={self.else_if_bodies}, else_body={self.else_body})"
+    """Node representing an if statement."""
+    def __init__(self, condition, true_branch, false_branch=None):
+        self.condition = condition
+        self.true_branch = true_branch or []
+        self.false_branch = false_branch or []
 
 
 class ForNode(ASTNode):
+    """Node representing a for loop."""
     def __init__(self, init, condition, update, body):
         self.init = init
         self.condition = condition
         self.update = update
-        self.body = body
-
-    def __repr__(self):
-        return f"ForNode(init={self.init}, condition={self.condition}, update={self.update}, body={self.body})"
+        self.body = body or []
 
 
-class ReturnNode(ASTNode):
-    def __init__(self, value):
+class VectorConstructorNode(ASTNode):
+    """Node representing a vector constructor (vec3(x, y, z))."""
+    def __init__(self, type_name, arguments):
+        self.type_name = type_name
+        self.arguments = arguments or []
+
+
+class LayoutNode(ASTNode):
+    """Node representing a layout qualifier."""
+    def __init__(self, qualifiers):
+        self.qualifiers = qualifiers or {}
+
+
+class ConstantNode(ASTNode):
+    """Node representing a constant value (number, boolean, etc.)."""
+    def __init__(self, value, type_name=None):
         self.value = value
-
-    def __repr__(self):
-        return f"ReturnNode(value={self.value})"
-
-
-class FunctionCallNode(ASTNode):
-    def __init__(self, name, args):
-        self.name = name
-        self.args = args
-
-    def __repr__(self):
-        return f"FunctionCallNode(name={self.name}, args={self.args})"
-
-
-class BinaryOpNode(ASTNode):
-    def __init__(self, left, op, right):
-        self.left = left
-        self.op = op
-        self.right = right
-
-    def __repr__(self):
-        return f"BinaryOpNode(left={self.left}, operator={self.op}, right={self.right})"
+        self.type_name = type_name
 
 
 class MemberAccessNode(ASTNode):
-    def __init__(self, object, member):
-        self.object = object
+    """Node representing member access (obj.member)."""
+    def __init__(self, object_expr, member):
+        self.object_expr = object_expr
         self.member = member
 
-    def __repr__(self):
-        return f"MemberAccessNode(object={self.object}, member={self.member})"
 
-
-class UnaryOpNode(ASTNode):
-    def __init__(self, op, operand):
-        self.op = op
-        self.operand = operand
-
-    def __repr__(self):
-        return f"UnaryOpNode(operator={self.op}, operand={self.operand})"
-
-    def __str__(self):
-        return f"({self.op}{self.operand})"
+class TernaryOpNode(ASTNode):
+    """Node representing a ternary operation (a ? b : c)."""
+    def __init__(self, condition, true_value, false_value):
+        self.condition = condition
+        self.true_value = true_value
+        self.false_value = false_value
 
 
 class StructNode(ASTNode):
-    def __init__(self, name, fields):
+    """Node representing a struct definition."""
+    def __init__(self, name, members):
         self.name = name
-        self.fields = fields
-
-    def __repr__(self):
-        return f"StructNode(name='{self.name}', fields={self.fields})"
+        self.members = members or []

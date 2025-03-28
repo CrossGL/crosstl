@@ -1,1 +1,1 @@
-"""Test module for opengl."""
+"""Test module for opengl (lowercase alias)."""
