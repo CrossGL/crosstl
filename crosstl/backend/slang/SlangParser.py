@@ -2,7 +2,15 @@
 Slang parser implementation
 """
 
-from .slangast import ConstantNode, FunctionCallNode, FunctionNode, ParameterNode, ReturnNode, ShaderNode, VariableNode
+from .slangast import (
+    ConstantNode,
+    FunctionCallNode,
+    FunctionNode,
+    ParameterNode,
+    ReturnNode,
+    ShaderNode,
+    VariableNode,
+)
 from .slanglexer import SlangLexer
 
 

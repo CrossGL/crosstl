@@ -7,7 +7,6 @@ class ASTNode:
     """Base class for all AST nodes."""
 
 
-
 class ShaderNode(ASTNode):
     """Root node for a shader program."""
 
