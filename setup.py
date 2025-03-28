@@ -19,7 +19,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://crossgl.net/",
     project_urls={"Documentation": "https://crossgl.github.io/index.html"},
-    include_package_dats=True,
+    include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
         "Operating System :: OS Independent",

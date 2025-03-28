@@ -1,7 +1,7 @@
 from . import translator
 from .translator.lexer import Lexer
 from .translator.parser import Parser
-from .translator.codegen import directx_codegen, metal_codegen, opengl_codegen
+from .translator.codegen import directx_codegen, metal_codegen, opengl_codegen, vulkan_codegen
 from .translator.ast import ASTNode
 from .backend.DirectX import *
 from .backend.Metal import *
@@ -61,6 +61,8 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
             codegen = directx_codegen.HLSLCodeGen()
         elif backend == "opengl":
             codegen = opengl_codegen.GLSLCodeGen()
+        elif backend == "vulkan":
+            codegen = vulkan_codegen.VulkanCodeGen()
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
