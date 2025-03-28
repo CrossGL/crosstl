@@ -5,11 +5,12 @@ OpenGL Abstract Syntax Tree (AST) implementation
 
 class ASTNode:
     """Base class for all AST nodes."""
-    pass
+
 
 
 class ShaderNode(ASTNode):
     """Root node for a shader program."""
+
     def __init__(self, functions=None, variables=None, structs=None):
         self.functions = functions or []
         self.variables = variables or []
@@ -18,6 +19,7 @@ class ShaderNode(ASTNode):
 
 class VariableNode(ASTNode):
     """Node representing a variable declaration."""
+
     def __init__(self, type_name, name, value=None, qualifiers=None, array_size=None):
         self.type_name = type_name
         self.name = name
@@ -28,6 +30,7 @@ class VariableNode(ASTNode):
 
 class AssignmentNode(ASTNode):
     """Node representing a variable assignment."""
+
     def __init__(self, left, right):
         self.left = left
         self.right = right
@@ -35,6 +38,7 @@ class AssignmentNode(ASTNode):
 
 class FunctionNode(ASTNode):
     """Node representing a function declaration/definition."""
+
     def __init__(self, return_type, name, parameters, body):
         self.return_type = return_type
         self.name = name
@@ -44,6 +48,7 @@ class FunctionNode(ASTNode):
 
 class ArrayAccessNode(ASTNode):
     """Node representing array access (array[index])."""
+
     def __init__(self, array, index):
         self.array = array
         self.index = index
@@ -51,6 +56,7 @@ class ArrayAccessNode(ASTNode):
 
 class BinaryOpNode(ASTNode):
     """Node representing a binary operation (a + b)."""
+
     def __init__(self, left, operator, right):
         self.left = left
         self.operator = operator
@@ -59,6 +65,7 @@ class BinaryOpNode(ASTNode):
 
 class UnaryOpNode(ASTNode):
     """Node representing a unary operation (!a, -b)."""
+
     def __init__(self, operator, operand):
         self.operator = operator
         self.operand = operand
@@ -66,12 +73,14 @@ class UnaryOpNode(ASTNode):
 
 class ReturnNode(ASTNode):
     """Node representing a return statement."""
+
     def __init__(self, value=None):
         self.value = value
 
 
 class FunctionCallNode(ASTNode):
     """Node representing a function call."""
+
     def __init__(self, function, arguments):
         self.function = function
         self.arguments = arguments or []
@@ -79,6 +88,7 @@ class FunctionCallNode(ASTNode):
 
 class IfNode(ASTNode):
     """Node representing an if statement."""
+
     def __init__(self, condition, true_branch, false_branch=None):
         self.condition = condition
         self.true_branch = true_branch or []
@@ -87,6 +97,7 @@ class IfNode(ASTNode):
 
 class ForNode(ASTNode):
     """Node representing a for loop."""
+
     def __init__(self, init, condition, update, body):
         self.init = init
         self.condition = condition
@@ -96,6 +107,7 @@ class ForNode(ASTNode):
 
 class VectorConstructorNode(ASTNode):
     """Node representing a vector constructor (vec3(x, y, z))."""
+
     def __init__(self, type_name, arguments):
         self.type_name = type_name
         self.arguments = arguments or []
@@ -103,12 +115,14 @@ class VectorConstructorNode(ASTNode):
 
 class LayoutNode(ASTNode):
     """Node representing a layout qualifier."""
+
     def __init__(self, qualifiers):
         self.qualifiers = qualifiers or {}
 
 
 class ConstantNode(ASTNode):
     """Node representing a constant value (number, boolean, etc.)."""
+
     def __init__(self, value, type_name=None):
         self.value = value
         self.type_name = type_name
@@ -116,6 +130,7 @@ class ConstantNode(ASTNode):
 
 class MemberAccessNode(ASTNode):
     """Node representing member access (obj.member)."""
+
     def __init__(self, object_expr, member):
         self.object_expr = object_expr
         self.member = member
@@ -123,6 +138,7 @@ class MemberAccessNode(ASTNode):
 
 class TernaryOpNode(ASTNode):
     """Node representing a ternary operation (a ? b : c)."""
+
     def __init__(self, condition, true_value, false_value):
         self.condition = condition
         self.true_value = true_value
@@ -131,6 +147,7 @@ class TernaryOpNode(ASTNode):
 
 class StructNode(ASTNode):
     """Node representing a struct definition."""
+
     def __init__(self, name, members):
         self.name = name
         self.members = members or []
