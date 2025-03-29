@@ -202,7 +202,38 @@ print("Token IDs:", token_ids.tolist())
 print("Token Values:", token_values.tolist())
 
 
+# No constant folding test case
+
+class MyModel(torch.nn.Module):
+    def forward(self, x):
+        y = x + 5
+        small_tensor = torch.tensor([1, 2, 3])  
+        large_tensor = torch.tensor([[1, 2], [3, 4]])  # Large tensor (dynamic)
+        z = y * small_tensor
+        w = z + large_tensor
+        return w
+
+model = MyModel()
+graph_module = fx.symbolic_trace(model)
+
 jax_code = fx_to_jax(graph_module)
 
 print("=== Generated JAX Code ===")
 print(jax_code)
+
+
+"""
+=== Corrected JAX Code ===
+import jax
+import jax.numpy as jnp
+
+
+def jax_function(pos):
+    x = pos  # Input placeholder
+    add = jnp.add(x, 5)
+    _tensor_constant0 = jnp.array([1, 2, 3], dtype=jnp.int32)  # Constant tensor
+    mul = jnp.multiply(add, _tensor_constant0)
+    _tensor_constant1 = jnp.array([[1, 2], [3, 4]], dtype=jnp.int32)  # Constant tensor
+    add_1 = jnp.add(mul, _tensor_constant1)
+    return add_1
+"""
