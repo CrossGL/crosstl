@@ -2,6 +2,10 @@ import torch
 import torch.fx as fx
 from typing import List, Tuple
 
+# local import
+
+from .to_jax import fx_to_jax
+
 
 class TorchLexer(torch.nn.Module):
     def __init__(self, code: str):
@@ -196,3 +200,9 @@ for node in graph_module.graph.nodes:
 print("=== Token Details ===")
 print("Token IDs:", token_ids.tolist())
 print("Token Values:", token_values.tolist())
+
+
+jax_code = fx_to_jax(graph_module)
+
+print("=== Generated JAX Code ===")
+print(jax_code)
