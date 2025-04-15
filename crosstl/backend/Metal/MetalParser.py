@@ -6,12 +6,20 @@ class MetalParser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
-        self.current_token = self.tokens[self.pos]
+        self.current_token = (
+            self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
+        )
         self.skip_comments()
 
     def skip_comments(self):
-        while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
-            self.eat(self.current_token[0])
+        while self.pos < len(self.tokens) and self.current_token[0] in [
+            "COMMENT_SINGLE",
+            "COMMENT_MULTI",
+        ]:
+            self.pos += 1
+            self.current_token = (
+                self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
+            )
 
     def eat(self, token_type):
         if self.current_token[0] == token_type:
@@ -169,16 +177,27 @@ class MetalParser:
                 "VECTOR",
                 "IDENTIFIER",
                 "TEXTURE2D",
+                "TEXTURECUBE",
                 "SAMPLER",
             ]:
                 vtype = self.current_token[1]
                 self.eat(self.current_token[0])
 
+                # Handle generic types like texture2d<float>
                 if self.current_token[0] == "LESS_THAN":
                     self.eat("LESS_THAN")
-                    if self.current_token[0] in ["FLOAT", "INT", "UINT", "VECTOR"]:
-                        vtype += f"<{self.current_token[1]}>"
+                    if self.current_token[0] in [
+                        "FLOAT",
+                        "HALF",
+                        "INT",
+                        "UINT",
+                        "BOOL",
+                        "VECTOR",
+                        "IDENTIFIER",
+                    ]:
+                        inner_type = self.current_token[1]
                         self.eat(self.current_token[0])
+                        vtype += f"<{inner_type}>"
                     self.eat("GREATER_THAN")
 
                 if self.current_token[0] == "IDENTIFIER":
@@ -240,6 +259,7 @@ class MetalParser:
             "BOOL",
             "VECTOR",
             "IDENTIFIER",
+            "CONST",
         ]:
             return self.parse_variable_declaration_or_assignment()
         elif self.current_token[0] == "IF":
@@ -252,12 +272,18 @@ class MetalParser:
             return self.parse_expression_statement()
 
     def parse_variable_declaration_or_assignment(self):
+        is_const = False
+        if self.current_token[0] == "CONST":
+            is_const = True
+            self.eat("CONST")
+
         if self.current_token[0] in [
             "FLOAT",
-            "FVECTOR",
+            "HALF",
             "INT",
             "UINT",
             "BOOL",
+            "VECTOR",
             "IDENTIFIER",
         ]:
             first_token = self.current_token
@@ -266,14 +292,17 @@ class MetalParser:
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
+                var_node = VariableNode(first_token[1], name)
+                var_node.is_const = is_const  # Add const property
+
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
-                    return VariableNode(first_token[1], name)
+                    return var_node
                 elif self.current_token[0] == "EQUALS":
                     self.eat("EQUALS")
                     value = self.parse_expression()
                     self.eat("SEMICOLON")
-                    return AssignmentNode(VariableNode(first_token[1], name), value)
+                    return AssignmentNode(var_node, value)
             elif self.current_token[0] == "EQUALS":
                 # This handles cases like "test = float3(1.0, 1.0, 1.0);"
                 self.eat("EQUALS")
@@ -560,7 +589,30 @@ class MetalParser:
         if self.current_token[0] == "DOT":
             return self.parse_member_access(MemberAccessNode(object, member))
 
+        # Check if this is a texture sample operation
+        if member == "sample" and self.current_token[0] == "LPAREN":
+            texture = object  # The object is the texture
+            return self.parse_texture_sample_args(texture)
+
         return MemberAccessNode(object, member)
+
+    def parse_texture_sample_args(self, texture):
+        self.eat("LPAREN")
+        sampler = self.parse_expression()
+        self.eat("COMMA")
+        coordinates = self.parse_expression()
+
+        # Support for optional LOD parameter
+        lod = None
+        if self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            lod = self.parse_expression()
+
+        self.eat("RPAREN")
+
+        if lod is not None:
+            return TextureSampleNode(texture, sampler, coordinates, lod)
+        return TextureSampleNode(texture, sampler, coordinates)
 
     def parse_texture_sample(self):
         texture = self.parse_expression()

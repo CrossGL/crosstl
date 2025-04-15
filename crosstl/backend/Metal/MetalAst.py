@@ -59,9 +59,11 @@ class VariableNode(ASTNode):
         self.vtype = vtype
         self.name = name
         self.attributes = attributes or []
+        self.is_const = False  # Default is not constant
 
     def __repr__(self):
-        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', attributes={self.attributes})"
+        const_str = "const " if self.is_const else ""
+        return f"VariableNode(vtype='{const_str}{self.vtype}', name='{self.name}', attributes={self.attributes})"
 
 
 class AttributeNode(ASTNode):
@@ -159,12 +161,15 @@ class UnaryOpNode(ASTNode):
 
 
 class TextureSampleNode(ASTNode):
-    def __init__(self, texture, sampler, coordinates):
+    def __init__(self, texture, sampler, coordinates, lod=None):
         self.texture = texture
         self.sampler = sampler
         self.coordinates = coordinates
+        self.lod = lod
 
     def __repr__(self):
+        if self.lod is not None:
+            return f"TextureSampleNode(texture={self.texture}, sampler={self.sampler}, coordinates={self.coordinates}, lod={self.lod})"
         return f"TextureSampleNode(texture={self.texture}, sampler={self.sampler}, coordinates={self.coordinates})"
 
 

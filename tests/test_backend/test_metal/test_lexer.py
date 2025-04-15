@@ -157,5 +157,31 @@ def test_bitwise_not_tokenization():
     assert has_not, "Bitwise NOT operator (~) not tokenized correctly"
 
 
+def test_numeric_literals_with_suffixes():
+    code = """
+        float a = 1.0f;    // float literal
+        half b = 2.5h;     // half literal
+        int c = 10;        // int literal
+        uint d = 20u;      // uint literal
+    """
+    tokens = tokenize_code(code)
+
+    suffixed_nums = []
+    for token in tokens:
+        if token[0] == "NUMBER":
+            suffixed_nums.append(token[1])
+
+    assert (
+        "1.0f" in suffixed_nums
+    ), "Float literal with 'f' suffix not tokenized correctly"
+    assert (
+        "2.5h" in suffixed_nums
+    ), "Half literal with 'h' suffix not tokenized correctly"
+    assert "10" in suffixed_nums, "Integer literal not tokenized correctly"
+    assert (
+        "20u" in suffixed_nums
+    ), "Unsigned integer literal with 'u' suffix not tokenized correctly"
+
+
 if __name__ == "__main__":
     pytest.main()

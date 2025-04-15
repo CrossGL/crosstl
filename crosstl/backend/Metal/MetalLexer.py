@@ -13,6 +13,7 @@ TOKENS = tuple(
         ("STRUCT", r"\bstruct\b"),
         ("CONSTANT", r"\bconstant\b"),
         ("TEXTURE2D", r"\btexture2d\b"),
+        ("TEXTURECUBE", r"\btexturecube\b"),
         ("buffer", r"\bbuffer\b"),
         ("SAMPLER", r"\bsampler\b"),
         ("VECTOR", r"\b(float|half|int|uint)[2-4]\b"),
@@ -37,9 +38,10 @@ TOKENS = tuple(
         ("DEVICE", r"\bdevice\b"),
         ("THREADGROUP", r"\bthreadgroup\b"),
         ("THREAD", r"\bthread\b"),
+        ("CONST", r"\bconst\b"),
         ("ATTRIBUTE", r"\[\[.*?\]\]"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("NUMBER", r"\d+(\.\d+)?"),
+        ("NUMBER", r"\d+(\.\d+)?([fFhHuU])?"),
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
         ("LPAREN", r"\("),
@@ -79,6 +81,7 @@ KEYWORDS = {
     "struct": "STRUCT",
     "constant": "CONSTANT",
     "texture2d": "TEXTURE2D",
+    "texturecube": "TEXTURECUBE",
     "sampler": "SAMPLER",
     "float": "FLOAT",
     "half": "HALF",
@@ -100,6 +103,7 @@ KEYWORDS = {
     "device": "DEVICE",
     "threadgroup": "THREADGROUP",
     "thread": "THREAD",
+    "const": "CONST",
 }
 
 

@@ -28,7 +28,17 @@ class MetalToCrossGLConverter:
             "bool2": "bvec2",
             "bool3": "bvec3",
             "bool4": "bvec4",
-            "Texture2D": "sampler2D",
+            # Texture Types
+            "texture2d": "sampler2D",
+            "texture2d<float>": "sampler2D",
+            "texture2d<half>": "sampler2D",
+            "texture2d<int>": "isampler2D",
+            "texture2d<uint>": "usampler2D",
+            "texturecube": "samplerCube",
+            "texturecube<float>": "samplerCube",
+            "texturecube<half>": "samplerCube",
+            "texturecube<int>": "isamplerCube",
+            "texturecube<uint>": "usamplerCube",
             "TextureCube": "samplerCube",
             # Matrix Types
             "float2x2": "mat2",
@@ -133,7 +143,10 @@ class MetalToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                const_str = (
+                    "const " if hasattr(stmt, "is_const") and stmt.is_const else ""
+                )
+                code += f"{const_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, ReturnNode):
@@ -145,6 +158,13 @@ class MetalToCrossGLConverter:
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
+            elif isinstance(stmt, FunctionCallNode):
+                code += f"{self.generate_expression(stmt, is_main)};\n"
+            elif isinstance(stmt, str):
+                code += f"{stmt};\n"
+            else:
+                # For any unhandled statement type, attempt to generate something useful
+                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
 
     def generate_for_loop(self, node, indent, is_main):
@@ -190,10 +210,18 @@ class MetalToCrossGLConverter:
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
-        if isinstance(expr, str):
+        if expr is None:
+            return ""
+        elif isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
-            return f"{self.map_type(expr.vtype)} {expr.name}"
+            if expr.vtype:
+                const_str = (
+                    "const " if hasattr(expr, "is_const") and expr.is_const else ""
+                )
+                return f"{const_str}{self.map_type(expr.vtype)} {expr.name}"
+            else:
+                return expr.name
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr, is_main)
         elif isinstance(expr, BinaryOpNode):
@@ -206,14 +234,8 @@ class MetalToCrossGLConverter:
             )
             return f"{expr.name}({args})"
         elif isinstance(expr, MemberAccessNode):
-            obj = self.generate_expression(expr.object)
+            obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
-
-        elif isinstance(expr, AssignmentNode):
-            left = self.generate_expression(expr.left, is_main)
-            right = self.generate_expression(expr.right, is_main)
-            return f"({left} {expr.operator} {right})"
-
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
             return f"({expr.op}{operand})"
@@ -224,11 +246,50 @@ class MetalToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
-        else:
+        elif isinstance(expr, TextureSampleNode):
+            texture = self.generate_expression(expr.texture, is_main)
+            self.generate_expression(expr.sampler, is_main)
+            coords = self.generate_expression(expr.coordinates, is_main)
+
+            # Handle LOD parameter if present
+            if hasattr(expr, "lod") and expr.lod is not None:
+                lod = self.generate_expression(expr.lod, is_main)
+                # In CrossGL, texture sampling with LOD is done with textureLod(sampler, coordinates, lod)
+                return f"textureLod({texture}, {coords}, {lod})"
+
+            # In CrossGL, texture sampling is done with texture(sampler, coordinates)
+            return f"texture({texture}, {coords})"
+        elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
             return str(expr)
+        else:
+            # For any unhandled expression type, return a placeholder
+            return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def map_type(self, metal_type):
         if metal_type:
+            # Special case for generic types not explicitly defined in the map
+            if (
+                "<" in metal_type
+                and ">" in metal_type
+                and metal_type not in self.type_map
+            ):
+                base_type, inner_type = metal_type.split("<", 1)
+                inner_type = inner_type.rstrip(">")
+                if base_type == "texture2d":
+                    if inner_type in ["float", "half"]:
+                        return "sampler2D"
+                    elif inner_type == "int":
+                        return "isampler2D"
+                    elif inner_type == "uint":
+                        return "usampler2D"
+                elif base_type == "texturecube":
+                    if inner_type in ["float", "half"]:
+                        return "samplerCube"
+                    elif inner_type == "int":
+                        return "isamplerCube"
+                    elif inner_type == "uint":
+                        return "usamplerCube"
+
             return self.type_map.get(metal_type, metal_type)
         return metal_type
 

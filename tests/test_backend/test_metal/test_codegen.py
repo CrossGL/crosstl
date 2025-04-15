@@ -347,5 +347,57 @@ def test_bitwise_not_codegen():
         pytest.fail("Bitwise NOT operator code generation not implemented")
 
 
+def test_const_codegen():
+    code = """
+    void main() {
+        const float PI = 3.14159;
+        const int VERSION = 100;
+        float radius = 5.0;
+        float area = PI * radius * radius;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+        assert (
+            "const float PI" in generated_code
+        ), "Const declaration not properly generated"
+    except SyntaxError as e:
+        pytest.fail(f"Const variable code generation not implemented: {e}")
+
+
+def test_texture_sampling():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    
+    struct VertexOut {
+        float4 position [[position]];
+        float2 texCoord;
+    };
+    
+    fragment float4 fragmentShader(VertexOut in [[stage_in]],
+                                   texture2d<float> diffuseTexture [[texture(0)]],
+                                   sampler textureSampler [[sampler(0)]]) {
+        // Basic texture sampling
+        float4 color1 = diffuseTexture.sample(textureSampler, in.texCoord);
+        
+        // Texture sampling with LOD
+        float4 color2 = diffuseTexture.sample(textureSampler, in.texCoord, 2.0);
+        
+        return color1 * 0.5 + color2 * 0.5;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+    except SyntaxError as e:
+        pytest.fail(f"Texture sampling code generation not implemented: {e}")
+
+
 if __name__ == "__main__":
     pytest.main()
