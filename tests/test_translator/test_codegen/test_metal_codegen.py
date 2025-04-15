@@ -432,12 +432,12 @@ def test_metal_texture_types():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        
+
         # Verify proper Metal texture types
         assert "texture2d<float> albedoMap" in generated_code
         assert "texture2d<float> environmentMap" in generated_code
         assert "texture2d<float> depthMap" in generated_code
-        
+
         # Verify sampling operations - metal_codegen uses the texture function, not .sample
         assert "texture( albedoMap" in generated_code
         assert "normalize" in generated_code
@@ -488,18 +488,18 @@ def test_metal_attributes_semantics():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        
+
         # Check Metal attributes for vertex inputs
         assert "[[attribute(0)]]" in generated_code  # POSITION
         assert "[[attribute(1)]]" in generated_code  # NORMAL
         assert "[[attribute(5)]]" in generated_code  # TEXCOORD0
-        
+
         # Check Metal attributes for vertex outputs
         assert "[[position]]" in generated_code  # gl_Position
-        
+
         # Check Metal attributes for fragment outputs
         assert "[[color(0)]]" in generated_code  # gl_FragColor
-        
+
         # Check vertex ID
         assert "[[vertex_id]]" in generated_code or "[[stage_in]]" in generated_code
     except SyntaxError as e:
@@ -546,7 +546,7 @@ def test_metal_vector_type_conversions():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        
+
         # Check vector type conversions
         assert "float2 vec2Field" in generated_code
         assert "float3 vec3Field" in generated_code
@@ -554,7 +554,7 @@ def test_metal_vector_type_conversions():
         assert "int2 ivec2Field" in generated_code
         assert "int3 ivec3Field" in generated_code
         assert "int4 ivec4Field" in generated_code
-        
+
         # Check matrix type conversions
         assert "float2x2 mat2Field" in generated_code
         assert "float3x3 mat3Field" in generated_code
@@ -599,17 +599,17 @@ def test_metal_texture_sampling():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        
+
         # Check texture declarations
         assert "texture2d<float> colorMap" in generated_code
         assert "texture2d<float> normalMap" in generated_code
         assert "texture2d<float> envMap" in generated_code
-        
+
         # Check sampling operations - metal_codegen uses the texture function, not .sample
         assert "texture( colorMap" in generated_code
         assert "texture( normalMap" in generated_code
         assert "texture( envMap" in generated_code
-        
+
         # Check component selection
         assert ".rgb" in generated_code
     except SyntaxError as e:
@@ -648,10 +648,10 @@ def test_metal_constant_buffer():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        
+
         # Check material struct declaration
         assert "struct MaterialParams" in generated_code
-        
+
         # Check member access
         assert "material.baseColor" in generated_code
         assert "material.metallic" in generated_code

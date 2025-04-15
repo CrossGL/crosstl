@@ -27,8 +27,17 @@ class HLSLToCrossGLConverter:
             "bool4": "bvec4",
             "float": "float",
             "double": "double",
+            "half": "float16_t",
+            "half2": "f16vec2",
+            "half3": "f16vec3",
+            "half4": "f16vec4",
+            "double2": "dvec2",
+            "double3": "dvec3",
+            "double4": "dvec4",
             "Texture2D": "sampler2D",
             "TextureCube": "samplerCube",
+            "int64_t": "int64_t",
+            "uint64_t": "uint64_t",
         }
         self.semantic_map = {
             # Vertex inputs instance
@@ -59,7 +68,52 @@ class HLSLToCrossGLConverter:
             "SV_DEPTH5": "gl_FragDepth5",
             "SV_DEPTH6": "gl_FragDepth6",
             "SV_DEPTH7": "gl_FragDepth7",
+            # Additional mappings
+            "POSITION": "Position",
+            "NORMAL": "Normal",
+            "TANGENT": "Tangent",
+            "BINORMAL": "Binormal",
+            "TEXCOORD": "TexCoord",
+            "TEXCOORD0": "TexCoord0",
+            "TEXCOORD1": "TexCoord1",
+            "TEXCOORD2": "TexCoord2",
+            "TEXCOORD3": "TexCoord3",
+            "SV_IsFrontFace": "gl_IsFrontFace",
+            "SV_PrimitiveID": "gl_PrimitiveID",
+            "SV_PointCoord": "gl_PointCoord",
         }
+        self.bitwise_op_map = {
+            "&": "bitAnd",
+            "|": "bitOr",
+            "^": "bitXor",
+            "~": "bitNot",
+            "<<": "bitShiftLeft",
+            ">>": "bitShiftRight",
+        }
+        self.indentation = 0
+        self.code = []
+
+    def get_indent(self):
+        return "    " * self.indentation
+
+    def visit(self, node):
+        # Special case for SwitchStatementNode and SwitchCaseNode
+        if isinstance(node, SwitchStatementNode):
+            return self.visit_SwitchStatementNode(node)
+        elif isinstance(node, SwitchCaseNode):
+            return self.visit_SwitchCaseNode(node)
+        elif isinstance(node, StructNode):
+            return self.visit_StructNode(node)
+        elif isinstance(node, BinaryOpNode):
+            return self.visit_BinaryOpNode(node)
+        elif isinstance(node, UnaryOpNode):
+            return self.visit_UnaryOpNode(node)
+
+        # For other node types, use existing methods
+        if hasattr(self, f"generate_{type(node).__name__}"):
+            method = getattr(self, f"generate_{type(node).__name__}")
+            return method(node)
+        return self.generate_expression(node)
 
     def generate(self, ast):
         code = "shader main {\n"
@@ -151,7 +205,14 @@ class HLSLToCrossGLConverter:
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
             elif isinstance(stmt, SwitchNode):
-                code += self.generate_switch_statement(stmt, indent)
+                code += self.generate_switch_statement(stmt, indent, is_main)
+            elif isinstance(stmt, FunctionCallNode):
+                code += f"{self.generate_expression(stmt, is_main)};\n"
+            elif isinstance(stmt, str):
+                code += f"{stmt};\n"
+            else:
+                # For any unhandled statement type
+                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
 
     def generate_for_loop(self, node, indent, is_main):
@@ -210,19 +271,36 @@ class HLSLToCrossGLConverter:
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
-            return f"{self.map_type(expr.vtype)} {expr.name}"
+            if expr.vtype:
+                return f"{self.map_type(expr.vtype)} {expr.name}"
+            else:
+                return expr.name
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
+            if expr.op in self.bitwise_op_map:
+                # Use the appropriate function for bitwise operations
+                func = self.bitwise_op_map.get(expr.op)
+                return f"{func}({left}, {right})"
             return f"{left} {expr.op} {right}"
 
         elif isinstance(expr, AssignmentNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
-            return f"{left} {expr.operator} {right}"
+            op = expr.operator
+            # Handle special assignment operators that might involve bitwise operations
+            if op in ["&=", "|=", "^=", "<<=", ">>="]:
+                base_op = op[0:-1]  # Remove the '=' character
+                if base_op in self.bitwise_op_map:
+                    func = self.bitwise_op_map.get(base_op)
+                    return f"{left} = {func}({left}, {right})"
+            return f"{left} {op} {right}"
 
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
+            if expr.op in self.bitwise_op_map:
+                func = self.bitwise_op_map.get(expr.op)
+                return f"{func}({operand})"
             return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(
@@ -230,7 +308,7 @@ class HLSLToCrossGLConverter:
             )
             return f"{expr.name}({args})"
         elif isinstance(expr, MemberAccessNode):
-            obj = self.generate_expression(expr.object)
+            obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
 
         elif isinstance(expr, TernaryOpNode):
@@ -241,6 +319,8 @@ class HLSLToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
+        elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
+            return str(expr)
         else:
             return str(expr)
 
@@ -251,27 +331,160 @@ class HLSLToCrossGLConverter:
 
     def map_semantic(self, semantic):
         if semantic is not None:
-            return f"@ {self.semantic_map.get(semantic, semantic)}"
+            mapped_semantic = self.semantic_map.get(semantic, semantic)
+            return f"@ {mapped_semantic}"
         else:
             return ""
 
-    def generate_switch_statement(self, node, indent=1):
+    def generate_switch_statement(self, node, indent=1, is_main=False):
         code = (
             "    " * indent
-            + f"switch ({self.generate_expression(node.condition)}) {{\n"
+            + f"switch ({self.generate_expression(node.condition, is_main)}) {{\n"
         )
 
         for case in node.cases:
             code += (
                 "    " * (indent + 1)
-                + f"case {self.generate_expression(case.value)}:\n"
+                + f"case {self.generate_expression(case.value, is_main)}:\n"
             )
-            code += self.generate_function_body(case.body, indent + 2)
+            code += self.generate_function_body(case.body, indent + 2, is_main)
             code += "    " * (indent + 2) + "break;\n"
 
         if node.default_body:
             code += "    " * (indent + 1) + "default:\n"
-            code += self.generate_function_body(node.default_body, indent + 2)
+            code += self.generate_function_body(node.default_body, indent + 2, is_main)
+            code += "    " * (indent + 2) + "break;\n"
 
         code += "    " * indent + "}\n"
         return code
+
+    def visit_BinaryOpNode(self, node):
+        if hasattr(node.left, "visit"):
+            left = node.visit_child(self, node.left)
+        else:
+            left = self.generate_expression(node.left)
+
+        if hasattr(node.right, "visit"):
+            right = node.visit_child(self, node.right)
+        else:
+            right = self.generate_expression(node.right)
+
+        # Handle bitwise operations based on token value
+        if hasattr(node.op, "token_type"):
+            if node.op.token_type in ("BITWISE_AND", "AMPERSAND", "&"):
+                return f"({left} & {right})"
+            elif node.op.token_type in ("BITWISE_OR", "PIPE", "|"):
+                return f"({left} | {right})"
+            elif node.op.token_type in ("BITWISE_XOR", "CARET", "^"):
+                return f"({left} ^ {right})"
+        elif hasattr(node.op, "value"):
+            # Handle string values
+            if node.op.value in ("&", "BITWISE_AND", "AMPERSAND"):
+                return f"({left} & {right})"
+            elif node.op.value in ("|", "BITWISE_OR", "PIPE"):
+                return f"({left} | {right})"
+            elif node.op.value in ("^", "BITWISE_XOR", "CARET"):
+                return f"({left} ^ {right})"
+        elif isinstance(node.op, str):
+            # Direct string comparison
+            if node.op in ("&", "BITWISE_AND", "AMPERSAND"):
+                return f"({left} & {right})"
+            elif node.op in ("|", "BITWISE_OR", "PIPE"):
+                return f"({left} | {right})"
+            elif node.op in ("^", "BITWISE_XOR", "CARET"):
+                return f"({left} ^ {right})"
+
+        # Falls back to string representation of the operator
+        op_str = node.op.value if hasattr(node.op, "value") else str(node.op)
+        return f"{left} {op_str} {right}"
+
+    def visit_UnaryOpNode(self, node):
+        if hasattr(node, "expr"):
+            expr_node = node.expr
+        else:
+            expr_node = node.operand
+
+        if hasattr(expr_node, "visit"):
+            expr = node.visit_child(self, expr_node)
+        else:
+            expr = self.generate_expression(expr_node)
+
+        # Handle bitwise NOT based on token type or value
+        if hasattr(node.op, "token_type") and node.op.token_type in (
+            "BITWISE_NOT",
+            "TILDE",
+            "~",
+        ):
+            return f"(~{expr})"
+        elif hasattr(node.op, "value") and node.op.value in (
+            "~",
+            "BITWISE_NOT",
+            "TILDE",
+        ):
+            return f"(~{expr})"
+        elif isinstance(node.op, str) and node.op in ("~", "BITWISE_NOT", "TILDE"):
+            return f"(~{expr})"
+
+        # Falls back to string representation of the operator
+        op_str = node.op.value if hasattr(node.op, "value") else str(node.op)
+        return f"{op_str}{expr}"
+
+    def visit_SwitchStatementNode(self, node):
+        condition = self.visit(node.condition)
+        self.code.append(f"switch ({condition}) {{")
+        self.indentation += 1
+
+        for case in node.cases:
+            self.visit(case)
+
+        if node.default_body:
+            self.code.append(self.get_indent() + "default:")
+            self.indentation += 1
+            for stmt in node.default_body:
+                self.visit(stmt)
+            self.indentation -= 1
+
+        self.indentation -= 1
+        self.code.append(self.get_indent() + "}")
+        return None
+
+    def visit_SwitchCaseNode(self, node):
+        case_value = self.visit(node.value)
+        self.code.append(f"{self.get_indent()}case {case_value}:")
+        self.indentation += 1
+
+        for stmt in node.body:
+            self.visit(stmt)
+
+        self.indentation -= 1
+        return None
+
+    def visit_StructNode(self, node):
+        struct_code = [f"struct {node.name} {{"]
+        self.indentation += 1
+
+        for member in node.members:
+            type_name = self.type_map.get(member["type"], member["type"])
+            semantic = member.get("semantic", None)
+
+            if semantic:
+                semantic_annotation = self.semantic_map.get(
+                    semantic, f"/* {semantic} */"
+                )
+                struct_code.append(
+                    f"{self.get_indent()}{semantic_annotation} {type_name} {member['name']};"
+                )
+            else:
+                struct_code.append(f"{self.get_indent()}{type_name} {member['name']};")
+
+        self.indentation -= 1
+        struct_code.append(self.get_indent() + "};")
+
+        for line in struct_code:
+            self.code.append(line)
+
+        if node.variables:
+            for var in node.variables:
+                self.code.append(f"{self.get_indent()}{node.name} {var};")
+
+        return None

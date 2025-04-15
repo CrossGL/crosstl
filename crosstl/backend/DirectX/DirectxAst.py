@@ -1,5 +1,6 @@
 class ASTNode:
-    pass
+    """Base class for all AST nodes."""
+
 
 
 class TernaryOpNode:
@@ -23,13 +24,22 @@ class ShaderNode:
         return f"ShaderNode(structs={self.structs}, functions={self.functions}, global_variables={self.global_variables}, cbuffers={self.cbuffers})"
 
 
-class StructNode:
-    def __init__(self, name, members):
+class StructNode(ASTNode):
+    """Node representing a struct declaration."""
+
+    def __init__(self, name, members, variables=None, semantic=None):
         self.name = name
-        self.members = members
+        self.members = members  # List of VariableNode objects
+        self.variables = (
+            variables if variables else []
+        )  # Variables declared with struct
+        self.semantic = semantic  # Optional semantic for the struct
 
     def __repr__(self):
-        return f"StructNode(name={self.name}, members={self.members})"
+        return f"StructNode(name={self.name}, members={self.members}, variables={self.variables}, semantic={self.semantic})"
+
+    def accept(self, visitor):
+        return visitor.visit_StructNode(self)
 
 
 class FunctionNode(ASTNode):
@@ -201,3 +211,40 @@ class CaseNode(ASTNode):
 
     def __repr__(self):
         return f"CaseNode(value={self.value}, body={self.body})"
+
+
+class SwitchStatementNode(ASTNode):
+    """Node representing a switch statement."""
+
+    def __init__(self, condition, cases, default_body=None):
+        self.condition = condition
+        self.cases = cases
+        self.default_body = default_body
+
+    def accept(self, visitor):
+        return visitor.visit_SwitchStatementNode(self)
+
+    def visit_child(self, visitor, node):
+        if node:
+            return (
+                node.visit(visitor) if hasattr(node, "visit") else node.accept(visitor)
+            )
+        return None
+
+
+class SwitchCaseNode(ASTNode):
+    """Node representing a case within a switch statement."""
+
+    def __init__(self, value, body):
+        self.value = value
+        self.body = body
+
+    def accept(self, visitor):
+        return visitor.visit_SwitchCaseNode(self)
+
+    def visit_child(self, visitor, node):
+        if node:
+            return (
+                node.visit(visitor) if hasattr(node, "visit") else node.accept(visitor)
+            )
+        return None

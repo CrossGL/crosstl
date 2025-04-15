@@ -398,6 +398,11 @@ def test_else_if_codegen():
     """
     try:
         tokens = tokenize_code(code)
+        # Print relevant tokens for debugging
+        for i, token in enumerate(tokens):
+            if "else" in str(token).lower() or "if" in str(token).lower():
+                print(f"Token {i}: {token}")
+
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
