@@ -24,6 +24,8 @@ from .OpenglAst import (
     ArrayAccessNode,
     StructNode,
     UniformNode,
+    SwitchNode,
+    CaseNode,
 )
 
 
@@ -411,6 +413,8 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, FunctionCallNode):
             # Function call as a statement
             return self.generate_function_call(node) + ";"
+        elif isinstance(node, SwitchNode):
+            return self.generate_switch_statement(node)
         else:
             # Generic expression statement
             return self.generate_expression(node) + ";"
@@ -710,3 +714,37 @@ class GLSLToCrossGLConverter:
         if node.array_size is not None:
             array_suffix = f"[{node.array_size}]"
         return f"{var_type} {var_name}{array_suffix}"
+
+    def generate_switch_statement(self, node):
+        """Generate CrossGL code for a switch statement
+
+        Args:
+            node: SwitchNode representing a GLSL switch statement
+
+        Returns:
+            str: The CrossGL switch statement
+        """
+        expression = self.generate_expression(node.expression)
+        result = f"switch ({expression}) {{\n"
+
+        # Generate case statements
+        for case in node.cases:
+            case_value = self.generate_expression(case.value)
+            result += self.indent() + f"case {case_value}:\n"
+
+            self.increase_indent()
+            for statement in case.body:
+                result += self.indent() + self.generate_statement(statement) + "\n"
+            self.decrease_indent()
+
+        # Generate default case if present
+        if node.default:
+            result += self.indent() + "default:\n"
+
+            self.increase_indent()
+            for statement in node.default:
+                result += self.indent() + self.generate_statement(statement) + "\n"
+            self.decrease_indent()
+
+        result += self.indent() + "}"
+        return result

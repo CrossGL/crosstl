@@ -1,4 +1,25 @@
-from .VulkanAst import *
+from .VulkanAst import (
+    AssignmentNode,
+    BinaryOpNode,
+    BreakNode,
+    CaseNode,
+    DefaultNode,
+    DoWhileNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    LayoutNode,
+    MemberAccessNode,
+    ReturnNode,
+    StructNode,
+    SwitchNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    WhileNode,
+)
+
 
 class VulkanToCrossGLConverter:
     def __init__(self):
@@ -80,14 +101,14 @@ class VulkanToCrossGLConverter:
             elif isinstance(node, FunctionNode):
                 # Determine if this is a vertex or fragment shader based on the function name
                 if node.name == "main":
-                    entry_func = node
+                    pass
                     # Check for gl_Position writes to identify a vertex shader
                     is_vertex_shader = False
                     for stmt in node.body:
                         if self.is_position_assignment(stmt):
                             is_vertex_shader = True
                             break
-                    
+
                     if is_vertex_shader:
                         code += "    // Vertex Shader\n"
                         code += "    vertex {\n"
@@ -110,14 +131,14 @@ class VulkanToCrossGLConverter:
         if isinstance(stmt, AssignmentNode):
             if isinstance(stmt.name, str) and "gl_Position" in stmt.name:
                 return True
-            elif hasattr(stmt.name, 'name') and "gl_Position" in stmt.name.name:
+            elif hasattr(stmt.name, "name") and "gl_Position" in stmt.name.name:
                 return True
         return False
 
     def generate_layout(self, node):
         code = ""
         layout_type = node.layout_type.lower() if node.layout_type else ""
-        
+
         if layout_type == "uniform":
             # Handle uniform buffers
             if node.struct_fields:
@@ -139,7 +160,7 @@ class VulkanToCrossGLConverter:
         elif layout_type == "in" or layout_type == "out":
             # Input/output variables are handled differently in HLSL - typically as function parameters or return values
             pass
-        
+
         return code
 
     def generate_struct(self, node):
@@ -168,7 +189,7 @@ class VulkanToCrossGLConverter:
         # Check if body is a list or a single node
         if not isinstance(body, list):
             body = [body]
-        
+
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
@@ -218,12 +239,12 @@ class VulkanToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
-            
+
             # Handle bitwise operations
             if expr.op in self.bitwise_op_map:
                 op = self.bitwise_op_map[expr.op]
                 return f"({left} {op} {right})"
-            
+
             return f"({left} {expr.op} {right})"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
@@ -249,7 +270,11 @@ class VulkanToCrossGLConverter:
         return f"{node.name}({args})"
 
     def generate_for_loop(self, node, indent):
-        init = self.generate_expression(node.init) if isinstance(node.init, (BinaryOpNode, AssignmentNode)) else node.init
+        init = (
+            self.generate_expression(node.init)
+            if isinstance(node.init, (BinaryOpNode, AssignmentNode))
+            else node.init
+        )
         condition = self.generate_expression(node.condition)
         update = self.generate_expression(node.update)
 
@@ -283,11 +308,13 @@ class VulkanToCrossGLConverter:
         code += "    " * indent + "}"
 
         # Handle else-if chains
-        if hasattr(node, 'else_if_conditions') and node.else_if_conditions:
+        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
             for i in range(len(node.else_if_conditions)):
                 else_if_condition = self.generate_expression(node.else_if_conditions[i])
                 code += f" else if ({else_if_condition}) {{\n"
-                code += self.generate_function_body(node.else_if_bodies[i], indent=indent + 1)
+                code += self.generate_function_body(
+                    node.else_if_bodies[i], indent=indent + 1
+                )
                 code += "    " * indent + "}"
 
         # Handle else block
@@ -301,9 +328,9 @@ class VulkanToCrossGLConverter:
 
     def generate_switch_statement(self, node, indent):
         expression = self.generate_expression(node.expression)
-        
+
         code = f"switch ({expression}) {{\n"
-        
+
         for case in node.cases:
             if isinstance(case, CaseNode):
                 value = self.generate_expression(case.value)
@@ -314,7 +341,7 @@ class VulkanToCrossGLConverter:
                 code += "    " * (indent + 1) + "default:\n"
                 code += self.generate_function_body(case.statements, indent=indent + 2)
                 code += "    " * (indent + 2) + "break;\n"
-                
+
         code += "    " * indent + "}\n"
         return code
 
@@ -322,4 +349,4 @@ class VulkanToCrossGLConverter:
         """Map Vulkan/GLSL types to HLSL/DirectX types"""
         if vulkan_type in self.type_map:
             return self.type_map[vulkan_type]
-        return vulkan_type 
+        return vulkan_type

@@ -16,6 +16,9 @@ from .OpenglAst import (
     MemberAccessNode,
     TernaryOpNode,
     StructNode,
+    SwitchNode,
+    CaseNode,
+    BlockNode,
 )
 from .OpenglLexer import GLSLLexer
 
@@ -34,17 +37,52 @@ class GLSLParser:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
-        if self.current_token[1] == "main" and self.shader_type == "vertex":
-            self.shader_type = "fragment"
-            # If we encounter the second 'main', switch shader_type to 'fragment'
+        """Match the current token type with the expected token type
+
+        Args:
+
+            token_type: The token type to match with the current token type
+
+        Raises:
+
+            SyntaxError: If the current token type does not match the expected
+
+                token type
+
+        """
         if self.current_token[0] == token_type:
             self.pos += 1
-            self.current_token = (
-                self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
-            )
-            self.skip_comments()
+            if self.pos < len(self.tokens):
+                self.current_token = self.tokens[self.pos]
+            else:
+                self.current_token = ("EOF", "")
         else:
-            raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+            raise SyntaxError(
+                f"Syntax error: expected {token_type}, got {self.current_token[0]}"
+            )
+
+    def skip_until(self, token_types):
+        """Skip tokens until one of the specified token types is found
+
+        This method is useful for error recovery, allowing the parser to
+        skip ahead to a known synchronization point.
+
+        Args:
+            token_types (list): A list of token types to stop at
+
+        Returns:
+            bool: True if a token in token_types was found, False if EOF was reached
+        """
+        while self.current_token[0] != "EOF":
+            if self.current_token[0] in token_types:
+                return True
+            self.pos += 1
+            if self.pos < len(self.tokens):
+                self.current_token = self.tokens[self.pos]
+            else:
+                self.current_token = ("EOF", "")
+                return False
+        return False
 
     def parse(self):
         shader = self.parse_shader()
@@ -347,6 +385,8 @@ class GLSLParser:
                 body.append(self.parse_if_statement())
             elif self.current_token[0] == "FOR":
                 body.append(self.parse_for_loop())
+            elif self.current_token[0] == "SWITCH":
+                body.append(self.parse_switch_statement())
             elif self.current_token[0] == "RETURN":
                 body.append(self.parse_return_statement())
             elif self.current_token[0] in [
@@ -487,41 +527,101 @@ class GLSLParser:
         self.eat("RBRACE")
         return ForNode(init, condition, update, body)
 
-    def parse_update(self):
-        """Parse an update statement
+    def parse_switch_statement(self):
+        """Parse a switch statement
 
-        This method parses an update statement in the shader code.
+        This method parses a switch statement in the shader code.
 
         Returns:
-
-            ASTNode: An ASTNode object representing the update statement
-
+            SwitchNode: A SwitchNode object representing the switch statement
         """
-        if self.current_token[0] == "IDENTIFIER":
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            if self.current_token[0] == "INCREMENT":
-                op_name = self.current_token[1]
-                self.eat("INCREMENT")
-                return VariableNode("", name + op_name)
-            elif self.current_token[0] == "DECREMENT":
-                op_name = self.current_token[1]
-                self.eat("DECREMENT")
-                return VariableNode("", name + op_name)
+        self.eat("SWITCH")
+        self.eat("LPAREN")
+        expression = self.parse_expression()
+        self.eat("RPAREN")
+        self.eat("LBRACE")
+
+        cases = []
+        default = None
+
+        while self.current_token[0] not in ["RBRACE", "EOF"]:
+            if self.current_token[0] == "CASE":
+                cases.append(self.parse_case_statement())
+            elif self.current_token[0] == "DEFAULT":
+                self.eat("DEFAULT")
+                self.eat("COLON")
+                default_statements = []
+
+                # Parse statements until we hit a case, default, or end of switch
+                while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+                    if self.current_token[0] == "IF":
+                        default_statements.append(self.parse_if_statement())
+                    elif self.current_token[0] == "FOR":
+                        default_statements.append(self.parse_for_loop())
+                    elif self.current_token[0] == "RETURN":
+                        default_statements.append(self.parse_return_statement())
+                    elif self.current_token[0] in [
+                        "VECTOR",
+                        "IDENTIFIER",
+                        "FLOAT",
+                        "DOUBLE",
+                        "UINT",
+                        "INT",
+                    ]:
+                        default_statements.append(
+                            self.parse_assignment_or_function_call()
+                        )
+                    else:
+                        raise SyntaxError(
+                            f"Unexpected token in default case: {self.current_token[0]}"
+                        )
+
+                default = default_statements
             else:
                 raise SyntaxError(
-                    f"Expected INCREMENT or DECREMENT, got {self.current_token[0]}"
+                    f"Unexpected token in switch statement: {self.current_token[0]}"
                 )
-        elif self.current_token[0] in ["INCREMENT", "DECREMENT"]:
-            op = self.current_token[0]
-            op_name = self.current_token[1]
-            self.eat(op)
-            if self.current_token[0] == "IDENTIFIER":
-                name = self.current_token[1]
-                self.eat("IDENTIFIER")
-                return VariableNode("", op_name + name)
-        else:
-            raise SyntaxError(f"Unexpected token in update: {self.current_token[0]}")
+
+        self.eat("RBRACE")
+        return SwitchNode(expression, cases, default)
+
+    def parse_case_statement(self):
+        """Parse a case statement within a switch
+
+        This method parses a case statement in the shader code.
+
+        Returns:
+            CaseNode: A CaseNode object representing the case statement
+        """
+        self.eat("CASE")
+        value = self.parse_expression()
+        self.eat("COLON")
+
+        statements = []
+
+        # Parse statements until we hit a case, default, or end of switch
+        while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+            if self.current_token[0] == "IF":
+                statements.append(self.parse_if_statement())
+            elif self.current_token[0] == "FOR":
+                statements.append(self.parse_for_loop())
+            elif self.current_token[0] == "RETURN":
+                statements.append(self.parse_return_statement())
+            elif self.current_token[0] in [
+                "VECTOR",
+                "IDENTIFIER",
+                "FLOAT",
+                "DOUBLE",
+                "UINT",
+                "INT",
+            ]:
+                statements.append(self.parse_assignment_or_function_call())
+            else:
+                raise SyntaxError(
+                    f"Unexpected token in case statement: {self.current_token[0]}"
+                )
+
+        return CaseNode(value, statements)
 
     def parse_return_statement(self):
         """Parse a return statement
@@ -839,21 +939,27 @@ class GLSLParser:
         return expr
 
     def parse_unary(self):
-        """Parse a unary expression
+        """Parse a unary operation
 
-        This method parses a unary expression in the shader code.
+        This method parses a unary operation in the shader code.
 
         Returns:
 
-            ASTNode: An ASTNode object representing the unary expression
+            Node: A Node object representing the unary operation
+
+        Raises:
+
+            SyntaxError: If the current token is not a valid unary operation
 
         """
-        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT"]:
+        if self.current_token[0] in ["PLUS", "MINUS", "LOGICAL_NOT", "BITWISE_NOT"]:
             op = self.current_token[1]
-            self.eat(self.current_token[0])
-            operand = self.parse_unary()
-            return UnaryOpNode(op, operand)
-        return self.parse_primary()
+            token_type = self.current_token[0]
+            self.eat(token_type)
+            value = self.parse_unary()
+            return UnaryOpNode(op, value)
+        else:
+            return self.parse_primary()
 
     def parse_primary(self):
         """Parse a primary expression
@@ -925,61 +1031,83 @@ class GLSLParser:
 
         Returns:
 
-            ASTNode: An ASTNode object representing the expression
+            Node: A Node object representing the expression
+
+        Raises:
+
+            SyntaxError: If the current token is not a valid expression
 
         """
-        expr = self.parse_ternary()
-        while self.current_token[0] in [
-            "LESS_THAN",
-            "GREATER_THAN",
-            "LESS_EQUAL",
-            "GREATER_EQUAL",
-            "EQUAL",
-            "NOT_EQUAL",
-            "LOGICAL_AND",
-            "LOGICAL_OR",
-            "PLUS",
-            "MINUS",
-            "MULTIPLY",
-            "DIVIDE",
-            "ASSIGN_ADD",
-            "ASSIGN_SUB",
-            "ASSIGN_MUL",
-            "ASSIGN_DIV",
-            "ASSIGN_AND",
-            "ASSIGN_OR",
-            "ASSIGN_XOR",
-            "ASSIGN_MOD",
-            "BITWISE_SHIFT_RIGHT",
-            "BITWISE_SHIFT_LEFT",
-            "BITWISE_XOR",
-            "ASSIGN_SHIFT_RIGHT",
-            "ASSIGN_SHIFT_LEFT",
-        ]:
-            op = self.current_token[0]
-            self.eat(op)
-            right = self.parse_ternary()
-            expr = BinaryOpNode(expr, op, right)
-        return expr
+        return self.parse_logical_or()
 
-    def parse_ternary(self):
-        """Parse a ternary expression
+    def parse_logical_or(self):
+        left = self.parse_logical_and()
 
-        This method parses a ternary expression in the shader code.
+        while self.current_token[0] == "LOGICAL_OR":
+            op = self.current_token[1]
+            self.eat("LOGICAL_OR")
+            right = self.parse_logical_and()
+            left = BinaryOpNode(left, op, right)
 
-        Returns:
+        return left
 
-            ASTNode: An ASTNode object representing the ternary expression
+    def parse_logical_and(self):
+        left = self.parse_bitwise_or()  # Changed from parse_equality
 
-        """
-        expr = self.parse_additive()
-        if self.current_token[0] == "QUESTION":
-            self.eat("QUESTION")
-            true_expr = self.parse_expression()
-            self.eat("COLON")
-            false_expr = self.parse_expression()
-            expr = TernaryOpNode(expr, true_expr, false_expr)
-        return expr
+        while self.current_token[0] == "LOGICAL_AND":
+            op = self.current_token[1]
+            self.eat("LOGICAL_AND")
+            right = self.parse_bitwise_or()  # Changed from parse_equality
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_or(self):
+        """Parse a bitwise OR expression"""
+        left = self.parse_bitwise_xor()
+
+        while self.current_token[0] == "BITWISE_OR":
+            op = self.current_token[1]
+            self.eat("BITWISE_OR")
+            right = self.parse_bitwise_xor()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_xor(self):
+        """Parse a bitwise XOR expression"""
+        left = self.parse_bitwise_and()
+
+        while self.current_token[0] == "BITWISE_XOR":
+            op = self.current_token[1]
+            self.eat("BITWISE_XOR")
+            right = self.parse_bitwise_and()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_and(self):
+        """Parse a bitwise AND expression"""
+        left = self.parse_equality()
+
+        while self.current_token[0] == "BITWISE_AND":
+            op = self.current_token[1]
+            self.eat("BITWISE_AND")
+            right = self.parse_equality()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_equality(self):
+        left = self.parse_relational()
+
+        while self.current_token[0] in ["EQUAL", "NOT_EQUAL"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_relational()
+            left = BinaryOpNode(left, op, right)
+
+        return left
 
     def parse_function_call_or_identifier(self):
         """Parse a function call or identifier

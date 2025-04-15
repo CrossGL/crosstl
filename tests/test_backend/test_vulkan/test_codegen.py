@@ -214,7 +214,7 @@ def test_bitwise_and_ops_codegen():
         print("Tokens for bitwise AND test:")
         for i, token in enumerate(tokens):
             print(f"{i}: {token}")
-            
+
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
@@ -306,7 +306,9 @@ def test_bitwise_shift_ops_codegen():
         generated_code = generate_code(ast)
         print(generated_code)
     except SyntaxError:
-        pytest.fail("Bitwise shift operators parsing or code generation not implemented.")
+        pytest.fail(
+            "Bitwise shift operators parsing or code generation not implemented."
+        )
 
 
 def test_double_dtype_codegen():

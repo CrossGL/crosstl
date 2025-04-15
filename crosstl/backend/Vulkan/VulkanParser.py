@@ -57,14 +57,42 @@ class VulkanParser:
             elif self.current_token[0] == "UNIFORM":
                 statements.append(self.parse_uniform())
             elif (
-                (self.current_token[0] in ["VOID", "FLOAT", "INT", "UINT", "BOOL", "VEC2", "VEC3", "VEC4", "MAT2", "MAT3", "MAT4"] or self.current_token[1] in VALID_DATA_TYPES)
+                (
+                    self.current_token[0]
+                    in [
+                        "VOID",
+                        "FLOAT",
+                        "INT",
+                        "UINT",
+                        "BOOL",
+                        "VEC2",
+                        "VEC3",
+                        "VEC4",
+                        "MAT2",
+                        "MAT3",
+                        "MAT4",
+                    ]
+                    or self.current_token[1] in VALID_DATA_TYPES
+                )
                 and self.peek(1) == "IDENTIFIER"
                 and self.peek(2) == "LPAREN"
             ):
                 statements.append(self.parse_function())
             elif (
                 self.current_token[0] == "IDENTIFIER"
-                or self.current_token[0] in ["FLOAT", "INT", "UINT", "BOOL", "VEC2", "VEC3", "VEC4", "MAT2", "MAT3", "MAT4"]
+                or self.current_token[0]
+                in [
+                    "FLOAT",
+                    "INT",
+                    "UINT",
+                    "BOOL",
+                    "VEC2",
+                    "VEC3",
+                    "VEC4",
+                    "MAT2",
+                    "MAT3",
+                    "MAT4",
+                ]
                 or self.current_token[1] in VALID_DATA_TYPES
             ):
                 statements.append(self.parse_variable(self.current_token[1]))
@@ -187,10 +215,27 @@ class VulkanParser:
         self.eat("IDENTIFIER")
         self.eat("LBRACE")
         members = []
-        
+
         while self.current_token[0] != "RBRACE":
             # Get the member type
-            if self.current_token[0] in ["VEC2", "VEC3", "VEC4", "IVEC2", "IVEC3", "IVEC4", "UVEC2", "UVEC3", "UVEC4", "FLOAT", "INT", "UINT", "BOOL", "MAT2", "MAT3", "MAT4"]:
+            if self.current_token[0] in [
+                "VEC2",
+                "VEC3",
+                "VEC4",
+                "IVEC2",
+                "IVEC3",
+                "IVEC4",
+                "UVEC2",
+                "UVEC3",
+                "UVEC4",
+                "FLOAT",
+                "INT",
+                "UINT",
+                "BOOL",
+                "MAT2",
+                "MAT3",
+                "MAT4",
+            ]:
                 # Vector/matrix/scalar types
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
@@ -203,20 +248,22 @@ class VulkanParser:
                 type_name = self.current_token[1]
                 self.eat("IDENTIFIER")
             else:
-                raise SyntaxError(f"Unexpected token in struct member: {self.current_token}")
-            
+                raise SyntaxError(
+                    f"Unexpected token in struct member: {self.current_token}"
+                )
+
             # Get the member name
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            
+
             # Check for semicolon
             self.eat("SEMICOLON")
-            
+
             members.append(VariableNode(type_name, member_name))
-        
+
         self.eat("RBRACE")
         self.eat("SEMICOLON")
-        
+
         return StructNode(name, members)
 
     def parse_function(self):
@@ -377,7 +424,7 @@ class VulkanParser:
     def parse_variable(self, type_name):
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        
+
         while self.current_token[0] == "DOT":
             self.eat("DOT")
             member_name = self.current_token[1]
@@ -404,10 +451,12 @@ class VulkanParser:
         # Handle binary operators
         elif self.current_token[0] in ("BINARY_AND", "BINARY_OR", "BINARY_XOR"):
             op = self.current_token[0]
-            op_symbol = "&" if op == "BINARY_AND" else ("|" if op == "BINARY_OR" else "^")
+            op_symbol = (
+                "&" if op == "BINARY_AND" else ("|" if op == "BINARY_OR" else "^")
+            )
             self.eat(op)
             right = self.parse_expression()
-            
+
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op_symbol, right)
@@ -416,7 +465,7 @@ class VulkanParser:
                 self.skip_until("SEMICOLON")
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op_symbol, right)
-            
+
         elif self.current_token[0] in (
             "EQUALS",
             "PLUS_EQUALS",
@@ -480,11 +529,21 @@ class VulkanParser:
                 self.eat("COMMA")
                 args.append(self.parse_expression())
         self.eat("RPAREN")
-        
+
         # Handle vector constructors (vec4, vec3, etc.)
-        if name in ["vec4", "vec3", "vec2", "ivec4", "ivec3", "ivec2", "uvec4", "uvec3", "uvec2"]:
+        if name in [
+            "vec4",
+            "vec3",
+            "vec2",
+            "ivec4",
+            "ivec3",
+            "ivec2",
+            "uvec4",
+            "uvec3",
+            "uvec2",
+        ]:
             return FunctionCallNode(name, args)
-        
+
         return FunctionCallNode(name, args)
 
     def parse_function_call_or_identifier(self):
@@ -503,7 +562,10 @@ class VulkanParser:
             value = self.parse_primary()
             return UnaryOpNode("-", value)
 
-        if self.current_token[0] == "BITWISE_NOT" or self.current_token[0] == "BINARY_NOT":
+        if (
+            self.current_token[0] == "BITWISE_NOT"
+            or self.current_token[0] == "BINARY_NOT"
+        ):
             self.eat(self.current_token[0])
             value = self.parse_primary()
             return UnaryOpNode("~", value)
@@ -517,7 +579,7 @@ class VulkanParser:
             value = self.current_token[1]
             self.eat("NUMBER")
             # Check if there's a 'u' suffix (for uint literals)
-            if value.endswith('u'):
+            if value.endswith("u"):
                 value = value[:-1]  # Remove the 'u' suffix
             return value
         elif self.current_token[0] == "LPAREN":
@@ -669,21 +731,29 @@ class VulkanParser:
             "BINARY_OR",
             "BINARY_XOR",
             "BITWISE_SHIFT_LEFT",
-            "BITWISE_SHIFT_RIGHT"
+            "BITWISE_SHIFT_RIGHT",
         ]:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_additive()
-            
+
             # Map token types to operator symbols
-            op_symbol = "&" if op == "BINARY_AND" else \
-                      "|" if op == "BINARY_OR" else \
-                      "^" if op == "BINARY_XOR" else \
-                      "<<" if op == "BITWISE_SHIFT_LEFT" else \
-                      ">>"  # BITWISE_SHIFT_RIGHT
-                      
+            op_symbol = (
+                "&"
+                if op == "BINARY_AND"
+                else (
+                    "|"
+                    if op == "BINARY_OR"
+                    else (
+                        "^"
+                        if op == "BINARY_XOR"
+                        else "<<" if op == "BITWISE_SHIFT_LEFT" else ">>"
+                    )
+                )
+            )  # BITWISE_SHIFT_RIGHT
+
             left = BinaryOpNode(left, op_symbol, right)
-        
+
         return left
 
     def parse_expression_statement(self):

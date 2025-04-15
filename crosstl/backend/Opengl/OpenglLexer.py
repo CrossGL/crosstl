@@ -1,5 +1,6 @@
 import re
 from typing import Iterator, Tuple, List
+from enum import Enum
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -37,8 +38,12 @@ TOKENS = tuple(
         ("ATTRIBUTE", r"\battribute\b"),
         ("VARYING", r"\bvarying\b"),
         ("CONST", r"\bconst\b"),
+        ("SWITCH", r"\bswitch\b"),
+        ("CASE", r"\bcase\b"),
+        ("DEFAULT", r"\bdefault\b"),
+        ("BREAK", r"\bbreak\b"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("NUMBER", r"\d+(\.\d+)?([eE][+-]?\d+)?"),
+        ("NUMBER", r"\d+(\.\d+)?([eE][+-]?\d+)?u?"),
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
         ("LPAREN", r"\("),
@@ -106,7 +111,109 @@ KEYWORDS = {
     "attribute": "ATTRIBUTE",
     "varying": "VARYING",
     "const": "CONST",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
+    "break": "BREAK",
 }
+
+
+class TokenType(Enum):
+    ID = "ID"
+    INT = "INT"
+    FLOAT = "FLOAT"
+    DOUBLE = "DOUBLE"
+    HALF = "HALF"
+    STRING = "STRING"
+
+    ADD = "ADD"
+    SUB = "SUB"
+    MUL = "MUL"
+    DIV = "DIV"
+    MOD = "MOD"
+    ASSIGN = "ASSIGN"
+
+    # Bitwise operators
+    AMPERSAND = "AMPERSAND"  # &
+    PIPE = "PIPE"  # |
+    CARET = "CARET"  # ^
+    TILDE = "TILDE"  # ~
+
+    EQ = "EQ"
+    NEQ = "NEQ"
+    GT = "GT"
+    GTE = "GTE"
+    LT = "LT"
+    LTE = "LTE"
+
+    AND = "AND"
+    OR = "OR"
+    NOT = "NOT"
+
+    BIT_AND = "BIT_AND"
+    BIT_OR = "BIT_OR"
+    BIT_XOR = "BIT_XOR"
+    BIT_NOT = "BIT_NOT"
+
+    LPAREN = "LPAREN"
+    RPAREN = "RPAREN"
+    LCBR = "LCBR"
+    RCBR = "RCBR"
+    LSBR = "LSBR"
+    RSBR = "RSBR"
+
+    DOT = "DOT"
+    COMMA = "COMMA"
+    SEMICOLON = "SEMICOLON"
+    COLON = "COLON"
+    QUESTION = "QUESTION"
+
+    IF = "IF"
+    ELSE = "ELSE"
+    FOR = "FOR"
+    WHILE = "WHILE"
+    DO = "DO"
+    BREAK = "BREAK"
+    CONTINUE = "CONTINUE"
+    RETURN = "RETURN"
+
+    SWITCH = "SWITCH"
+    CASE = "CASE"
+    DEFAULT = "DEFAULT"
+
+    STRUCT = "STRUCT"
+
+    COMMENT = "COMMENT"
+
+    # Type specifiers
+    TYPE_INT = "TYPE_INT"
+    TYPE_FLOAT = "TYPE_FLOAT"
+    TYPE_BOOL = "TYPE_BOOL"
+    TYPE_VEC2 = "TYPE_VEC2"
+    TYPE_VEC3 = "TYPE_VEC3"
+    TYPE_VEC4 = "TYPE_VEC4"
+    TYPE_MAT2 = "TYPE_MAT2"
+    TYPE_MAT3 = "TYPE_MAT3"
+    TYPE_MAT4 = "TYPE_MAT4"
+    TYPE_SAMPLER2D = "TYPE_SAMPLER2D"
+    TYPE_SAMPLER3D = "TYPE_SAMPLER3D"
+    TYPE_VOID = "TYPE_VOID"
+
+    # GLSL Qualifiers
+    QUALIFIER_CONST = "QUALIFIER_CONST"
+    QUALIFIER_IN = "QUALIFIER_IN"
+    QUALIFIER_OUT = "QUALIFIER_OUT"
+    QUALIFIER_INOUT = "QUALIFIER_INOUT"
+    QUALIFIER_UNIFORM = "QUALIFIER_UNIFORM"
+    QUALIFIER_VARYING = "QUALIFIER_VARYING"
+    QUALIFIER_ATTRIBUTE = "QUALIFIER_ATTRIBUTE"
+
+    PRECISION_LOW = "PRECISION_LOW"
+    PRECISION_MEDIUM = "PRECISION_MEDIUM"
+    PRECISION_HIGH = "PRECISION_HIGH"
+    PRECISION = "PRECISION"
+
+    EOF = "EOF"
 
 
 class GLSLLexer:
@@ -114,6 +221,50 @@ class GLSLLexer:
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
+        self.position = 0
+        self.line = 1
+        self.column = 0
+        self.current_char = (
+            self.code[self.position] if self.position < len(self.code) else None
+        )
+
+        self.reserved_keywords = {
+            "if": TokenType.IF,
+            "else": TokenType.ELSE,
+            "for": TokenType.FOR,
+            "while": TokenType.WHILE,
+            "do": TokenType.DO,
+            "break": TokenType.BREAK,
+            "continue": TokenType.CONTINUE,
+            "return": TokenType.RETURN,
+            "switch": TokenType.SWITCH,
+            "case": TokenType.CASE,
+            "default": TokenType.DEFAULT,
+            "struct": TokenType.STRUCT,
+            "int": TokenType.TYPE_INT,
+            "float": TokenType.TYPE_FLOAT,
+            "bool": TokenType.TYPE_BOOL,
+            "vec2": TokenType.TYPE_VEC2,
+            "vec3": TokenType.TYPE_VEC3,
+            "vec4": TokenType.TYPE_VEC4,
+            "mat2": TokenType.TYPE_MAT2,
+            "mat3": TokenType.TYPE_MAT3,
+            "mat4": TokenType.TYPE_MAT4,
+            "sampler2D": TokenType.TYPE_SAMPLER2D,
+            "sampler3D": TokenType.TYPE_SAMPLER3D,
+            "void": TokenType.TYPE_VOID,
+            "const": TokenType.QUALIFIER_CONST,
+            "in": TokenType.QUALIFIER_IN,
+            "out": TokenType.QUALIFIER_OUT,
+            "inout": TokenType.QUALIFIER_INOUT,
+            "uniform": TokenType.QUALIFIER_UNIFORM,
+            "varying": TokenType.QUALIFIER_VARYING,
+            "attribute": TokenType.QUALIFIER_ATTRIBUTE,
+            "lowp": TokenType.PRECISION_LOW,
+            "mediump": TokenType.PRECISION_MEDIUM,
+            "highp": TokenType.PRECISION_HIGH,
+            "precision": TokenType.PRECISION,
+        }
 
     def tokenize(self) -> List[Tuple[str, str]]:
         # tokenize the input code and return list of tokens
@@ -121,12 +272,11 @@ class GLSLLexer:
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         # function that yields tokens one at a time
-        pos = 0
-        while pos < self._length:
-            token = self._next_token(pos)
+        while self.current_char is not None:
+            token = self.get_next_token()
             if token is None:
                 raise SyntaxError(
-                    f"Illegal character '{self.code[pos]}' at position {pos}"
+                    f"Illegal character '{self.current_char}' at position {self.position}"
                 )
             new_pos, token_type, text = token
 
@@ -136,17 +286,219 @@ class GLSLLexer:
             if token_type not in SKIP_TOKENS:
                 yield (token_type, text)
 
-            pos = new_pos
+            self.position = new_pos
 
         yield ("EOF", "")
 
-    def _next_token(self, pos: int) -> Tuple[int, str, str]:
-        # find the next token starting at the given position
-        for token_type, pattern in self._token_patterns:
-            match = pattern.match(self.code, pos)
-            if match:
-                return match.end(0), token_type, match.group(0)
+    def get_next_token(self):
+        """
+        Lexical analyzer (tokenizer) - this method is responsible for
+        breaking a sentence apart into tokens
+        """
+        token = None
+        while self.current_char is not None and token is None:
+            if self.current_char.isspace():
+                self.skip_whitespace()
+                continue
+
+            if self.current_char == "/" and self.peek() == "/":
+                self.skip_comment()
+                continue
+
+            if self.current_char == "/" and self.peek() == "*":
+                self.skip_multiline_comment()
+                continue
+
+            if self.current_char.isalpha() or self.current_char == "_":
+                return self.identifier()
+
+            if self.current_char.isdigit() or (
+                self.current_char == "." and self.peek().isdigit()
+            ):
+                return self.number()
+
+            if self.current_char == "+":
+                token = Token(TokenType.ADD, "+", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "-":
+                token = Token(TokenType.SUB, "-", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "*":
+                token = Token(TokenType.MUL, "*", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "/":
+                token = Token(TokenType.DIV, "/", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "%":
+                token = Token(TokenType.MOD, "%", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "=":
+                if self.peek() == "=":
+                    token = Token(TokenType.EQ, "==", self.line, self.column)
+                    self.advance()
+                    self.advance()
+                else:
+                    token = Token(TokenType.ASSIGN, "=", self.line, self.column)
+                    self.advance()
+
+            elif self.current_char == "!":
+                if self.peek() == "=":
+                    token = Token(TokenType.NEQ, "!=", self.line, self.column)
+                    self.advance()
+                    self.advance()
+                else:
+                    token = Token(TokenType.NOT, "!", self.line, self.column)
+                    self.advance()
+
+            elif self.current_char == ">":
+                if self.peek() == "=":
+                    token = Token(TokenType.GTE, ">=", self.line, self.column)
+                    self.advance()
+                    self.advance()
+                else:
+                    token = Token(TokenType.GT, ">", self.line, self.column)
+                    self.advance()
+
+            elif self.current_char == "<":
+                if self.peek() == "=":
+                    token = Token(TokenType.LTE, "<=", self.line, self.column)
+                    self.advance()
+                    self.advance()
+                else:
+                    token = Token(TokenType.LT, "<", self.line, self.column)
+                    self.advance()
+
+            elif self.current_char == "&":
+                if self.peek() == "&":
+                    token = Token(TokenType.AND, "&&", self.line, self.column)
+                    self.advance()
+                    self.advance()
+                else:
+                    token = Token(TokenType.AMPERSAND, "&", self.line, self.column)
+                    self.advance()
+
+            elif self.current_char == "|":
+                if self.peek() == "|":
+                    token = Token(TokenType.OR, "||", self.line, self.column)
+                    self.advance()
+                    self.advance()
+                else:
+                    token = Token(TokenType.PIPE, "|", self.line, self.column)
+                    self.advance()
+
+            elif self.current_char == "^":
+                token = Token(TokenType.CARET, "^", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "~":
+                token = Token(TokenType.TILDE, "~", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "(":
+                token = Token(TokenType.LPAREN, "(", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == ")":
+                token = Token(TokenType.RPAREN, ")", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "{":
+                token = Token(TokenType.LCBR, "{", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "}":
+                token = Token(TokenType.RCBR, "}", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "[":
+                token = Token(TokenType.LSBR, "[", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "]":
+                token = Token(TokenType.RSBR, "]", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == ".":
+                token = Token(TokenType.DOT, ".", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == ",":
+                token = Token(TokenType.COMMA, ",", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == ";":
+                token = Token(TokenType.SEMICOLON, ";", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == ":":
+                token = Token(TokenType.COLON, ":", self.line, self.column)
+                self.advance()
+
+            elif self.current_char == "?":
+                token = Token(TokenType.QUESTION, "?", self.line, self.column)
+                self.advance()
+
+            if token is None:
+                raise SyntaxError(f"Unexpected character: {self.current_char}")
+
+            return token
+
+    def skip_whitespace(self):
+        while self.current_char is not None and self.current_char.isspace():
+            self.advance()
+
+    def skip_comment(self):
+        while self.current_char != "\n":
+            self.advance()
+
+    def skip_multiline_comment(self):
+        while not (self.current_char == "*" and self.peek() == "/"):
+            self.advance()
+        self.advance()  # Skip the closing */
+
+    def advance(self):
+        self.position += 1
+        self.column += 1
+        if self.position < len(self.code):
+            self.current_char = self.code[self.position]
+        else:
+            self.current_char = None
+
+    def peek(self):
+        peek_pos = self.position + 1
+        if peek_pos < len(self.code):
+            return self.code[peek_pos]
         return None
+
+    def identifier(self):
+        start = self.position
+        while self.current_char is not None and (
+            self.current_char.isalnum() or self.current_char == "_"
+        ):
+            self.advance()
+        return Token(
+            TokenType.ID, self.code[start : self.position], self.line, self.column
+        )
+
+    def number(self):
+        start = self.position
+        while self.current_char is not None and (
+            self.current_char.isdigit()
+            or self.current_char == "."
+            or self.current_char == "e"
+            or self.current_char == "E"
+            or self.current_char == "+"
+            or self.current_char == "-"
+        ):
+            self.advance()
+        return Token(
+            TokenType.NUMBER, self.code[start : self.position], self.line, self.column
+        )
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "GLSLLexer":

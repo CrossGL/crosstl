@@ -430,61 +430,73 @@ class HLSLToCrossGLConverter:
         return f"{op_str}{expr}"
 
     def visit_SwitchStatementNode(self, node):
-        condition = self.visit(node.condition)
-        self.code.append(f"switch ({condition}) {{")
-        self.indentation += 1
-
-        for case in node.cases:
-            self.visit(case)
-
-        if node.default_body:
-            self.code.append(self.get_indent() + "default:")
-            self.indentation += 1
-            for stmt in node.default_body:
-                self.visit(stmt)
-            self.indentation -= 1
-
-        self.indentation -= 1
-        self.code.append(self.get_indent() + "}")
-        return None
+        # Handle the alternative SwitchStatementNode type if needed
+        return self.visit_SwitchNode(node)
 
     def visit_SwitchCaseNode(self, node):
-        case_value = self.visit(node.value)
-        self.code.append(f"{self.get_indent()}case {case_value}:")
-        self.indentation += 1
-
-        for stmt in node.body:
-            self.visit(stmt)
-
-        self.indentation -= 1
-        return None
+        # Handle the alternative SwitchCaseNode type if needed
+        return self.visit_CaseNode(node)
 
     def visit_StructNode(self, node):
-        struct_code = [f"struct {node.name} {{"]
+        # Generate code for a struct definition
+        code = f"struct {node.name} {{\n"
         self.indentation += 1
 
         for member in node.members:
-            type_name = self.type_map.get(member["type"], member["type"])
-            semantic = member.get("semantic", None)
+            semantic = ""
+            if member.semantic:
+                semantic = f" @ {self.map_semantic(member.semantic)}"
 
-            if semantic:
-                semantic_annotation = self.semantic_map.get(
-                    semantic, f"/* {semantic} */"
-                )
-                struct_code.append(
-                    f"{self.get_indent()}{semantic_annotation} {type_name} {member['name']};"
-                )
-            else:
-                struct_code.append(f"{self.get_indent()}{type_name} {member['name']};")
+            code += (
+                self.get_indent()
+                + f"{self.map_type(member.vtype)} {member.name}{semantic};\n"
+            )
 
         self.indentation -= 1
-        struct_code.append(self.get_indent() + "};")
+        code += self.get_indent() + "}\n"
+        return code
 
-        for line in struct_code:
-            self.code.append(line)
+    def visit_SwitchNode(self, node):
+        # Generate the switch statement code
+        condition = self.generate_expression(node.condition)
+        code = f"switch ({condition}) {{\n"
 
-        if node.variables:
-            for var in node.variables:
-                self.code.append(f"{self.get_indent()}{node.name} {var};")
+        # Generate case statements
+        for case in node.cases:
+            code += self.visit_CaseNode(case)
 
-        return None
+        # Generate default case if exists
+        if node.default_body:
+            code += self.get_indent() + "default:\n"
+            self.indentation += 1
+            for stmt in node.default_body:
+                code += self.get_indent() + self.generate_statement(stmt) + "\n"
+            code += self.get_indent() + "break;\n"
+            self.indentation -= 1
+
+        code += self.get_indent() + "}\n"
+        return code
+
+    def visit_CaseNode(self, node):
+        # Generate a case statement
+        value = self.generate_expression(node.value)
+        code = self.get_indent() + f"case {value}:\n"
+
+        # Generate the case body
+        self.indentation += 1
+        for stmt in node.body:
+            code += self.get_indent() + self.generate_statement(stmt) + "\n"
+        code += self.get_indent() + "break;\n"
+        self.indentation -= 1
+
+        return code
+
+    def generate_statement(self, node):
+        """Generate a statement in CrossGL syntax"""
+        if isinstance(node, str):
+            return node
+        elif hasattr(self, f"visit_{type(node).__name__}"):
+            method = getattr(self, f"visit_{type(node).__name__}")
+            return method(node)
+        else:
+            return self.generate_expression(node)

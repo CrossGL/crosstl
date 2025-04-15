@@ -280,5 +280,138 @@ def test_member_access():
     assert "vColor.a" in result.replace(" ", "")
 
 
+def test_bitwise_and_ops():
+    glsl_code = """
+    void main() {
+        uint value = 5u;
+        uint mask = 3u;
+        uint result = value & mask;  // Bitwise AND
+        if (result == 1u) {
+            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+    """
+    result = process_glsl(glsl_code, "fragment")
+    assert "value" in result
+    assert "mask" in result
+    assert "result" in result
+    assert "gl_FragColor" in result
+    assert "if" in result
+
+
+def test_bitwise_or_ops():
+    glsl_code = """
+    void main() {
+        uint value = 5u;
+        uint mask = 2u;
+        uint result = value | mask;  // Bitwise OR
+        if (result == 7u) {
+            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+    """
+    result = process_glsl(glsl_code, "fragment")
+    assert "value" in result
+    assert "mask" in result
+    assert "result" in result
+    assert "gl_FragColor" in result
+    assert "if" in result
+
+
+def test_bitwise_xor_ops():
+    glsl_code = """
+    void main() {
+        uint value = 5u;
+        uint mask = 3u;
+        uint result = value ^ mask;  // Bitwise XOR
+        if (result == 6u) {
+            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+    """
+    result = process_glsl(glsl_code, "fragment")
+    assert "value" in result
+    assert "mask" in result
+    assert "result" in result
+    assert "gl_FragColor" in result
+    assert "if" in result
+
+
+def test_bitwise_not_ops():
+    glsl_code = """
+    void main() {
+        uint value = 5u;
+        uint result = ~value;  // Bitwise NOT
+        if (result != 5u) {
+            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+    """
+    result = process_glsl(glsl_code, "fragment")
+    assert "value" in result
+    assert "result" in result
+    assert "gl_FragColor" in result
+    assert "if" in result
+
+
+def test_bitwise_shift_ops():
+    glsl_code = """
+    void main() {
+        uint value = 4u;
+        uint result1 = value << 1;  // Left shift
+        uint result2 = value >> 1;  // Right shift
+        if (result1 == 8u && result2 == 2u) {
+            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+    """
+    result = process_glsl(glsl_code, "fragment")
+    assert "value" in result
+    assert "result1" in result
+    assert "result2" in result
+    assert "gl_FragColor" in result
+    assert "if" in result
+
+
+def test_switch_case():
+    glsl_code = """
+    void main() {
+        int value = 2;
+        vec4 color;
+        
+        switch (value) {
+            case 0:
+                color = vec4(1.0, 0.0, 0.0, 1.0);
+                break;
+            case 1:
+                color = vec4(0.0, 1.0, 0.0, 1.0);
+                break;
+            case 2:
+                color = vec4(0.0, 0.0, 1.0, 1.0);
+                break;
+            default:
+                color = vec4(0.5, 0.5, 0.5, 1.0);
+                break;
+        }
+        
+        gl_FragColor = color;
+    }
+    """
+    result = process_glsl(glsl_code, "fragment")
+    assert "value" in result
+    assert "color" in result
+    assert "gl_FragColor" in result
+
+
 if __name__ == "__main__":
     pytest.main()

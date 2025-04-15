@@ -111,18 +111,14 @@ class AssignmentNode(ASTNode):
         return f"AssignmentNode(name={self.name}, value={self.value}, operator='{self.operator}')"
 
 
-class VectorConstructorNode:
-    def __init__(self, type_name, args):
-        self.type_name = type_name
-        self.args = args
-
-    def __repr__(self):
-        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', io_type={self.io_type}, semantic={self.semantic}, array_size={self.array_size})"
+class VectorConstructorNode(ASTNode):
+    def __init__(self, vector_type, arguments):
+        self.vector_type = vector_type
+        self.arguments = arguments
 
     def __str__(self):
-        if self.array_size is not None:
-            return f"{self.vtype} {self.name}[{self.array_size}]"
-        return f"{self.vtype} {self.name}"
+        args_str = ", ".join(str(arg) for arg in self.arguments)
+        return f"{self.vector_type}({args_str})"
 
 
 class IfNode(ASTNode):
@@ -145,22 +141,26 @@ class IfNode(ASTNode):
 
 
 class ForNode(ASTNode):
-    def __init__(self, init, condition, update, body):
+    def __init__(self, init, condition, iteration, body):
         self.init = init
         self.condition = condition
-        self.update = update
+        self.iteration = iteration
         self.body = body
 
-    def __repr__(self):
-        return f"ForNode(init={self.init}, condition={self.condition}, update={self.update}, body={self.body})"
+    def __str__(self):
+        return f"ForNode(init={self.init}, condition={self.condition}, iteration={self.iteration}, body={self.body})"
 
 
 class ReturnNode(ASTNode):
-    def __init__(self, value):
-        self.value = value
+    def __init__(self, token, expr=None):
+        super().__init__(token)
+        self.expr = expr
 
-    def __repr__(self):
-        return f"ReturnNode(value={self.value})"
+    def __str__(self):
+        if self.expr:
+            return f"return {self.expr}"
+        else:
+            return "return"
 
 
 class FunctionCallNode(ASTNode):
@@ -210,3 +210,22 @@ class StructNode(ASTNode):
 
     def __repr__(self):
         return f"StructNode(name='{self.name}', fields={self.fields})"
+
+
+class SwitchNode(ASTNode):
+    def __init__(self, expression, cases, default=None):
+        self.expression = expression
+        self.cases = cases  # List of CaseNode
+        self.default = default  # List of statements or None
+
+    def __str__(self):
+        return f"SwitchNode(expression={self.expression}, cases={self.cases}, default={self.default})"
+
+
+class CaseNode(ASTNode):
+    def __init__(self, value, statements):
+        self.value = value
+        self.statements = statements
+
+    def __str__(self):
+        return f"CaseNode(value={self.value}, statements={self.statements})"
