@@ -45,3 +45,4 @@ build
 # Python
 crosstl.egg-info
 .vscode/settings.json
+.github/.DS_Store

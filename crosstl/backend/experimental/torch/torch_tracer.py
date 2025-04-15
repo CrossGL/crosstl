@@ -1,6 +1,6 @@
 import torch
 import torch.fx as fx
-from typing import List, Tuple
+from typing import Tuple
 
 # local import
 
@@ -13,7 +13,7 @@ class TorchLexer(torch.nn.Module):
         self.code = code
         self.length = len(code)
 
-        # Token IDs as constants (ToDo : Definitely a better way to store data) 
+        # Token IDs as constants (ToDo : Definitely a better way to store data)
         self.PLUS_ID = 1
         self.MINUS_ID = 2
         self.MULTIPLY_ID = 3
@@ -150,7 +150,8 @@ class TorchLexer(torch.nn.Module):
         token_values_tensor = torch.tensor(token_values, dtype=torch.int32)
         return token_ids_tensor, token_values_tensor
 
-# ToDo : Find a better wrapping method! 
+
+# ToDo : Find a better wrapping method!
 class TorchLexerFX(torch.nn.Module):
     def __init__(self, code: str):
         super(TorchLexerFX, self).__init__()
@@ -204,14 +205,16 @@ print("Token Values:", token_values.tolist())
 
 # No constant folding test case
 
+
 class MyModel(torch.nn.Module):
     def forward(self, x):
         y = x + 5
-        small_tensor = torch.tensor([1, 2, 3])  
+        small_tensor = torch.tensor([1, 2, 3])
         large_tensor = torch.tensor([[1, 2], [3, 4]])  # Large tensor (dynamic)
         z = y * small_tensor
         w = z + large_tensor
         return w
+
 
 model = MyModel()
 graph_module = fx.symbolic_trace(model)

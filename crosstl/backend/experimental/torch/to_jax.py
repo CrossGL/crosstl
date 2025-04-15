@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
-from typing import Any, Dict
-
+from typing import Dict
 
 FX_TO_JAX_OPS = {
     "add": "jnp.add",
