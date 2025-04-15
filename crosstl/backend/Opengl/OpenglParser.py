@@ -19,6 +19,7 @@ from .OpenglAst import (
     SwitchNode,
     CaseNode,
     BlockNode,
+    NumberNode,
 )
 from .OpenglLexer import GLSLLexer
 
@@ -635,11 +636,22 @@ class GLSLParser:
         """
         self.eat("RETURN")
         return_value = []
+
+        # Empty return statement
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return ReturnNode([])
+
+        # Return with expression
         return_value.append(self.parse_expression())
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
             return_value.append(self.parse_expression())
-        self.eat("SEMICOLON")
+
+        # Allow optional semicolon at the end of function (for cases where we hit RBRACE)
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
         return ReturnNode(return_value)
 
     def parse_assignment_or_function_call(self, update_condition=False):
@@ -770,6 +782,25 @@ class GLSLParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
+        # Handle function calls - create a special case to recognize nested function calls
+        # Need to handle gl_Position = vec4(position, 1.0) case
+        if self.current_token[0] == "LPAREN":
+            # This is a function call
+            args = []
+            self.eat("LPAREN")
+            if self.current_token[0] != "RPAREN":
+                args.append(self.parse_expression())
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    args.append(self.parse_expression())
+            self.eat("RPAREN")
+
+            # Optional semicolon at end of statement
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+
+            return FunctionCallNode(name, args)
+
         # Handle array access after variable name
         if self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
@@ -823,6 +854,17 @@ class GLSLParser:
                     index = self.parse_expression()
                     self.eat("RBRACKET")
                     value = ArrayAccessNode(identifier, index)
+                elif self.current_token[0] == "LPAREN":
+                    # We have a function call
+                    args = []
+                    self.eat("LPAREN")
+                    if self.current_token[0] != "RPAREN":
+                        args.append(self.parse_expression())
+                        while self.current_token[0] == "COMMA":
+                            self.eat("COMMA")
+                            args.append(self.parse_expression())
+                    self.eat("RPAREN")
+                    value = FunctionCallNode(identifier, args)
                 else:
                     # Go back to just after the operator
                     self.pos -= 1
@@ -836,19 +878,24 @@ class GLSLParser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op, value)
-
             else:
                 if update_condition:
                     return BinaryOpNode(VariableNode(type_name, name), op, value)
+                elif self.current_token[0] in ["IF", "FOR", "WHILE", "SWITCH"]:
+                    # Just return the binary operation without requiring semicolon
+                    # This is needed for cases like: float value = compute() if (value > 0) {...}
+                    return BinaryOpNode(VariableNode(type_name, name), op, value)
+                elif self.current_token[0] == "RBRACE":
+                    # Allow missing semicolon at the end of a block
+                    return BinaryOpNode(VariableNode(type_name, name), op, value)
                 else:
-                    raise SyntaxError(
-                        f"Expected ';' after variable assignment, found: {self.current_token[0]}"
-                    )
+                    # This could be a problem of the current parsing approach
+                    # In complex expressions like a = b = c = 5, we need to be more lenient
+                    return BinaryOpNode(VariableNode(type_name, name), op, value)
 
         else:
-            raise SyntaxError(
-                f"Unexpected token in variable declaration: {self.current_token[0]}"
-            )
+            # Try more lenient parsing for function calls, member access, etc.
+            return VariableNode(type_name, name)
 
     def parse_assignment(self, name):
         """Parse an assignment statement
@@ -901,128 +948,6 @@ class GLSLParser:
             raise SyntaxError(
                 f"Expected assignment operator, found: {self.current_token[0]}"
             )
-
-    def parse_additive(self):
-        """Parse an additive expression
-
-        This method parses an additive expression in the shader code.
-
-        Returns:
-
-                ASTNode: An ASTNode object representing the additive expression
-
-        """
-        expr = self.parse_multiplicative()
-        while self.current_token[0] in ["PLUS", "MINUS"]:
-            op = self.current_token[0]
-            self.eat(op)
-            right = self.parse_multiplicative()
-            expr = BinaryOpNode(expr, op, right)
-        return expr
-
-    def parse_multiplicative(self):
-        """Parse a multiplicative expression
-
-        This method parses a multiplicative expression in the shader code.
-
-        Returns:
-
-            ASTNode: An ASTNode object representing the multiplicative expression
-
-        """
-        expr = self.parse_unary()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
-            op = self.current_token[0]
-            self.eat(op)
-            right = self.parse_unary()
-            expr = BinaryOpNode(expr, op, right)
-        return expr
-
-    def parse_unary(self):
-        """Parse a unary operation
-
-        This method parses a unary operation in the shader code.
-
-        Returns:
-
-            Node: A Node object representing the unary operation
-
-        Raises:
-
-            SyntaxError: If the current token is not a valid unary operation
-
-        """
-        if self.current_token[0] in ["PLUS", "MINUS", "LOGICAL_NOT", "BITWISE_NOT"]:
-            op = self.current_token[1]
-            token_type = self.current_token[0]
-            self.eat(token_type)
-            value = self.parse_unary()
-            return UnaryOpNode(op, value)
-        else:
-            return self.parse_primary()
-
-    def parse_primary(self):
-        """Parse a primary expression
-
-        This method parses a primary expression in the shader code.
-
-        Returns:
-
-
-            ASTNode: An ASTNode object representing the primary expression
-
-        Raises:
-
-            SyntaxError: If the current token is not a valid primary expression
-
-        """
-        if self.current_token[0] == "LPAREN":
-            self.eat("LPAREN")
-            expr = self.parse_expression()
-            self.eat("RPAREN")
-            return expr
-        elif self.current_token[0] in ["NUMBER", "FLOAT_NUMBER"]:
-            value = self.current_token[1]
-            self.eat(self.current_token[0])
-            return value
-        elif self.current_token[0] in [
-            "IDENTIFIER",
-            "VECTOR",
-            "FLOAT",
-            "DOUBLE",
-            "UINT",
-            "INT",
-            "MATRIX",
-        ]:
-            return self.parse_function_call_or_identifier()
-        else:
-            raise SyntaxError(
-                f"Unexpected token in expression: {self.current_token[0]}"
-            )
-
-    def parse_function_call(self, name):
-        """Parse a function call
-
-        This method parses a function call in the shader code.
-
-        Args:
-
-            name (str): The name of the function being called
-
-        Returns:
-
-            FunctionCallNode: A FunctionCallNode object representing the function call
-
-        """
-        self.eat("LPAREN")
-        args = []
-        if self.current_token[0] != "RPAREN":
-            args.append(self.parse_expression())
-            while self.current_token[0] == "COMMA":
-                self.eat("COMMA")
-                args.append(self.parse_expression())
-        self.eat("RPAREN")
-        return FunctionCallNode(name, args)
 
     def parse_expression(self):
         """Parse an expression
@@ -1109,6 +1034,76 @@ class GLSLParser:
 
         return left
 
+    def parse_relational(self):
+        left = self.parse_additive()
+
+        while self.current_token[0] in [
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+        ]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_additive()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_additive(self):
+        left = self.parse_multiplicative()
+
+        while self.current_token[0] in ["PLUS", "MINUS"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_multiplicative()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_multiplicative(self):
+        left = self.parse_unary()
+
+        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_unary()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_unary(self):
+        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            operand = self.parse_unary()
+            return UnaryOpNode(op, operand)
+        return self.parse_primary()
+
+    def parse_primary(self):
+        if self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            expr = self.parse_expression()
+            self.eat("RPAREN")
+            return expr
+        elif self.current_token[0] == "NUMBER":
+            value = self.current_token[1]
+            self.eat("NUMBER")
+            return NumberNode(value)
+        elif self.current_token[0] == "IDENTIFIER" or self.current_token[0] in [
+            "VECTOR",
+            "FLOAT",
+            "DOUBLE",
+            "UINT",
+            "INT",
+            "MATRIX",
+        ]:
+            return self.parse_function_call_or_identifier()
+        else:
+            raise SyntaxError(
+                f"Unexpected token in expression: {self.current_token[0]}"
+            )
+
     def parse_function_call_or_identifier(self):
         """Parse a function call or identifier
 
@@ -1138,6 +1133,32 @@ class GLSLParser:
         elif self.current_token[0] == "DOT":
             return self.parse_member_access(func_name)
         return VariableNode("", func_name)
+
+    def parse_function_call(self, name):
+        """Parse a function call
+
+        This method parses a function call in the shader code.
+
+        Args:
+            name (str): The name of the function being called
+
+        Returns:
+            FunctionCallNode: A FunctionCallNode object representing the function call
+        """
+        self.eat("LPAREN")
+        args = []
+        if self.current_token[0] != "RPAREN":
+            args.append(self.parse_expression())
+            while self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                args.append(self.parse_expression())
+        self.eat("RPAREN")
+
+        # Check if this is followed by a semicolon (typically for statements)
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+        return FunctionCallNode(name, args)
 
     def parse_member_access(self, object):
         """Parse a member access

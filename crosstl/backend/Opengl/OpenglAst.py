@@ -153,14 +153,17 @@ class ForNode(ASTNode):
 
 class ReturnNode(ASTNode):
     def __init__(self, token, expr=None):
-        super().__init__(token)
         self.expr = expr
+        self.token = token
 
     def __str__(self):
         if self.expr:
             return f"return {self.expr}"
         else:
             return "return"
+
+    def __repr__(self):
+        return f"ReturnNode(token={self.token}, expr={self.expr})"
 
 
 class FunctionCallNode(ASTNode):
@@ -237,3 +240,14 @@ class BlockNode(ASTNode):
 
     def __str__(self):
         return f"BlockNode(statements={self.statements})"
+
+
+class NumberNode(ASTNode):
+    def __init__(self, value):
+        self.value = value
+
+    def __repr__(self):
+        return f"NumberNode(value={self.value})"
+
+    def __str__(self):
+        return self.value
