@@ -155,6 +155,7 @@ class ReturnNode(ASTNode):
     def __init__(self, token, expr=None):
         self.expr = expr
         self.token = token
+        self.value = token  # Add this for compatibility with code generator
 
     def __str__(self):
         if self.expr:

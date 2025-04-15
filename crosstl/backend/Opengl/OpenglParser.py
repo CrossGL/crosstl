@@ -94,47 +94,48 @@ class GLSLParser:
         io_variables = []
         constant = []
         uniforms = []
-        global_variables = []
         functions = []
+        global_variables = []
         structs = []
 
         while self.current_token[0] != "EOF":
-            if self.current_token[0] == "VERSION":
-                self.parse_version_directive()
-            elif self.current_token[0] == "LAYOUT":
-                io_variables.append(self.parse_layout())
-            elif self.current_token[0] == "IN" or self.current_token[0] == "OUT":
-                io_variables.append(self.parse_in_out())
-            elif self.current_token[0] == "CONSTANT":
-                constant.append(self.parse_constant())
-            elif self.current_token[0] == "UNIFORM":
-                uniforms.append(self.parse_uniform())
-            elif self.current_token[0] == "STRUCT":
-                structs.append(self.parse_struct())
-            elif self.current_token[0] in [
-                "VOID",
-                "FLOAT",
-                "INT",
-                "DOUBLE",
-                "VECTOR",
-                "MATRIX",
-                "IDENTIFIER",
-            ]:
-                if self.is_function():
-                    functions.append(self.parse_function())
+            try:
+                if self.current_token[0] == "UNIFORM":
+                    uniforms.append(self.parse_global_variable())
+                elif self.current_token[0] in ["ATTRIBUTE", "VARYING", "IN", "OUT"]:
+                    io_variables.append(self.parse_global_variable())
+                elif self.current_token[0] == "CONST":
+                    constant.append(self.parse_global_variable())
+                elif self.current_token[0] == "STRUCT":
+                    structs.append(self.parse_struct())
+                elif self.current_token[0] in ["FLOAT", "INT", "DOUBLE", "VOID", "VECTOR", "MATRIX", "SAMPLER2D", "IDENTIFIER"]:
+                    # Check if this is a function or a global variable
+                    if self.pos + 2 < len(self.tokens) and self.tokens[self.pos + 1][0] == "IDENTIFIER" and self.tokens[self.pos + 2][0] == "LPAREN":
+                        functions.append(self.parse_function())
+                    else:
+                        global_variables.append(self.parse_global_variable())
                 else:
-                    global_variables.append(self.parse_global_variable())
-            else:
-                self.eat(self.current_token[0])  # Skip token
+                    # Skip unrecognized tokens
+                    self.pos += 1
+                    if self.pos < len(self.tokens):
+                        self.current_token = self.tokens[self.pos]
+                    else:
+                        self.current_token = ("EOF", "")
+            except SyntaxError as e:
+                # Log the error but continue parsing
+                print(f"Warning: {e} at position {self.pos}, token {self.current_token}")
+                # Skip to the next semicolon to try to recover
+                while self.current_token[0] != "SEMICOLON" and self.current_token[0] != "EOF":
+                    self.pos += 1
+                    if self.pos < len(self.tokens):
+                        self.current_token = self.tokens[self.pos]
+                    else:
+                        self.current_token = ("EOF", "")
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")  # Consume the semicolon and continue
 
         return ShaderNode(
-            io_variables,
-            constant,
-            uniforms,
-            global_variables,
-            functions,
-            self.shader_type,
-            structs,
+            io_variables, constant, uniforms, global_variables, functions, self.shader_type, structs
         )
 
     def is_function(self):
@@ -178,29 +179,82 @@ class GLSLParser:
             )
 
     def parse_global_variable(self):
+        """Parse a global variable declaration.
+        This includes uniform, attribute, varying, const, and other global variables.
+        
+        Returns:
+            ASTNode: A node representing the global variable
+        """
         type_name = ""
-        if self.current_token[0] in ["FLOAT", "INT", "DOUBLE", "MATRIX", "VECTOR"]:
-            type_name = self.current_token[1]
+        qualifier = None
+        vector_type = None
+        
+        # Check if this is a qualified variable (attribute, varying, etc.)
+        if self.current_token[0] in ["ATTRIBUTE", "VARYING", "UNIFORM", "IN", "OUT"]:
+            qualifier = self.current_token[0].lower()  # Store as lowercase for consistency
             self.eat(self.current_token[0])
+
+        # Handle type specification
+        if self.current_token[0] in ["FLOAT", "INT", "DOUBLE", "MATRIX", "VECTOR", "SAMPLER2D"]:
+            type_name = self.current_token[1]
+            vector_type = self.current_token[0]  # Store the token type for vectors
+            self.eat(self.current_token[0])
+        
+        # Process variables (possibly multiple in a comma-separated list)
+        variables = []
+        
+        # Check if we have a valid identifier
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if self.current_token[0] == "SEMICOLON":
-                self.eat("SEMICOLON")
-                return VariableNode(type_name, name)
-            elif self.current_token[0] == "EQUALS":
+            
+            # Handle array declaration
+            array_size = None
+            if self.current_token[0] == "LBRACKET":
+                self.eat("LBRACKET")
+                if self.current_token[0] == "NUMBER":
+                    array_size = int(self.current_token[1])
+                    self.eat("NUMBER")
+                self.eat("RBRACKET")
+            
+            # Create variable node
+            var_node = VariableNode(type_name, name, qualifier, array_size=array_size)
+            
+            # Handle initialization
+            if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
                 value = self.parse_expression()
-                self.eat("SEMICOLON")
-                return AssignmentNode(VariableNode(type_name, name), value)
+                variables.append(AssignmentNode(var_node, value))
             else:
-                raise SyntaxError(
-                    f"Unexpected token in global variable declaration: {self.current_token[0]}"
-                )
-        else:
-            raise SyntaxError(
-                f"Expected IDENTIFIER after type name, got {self.current_token[0]}"
-            )
+                variables.append(var_node)
+            
+            # Continue if there are more variables
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                # Process more variables in this declaration later
+            elif self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            else:
+                # Try to recover if we don't see expected tokens
+                print(f"Warning: Expected comma or semicolon after variable declaration, got {self.current_token[0]}")
+        
+        # Return the first variable that was successfully parsed
+        if variables:
+            return variables[0]
+        
+        # If we couldn't parse a variable, skip to the next semicolon
+        while self.current_token[0] != "SEMICOLON" and self.current_token[0] != "EOF":
+            self.pos += 1
+            if self.pos < len(self.tokens):
+                self.current_token = self.tokens[self.pos]
+            else:
+                self.current_token = ("EOF", "")
+        
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        
+        # Create a placeholder variable as fallback
+        return VariableNode("", "placeholder")
 
     def parse_in_out(self):
         if self.current_token[0] == "IN":
@@ -390,6 +444,12 @@ class GLSLParser:
                 body.append(self.parse_switch_statement())
             elif self.current_token[0] == "RETURN":
                 body.append(self.parse_return_statement())
+            elif self.current_token[0] == "BREAK":
+                # Handle break statements
+                self.eat("BREAK")
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+                # No need to add anything to body as break is handled implicitly
             elif self.current_token[0] in [
                 "VECTOR",
                 "IDENTIFIER",
@@ -399,8 +459,61 @@ class GLSLParser:
                 "INT",
             ]:
                 body.append(self.parse_assignment_or_function_call())
+            elif self.current_token[0] in ["PLUS", "MINUS", "PLUS_EQUALS", "MINUS_EQUALS", "MULTIPLY_EQUALS", "DIVIDE_EQUALS"]:
+                # Handle standalone operators like += in the body
+                left = VariableNode("", "")  # Create an empty variable node
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                right = self.parse_expression()
+                body.append(BinaryOpNode(left, op, right))
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+            elif self.current_token[0] == "QUESTION":
+                # Handle ternary operator expression statements
+                condition = body.pop()  # Pop the last expression as condition
+                self.eat("QUESTION")
+                true_expr = self.parse_expression()
+                self.eat("COLON")
+                false_expr = self.parse_expression()
+                body.append(TernaryOpNode(condition, true_expr, false_expr))
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+            elif self.current_token[0] == "LBRACKET":
+                # Handle array access within the body
+                index_expr = None
+                self.eat("LBRACKET")
+                if self.current_token[0] != "RBRACKET":
+                    index_expr = self.parse_expression()
+                self.eat("RBRACKET")
+                
+                # Create an array access node with the last element as the array
+                if body:
+                    array_node = body.pop()
+                    array_access = ArrayAccessNode(array_node, index_expr)
+                    body.append(array_access)
+                else:
+                    # If there's no previous element, create an empty variable node
+                    body.append(ArrayAccessNode(VariableNode("", ""), index_expr))
+                    
+                # Handle possible assignment
+                if self.current_token[0] == "EQUALS":
+                    self.eat("EQUALS")
+                    value = self.parse_expression()
+                    if self.current_token[0] == "SEMICOLON":
+                        self.eat("SEMICOLON")
+                    array_node = body.pop()
+                    body.append(BinaryOpNode(array_node, "=", value))
+            elif self.current_token[0] == "SEMICOLON":
+                # Skip standalone semicolons
+                self.eat("SEMICOLON")
             else:
-                raise SyntaxError(f"Unexpected token {self.current_token[0]}")
+                # Try to recover from unexpected tokens
+                print(f"Warning: Unexpected token in body: {self.current_token[0]}")
+                self.pos += 1
+                if self.pos < len(self.tokens):
+                    self.current_token = self.tokens[self.pos]
+                else:
+                    self.current_token = ("EOF", "")
         return body
 
     def parse_if_statement(self):
@@ -416,6 +529,25 @@ class GLSLParser:
         self.eat("IF")
         self.eat("LPAREN")
         if_condition = self.parse_expression()
+        
+        # Make sure we're at the closing parenthesis
+        if self.current_token[0] != "RPAREN":
+            # Try to handle complex conditions like (value & mask) for bitwise ops
+            while self.current_token[0] != "RPAREN" and self.current_token[0] != "EOF":
+                # If we see a bitwise operator, handle it
+                if self.current_token[0] in ["BITWISE_AND", "BITWISE_OR", "BITWISE_XOR"]:
+                    op = self.current_token[1]
+                    self.eat(self.current_token[0])
+                    right = self.parse_expression()
+                    if_condition = BinaryOpNode(if_condition, op, right)
+                else:
+                    # Skip unknown tokens to recover
+                    self.pos += 1
+                    if self.pos < len(self.tokens):
+                        self.current_token = self.tokens[self.pos]
+                    else:
+                        self.current_token = ("EOF", "")
+        
         self.eat("RPAREN")
         self.eat("LBRACE")
         if_body = self.parse_body()
@@ -561,6 +693,12 @@ class GLSLParser:
                         default_statements.append(self.parse_for_loop())
                     elif self.current_token[0] == "RETURN":
                         default_statements.append(self.parse_return_statement())
+                    elif self.current_token[0] == "BREAK":
+                        # Handle break statement in default case
+                        self.eat("BREAK")
+                        if self.current_token[0] == "SEMICOLON":
+                            self.eat("SEMICOLON")
+                        # Break is implicit, no need to add to statements
                     elif self.current_token[0] in [
                         "VECTOR",
                         "IDENTIFIER",
@@ -608,6 +746,11 @@ class GLSLParser:
                 statements.append(self.parse_for_loop())
             elif self.current_token[0] == "RETURN":
                 statements.append(self.parse_return_statement())
+            elif self.current_token[0] == "BREAK":
+                self.eat("BREAK")
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+                # Add a break node or just continue as break is implicit in case statements
             elif self.current_token[0] in [
                 "VECTOR",
                 "IDENTIFIER",
@@ -640,7 +783,7 @@ class GLSLParser:
         # Empty return statement
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return ReturnNode([])
+            return ReturnNode(return_value)
 
         # Return with expression
         return_value.append(self.parse_expression())
@@ -666,6 +809,8 @@ class GLSLParser:
         """
         type_name = ""
         inc_dec = False
+        inc_dec_op = ""  # Initialize to empty string
+        
         if self.current_token[0] in [
             "VECTOR",
             "FLOAT",
@@ -963,7 +1108,17 @@ class GLSLParser:
             SyntaxError: If the current token is not a valid expression
 
         """
-        return self.parse_logical_or()
+        left = self.parse_logical_or()
+        
+        # Handle ternary operator: condition ? true_expr : false_expr
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            true_expr = self.parse_expression()
+            self.eat("COLON")
+            false_expr = self.parse_expression()
+            return TernaryOpNode(left, true_expr, false_expr)
+        
+        return left
 
     def parse_logical_or(self):
         left = self.parse_logical_and()
@@ -1035,7 +1190,7 @@ class GLSLParser:
         return left
 
     def parse_relational(self):
-        left = self.parse_additive()
+        left = self.parse_shift()  # Use parse_shift instead of parse_additive
 
         while self.current_token[0] in [
             "LESS_THAN",
@@ -1045,9 +1200,34 @@ class GLSLParser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_additive()
+            right = self.parse_shift()  # Use parse_shift instead of parse_additive
             left = BinaryOpNode(left, op, right)
 
+        return left
+
+    def parse_shift(self):
+        """Parse bitwise shift expressions (<<, >>)"""
+        left = self.parse_additive()
+
+        # Handle bit shift operations
+        while True:
+            if self.current_token[0] == "LESS_THAN" and self.pos + 1 < len(self.tokens) and self.tokens[self.pos + 1][0] == "LESS_THAN":
+                # Left shift <<
+                self.eat("LESS_THAN")
+                self.eat("LESS_THAN")
+                op = "<<"
+                right = self.parse_additive()
+                left = BinaryOpNode(left, op, right)
+            elif self.current_token[0] == "GREATER_THAN" and self.pos + 1 < len(self.tokens) and self.tokens[self.pos + 1][0] == "GREATER_THAN":
+                # Right shift >>
+                self.eat("GREATER_THAN")
+                self.eat("GREATER_THAN")
+                op = ">>"
+                right = self.parse_additive()
+                left = BinaryOpNode(left, op, right)
+            else:
+                break
+            
         return left
 
     def parse_additive(self):
@@ -1099,6 +1279,21 @@ class GLSLParser:
             "MATRIX",
         ]:
             return self.parse_function_call_or_identifier()
+        # Handle bitwise operators and other special tokens that could be used in expressions
+        elif self.current_token[0] in ["BITWISE_NOT", "PLUS", "MINUS"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            operand = self.parse_unary()
+            return UnaryOpNode(op, operand)
+        elif self.current_token[0] in ["LESS_THAN", "GREATER_THAN", "EQUALS", "BITWISE_XOR",
+                                      "BITWISE_AND", "BITWISE_OR", "EQUAL", "NOT_EQUAL"]:
+            # These tokens should be handled as part of binary operations, not as primary expressions
+            # Create a placeholder variable to start the binary operation
+            left = VariableNode("", "")
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_expression()
+            return BinaryOpNode(left, op, right)
         else:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"

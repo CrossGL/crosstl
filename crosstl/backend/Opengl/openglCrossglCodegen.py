@@ -526,16 +526,13 @@ class GLSLToCrossGLConverter:
         """
         init = self.generate_statement(node.init).rstrip(";")
         condition = self.generate_expression(node.condition)
-        update = self.generate_statement(node.update).rstrip(";")
+        iteration = self.generate_statement(node.iteration).rstrip(";")
 
-        result = f"for ({init}; {condition}; {update}) {{\n"
-
-        # Generate loop body
+        result = f"for ({init}; {condition}; {iteration}) {{\n"
         self.increase_indent()
         for statement in node.body:
             result += self.indent() + self.generate_statement(statement) + "\n"
         self.decrease_indent()
-
         result += self.indent() + "}"
         return result
 
@@ -733,7 +730,7 @@ class GLSLToCrossGLConverter:
             result += self.indent() + f"case {case_value}:\n"
 
             self.increase_indent()
-            for statement in case.body:
+            for statement in case.statements:
                 result += self.indent() + self.generate_statement(statement) + "\n"
             self.decrease_indent()
 
