@@ -285,12 +285,20 @@ class GLSLLexer:
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         # function that yields tokens one at a time
-        while self.current_char is not None:
+        while self.position < len(self.code):
+            # Ensure current_char is set correctly
+            self.current_char = (
+                self.code[self.position] if self.position < len(self.code) else None
+            )
+
+            if self.current_char is None:
+                break
+
             token = self.get_next_token()
             if token is None:
-                raise SyntaxError(
-                    f"Illegal character '{self.current_char}' at position {self.position}"
-                )
+                self.advance()  # Skip this character and try again
+                continue
+
             new_pos, token_type, text = token
 
             if token_type == "IDENTIFIER" and text in KEYWORDS:
@@ -337,126 +345,168 @@ class GLSLLexer:
                 self.advance()
 
             elif self.current_char == "-":
-                token = Token(TokenType.SUB, "-", self.line, self.column)
+                # token = Token(TokenType.SUB, "-", self.line, self.column)
+                token = (self.position + 1, "MINUS", "-")
                 self.advance()
 
             elif self.current_char == "*":
-                token = Token(TokenType.MUL, "*", self.line, self.column)
+                # token = Token(TokenType.MUL, "*", self.line, self.column)
+                token = (self.position + 1, "MULTIPLY", "*")
                 self.advance()
 
             elif self.current_char == "/":
-                token = Token(TokenType.DIV, "/", self.line, self.column)
+                # token = Token(TokenType.DIV, "/", self.line, self.column)
+                token = (self.position + 1, "DIVIDE", "/")
                 self.advance()
 
             elif self.current_char == "%":
-                token = Token(TokenType.MOD, "%", self.line, self.column)
+                # token = Token(TokenType.MOD, "%", self.line, self.column)
+                token = (self.position + 1, "MOD", "%")
                 self.advance()
 
             elif self.current_char == "=":
                 if self.peek() == "=":
-                    token = Token(TokenType.EQ, "==", self.line, self.column)
+                    # token = Token(TokenType.EQ, "==", self.line, self.column)
+                    token = (self.position + 2, "EQUAL", "==")
                     self.advance()
                     self.advance()
                 else:
-                    token = Token(TokenType.ASSIGN, "=", self.line, self.column)
+                    # token = Token(TokenType.ASSIGN, "=", self.line, self.column)
+                    token = (self.position + 1, "EQUALS", "=")
                     self.advance()
 
             elif self.current_char == "!":
                 if self.peek() == "=":
-                    token = Token(TokenType.NEQ, "!=", self.line, self.column)
+                    # token = Token(TokenType.NEQ, "!=", self.line, self.column)
+                    token = (self.position + 2, "NOT_EQUAL", "!=")
                     self.advance()
                     self.advance()
                 else:
-                    token = Token(TokenType.NOT, "!", self.line, self.column)
+                    # token = Token(TokenType.NOT, "!", self.line, self.column)
+                    token = (self.position + 1, "LOGICAL_NOT", "!")
                     self.advance()
 
             elif self.current_char == ">":
                 if self.peek() == "=":
-                    token = Token(TokenType.GTE, ">=", self.line, self.column)
+                    # token = Token(TokenType.GTE, ">=", self.line, self.column)
+                    token = (self.position + 2, "GREATER_EQUAL", ">=")
                     self.advance()
                     self.advance()
                 else:
-                    token = Token(TokenType.GT, ">", self.line, self.column)
+                    # token = Token(TokenType.GT, ">", self.line, self.column)
+                    token = (self.position + 1, "GREATER_THAN", ">")
                     self.advance()
 
             elif self.current_char == "<":
                 if self.peek() == "=":
-                    token = Token(TokenType.LTE, "<=", self.line, self.column)
+                    # token = Token(TokenType.LTE, "<=", self.line, self.column)
+                    token = (self.position + 2, "LESS_EQUAL", "<=")
                     self.advance()
                     self.advance()
                 else:
-                    token = Token(TokenType.LT, "<", self.line, self.column)
+                    # token = Token(TokenType.LT, "<", self.line, self.column)
+                    token = (self.position + 1, "LESS_THAN", "<")
                     self.advance()
 
             elif self.current_char == "&":
                 if self.peek() == "&":
-                    token = Token(TokenType.AND, "&&", self.line, self.column)
+                    # token = Token(TokenType.AND, "&&", self.line, self.column)
+                    token = (self.position + 2, "LOGICAL_AND", "&&")
                     self.advance()
                     self.advance()
                 else:
-                    token = Token(TokenType.AMPERSAND, "&", self.line, self.column)
+                    # token = Token(TokenType.AMPERSAND, "&", self.line, self.column)
+                    token = (self.position + 1, "BITWISE_AND", "&")
                     self.advance()
 
             elif self.current_char == "|":
                 if self.peek() == "|":
-                    token = Token(TokenType.OR, "||", self.line, self.column)
+                    # token = Token(TokenType.OR, "||", self.line, self.column)
+                    token = (self.position + 2, "LOGICAL_OR", "||")
                     self.advance()
                     self.advance()
                 else:
-                    token = Token(TokenType.PIPE, "|", self.line, self.column)
+                    # token = Token(TokenType.PIPE, "|", self.line, self.column)
+                    token = (self.position + 1, "BITWISE_OR", "|")
                     self.advance()
 
             elif self.current_char == "^":
-                token = Token(TokenType.CARET, "^", self.line, self.column)
+                # token = Token(TokenType.CARET, "^", self.line, self.column)
+                token = (self.position + 1, "BITWISE_XOR", "^")
                 self.advance()
 
             elif self.current_char == "~":
-                token = Token(TokenType.TILDE, "~", self.line, self.column)
+                # token = Token(TokenType.TILDE, "~", self.line, self.column)
+                token = (self.position + 1, "BITWISE_NOT", "~")
                 self.advance()
 
             elif self.current_char == "(":
-                token = Token(TokenType.LPAREN, "(", self.line, self.column)
+                # token = Token(TokenType.LPAREN, "(", self.line, self.column)
+                token = (self.position + 1, "LPAREN", "(")
                 self.advance()
 
             elif self.current_char == ")":
-                token = Token(TokenType.RPAREN, ")", self.line, self.column)
+                # token = Token(TokenType.RPAREN, ")", self.line, self.column)
+                token = (self.position + 1, "RPAREN", ")")
                 self.advance()
 
             elif self.current_char == "{":
-                token = Token(TokenType.LCBR, "{", self.line, self.column)
+                # token = Token(TokenType.LCBR, "{", self.line, self.column)
+                token = (self.position + 1, "LBRACE", "{")
                 self.advance()
 
             elif self.current_char == "}":
-                token = Token(TokenType.RCBR, "}", self.line, self.column)
+                # token = Token(TokenType.RCBR, "}", self.line, self.column)
+                token = (self.position + 1, "RBRACE", "}")
                 self.advance()
 
             elif self.current_char == "[":
-                token = Token(TokenType.LSBR, "[", self.line, self.column)
+                # token = Token(TokenType.LSBR, "[", self.line, self.column)
+                token = (self.position + 1, "LBRACKET", "[")
                 self.advance()
 
             elif self.current_char == "]":
-                token = Token(TokenType.RSBR, "]", self.line, self.column)
+                # token = Token(TokenType.RSBR, "]", self.line, self.column)
+                token = (self.position + 1, "RBRACKET", "]")
                 self.advance()
 
             elif self.current_char == ".":
-                token = Token(TokenType.DOT, ".", self.line, self.column)
+                # token = Token(TokenType.DOT, ".", self.line, self.column)
+                token = (self.position + 1, "DOT", ".")
                 self.advance()
 
             elif self.current_char == ",":
-                token = Token(TokenType.COMMA, ",", self.line, self.column)
+                # token = Token(TokenType.COMMA, ",", self.line, self.column)
+                token = (self.position + 1, "COMMA", ",")
                 self.advance()
 
             elif self.current_char == ";":
-                token = Token(TokenType.SEMICOLON, ";", self.line, self.column)
+                # token = Token(TokenType.SEMICOLON, ";", self.line, self.column)
+                token = (self.position + 1, "SEMICOLON", ";")
                 self.advance()
 
             elif self.current_char == ":":
-                token = Token(TokenType.COLON, ":", self.line, self.column)
+                # token = Token(TokenType.COLON, ":", self.line, self.column)
+                token = (self.position + 1, "COLON", ":")
                 self.advance()
 
             elif self.current_char == "?":
-                token = Token(TokenType.QUESTION, "?", self.line, self.column)
+                # token = Token(TokenType.QUESTION, "?", self.line, self.column)
+                token = (self.position + 1, "QUESTION", "?")
                 self.advance()
+
+            elif self.current_char == "#":
+                # Handle preprocessor directive starting with #
+                self.position
+                directive = "#"
+                self.advance()
+
+                # Collect the directive name (like 'version', 'include', etc.)
+                while self.current_char is not None and not self.current_char.isspace():
+                    directive += self.current_char
+                    self.advance()
+
+                token = (self.position, "PREPROCESSOR", directive)
 
             if token is None:
                 raise SyntaxError(f"Unexpected character: {self.current_char}")
@@ -477,6 +527,7 @@ class GLSLLexer:
         self.advance()  # Skip the closing */
 
     def advance(self):
+        """Advance the position pointer and set the current character"""
         self.position += 1
         self.column += 1
         if self.position < len(self.code):
