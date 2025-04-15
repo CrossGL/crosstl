@@ -2,7 +2,6 @@ class ASTNode:
     """Base class for all AST nodes."""
 
 
-
 class TernaryOpNode:
     def __init__(self, condition, true_expr, false_expr):
         self.condition = condition
