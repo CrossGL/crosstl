@@ -229,3 +229,11 @@ class CaseNode(ASTNode):
 
     def __str__(self):
         return f"CaseNode(value={self.value}, statements={self.statements})"
+
+
+class BlockNode(ASTNode):
+    def __init__(self, statements):
+        self.statements = statements
+
+    def __str__(self):
+        return f"BlockNode(statements={self.statements})"

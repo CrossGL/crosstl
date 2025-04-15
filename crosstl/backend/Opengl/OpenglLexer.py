@@ -216,6 +216,19 @@ class TokenType(Enum):
     EOF = "EOF"
 
 
+class Token:
+    """Token class for the GLSL lexer"""
+
+    def __init__(self, token_type, value, line, column):
+        self.token_type = token_type
+        self.value = value
+        self.line = line
+        self.column = column
+
+    def __repr__(self):
+        return f"Token({self.token_type}, '{self.value}', line={self.line}, col={self.column})"
+
+
 class GLSLLexer:
     def __init__(self, code: str):
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
@@ -283,7 +296,8 @@ class GLSLLexer:
             if token_type == "IDENTIFIER" and text in KEYWORDS:
                 token_type = KEYWORDS[text]
 
-            if token_type not in SKIP_TOKENS:
+            # Only skip whitespace and comments
+            if token_type not in ["WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"]:
                 yield (token_type, text)
 
             self.position = new_pos
@@ -318,7 +332,8 @@ class GLSLLexer:
                 return self.number()
 
             if self.current_char == "+":
-                token = Token(TokenType.ADD, "+", self.line, self.column)
+                # token = Token(TokenType.ADD, "+", self.line, self.column)
+                token = (self.position + 1, "PLUS", "+")
                 self.advance()
 
             elif self.current_char == "-":
@@ -481,9 +496,7 @@ class GLSLLexer:
             self.current_char.isalnum() or self.current_char == "_"
         ):
             self.advance()
-        return Token(
-            TokenType.ID, self.code[start : self.position], self.line, self.column
-        )
+        return (self.position, "IDENTIFIER", self.code[start : self.position])
 
     def number(self):
         start = self.position
@@ -496,9 +509,7 @@ class GLSLLexer:
             or self.current_char == "-"
         ):
             self.advance()
-        return Token(
-            TokenType.NUMBER, self.code[start : self.position], self.line, self.column
-        )
+        return (self.position, "NUMBER", self.code[start : self.position])
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "GLSLLexer":

@@ -266,6 +266,8 @@ class MetalParser:
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
             return self.parse_for_statement()
+        elif self.current_token[0] == "SWITCH":
+            return self.parse_switch_statement()
         elif self.current_token[0] == "RETURN":
             return self.parse_return_statement()
         else:
@@ -543,6 +545,10 @@ class MetalParser:
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
+        elif self.current_token[0] == "BREAK":
+            # Handle break statement
+            self.eat("BREAK")
+            return "break"
         else:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
@@ -624,3 +630,71 @@ class MetalParser:
         coordinates = self.parse_expression()
         self.eat("RPAREN")
         return TextureSampleNode(texture, sampler, coordinates)
+
+    def parse_switch_statement(self):
+        """Parse a switch statement
+
+        This method parses a switch statement in Metal shader code.
+
+        Returns:
+            SwitchNode: A node representing the switch statement
+        """
+        self.eat("SWITCH")
+        self.eat("LPAREN")
+        expression = self.parse_expression()
+        self.eat("RPAREN")
+        self.eat("LBRACE")
+
+        cases = []
+        default = None
+
+        while self.current_token[0] not in ["RBRACE", "EOF"]:
+            if self.current_token[0] == "CASE":
+                cases.append(self.parse_case_statement())
+            elif self.current_token[0] == "DEFAULT":
+                self.eat("DEFAULT")
+                self.eat("COLON")
+                default_statements = []
+
+                # Parse statements until we hit a case, default, or end of switch
+                while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+                    if self.current_token[0] == "BREAK":
+                        self.eat("BREAK")
+                        self.eat("SEMICOLON")
+                        break
+                    else:
+                        default_statements.append(self.parse_statement())
+
+                default = default_statements
+            else:
+                raise SyntaxError(
+                    f"Unexpected token in switch statement: {self.current_token[0]}"
+                )
+
+        self.eat("RBRACE")
+        return SwitchNode(expression, cases, default)
+
+    def parse_case_statement(self):
+        """Parse a case statement
+
+        This method parses a case statement in Metal shader code.
+
+        Returns:
+            CaseNode: A node representing the case statement
+        """
+        self.eat("CASE")
+        value = self.parse_expression()
+        self.eat("COLON")
+
+        statements = []
+
+        # Parse statements until we hit a case, default, break, or end of switch
+        while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+            if self.current_token[0] == "BREAK":
+                self.eat("BREAK")
+                self.eat("SEMICOLON")
+                break
+            else:
+                statements.append(self.parse_statement())
+
+        return CaseNode(value, statements)

@@ -188,3 +188,22 @@ class ConstantBufferNode(ASTNode):
 
     def __repr__(self):
         return f"ConstantBufferNode(name={self.name}, members={self.members})"
+
+
+class SwitchNode(ASTNode):
+    def __init__(self, expression, cases, default=None):
+        self.expression = expression
+        self.cases = cases  # List of CaseNode
+        self.default = default  # List of statements or None
+
+    def __repr__(self):
+        return f"SwitchNode(expression={self.expression}, cases={self.cases}, default={self.default})"
+
+
+class CaseNode(ASTNode):
+    def __init__(self, value, statements):
+        self.value = value
+        self.statements = statements
+
+    def __repr__(self):
+        return f"CaseNode(value={self.value}, statements={self.statements})"

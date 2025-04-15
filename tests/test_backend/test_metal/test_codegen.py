@@ -399,5 +399,50 @@ def test_texture_sampling():
         pytest.fail(f"Texture sampling code generation not implemented: {e}")
 
 
+def test_switch_case():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    
+    struct VertexOut {
+        float4 position [[position]];
+        int materialID;
+    };
+    
+    fragment float4 fragmentShader(VertexOut in [[stage_in]]) {
+        float4 color;
+        
+        switch (in.materialID) {
+            case 0:
+                color = float4(1.0, 0.0, 0.0, 1.0);  // Red
+                break;
+            case 1:
+                color = float4(0.0, 1.0, 0.0, 1.0);  // Green
+                break;
+            case 2:
+                color = float4(0.0, 0.0, 1.0, 1.0);  // Blue
+                break;
+            default:
+                color = float4(0.5, 0.5, 0.5, 1.0);  // Gray
+                break;
+        }
+        
+        return color;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+        assert (
+            "switch" in generated_code
+        ), "Switch statement not found in generated code"
+        assert "case 0:" in generated_code, "Case 0 not found in generated code"
+        assert "default:" in generated_code, "Default case not found in generated code"
+    except SyntaxError as e:
+        pytest.fail(f"Switch statement code generation not implemented: {e}")
+
+
 if __name__ == "__main__":
     pytest.main()

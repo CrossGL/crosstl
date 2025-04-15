@@ -158,6 +158,8 @@ class MetalToCrossGLConverter:
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
+            elif isinstance(stmt, SwitchNode):
+                code += self.generate_switch_statement(stmt, indent, is_main)
             elif isinstance(stmt, FunctionCallNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, str):
@@ -311,3 +313,58 @@ class MetalToCrossGLConverter:
                     return ""
         else:
             return ""
+
+    def generate_switch_statement(self, node, indent, is_main):
+        """Generate CrossGL code for a switch statement
+
+        Args:
+            node: SwitchNode representing a Metal switch statement
+            indent: Current indentation level
+            is_main: Whether this is within the main function
+
+        Returns:
+            str: The CrossGL switch statement
+        """
+        expression = self.generate_expression(node.expression, is_main)
+        code = f"switch ({expression}) {{\n"
+
+        # Generate case statements
+        for case in node.cases:
+            case_value = self.generate_expression(case.value, is_main)
+            code += "    " * (indent + 1) + f"case {case_value}:\n"
+
+            # Generate case body
+            for stmt in case.statements:
+                code += "    " * (indent + 2)
+                if isinstance(stmt, SwitchNode):
+                    code += self.generate_switch_statement(stmt, indent + 2, is_main)
+                elif isinstance(stmt, IfNode):
+                    code += self.generate_if_statement(stmt, indent + 2, is_main)
+                elif isinstance(stmt, ForNode):
+                    code += self.generate_for_loop(stmt, indent + 2, is_main)
+                else:
+                    code += self.generate_expression(stmt, is_main) + ";\n"
+
+            # Add implicit break if not present
+            code += "    " * (indent + 2) + "break;\n"
+
+        # Generate default case if present
+        if node.default:
+            code += "    " * (indent + 1) + "default:\n"
+
+            for stmt in node.default:
+                code += "    " * (indent + 2)
+                if isinstance(stmt, SwitchNode):
+                    code += self.generate_switch_statement(stmt, indent + 2, is_main)
+                elif isinstance(stmt, IfNode):
+                    code += self.generate_if_statement(stmt, indent + 2, is_main)
+                elif isinstance(stmt, ForNode):
+                    code += self.generate_for_loop(stmt, indent + 2, is_main)
+                else:
+                    code += self.generate_expression(stmt, is_main) + ";\n"
+
+            # Add implicit break if not present
+            code += "    " * (indent + 2) + "break;\n"
+
+        code += "    " * indent + "}\n"
+        return code
