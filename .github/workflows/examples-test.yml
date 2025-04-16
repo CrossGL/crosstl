@@ -1,0 +1,122 @@
+name: CrossGL-Translator Examples Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-examples:
+    name: Test Examples - Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install -e .; fi
+        shell: bash
+
+      - name: Run test script with all examples
+        run: |
+          python examples/test.py
+
+      - name: Run individual examples with multiple backends
+        run: |
+          mkdir -p output
+
+          # Array Test
+          python -c "import crosstl; crosstl.translate('examples/ArrayTest.cgl', backend='metal', save_shader='output/ArrayTest.metal')"
+          python -c "import crosstl; crosstl.translate('examples/ArrayTest.cgl', backend='opengl', save_shader='output/ArrayTest.glsl')"
+          python -c "import crosstl; crosstl.translate('examples/ArrayTest.cgl', backend='directx', save_shader='output/ArrayTest.hlsl')"
+          python -c "import crosstl; crosstl.translate('examples/ArrayTest.cgl', backend='vulkan', save_shader='output/ArrayTest.spirv')"
+
+          # Simple Shader
+          python -c "import crosstl; crosstl.translate('examples/SimpleShader.cgl', backend='metal', save_shader='output/SimpleShader.metal')"
+          python -c "import crosstl; crosstl.translate('examples/SimpleShader.cgl', backend='opengl', save_shader='output/SimpleShader.glsl')"
+          python -c "import crosstl; crosstl.translate('examples/SimpleShader.cgl', backend='directx', save_shader='output/SimpleShader.hlsl')"
+          python -c "import crosstl; crosstl.translate('examples/SimpleShader.cgl', backend='vulkan', save_shader='output/SimpleShader.spirv')"
+
+          # Perlin Noise
+          python -c "import crosstl; crosstl.translate('examples/PerlinNoise.cgl', backend='metal', save_shader='output/PerlinNoise.metal')"
+          python -c "import crosstl; crosstl.translate('examples/PerlinNoise.cgl', backend='opengl', save_shader='output/PerlinNoise.glsl')"
+          python -c "import crosstl; crosstl.translate('examples/PerlinNoise.cgl', backend='directx', save_shader='output/PerlinNoise.hlsl')"
+          python -c "import crosstl; crosstl.translate('examples/PerlinNoise.cgl', backend='vulkan', save_shader='output/PerlinNoise.spirv')"
+
+          # Complex Shader
+          python -c "import crosstl; crosstl.translate('examples/ComplexShader.cgl', backend='metal', save_shader='output/ComplexShader.metal')"
+          python -c "import crosstl; crosstl.translate('examples/ComplexShader.cgl', backend='opengl', save_shader='output/ComplexShader.glsl')"
+          python -c "import crosstl; crosstl.translate('examples/ComplexShader.cgl', backend='directx', save_shader='output/ComplexShader.hlsl')"
+          python -c "import crosstl; crosstl.translate('examples/ComplexShader.cgl', backend='vulkan', save_shader='output/ComplexShader.spirv')"
+        shell: bash
+        continue-on-error: true
+
+  backend-specific:
+    name: ${{ matrix.combination.example }} on ${{ matrix.combination.backend }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        combination:
+          # DirectX backend
+          - { backend: "directx", example: "ArrayTest", extension: ".hlsl" }
+          - { backend: "directx", example: "SimpleShader", extension: ".hlsl" }
+          - { backend: "directx", example: "PerlinNoise", extension: ".hlsl" }
+          - { backend: "directx", example: "ComplexShader", extension: ".hlsl" }
+
+          # Vulkan backend
+          - { backend: "vulkan", example: "ArrayTest", extension: ".spirv" }
+          - { backend: "vulkan", example: "SimpleShader", extension: ".spirv" }
+          - { backend: "vulkan", example: "PerlinNoise", extension: ".spirv" }
+          - { backend: "vulkan", example: "ComplexShader", extension: ".spirv" }
+
+          # OpenGL backend
+          - { backend: "opengl", example: "ArrayTest", extension: ".glsl" }
+          - { backend: "opengl", example: "SimpleShader", extension: ".glsl" }
+          - { backend: "opengl", example: "PerlinNoise", extension: ".glsl" }
+          - { backend: "opengl", example: "ComplexShader", extension: ".glsl" }
+
+          # Metal backend
+          - { backend: "metal", example: "ArrayTest", extension: ".metal" }
+          - { backend: "metal", example: "SimpleShader", extension: ".metal" }
+          - { backend: "metal", example: "PerlinNoise", extension: ".metal" }
+          - { backend: "metal", example: "ComplexShader", extension: ".metal" }
+
+          # Slang and Mojo backends are excluded as they're still experimental
+          # and not fully implemented
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install -e .; fi
+        shell: bash
+
+      - name: Run ${{ matrix.combination.example }} on ${{ matrix.combination.backend }} backend
+        run: |
+          mkdir -p output
+          python -c "import crosstl; crosstl.translate('examples/${{ matrix.combination.example }}.cgl', backend='${{ matrix.combination.backend }}', save_shader='output/${{ matrix.combination.example }}${{ matrix.combination.extension }}')"
+        shell: bash
+        continue-on-error: true

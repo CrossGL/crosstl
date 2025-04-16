@@ -70,7 +70,7 @@ class Parser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def parse(self):
-        """Parse the shader code
+        """Parse the shader code and generate an AST
 
         This method parses the shader code and generates an abstract syntax tree (AST).
 
@@ -835,12 +835,12 @@ class Parser:
             if expr is not None:
                 return_value.append(expr)
 
-            # Handle multiple return values (comma-separated)
-            while self.current_token[0] == "COMMA":
-                self.eat("COMMA")
-                expr = self.parse_expression()
-                if expr is not None:
-                    return_value.append(expr)
+                # Handle multiple return values (comma-separated)
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    expr = self.parse_expression()
+                    if expr is not None:
+                        return_value.append(expr)
         except Exception as e:
             self.report_error(f"Error parsing return expression: {e}")
             # Recovery: skip to the end of the statement
@@ -1377,10 +1377,10 @@ class Parser:
                             self.next_token()
 
                         # If we found a semicolon, eat it
-                        if self.current_token[0] == "SEMICOLON":
-                            self.eat("SEMICOLON")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
 
-                    return BinaryOpNode(VariableNode(type_name, name), op, value)
+                return BinaryOpNode(VariableNode(type_name, name), op, value)
 
         else:
             # Handle any other tokens more gracefully
