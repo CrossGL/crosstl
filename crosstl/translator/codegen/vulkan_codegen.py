@@ -1466,9 +1466,9 @@ class VulkanSPIRVCodeGen:
                 # Main shader function - save for later
                 if self.main_fn_id is None:
                     self.main_fn_id = self.get_id()
-        else:
-            # Helper function
-            self.process_function_node(func)
+            else:
+                # Helper function
+                self.process_function_node(func)
 
         # Process main shader function last
         for func in ast.functions:
