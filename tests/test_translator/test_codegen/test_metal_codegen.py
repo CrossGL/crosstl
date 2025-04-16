@@ -239,7 +239,7 @@ def test_function_call(shader, expected_output):
     ast = crosstl.translator.parse(shader)
     code_gen = MetalCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     assert expected_output in generated_code
 
 
@@ -263,7 +263,7 @@ def test_assignment_or_operator(shader, expected_output):
     ast = crosstl.translator.parse(shader)
     code_gen = MetalCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     assert expected_output in generated_code
 
 
@@ -288,7 +288,7 @@ def test_assignment_shift_operators(shader, expected_output):
     ast = crosstl.translator.parse(shader)
     code_gen = MetalCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     for output in expected_output:
         assert output in generated_code
 
@@ -316,7 +316,7 @@ def test_bitwise_operators(shader, expected_outputs):
     ast = crosstl.translator.parse(shader)
     code_gen = MetalCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     for expected in expected_outputs:
         assert expected in generated_code
 
@@ -387,12 +387,12 @@ def test_metal_texture_types():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        
+
         # Verify proper Metal texture types
         assert "texture2d<float> albedoMap" in generated_code
         assert "texture2d<float> environmentMap" in generated_code
         assert "texture2d<float> depthMap" in generated_code
-        
+
         # Verify sampling operations
         # Just check for texture operations, not specific syntax
         assert "albedoMap" in generated_code
@@ -664,14 +664,14 @@ def test_metal_array_handling(array_test_data):
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
-        
+
         # Use the fixture data for verification
         for expected in array_test_data["metal"]["array_type_declarations"]:
             assert expected in generated_code
-            
+
         for expected in array_test_data["metal"]["array_access"]:
             assert expected in generated_code
-        
+
     except SyntaxError as e:
         pytest.fail(f"Metal array codegen failed: {e}")
 
@@ -698,7 +698,7 @@ def test_shift_operators(shader, expected_outputs):
     ast = crosstl.translator.parse(shader)
     code_gen = MetalCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     for expected in expected_outputs:
         assert expected in generated_code
 

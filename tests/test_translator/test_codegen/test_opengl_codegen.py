@@ -523,14 +523,14 @@ def test_opengl_array_handling(array_test_data):
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
-        
+
         # Use the fixture data for verification
         for expected in array_test_data["glsl"]["array_type_declarations"]:
             assert expected in generated_code
-            
+
         for expected in array_test_data["glsl"]["array_access"]:
             assert expected in generated_code
-        
+
     except SyntaxError as e:
         pytest.fail(f"OpenGL array codegen failed: {e}")
 
@@ -554,16 +554,16 @@ def test_opengl_array_handling(array_test_data):
                 }
             }
             """,
-            ["float values[4]", "data.values[2]", "arr[0]"]
+            ["float values[4]", "data.values[2]", "arr[0]"],
         )
-    ]
+    ],
 )
 def test_array_handling(array_shader, expected_outputs):
     try:
         ast = crosstl.translator.parse(array_shader)
         code_gen = GLSLCodeGen()
         generated_code = code_gen.generate(ast)
-        
+
         for expected in expected_outputs:
             assert expected in generated_code
     except Exception as e:
@@ -584,15 +584,15 @@ def test_array_handling(array_shader, expected_outputs):
                 }
             }
             """,
-            ["a << b", "a >> b"]
+            ["a << b", "a >> b"],
         )
-    ]
+    ],
 )
 def test_shift_operators(shader, expected_outputs):
     ast = crosstl.translator.parse(shader)
     code_gen = GLSLCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     for expected in expected_outputs:
         assert expected in generated_code
 

@@ -213,7 +213,9 @@ class MetalCodeGen:
                     else:
                         code += f"    {self.map_type(member.vtype)} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, 'name') and hasattr(node, 'members'):  # CbufferNode handling
+            elif hasattr(node, "name") and hasattr(
+                node, "members"
+            ):  # CbufferNode handling
                 code += f"{node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
@@ -226,7 +228,7 @@ class MetalCodeGen:
                         code += f"    {self.map_type(member.vtype)} {member.name};\n"
                 code += "};\n"
         for i, node in enumerate(ast.cbuffers):
-            if isinstance(node, StructNode) or hasattr(node, 'name'):
+            if isinstance(node, StructNode) or hasattr(node, "name"):
                 code += f"constant {node.name} &{node.name} [[buffer({i})]];\n"
         return code
 
@@ -270,7 +272,7 @@ class MetalCodeGen:
             # Improved array node handling
             element_type = self.map_type(stmt.element_type)
             size = get_array_size_from_node(stmt)
-            
+
             if size is None:
                 # Dynamic arrays in Metal need a size, use a large enough buffer
                 return f"{indent_str}device array<{element_type}, 1024> {stmt.name};\n"
@@ -371,16 +373,18 @@ class MetalCodeGen:
                 if len(expr.args) >= 2:
                     texture_name = self.generate_expression(expr.args[0])
                     coord = self.generate_expression(expr.args[1])
-                    
+
                     # Handle texture sampling in Metal
-                    if isinstance(expr.args[0], str) and expr.args[0] in [v[0].name for v in self.texture_variables]:
+                    if isinstance(expr.args[0], str) and expr.args[0] in [
+                        v[0].name for v in self.texture_variables
+                    ]:
                         # Check if we have a sampler with the same name
                         sampler_arg = ""
                         for s in self.sampler_variables:
                             if s[0].name == texture_name + "Sampler":
                                 sampler_arg = s[0].name
                                 break
-                        
+
                         # If no explicit sampler, use the default sampler
                         if not sampler_arg:
                             return f"{texture_name}.sample(sampler(mag_filter::linear, min_filter::linear), {coord})"
@@ -388,7 +392,9 @@ class MetalCodeGen:
                             return f"{texture_name}.sample({sampler_arg}, {coord})"
                     else:
                         # Fallback to standard texture function if not a texture variable
-                        args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                        args = ", ".join(
+                            self.generate_expression(arg) for arg in expr.args
+                        )
                         return f"{texture_name}.sample(sampler(mag_filter::linear, min_filter::linear), {coord})"
                 else:
                     # Handle incomplete texture call more gracefully
@@ -423,11 +429,11 @@ class MetalCodeGen:
     def map_type(self, vtype):
         if vtype:
             # Handle array types with a more robust approach
-            if '[' in vtype and ']' in vtype:
+            if "[" in vtype and "]" in vtype:
                 base_type, size = parse_array_type(vtype)
                 base_mapped = self.type_mapping.get(base_type, base_type)
-                return format_array_type(base_mapped, size, 'metal')
-            
+                return format_array_type(base_mapped, size, "metal")
+
             # Use the regular type mapping for non-array types
             return self.type_mapping.get(vtype, vtype)
         return vtype

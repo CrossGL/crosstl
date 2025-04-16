@@ -1,5 +1,5 @@
 import re
-from typing import List, Optional, Tuple, Union, Dict, Set
+from typing import List, Optional, Tuple, Union
 
 from .array_utils import parse_array_type, detect_array_element_type
 from ..ast import (
@@ -740,7 +740,9 @@ class VulkanSPIRVCodeGen:
                         member_type = self.struct_types[member.vtype]
                     else:
                         # Use a default type if unknown
-                        self.emit(f"; WARNING: Unknown type {member.vtype} in struct {struct_node.name}")
+                        self.emit(
+                            f"; WARNING: Unknown type {member.vtype} in struct {struct_node.name}"
+                        )
                         member_type = self.register_primitive_type("float")
 
             elif isinstance(member, ArrayNode):
@@ -763,9 +765,11 @@ class VulkanSPIRVCodeGen:
                     base_type = self.register_matrix_type(col_type, dim)
                 else:
                     # Use a default type if unknown
-                    self.emit(f"; WARNING: Unknown type {member.element_type} in array member of struct {struct_node.name}")
+                    self.emit(
+                        f"; WARNING: Unknown type {member.element_type} in array member of struct {struct_node.name}"
+                    )
                     base_type = self.register_primitive_type("float")
-                
+
                 # Create array type with size (if provided)
                 if member.size:
                     # Try to parse the size as an integer
@@ -774,12 +778,14 @@ class VulkanSPIRVCodeGen:
                         member_type = self.register_array_type(base_type, array_size)
                     except ValueError:
                         # Dynamic size or non-integer size
-                        self.emit(f"; WARNING: Non-integer array size {member.size} in struct {struct_node.name}")
+                        self.emit(
+                            f"; WARNING: Non-integer array size {member.size} in struct {struct_node.name}"
+                        )
                         member_type = self.register_array_type(base_type)
                 else:
                     # Runtime array
                     member_type = self.register_array_type(base_type)
-            
+
             if member_type:
                 members.append((member_type, member_name))
 
@@ -921,34 +927,38 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 f"; WARNING: Could not find member {member_name} in {struct_type}"
             )
-            
+
         elif isinstance(node.name, ArrayAccessNode):
             # Array access (e.g., array[index])
             array = self.process_expression(node.name.array)
             index = self.process_expression(node.name.index)
-            
+
             if array is None or index is None:
                 self.emit(f"; WARNING: Failed to evaluate array in assignment")
                 return
-            
+
             # Use the improved element type detection
             element_type = self.determine_array_element_type(array)
-            
+
             if element_type is None:
-                self.emit(f"; WARNING: Could not determine array element type for {node.name.array}")
+                self.emit(
+                    f"; WARNING: Could not determine array element type for {node.name.array}"
+                )
                 # Default to float if we can't determine the element type
                 element_type = self.primitive_types["float"]
-                
+
             # Create pointer to element
             ptr_type = self.register_pointer_type(element_type, "Function")
-            
+
             # Create access chain
             access = self.access_chain(array, [index], ptr_type)
-            
+
             # Store value to array element
             self.store_to_variable(access, rhs_value)
         else:
-            self.emit(f"; WARNING: Unsupported LHS type in assignment: {type(node.name).__name__}")
+            self.emit(
+                f"; WARNING: Unsupported LHS type in assignment: {type(node.name).__name__}"
+            )
 
     def process_return(self, node: ReturnNode):
         """Process a CrossGL return statement."""
@@ -1135,33 +1145,35 @@ class VulkanSPIRVCodeGen:
                 # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
-                
+
         # Array access
         elif isinstance(expr, ArrayAccessNode):
             # Process the array and index expressions
             array = self.process_expression(expr.array)
             index = self.process_expression(expr.index)
-            
+
             if array is None or index is None:
                 self.emit(f"; WARNING: Failed to evaluate array access")
                 # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
-            
+
             # Use the improved element type detection
             element_type = self.determine_array_element_type(array)
-            
+
             if element_type is None:
-                self.emit(f"; WARNING: Could not determine array element type for {expr.array}")
+                self.emit(
+                    f"; WARNING: Could not determine array element type for {expr.array}"
+                )
                 # Default to float if we can't determine the element type
                 element_type = self.primitive_types["float"]
-                
+
             # Create pointer to element
             ptr_type = self.register_pointer_type(element_type, "Function")
-            
+
             # Create access chain
             access = self.access_chain(array, [index], ptr_type)
-            
+
             # Load value from array element
             return self.load_from_variable(access, element_type)
 
@@ -1308,7 +1320,9 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, ptr_type.type, name)
         return spirv_id
 
-    def register_array_type(self, element_type: SpirvId, size: Optional[int] = None) -> SpirvId:
+    def register_array_type(
+        self, element_type: SpirvId, size: Optional[int] = None
+    ) -> SpirvId:
         """Create and register an array type."""
         key = (element_type.id, size)
         if key in self.array_types:
@@ -1318,7 +1332,9 @@ class VulkanSPIRVCodeGen:
 
         if size is not None:
             # Fixed-size array
-            size_const = self.register_constant(size, self.register_primitive_type("int"))
+            size_const = self.register_constant(
+                size, self.register_primitive_type("int")
+            )
             self.emit(f"%{id_value} = OpTypeArray %{element_type.id} %{size_const.id}")
         else:
             # Runtime array
@@ -1330,26 +1346,32 @@ class VulkanSPIRVCodeGen:
         self.array_types[key] = spirv_id
         return spirv_id
 
-    def determine_array_element_type(self, array_id: 'SpirvId') -> Optional['SpirvId']:
+    def determine_array_element_type(self, array_id: "SpirvId") -> Optional["SpirvId"]:
         """Determine the element type of an array based on its SpirvId.
-        
+
         Args:
             array_id: The SpirvId of the array
-            
+
         Returns:
             SpirvId of the element type, or None if it cannot be determined
         """
-        if not array_id or not hasattr(array_id, 'type') or not hasattr(array_id.type, 'base_type'):
+        if (
+            not array_id
+            or not hasattr(array_id, "type")
+            or not hasattr(array_id.type, "base_type")
+        ):
             return None
-            
+
         array_type = array_id.type.base_type
-        
+
         # Check if it's a known array type in our registry
         for arr_type, arr_type_id in self.array_types.items():
             if arr_type_id.type.base_type == array_type:
                 # Extract the element type from the array type info
-                element_type_name = arr_type.split('_')[1]  # Format: "array_float_4" -> "float"
-                
+                element_type_name = arr_type.split("_")[
+                    1
+                ]  # Format: "array_float_4" -> "float"
+
                 # Look up the element type ID
                 for type_dict in [
                     self.primitive_types,
@@ -1359,16 +1381,16 @@ class VulkanSPIRVCodeGen:
                     for type_name, type_id in type_dict.items():
                         if type_name == element_type_name:
                             return type_id
-        
+
         # If it's a pointer type, extract the base type
-        if array_type.startswith('ptr_'):
-            base_type = array_type.replace('ptr_', '', 1)
-            
+        if array_type.startswith("ptr_"):
+            base_type = array_type.replace("ptr_", "", 1)
+
             # Look for array type pattern in the base type
-            match = re.search(r'array_([^_]+)_', base_type)
+            match = re.search(r"array_([^_]+)_", base_type)
             if match:
                 element_type_name = match.group(1)
-                
+
                 # Look up the element type ID
                 for type_dict in [
                     self.primitive_types,
@@ -1378,7 +1400,7 @@ class VulkanSPIRVCodeGen:
                     for type_name, type_id in type_dict.items():
                         if type_name == element_type_name:
                             return type_id
-        
+
         # Last resort: Try to parse from type name
         for type_dict in [
             self.primitive_types,
@@ -1389,7 +1411,7 @@ class VulkanSPIRVCodeGen:
                 # Check if type name is a substring of the array type
                 if type_name in array_type:
                     return type_id
-                    
+
         # Default to float if we can't determine the element type
         return self.primitive_types["float"]
 

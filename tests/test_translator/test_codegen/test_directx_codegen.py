@@ -239,7 +239,7 @@ def test_function_call(shader, expected_output):
     ast = crosstl.translator.parse(shader)
     code_gen = HLSLCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     assert expected_output in generated_code
 
 
@@ -263,7 +263,7 @@ def test_assignment_or_operator(shader, expected_output):
     ast = crosstl.translator.parse(shader)
     code_gen = HLSLCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     assert expected_output in generated_code
 
 
@@ -329,7 +329,7 @@ def test_assignment_shift_operators(shader, expected_output):
     ast = crosstl.translator.parse(shader)
     code_gen = HLSLCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     for output in expected_output:
         assert output in generated_code
 
@@ -357,7 +357,7 @@ def test_bitwise_operators(shader, expected_outputs):
     ast = crosstl.translator.parse(shader)
     code_gen = HLSLCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     for expected in expected_outputs:
         assert expected in generated_code
 
@@ -458,7 +458,7 @@ def test_shift_operators(shader, expected_outputs):
     ast = crosstl.translator.parse(shader)
     code_gen = HLSLCodeGen()
     generated_code = code_gen.generate(ast)
-    
+
     for expected in expected_outputs:
         assert expected in generated_code
 
@@ -549,14 +549,17 @@ def test_directx_array_handling(array_test_data):
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
-        
+
         # Use the fixture data for verification
         for expected in array_test_data["hlsl"]["array_type_declarations"]:
-            assert expected in generated_code or expected.replace("[", "<").replace("]", ">") in generated_code
-            
+            assert (
+                expected in generated_code
+                or expected.replace("[", "<").replace("]", ">") in generated_code
+            )
+
         for expected in array_test_data["hlsl"]["array_access"]:
             assert expected in generated_code
-        
+
     except SyntaxError as e:
         pytest.fail(f"DirectX array codegen failed: {e}")
 

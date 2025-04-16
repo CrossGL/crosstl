@@ -63,7 +63,7 @@ class GLSLCodeGen:
             "gl_WorkGroupSize": "gl_WorkGroupSize",
             "gl_NumWorkGroups": "gl_NumWorkGroups",
         }
-        
+
         # Define type mapping for OpenGL (GLSL)
         self.type_mapping = {
             # Most types are the same in CrossGL and GLSL
@@ -114,7 +114,9 @@ class GLSLCodeGen:
                                 # Dynamic arrays in GLSL
                                 code += f"    {self.map_type(member.element_type)} {member.name}[];\n"
                         else:
-                            code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                            code += (
+                                f"    {self.map_type(member.vtype)} {member.name};\n"
+                            )
                     code += "};\n"
 
         # Generate global variables
@@ -157,7 +159,9 @@ class GLSLCodeGen:
                     else:
                         code += f"    {self.map_type(member.vtype)} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, 'name') and hasattr(node, 'members'):  # CbufferNode handling
+            elif hasattr(node, "name") and hasattr(
+                node, "members"
+            ):  # CbufferNode handling
                 code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
@@ -202,7 +206,7 @@ class GLSLCodeGen:
             # Improved array node handling for GLSL
             element_type = self.map_type(stmt.element_type)
             size = get_array_size_from_node(stmt)
-            
+
             if size is None:
                 # In GLSL, dynamic sized arrays need special handling
                 # For instance in shader storage blocks, but for simple cases:
@@ -318,11 +322,11 @@ class GLSLCodeGen:
     def map_type(self, vtype):
         if vtype:
             # Handle array types with a more robust approach
-            if '[' in vtype and ']' in vtype:
+            if "[" in vtype and "]" in vtype:
                 base_type, size = parse_array_type(vtype)
                 # GLSL can directly use the same syntax as CrossGL
                 return vtype
-                
+
             # Use the regular type mapping for non-array types
             return self.type_mapping.get(vtype, vtype)
         return vtype

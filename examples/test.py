@@ -2,74 +2,103 @@ import crosstl
 import sys
 import os
 
+
 def main():
     # Ensure output directory exists
     os.makedirs("output", exist_ok=True)
-    
+
     try:
         # Try to translate the complex shader, but don't fail if it doesn't work
         try:
-            metal_code = crosstl.translate('ComplexShader.cgl', backend='metal', 
-                                           save_shader='output/ComplexShader.metal')
-            
-            glsl_code = crosstl.translate('ComplexShader.cgl', backend='opengl', 
-                                          save_shader='output/ComplexShader.glsl')
-            
-            hlsl_code = crosstl.translate('ComplexShader.cgl', backend='directx', 
-                                          save_shader='output/ComplexShader.hlsl')
-            
+            metal_code = crosstl.translate(
+                "ComplexShader.cgl",
+                backend="metal",
+                save_shader="output/ComplexShader.metal",
+            )
+
+            glsl_code = crosstl.translate(
+                "ComplexShader.cgl",
+                backend="opengl",
+                save_shader="output/ComplexShader.glsl",
+            )
+
+            hlsl_code = crosstl.translate(
+                "ComplexShader.cgl",
+                backend="directx",
+                save_shader="output/ComplexShader.hlsl",
+            )
+
             print("Complex shader translation successful!")
         except Exception as e:
             print(f"Warning: Complex shader translation failed: {e}")
-        
+
         # Try the Perlin noise shader
         try:
-            metal_code = crosstl.translate('PerlinNoise.cgl', backend='metal', 
-                                           save_shader='output/PerlinNoise.metal')
-            
-            glsl_code = crosstl.translate('PerlinNoise.cgl', backend='opengl', 
-                                          save_shader='output/PerlinNoise.glsl')
-            
-            hlsl_code = crosstl.translate('PerlinNoise.cgl', backend='directx', 
-                                          save_shader='output/PerlinNoise.hlsl')
-            
+            metal_code = crosstl.translate(
+                "PerlinNoise.cgl",
+                backend="metal",
+                save_shader="output/PerlinNoise.metal",
+            )
+
+            glsl_code = crosstl.translate(
+                "PerlinNoise.cgl",
+                backend="opengl",
+                save_shader="output/PerlinNoise.glsl",
+            )
+
+            hlsl_code = crosstl.translate(
+                "PerlinNoise.cgl",
+                backend="directx",
+                save_shader="output/PerlinNoise.hlsl",
+            )
+
             print("Perlin noise shader translation successful!")
         except Exception as e:
             print(f"Warning: Perlin noise shader translation failed: {e}")
-        
+
         # Try the array test shader
         try:
-            metal_code = crosstl.translate('ArrayTest.cgl', backend='metal', 
-                                           save_shader='output/ArrayTest.metal')
-            
-            glsl_code = crosstl.translate('ArrayTest.cgl', backend='opengl', 
-                                          save_shader='output/ArrayTest.glsl')
-            
-            hlsl_code = crosstl.translate('ArrayTest.cgl', backend='directx', 
-                                          save_shader='output/ArrayTest.hlsl')
-            
-            spirv_code = crosstl.translate('ArrayTest.cgl', backend='vulkan', 
-                                          save_shader='output/ArrayTest.spirv')
-            
+            metal_code = crosstl.translate(
+                "ArrayTest.cgl", backend="metal", save_shader="output/ArrayTest.metal"
+            )
+
+            glsl_code = crosstl.translate(
+                "ArrayTest.cgl", backend="opengl", save_shader="output/ArrayTest.glsl"
+            )
+
+            hlsl_code = crosstl.translate(
+                "ArrayTest.cgl", backend="directx", save_shader="output/ArrayTest.hlsl"
+            )
+
+            spirv_code = crosstl.translate(
+                "ArrayTest.cgl", backend="vulkan", save_shader="output/ArrayTest.spirv"
+            )
+
             print("Array test shader translation successful!")
         except Exception as e:
             print(f"Warning: Array test shader translation failed: {e}")
-        
+
         # Use the simple shader as a fallback - this should always work
-        metal_code = crosstl.translate('SimpleShader.cgl', backend='metal', 
-                                       save_shader='output/SimpleShader.metal')
-        
-        glsl_code = crosstl.translate('SimpleShader.cgl', backend='opengl', 
-                                      save_shader='output/SimpleShader.glsl')
-        
-        hlsl_code = crosstl.translate('SimpleShader.cgl', backend='directx', 
-                                      save_shader='output/SimpleShader.hlsl')
-        
+        metal_code = crosstl.translate(
+            "SimpleShader.cgl", backend="metal", save_shader="output/SimpleShader.metal"
+        )
+
+        glsl_code = crosstl.translate(
+            "SimpleShader.cgl", backend="opengl", save_shader="output/SimpleShader.glsl"
+        )
+
+        hlsl_code = crosstl.translate(
+            "SimpleShader.cgl",
+            backend="directx",
+            save_shader="output/SimpleShader.hlsl",
+        )
+
         print("Simple shader translation successful!")
         return 0
     except Exception as e:
         print(f"Error: {e}")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -6,7 +6,7 @@ This module provides common test cases and verification utilities for arrays.
 import pytest
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any
 
 # Common shader template with comprehensive array handling scenarios
 ARRAY_TEST_SHADER = """
@@ -60,6 +60,7 @@ shader ArrayTest {
 }
 """
 
+
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
@@ -74,11 +75,11 @@ def parse_code(tokens: List):
 
 def run_array_test(code_generator_class, verification_tests: Dict[str, Any] = None):
     """Run standard array handling tests on a given code generator.
-    
+
     Args:
         code_generator_class: The code generator class to test
         verification_tests: Optional dict mapping test names to test cases
-    
+
     Returns:
         The generated code for further testing
     """
@@ -87,21 +88,27 @@ def run_array_test(code_generator_class, verification_tests: Dict[str, Any] = No
         ast = parse_code(tokens)
         code_gen = code_generator_class()
         generated_code = code_gen.generate(ast)
-        
+
         # Run verification tests
         if verification_tests:
             for test_name, test_case in verification_tests.items():
                 if isinstance(test_case, list):
                     # List of strings to check for in the output
                     for expected in test_case:
-                        assert expected in generated_code, f"Test '{test_name}' failed: '{expected}' not found in generated code"
+                        assert (
+                            expected in generated_code
+                        ), f"Test '{test_name}' failed: '{expected}' not found in generated code"
                 elif isinstance(test_case, str):
                     # Single string to check for
-                    assert test_case in generated_code, f"Test '{test_name}' failed: '{test_case}' not found in generated code"
+                    assert (
+                        test_case in generated_code
+                    ), f"Test '{test_name}' failed: '{test_case}' not found in generated code"
                 elif callable(test_case):
                     # Custom verification function
-                    assert test_case(generated_code), f"Test '{test_name}' failed: custom verification function returned false"
-        
+                    assert test_case(
+                        generated_code
+                    ), f"Test '{test_name}' failed: custom verification function returned false"
+
         return generated_code
     except Exception as e:
         pytest.fail(f"Array test failed: {e}")
@@ -111,42 +118,42 @@ def run_array_test(code_generator_class, verification_tests: Dict[str, Any] = No
 # Common verification tests for different backends
 DIRECTX_VERIFICATION = {
     "array_type_declarations": [
-        "float values[4]", 
+        "float values[4]",
         "float weights[8]",
     ],
     "array_access": [
         "weights[2]",
         "material.values[0]",
-        "material.colors[index]", 
-        "particles[3].position"
+        "material.colors[index]",
+        "particles[3].position",
     ],
-    "nested_array_access": "particles[index].velocity"
+    "nested_array_access": "particles[index].velocity",
 }
 
 METAL_VERIFICATION = {
     "array_type_declarations": [
-        "array<float, 4> values", 
+        "array<float, 4> values",
         "array<float, 8> weights",
     ],
     "array_access": [
         "weights[2]",
         "material.values[0]",
-        "material.colors[index]", 
-        "particles[3].position"
+        "material.colors[index]",
+        "particles[3].position",
     ],
-    "nested_array_access": "particles[index].velocity"
+    "nested_array_access": "particles[index].velocity",
 }
 
 GLSL_VERIFICATION = {
     "array_type_declarations": [
-        "float values[4]", 
+        "float values[4]",
         "float weights[8]",
     ],
     "array_access": [
         "weights[2]",
         "material.values[0]",
-        "material.colors[index]", 
-        "particles[3].position"
+        "material.colors[index]",
+        "particles[3].position",
     ],
-    "nested_array_access": "particles[index].velocity"
-} 
+    "nested_array_access": "particles[index].velocity",
+}

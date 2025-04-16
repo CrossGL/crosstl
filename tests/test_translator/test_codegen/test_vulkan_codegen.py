@@ -92,7 +92,7 @@ def test_vulkan_array_handling():
         ast = parse_code(tokens)
         code_gen = VulkanSPIRVCodeGen()
         code_gen.generate(ast)
-        # We don't check actual SPIR-V output here as it's binary/complex, 
+        # We don't check actual SPIR-V output here as it's binary/complex,
         # but ensure it doesn't crash with array handling
     except SyntaxError as e:
         pytest.fail(f"Vulkan array codegen failed: {e}")

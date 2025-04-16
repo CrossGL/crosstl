@@ -132,7 +132,9 @@ class HLSLCodeGen:
                     else:
                         code += f"    {self.map_type(member.vtype)} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, 'name') and hasattr(node, 'members'):  # Generic cbuffer handling
+            elif hasattr(node, "name") and hasattr(
+                node, "members"
+            ):  # Generic cbuffer handling
                 code += f"cbuffer {node.name} : register(b{i}) {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
@@ -174,7 +176,7 @@ class HLSLCodeGen:
             # Improved array node handling
             element_type = self.map_type(stmt.element_type)
             size = get_array_size_from_node(stmt)
-            
+
             if size is None:
                 # HLSL dynamic arrays need a size, but can be accessed with buffer types
                 # For basic shaders, use a fixed size as fallback
@@ -282,11 +284,11 @@ class HLSLCodeGen:
     def map_type(self, vtype):
         if vtype:
             # Handle array types with a more robust approach
-            if '[' in vtype and ']' in vtype:
+            if "[" in vtype and "]" in vtype:
                 base_type, size = parse_array_type(vtype)
                 base_mapped = self.type_mapping.get(base_type, base_type)
-                return format_array_type(base_mapped, size, 'hlsl')
-                
+                return format_array_type(base_mapped, size, "hlsl")
+
             # Use the regular type mapping for non-array types
             return self.type_mapping.get(vtype, vtype)
         return vtype

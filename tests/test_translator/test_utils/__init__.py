@@ -1,1 +1,1 @@
-"""Test utilities for the CrossGL Translator.""" 
+"""Test utilities for the CrossGL Translator."""
