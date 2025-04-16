@@ -1,5 +1,7 @@
 from ..ast import (
     AssignmentNode,
+    ArrayNode,
+    ArrayAccessNode,
     BinaryOpNode,
     ForNode,
     FunctionCallNode,
@@ -11,10 +13,12 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
 
 class GLSLCodeGen:
     def __init__(self):
+        """Initialize the code generator."""
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
@@ -59,6 +63,28 @@ class GLSLCodeGen:
             "gl_WorkGroupSize": "gl_WorkGroupSize",
             "gl_NumWorkGroups": "gl_NumWorkGroups",
         }
+        
+        # Define type mapping for OpenGL (GLSL)
+        self.type_mapping = {
+            # Most types are the same in CrossGL and GLSL
+            "vec2": "vec2",
+            "vec3": "vec3",
+            "vec4": "vec4",
+            "ivec2": "ivec2",
+            "ivec3": "ivec3",
+            "ivec4": "ivec4",
+            "mat2": "mat2",
+            "mat3": "mat3",
+            "mat4": "mat4",
+            "float": "float",
+            "int": "int",
+            "uint": "uint",
+            "bool": "bool",
+            "double": "double",
+            "void": "void",
+            "sampler2D": "sampler2D",
+            "samplerCube": "samplerCube",
+        }
 
     def generate(self, ast):
         code = "\n"
@@ -79,11 +105,17 @@ class GLSLCodeGen:
                     for member in node.members:
                         code += f"{self.map_semantic(member.semantic)} out {member.vtype} {member.name};\n"
                 else:
-                    code = ""
                     code += f"struct {node.name} {{\n"
                     for member in node.members:
-                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
-                    code += "}\n"
+                        if isinstance(member, ArrayNode):
+                            if member.size:
+                                code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                            else:
+                                # Dynamic arrays in GLSL
+                                code += f"    {self.map_type(member.element_type)} {member.name}[];\n"
+                        else:
+                            code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                    code += "};\n"
 
         # Generate global variables
         for i, node in enumerate(ast.global_variables):
@@ -116,8 +148,27 @@ class GLSLCodeGen:
             if isinstance(node, StructNode):
                 code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
                 for member in node.members:
-                    code += f"    {self.map_type(member.vtype)} {member.name};\n"
-                code += "}\n"
+                    if isinstance(member, ArrayNode):
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in uniform blocks need special handling in GLSL
+                            code += f"    {self.map_type(member.element_type)} {member.name}[];\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                code += "};\n"
+            elif hasattr(node, 'name') and hasattr(node, 'members'):  # CbufferNode handling
+                code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
+                for member in node.members:
+                    if isinstance(member, ArrayNode):
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in uniform blocks need special handling in GLSL
+                            code += f"    {self.map_type(member.element_type)} {member.name}[];\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                code += "};\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
@@ -145,7 +196,19 @@ class GLSLCodeGen:
     def generate_statement(self, stmt, indent=0, is_main=False):
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
+            # Handle variable declarations
             return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
+        elif isinstance(stmt, ArrayNode):
+            # Improved array node handling for GLSL
+            element_type = self.map_type(stmt.element_type)
+            size = get_array_size_from_node(stmt)
+            
+            if size is None:
+                # In GLSL, dynamic sized arrays need special handling
+                # For instance in shader storage blocks, but for simple cases:
+                return f"{indent_str}{element_type} {stmt.name}[];\n"
+            else:
+                return f"{indent_str}{element_type} {stmt.name}[{size}];\n"
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt, is_main)};\n"
         elif isinstance(stmt, IfNode):
@@ -155,9 +218,9 @@ class GLSLCodeGen:
         elif isinstance(stmt, ReturnNode):
             code = ""
             for i, return_stmt in enumerate(stmt.value):
-                code += f"{self.generate_expression(return_stmt, is_main)}"
-                if i < len(stmt.value) - 1:
+                if i > 0:
                     code += ", "
+                code += self.generate_expression(return_stmt, is_main)
             return f"{indent_str}return {code};\n"
         else:
             return f"{indent_str}{self.generate_expression(stmt, is_main)};\n"
@@ -240,6 +303,10 @@ class GLSLCodeGen:
                 return expr.member
             obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, ArrayAccessNode):
+            array = self.generate_expression(expr.array, is_main)
+            index = self.generate_expression(expr.index, is_main)
+            return f"{array}[{index}]"
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_expression(expr.condition, is_main)
             true_expr = self.generate_expression(expr.true_expr, is_main)
@@ -249,6 +316,15 @@ class GLSLCodeGen:
             return str(expr)
 
     def map_type(self, vtype):
+        if vtype:
+            # Handle array types with a more robust approach
+            if '[' in vtype and ']' in vtype:
+                base_type, size = parse_array_type(vtype)
+                # GLSL can directly use the same syntax as CrossGL
+                return vtype
+                
+            # Use the regular type mapping for non-array types
+            return self.type_mapping.get(vtype, vtype)
         return vtype
 
     def map_operator(self, op):

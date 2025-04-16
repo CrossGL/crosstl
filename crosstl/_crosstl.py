@@ -8,15 +8,31 @@ from .translator.codegen import (
     vulkan_codegen,
 )
 from .translator.ast import ASTNode
+import argparse
+import sys
+import os
+
+try:
+    from .formatter import format_shader_code
+
+    FORMATTER_AVAILABLE = True
+except ImportError:
+    FORMATTER_AVAILABLE = False
 
 
-def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> str:
+def translate(
+    file_path: str,
+    backend: str = "cgl",
+    save_shader: str = None,
+    format_output: bool = True,
+) -> str:
     """Translate a shader file to another language.
 
     Args:
         file_path (str): The path to the shader file
         backend (str, optional): The target language to translate to. Defaults to "cgl".
         save_shader (str, optional): The path to save the translated shader. Defaults to None.
+        format_output (bool, optional): Whether to format the generated code. Defaults to True.
 
     Returns:
         str: The translated shader code
@@ -98,11 +114,72 @@ def translate(file_path: str, backend: str = "cgl", save_shader: str = None) -> 
                 f"Unsupported translation scenario: {file_path} to {backend}"
             )
 
-    # Generate the code and write to the file
+    # Generate the code
     generated_code = codegen.generate(ast)
 
+    # Format the code if requested and the formatter is available
+    if format_output and FORMATTER_AVAILABLE:
+        generated_code = format_shader_code(generated_code, backend, save_shader)
+
+    # Write to the file if a path is provided
     if save_shader is not None:
         with open(save_shader, "w") as file:
             file.write(generated_code)
 
     return generated_code
+
+
+def main():
+    """Command-line entry point for CrossGL translation."""
+    parser = argparse.ArgumentParser(description="CrossGL Shader Translator")
+
+    parser.add_argument("input", help="Input shader file path")
+    parser.add_argument(
+        "--backend",
+        "-b",
+        default="cgl",
+        help="Target backend (metal, directx, opengl, vulkan, cgl)",
+    )
+    parser.add_argument("--output", "-o", help="Output file path")
+    parser.add_argument(
+        "--no-format", action="store_true", help="Disable code formatting"
+    )
+
+    args = parser.parse_args()
+
+    try:
+        if not os.path.exists(args.input):
+            print(f"Error: Input file {args.input} not found")
+            return 1
+
+        # Determine output path if not specified
+        output_path = args.output
+        if not output_path:
+            base, _ = os.path.splitext(args.input)
+            ext_map = {
+                "metal": ".metal",
+                "directx": ".hlsl",
+                "opengl": ".glsl",
+                "vulkan": ".spirv",
+                "cgl": ".cgl",
+            }
+            output_path = base + ext_map.get(args.backend, ".out")
+
+        # Perform translation
+        code = translate(
+            args.input,
+            backend=args.backend,
+            save_shader=output_path,
+            format_output=not args.no_format,
+        )
+
+        print(f"Successfully translated to {output_path}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

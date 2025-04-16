@@ -126,6 +126,11 @@ class BinaryOpNode(ASTNode):
         self.left = left
         self.op = op
         self.right = right
+        
+        # For compatibility with code generators
+        self.vtype = getattr(left, 'vtype', None)
+        self.name = getattr(left, 'name', str(left))
+        self.semantic = getattr(left, 'semantic', None)
 
     def __repr__(self):
         return f"BinaryOpNode(left={self.left}, op={self.op}, right={self.right})"
@@ -147,3 +152,26 @@ class UnaryOpNode(ASTNode):
 
     def __repr__(self):
         return f"UnaryOpNode(op={self.op}, operand={self.operand})"
+
+
+class ArrayNode(ASTNode):
+    def __init__(self, element_type, name, size=None, semantic=None):
+        self.element_type = element_type  # Type of array elements
+        self.name = name
+        self.size = size  # None means dynamic array
+        self.semantic = semantic
+        
+        # For compatibility with code generators that expect VariableNode
+        self.vtype = f"{element_type}[]" if size is None else f"{element_type}[{size}]"
+
+    def __repr__(self):
+        return f"ArrayNode(element_type={self.element_type}, name={self.name}, size={self.size}, semantic={self.semantic})"
+
+
+class ArrayAccessNode(ASTNode):
+    def __init__(self, array, index):
+        self.array = array
+        self.index = index
+
+    def __repr__(self):
+        return f"ArrayAccessNode(array={self.array}, index={self.index})"

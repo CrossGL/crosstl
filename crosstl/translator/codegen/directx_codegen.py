@@ -10,7 +10,10 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    ArrayAccessNode,
+    ArrayNode,
 )
+from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
 
 class HLSLCodeGen:
@@ -72,8 +75,15 @@ class HLSLCodeGen:
             if isinstance(node, StructNode):
                 code += f"struct {node.name} {{\n"
                 for member in node.members:
-                    code += f"    {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
-                code += "}\n"
+                    if isinstance(member, ArrayNode):
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in HLSL
+                            code += f"    {self.map_type(member.element_type)}[] {member.name};\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name}{self.map_semantic(member.semantic)};\n"
+                code += "};\n"
 
         # Generate global variables
         for i, node in enumerate(ast.global_variables):
@@ -111,10 +121,29 @@ class HLSLCodeGen:
         code = ""
         for i, node in enumerate(ast.cbuffers):
             if isinstance(node, StructNode):
-                code += f"cbuffer {node.name} : register(b{i}){{\n"
+                code += f"cbuffer {node.name} : register(b{i}) {{\n"
                 for member in node.members:
-                    code += f"    {self.map_type(member.vtype)} {member.name};\n"
-                code += "}\n"
+                    if isinstance(member, ArrayNode):
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in cbuffers usually not supported, so we'll make it fixed size
+                            code += f"    {self.map_type(member.element_type)} {member.name}[1];\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                code += "};\n"
+            elif hasattr(node, 'name') and hasattr(node, 'members'):  # Generic cbuffer handling
+                code += f"cbuffer {node.name} : register(b{i}) {{\n"
+                for member in node.members:
+                    if isinstance(member, ArrayNode):
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in cbuffers usually not supported
+                            code += f"    {self.map_type(member.element_type)} {member.name}[1];\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                code += "};\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
@@ -139,21 +168,32 @@ class HLSLCodeGen:
 
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
-        statement_handlers = {
-            VariableNode: (
-                lambda stmt: f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
-            ),
-            AssignmentNode: (
-                lambda stmt: f"{indent_str}{self.generate_assignment(stmt)};\n"
-            ),
-            IfNode: lambda stmt: self.generate_if(stmt, indent),
-            ForNode: lambda stmt: self.generate_for(stmt, indent),
-            ReturnNode: lambda stmt: self.generate_return(stmt, indent),
-        }
-
-        handler = statement_handlers.get(type(stmt))
-        if handler:
-            return handler(stmt)
+        if isinstance(stmt, VariableNode):
+            return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
+        elif isinstance(stmt, ArrayNode):
+            # Improved array node handling
+            element_type = self.map_type(stmt.element_type)
+            size = get_array_size_from_node(stmt)
+            
+            if size is None:
+                # HLSL dynamic arrays need a size, but can be accessed with buffer types
+                # For basic shaders, use a fixed size as fallback
+                return f"{indent_str}{element_type}[1024] {stmt.name};\n"
+            else:
+                return f"{indent_str}{element_type}[{size}] {stmt.name};\n"
+        elif isinstance(stmt, AssignmentNode):
+            return f"{indent_str}{self.generate_assignment(stmt)};\n"
+        elif isinstance(stmt, IfNode):
+            return self.generate_if(stmt, indent)
+        elif isinstance(stmt, ForNode):
+            return self.generate_for(stmt, indent)
+        elif isinstance(stmt, ReturnNode):
+            code = ""
+            for i, return_stmt in enumerate(stmt.value):
+                code += f"{self.generate_expression(return_stmt)}"
+                if i < len(stmt.value) - 1:
+                    code += ", "
+            return f"{indent_str}return {code};\n"
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
@@ -200,15 +240,6 @@ class HLSLCodeGen:
         code += f"{indent_str}}}\n"
         return code
 
-    def generate_return(self, node, indent):
-        indent_str = "    " * indent
-        code = ""
-        for i, return_stmt in enumerate(node.value):
-            code += f"{self.generate_expression(return_stmt)}"
-            if i < len(node.value) - 1:
-                code += ", "
-        return f"{indent_str}return {code};\n"
-
     def generate_expression(self, expr):
         if isinstance(expr, str):
             return expr
@@ -226,7 +257,18 @@ class HLSLCodeGen:
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
+        elif isinstance(expr, ArrayAccessNode):
+            # Handle array access
+            array = self.generate_expression(expr.array)
+            index = self.generate_expression(expr.index)
+            return f"{array}[{index}]"
         elif isinstance(expr, FunctionCallNode):
+            # Handle special vector constructor calls
+            if expr.name in ["vec2", "vec3", "vec4"]:
+                mapped_type = self.map_type(expr.name)
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{mapped_type}({args})"
+            # Standard function call
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             return f"{expr.name}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -239,6 +281,13 @@ class HLSLCodeGen:
 
     def map_type(self, vtype):
         if vtype:
+            # Handle array types with a more robust approach
+            if '[' in vtype and ']' in vtype:
+                base_type, size = parse_array_type(vtype)
+                base_mapped = self.type_mapping.get(base_type, base_type)
+                return format_array_type(base_mapped, size, 'hlsl')
+                
+            # Use the regular type mapping for non-array types
             return self.type_mapping.get(vtype, vtype)
         return vtype
 
@@ -268,10 +317,13 @@ class HLSLCodeGen:
             "ASSIGN_SHIFT_LEFT": "<<=",
             "ASSIGN_SHIFT_RIGHT": ">>=",
             "ASSIGN_AND": "&=",
-            "LOGICAL_AND": "&&",
+            "ASSIGN_OR": "|=",
             "ASSIGN_XOR": "^=",
-            "shift_left": "<<",
-            "shift_right": ">>",
+            "LOGICAL_AND": "&&",
+            "LOGICAL_OR": "||",
+            "BITWISE_SHIFT_RIGHT": ">>",
+            "BITWISE_SHIFT_LEFT": "<<",
+            "MOD": "%",
         }
         return op_map.get(op, op)
 

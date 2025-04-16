@@ -3,6 +3,7 @@ import pytest
 from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.codegen.vulkan_codegen import VulkanSPIRVCodeGen
+from ..test_utils.array_test_helper import ARRAY_TEST_SHADER, tokenize_code, parse_code
 
 
 def tokenize_code(code: str) -> List:
@@ -82,6 +83,19 @@ def test_basic_shader():
         assert code is not None
     except SyntaxError:
         pytest.fail("Vulkan basic shader codegen not implemented.")
+
+
+def test_vulkan_array_handling():
+    """Test the Vulkan code generator's handling of array types and array access."""
+    try:
+        tokens = tokenize_code(ARRAY_TEST_SHADER)
+        ast = parse_code(tokens)
+        code_gen = VulkanSPIRVCodeGen()
+        code_gen.generate(ast)
+        # We don't check actual SPIR-V output here as it's binary/complex, 
+        # but ensure it doesn't crash with array handling
+    except SyntaxError as e:
+        pytest.fail(f"Vulkan array codegen failed: {e}")
 
 
 if __name__ == "__main__":

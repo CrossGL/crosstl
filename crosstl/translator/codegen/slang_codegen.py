@@ -1,17 +1,24 @@
+import re
+from typing import Dict, List, Optional, Tuple, Any
 from ..ast import (
+    ArrayNode,
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
+    CbufferNode,
     ForNode,
     FunctionCallNode,
+    FunctionNode,
     IfNode,
     MemberAccessNode,
     ReturnNode,
+    ShaderNode,
     StructNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
-    ShaderNode,
 )
+from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
 
 class SlangCodeGen:

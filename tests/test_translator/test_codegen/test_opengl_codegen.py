@@ -1,8 +1,9 @@
-from crosstl.translator.lexer import Lexer
 import pytest
-from typing import List
+import crosstl.translator
 from crosstl.translator.parser import Parser
+from crosstl.translator.lexer import Lexer
 from crosstl.translator.codegen.opengl_codegen import GLSLCodeGen
+from typing import List
 
 
 def tokenize_code(code: str) -> List:
@@ -471,6 +472,129 @@ def test_bitwise_operators():
         print(code)
     except SyntaxError:
         pytest.fail("Bitwise Shift parsing not implemented.")
+
+
+def test_opengl_array_handling(array_test_data):
+    """Test the OpenGL code generator's handling of array types and array access."""
+    code = """
+    shader main {
+    struct Particle {
+        vec3 position;
+        vec3 velocity;
+    };
+
+    struct Material {
+        float values[4];  // Fixed-size array
+        vec3 colors[];    // Dynamic array
+    };
+
+    cbuffer Constants {
+        float weights[8];
+        int indices[10];
+    };
+
+    vertex {
+        VSOutput main(VSInput input) {
+            VSOutput output;
+            
+            // Array access in various forms
+            float value = weights[2];
+            int index = indices[5];
+            
+            // Array member access
+            Material material;
+            float x = material.values[0];
+            vec3 color = material.colors[index];
+            
+            // Nested array access
+            Particle particles[10];
+            vec3 pos = particles[3].position;
+            
+            // Array access in expressions
+            float sum = weights[0] + weights[1] + weights[2];
+            
+            return output;
+        }
+    }
+}
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        print(generated_code)
+        
+        # Use the fixture data for verification
+        for expected in array_test_data["glsl"]["array_type_declarations"]:
+            assert expected in generated_code
+            
+        for expected in array_test_data["glsl"]["array_access"]:
+            assert expected in generated_code
+        
+    except SyntaxError as e:
+        pytest.fail(f"OpenGL array codegen failed: {e}")
+
+
+@pytest.mark.parametrize(
+    "array_shader, expected_outputs",
+    [
+        (
+            """
+            shader TestArrayShader {
+                struct DataArray {
+                    float values[4];
+                };
+                
+                void main() {
+                    DataArray data;
+                    data.values[2] = 1.0;
+                    
+                    float arr[5];
+                    arr[0] = 1.0;
+                }
+            }
+            """,
+            ["float values[4]", "data.values[2]", "arr[0]"]
+        )
+    ]
+)
+def test_array_handling(array_shader, expected_outputs):
+    try:
+        ast = crosstl.translator.parse(array_shader)
+        code_gen = GLSLCodeGen()
+        generated_code = code_gen.generate(ast)
+        
+        for expected in expected_outputs:
+            assert expected in generated_code
+    except Exception as e:
+        pytest.fail(f"OpenGL array codegen failed: {e}")
+
+
+@pytest.mark.parametrize(
+    "shader, expected_outputs",
+    [
+        (
+            """
+            shader TestShader {
+                void main() {
+                    int a = 1;
+                    int b = 2;
+                    int c = a << b;
+                    int d = a >> b;
+                }
+            }
+            """,
+            ["a << b", "a >> b"]
+        )
+    ]
+)
+def test_shift_operators(shader, expected_outputs):
+    ast = crosstl.translator.parse(shader)
+    code_gen = GLSLCodeGen()
+    generated_code = code_gen.generate(ast)
+    
+    for expected in expected_outputs:
+        assert expected in generated_code
 
 
 if __name__ == "__main__":
