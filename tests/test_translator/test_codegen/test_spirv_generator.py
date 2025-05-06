@@ -1,6 +1,6 @@
 import pytest
 
-from crosstl.translator.codegen.vulkan_codegen import (
+from crosstl.translator.codegen.SPIRV_codegen import (
     SpirvType,
     SpirvId,
     VulkanSPIRVCodeGen,

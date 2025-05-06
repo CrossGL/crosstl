@@ -2,7 +2,7 @@ from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
 from crosstl.translator.parser import Parser
-from crosstl.translator.codegen.vulkan_codegen import VulkanSPIRVCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from ..test_utils.array_test_helper import ARRAY_TEST_SHADER, tokenize_code, parse_code
 
 

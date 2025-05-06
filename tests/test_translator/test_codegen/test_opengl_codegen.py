@@ -2,7 +2,7 @@ import pytest
 import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
-from crosstl.translator.codegen.opengl_codegen import GLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from typing import List
 
 

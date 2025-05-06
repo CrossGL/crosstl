@@ -1,6 +1,6 @@
-from crosstl.backend.Vulkan import VulkanCrossGLCodeGen
-from crosstl.backend.Vulkan.VulkanLexer import VulkanLexer
-from crosstl.backend.Vulkan.VulkanParser import VulkanParser
+from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
+from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
+from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 import pytest
 from typing import List
 

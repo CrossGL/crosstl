@@ -1,7 +1,7 @@
-from crosstl.backend.Opengl.OpenglLexer import GLSLLexer
+from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 import pytest
-from crosstl.backend.Opengl.OpenglParser import GLSLParser
-from crosstl.backend.Opengl.openglCrossglCodegen import GLSLToCrossGLConverter
+from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 
 
 # Helper functions for tokenizing and parsing GLSL code

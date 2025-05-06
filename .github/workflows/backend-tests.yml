@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.OS }}
     strategy:
       matrix:
-        backend: [directx, metal, opengl, 'slang', 'vulkan', 'mojo']
+        backend: [directx, metal, GLSL, 'slang', 'SPIRV', 'mojo']
         python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
         OS: [ubuntu-latest, windows-latest, macOS-latest]
       fail-fast: false

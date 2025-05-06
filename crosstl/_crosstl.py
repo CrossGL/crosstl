@@ -2,10 +2,10 @@ from . import translator
 from .translator.lexer import Lexer
 from .translator.parser import Parser
 from .translator.codegen import (
+    GLSL_codegen,
     directx_codegen,
     metal_codegen,
-    opengl_codegen,
-    vulkan_codegen,
+    SPIRV_codegen,
 )
 from .translator.ast import ASTNode
 import argparse
@@ -57,7 +57,7 @@ def translate(
         lexer = MetalLexer(shader_code)
         parser = MetalParser(lexer.tokenize())
     elif file_path.endswith(".glsl"):
-        from .backend.Opengl import GLSLLexer, GLSLParser
+        from .backend.GLSL import GLSLLexer, GLSLParser
 
         lexer = GLSLLexer(shader_code)
         parser = GLSLParser(lexer.tokenize())
@@ -82,9 +82,9 @@ def translate(
         elif backend == "directx":
             codegen = directx_codegen.HLSLCodeGen()
         elif backend == "opengl":
-            codegen = opengl_codegen.GLSLCodeGen()
+            codegen = GLSL_codegen.GLSLCodeGen()
         elif backend == "vulkan":
-            codegen = vulkan_codegen.VulkanSPIRVCodeGen()
+            codegen = SPIRV_codegen.VulkanSPIRVCodeGen()
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
@@ -100,7 +100,7 @@ def translate(
 
                 codegen = MetalToCrossGLConverter()
             elif file_path.endswith(".glsl"):
-                from .backend.Opengl.openglCrossglCodegen import GLSLToCrossGLConverter
+                from .backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 
                 codegen = GLSLToCrossGLConverter()
             elif file_path.endswith(".slang"):

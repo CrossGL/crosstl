@@ -1,6 +1,6 @@
 import pytest
 from typing import List
-from crosstl.backend.Vulkan.VulkanLexer import VulkanLexer
+from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 
 
 def tokenize_code(code: str) -> List:

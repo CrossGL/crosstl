@@ -1,7 +1,7 @@
 import pytest
 from typing import List
-from crosstl.backend.Vulkan.VulkanLexer import VulkanLexer
-from crosstl.backend.Vulkan import VulkanParser
+from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
+from crosstl.backend.SPIRV import VulkanParser
 
 
 def parse_code(tokens: List):
