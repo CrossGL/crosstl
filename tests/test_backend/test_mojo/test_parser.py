@@ -389,12 +389,12 @@ def test_bitwise_not_parsing():
 
 
 def test_string_literals_parsing():
-    code = '''
+    code = """
     fn main():
         let message: String = "Hello, Mojo!"
         let path: String = "path/to/file.txt"
         print(message)
-    '''
+    """
     try:
         tokens = tokenize_code(code)
         parse_code(tokens)

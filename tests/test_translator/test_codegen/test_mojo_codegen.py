@@ -513,7 +513,9 @@ def test_ternary_operator():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "if" in generated_code and "else" in generated_code  # Mojo ternary syntax
+        assert (
+            "if" in generated_code and "else" in generated_code
+        )  # Mojo ternary syntax
         print(generated_code)
     except SyntaxError:
         pytest.fail("Ternary operator codegen not implemented")

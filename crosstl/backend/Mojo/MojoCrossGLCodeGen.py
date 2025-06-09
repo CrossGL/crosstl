@@ -341,12 +341,25 @@ class MojoToCrossGLConverter:
         code += indent_str + "}"
 
         if hasattr(node, "else_body") and node.else_body:
-            if isinstance(node.else_body, IfNode):
+            # Check if else_body is a list
+            if isinstance(node.else_body, list):
+                if len(node.else_body) == 1 and isinstance(node.else_body[0], IfNode):
+                    # This is an elif statement
+                    code += " else "
+                    code += self.generate_if_statement(node.else_body[0], indent)
+                else:
+                    # Regular else with multiple statements
+                    code += " else {\n"
+                    code += self.generate_function_body(node.else_body, indent + 1)
+                    code += indent_str + "}"
+            elif isinstance(node.else_body, IfNode):
+                # Direct IfNode for elif
                 code += " else "
                 code += self.generate_if_statement(node.else_body, indent)
             else:
+                # Regular else body
                 code += " else {\n"
-                code += self.generate_function_body(node.else_body, indent + 1)
+                code += self.generate_function_body([node.else_body], indent + 1)
                 code += indent_str + "}"
 
         code += "\n"

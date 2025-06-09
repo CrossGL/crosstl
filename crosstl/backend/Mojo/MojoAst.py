@@ -43,13 +43,14 @@ class FunctionNode(MojoASTNode):
 
 
 class VariableDeclarationNode(MojoASTNode):
-    def __init__(self, var_type, name, initial_value=None):
+    def __init__(self, var_type, name, initial_value=None, vtype=None):
         self.var_type = var_type
         self.name = name
         self.initial_value = initial_value
+        self.vtype = vtype
 
     def __repr__(self):
-        return f"VariableDeclarationNode(var_type={self.var_type}, name={self.name}, initial_value={self.initial_value})"
+        return f"VariableDeclarationNode(var_type={self.var_type}, name={self.name}, initial_value={self.initial_value}, vtype={self.vtype})"
 
 
 class ArrayAccessNode(MojoASTNode):
@@ -298,3 +299,11 @@ class ContinueNode(MojoASTNode):
 
     def __repr__(self):
         return "ContinueNode()"
+
+
+class PassNode(MojoASTNode):
+    def __init__(self):
+        pass
+
+    def __repr__(self):
+        return "PassNode()"

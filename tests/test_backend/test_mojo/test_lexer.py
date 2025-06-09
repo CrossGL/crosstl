@@ -290,7 +290,9 @@ def test_comments_tokenization():
     try:
         tokens = tokenize_code(code)
         # Comments should be tokenized but filtered out
-        comment_found = any(token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"] for token in tokens)
+        comment_found = any(
+            token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"] for token in tokens
+        )
         # Since we skip comments in tokenization, we just ensure no error occurs
     except SyntaxError:
         pytest.fail("Comments tokenization not implemented.")
@@ -326,16 +328,20 @@ def test_bitwise_not_tokenization():
 
 
 def test_string_literals_tokenization():
-    code = '''
+    code = """
     fn main():
         let message: String = "Hello, Mojo!"
         let path: String = "path/to/file.txt"
-    '''
+    """
     try:
         tokens = tokenize_code(code)
         string_literals = [token[1] for token in tokens if token[0] == "STRING_LITERAL"]
-        assert '"Hello, Mojo!"' in string_literals, "String literal not tokenized correctly"
-        assert '"path/to/file.txt"' in string_literals, "String literal not tokenized correctly"
+        assert (
+            '"Hello, Mojo!"' in string_literals
+        ), "String literal not tokenized correctly"
+        assert (
+            '"path/to/file.txt"' in string_literals
+        ), "String literal not tokenized correctly"
     except SyntaxError:
         pytest.fail("String literals tokenization not implemented.")
 
