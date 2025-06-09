@@ -241,9 +241,6 @@ class MojoParser:
         return attributes
 
     def parse_block(self):
-        # For Mojo/Python-style syntax, we don't need to eat COLON here as it's handled by calling methods
-        # if self.current_token[0] == "COLON":
-        #     self.eat("COLON")
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
             statements = []
