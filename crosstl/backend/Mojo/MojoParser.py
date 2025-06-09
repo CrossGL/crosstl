@@ -395,6 +395,9 @@ class MojoParser:
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
+            "ASSIGN_XOR",
+            "ASSIGN_OR", 
+            "ASSIGN_AND",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -418,10 +421,37 @@ class MojoParser:
         return left
 
     def parse_logical_and(self):
-        left = self.parse_equality()
+        left = self.parse_bitwise_or()
         while self.current_token[0] == "AND":
             op = self.current_token[1]
             self.eat("AND")
+            right = self.parse_bitwise_or()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_or(self):
+        left = self.parse_bitwise_xor()
+        while self.current_token[0] == "BITWISE_OR":
+            op = self.current_token[1]
+            self.eat("BITWISE_OR")
+            right = self.parse_bitwise_xor()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_xor(self):
+        left = self.parse_bitwise_and()
+        while self.current_token[0] == "BITWISE_XOR":
+            op = self.current_token[1]
+            self.eat("BITWISE_XOR")
+            right = self.parse_bitwise_and()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_and(self):
+        left = self.parse_equality()
+        while self.current_token[0] == "BITWISE_AND":
+            op = self.current_token[1]
+            self.eat("BITWISE_AND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
         return left
@@ -436,13 +466,22 @@ class MojoParser:
         return left
 
     def parse_relational(self):
-        left = self.parse_additive()
+        left = self.parse_shift()
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
         ]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_shift()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_shift(self):
+        left = self.parse_additive()
+        while self.current_token[0] in ["SHIFT_LEFT", "SHIFT_RIGHT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_additive()

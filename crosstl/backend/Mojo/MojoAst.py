@@ -120,6 +120,15 @@ class WhileNode(MojoASTNode):
         return f"WhileNode(condition={self.condition}, body={self.body})"
 
 
+class DoWhileNode(MojoASTNode):
+    def __init__(self, condition, body):
+        self.condition = condition
+        self.body = body
+
+    def __repr__(self):
+        return f"DoWhileNode(condition={self.condition}, body={self.body})"
+
+
 class ReturnNode(MojoASTNode):
     def __init__(self, value):
         self.value = value
@@ -247,3 +256,45 @@ class SwitchNode(MojoASTNode):
 
     def __repr__(self):
         return f"SwitchNode(expression={self.expression}, cases={self.cases})"
+
+
+class CaseNode(MojoASTNode):
+    def __init__(self, value, body):
+        self.value = value
+        self.body = body
+
+    def __repr__(self):
+        return f"CaseNode(value={self.value}, body={self.body})"
+
+
+class PragmaNode(MojoASTNode):
+    def __init__(self, directive, value):
+        self.directive = directive
+        self.value = value
+
+    def __repr__(self):
+        return f"PragmaNode(directive={self.directive}, value={self.value})"
+
+
+class IncludeNode(MojoASTNode):
+    def __init__(self, path):
+        self.path = path
+
+    def __repr__(self):
+        return f"IncludeNode(path={self.path})"
+
+
+class BreakNode(MojoASTNode):
+    def __init__(self):
+        pass
+
+    def __repr__(self):
+        return "BreakNode()"
+
+
+class ContinueNode(MojoASTNode):
+    def __init__(self):
+        pass
+
+    def __repr__(self):
+        return "ContinueNode()"

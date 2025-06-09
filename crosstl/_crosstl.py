@@ -71,6 +71,11 @@ def translate(
 
         lexer = VulkanLexer(shader_code)
         parser = VulkanParser(lexer.tokenize())
+    elif file_path.endswith(".mojo"):
+        from .backend.Mojo import MojoLexer, MojoParser
+
+        lexer = MojoLexer(shader_code)
+        parser = MojoParser(lexer.tokenize())
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -107,6 +112,10 @@ def translate(
                 from .backend.slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
 
                 codegen = SlangToCrossGLConverter()
+            elif file_path.endswith(".mojo"):
+                from .backend.Mojo.MojoCrossGLCodeGen import MojoToCrossGLConverter
+
+                codegen = MojoToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
         else:
