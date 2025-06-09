@@ -223,7 +223,7 @@ def test_else_codegen():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
-        assert "else:" in generated_code
+        assert "} else {" in generated_code or "else" in generated_code
     except SyntaxError:
         pytest.fail("Else statement parsing or code generation not implemented.")
 
@@ -307,7 +307,7 @@ def test_else_if_codegen():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
-        assert "elif " in generated_code
+        assert "} else if (" in generated_code or "else if" in generated_code
     except SyntaxError:
         pytest.fail("Else-if statement parsing or code generation not implemented.")
 

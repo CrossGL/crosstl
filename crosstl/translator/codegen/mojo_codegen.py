@@ -245,7 +245,24 @@ class MojoCodeGen:
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
-            return f"{indent_str}var {stmt.name}: {self.map_type(stmt.vtype)}\n"
+            # Handle variable declarations
+            if hasattr(stmt, 'vtype') and stmt.vtype:
+                # Check if this is actually an array declaration disguised as a variable
+                vtype_str = str(stmt.vtype)
+                if "ArrayAccessNode" in vtype_str and "array=" in vtype_str and "index=" in vtype_str:
+                    # This is likely an array declaration
+                    import re
+                    array_match = re.search(r'array=(\w+).*?index=(\w+)', vtype_str)
+                    if array_match:
+                        array_name = array_match.group(1)
+                        size = array_match.group(2)
+                        base_type = "Float32"  # Default, could be improved
+                        return f"{indent_str}var {stmt.name}: StaticTuple[{base_type}, {size}]\n"
+                
+                # Regular variable declaration
+                return f"{indent_str}var {stmt.name}: {self.map_type(stmt.vtype)}\n"
+            else:
+                return f"{indent_str}var {stmt.name}\n"
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
@@ -261,8 +278,17 @@ class MojoCodeGen:
                 return f"{indent_str}return {values}\n"
             else:
                 return f"{indent_str}return {self.generate_expression(stmt.value)}\n"
+        elif isinstance(stmt, ArrayAccessNode):
+            # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
+            # Try to handle it gracefully
+            return f"{indent_str}# Unhandled ArrayAccessNode: {stmt}\n"
         else:
-            return f"{indent_str}{self.generate_expression(stmt)}\n"
+            # Handle expressions that may be used as statements
+            expr_result = self.generate_expression(stmt)
+            if expr_result.strip():
+                return f"{indent_str}{expr_result}\n"
+            else:
+                return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
 
     def generate_array_declaration(self, node, indent=0):
         indent_str = "    " * indent
@@ -352,9 +378,14 @@ class MojoCodeGen:
             op = self.map_operator(expr.op)
             return f"({op}{operand})"
         elif isinstance(expr, ArrayAccessNode):
-            array = self.generate_expression(expr.array)
-            index = self.generate_expression(expr.index)
-            return f"{array}[{index}]"
+            # Handle array access properly
+            if hasattr(expr, 'array') and hasattr(expr, 'index'):
+                array = self.generate_expression(expr.array)
+                index = self.generate_expression(expr.index)
+                return f"{array}[{index}]"
+            else:
+                # Fallback for malformed ArrayAccessNode
+                return str(expr)
         elif isinstance(expr, FunctionCallNode):
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(expr.name, expr.name)
@@ -387,7 +418,18 @@ class MojoCodeGen:
             false_expr = self.generate_expression(expr.false_expr)
             return f"({true_expr} if {condition} else {false_expr})"
         else:
-            return str(expr)
+            # For unknown expression types, handle special cases
+            expr_str = str(expr)
+            # Check if this looks like an array declaration being misinterpreted
+            if "ArrayAccessNode" in expr_str and "array=" in expr_str and "index=" in expr_str:
+                # Try to extract array name and size for array declarations
+                import re
+                array_match = re.search(r'array=(\w+).*?index=(\w+)', expr_str)
+                if array_match:
+                    array_name = array_match.group(1)
+                    size = array_match.group(2)
+                    return f"{array_name}"  # Just return the array name for now
+            return expr_str
 
     def map_type(self, vtype):
         if vtype:

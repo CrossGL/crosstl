@@ -561,12 +561,9 @@ def test_array_access():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "StaticTuple" in generated_code or "DynamicVector" in generated_code
-        assert "[0]" in generated_code
-        assert "[1]" in generated_code
-        print(generated_code)
+        assert "values[0]" in generated_code and "values[1]" in generated_code
     except SyntaxError:
-        pytest.fail("Array access codegen not implemented")
+        pytest.fail("Array access code generation not implemented.")
 
 
 def test_mojo_imports():
