@@ -154,7 +154,7 @@ class MojoCodeGen:
 
     def generate_struct(self, node):
         code = f"@value\nstruct {node.name}:\n"
-        
+
         # Generate struct members
         for member in node.members:
             if isinstance(member, ArrayNode):
@@ -163,9 +163,15 @@ class MojoCodeGen:
                 else:
                     code += f"    var {member.name}: DynamicVector[{self.map_type(member.element_type)}]\n"
             else:
-                semantic = f"  # {self.map_semantic(member.semantic)}" if member.semantic else ""
-                code += f"    var {member.name}: {self.map_type(member.vtype)}{semantic}\n"
-        
+                semantic = (
+                    f"  # {self.map_semantic(member.semantic)}"
+                    if member.semantic
+                    else ""
+                )
+                code += (
+                    f"    var {member.name}: {self.map_type(member.vtype)}{semantic}\n"
+                )
+
         code += "\n"
         return code
 
@@ -181,7 +187,9 @@ class MojoCodeGen:
                         else:
                             code += f"    var {member.name}: DynamicVector[{self.map_type(member.element_type)}]\n"
                     else:
-                        code += f"    var {member.name}: {self.map_type(member.vtype)}\n"
+                        code += (
+                            f"    var {member.name}: {self.map_type(member.vtype)}\n"
+                        )
                 code += "\n"
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
                 code += f"@value\nstruct {node.name}:\n"
@@ -192,20 +200,24 @@ class MojoCodeGen:
                         else:
                             code += f"    var {member.name}: DynamicVector[{self.map_type(member.element_type)}]\n"
                     else:
-                        code += f"    var {member.name}: {self.map_type(member.vtype)}\n"
+                        code += (
+                            f"    var {member.name}: {self.map_type(member.vtype)}\n"
+                        )
                 code += "\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
-        indent_str = "    " * indent
-        
+        "    " * indent
+
         # Generate function parameters
         params = []
         for p in func.params:
-            param_semantic = f"  # {self.map_semantic(p.semantic)}" if p.semantic else ""
+            param_semantic = (
+                f"  # {self.map_semantic(p.semantic)}" if p.semantic else ""
+            )
             params.append(f"{p.name}: {self.map_type(p.vtype)}{param_semantic}")
-        
+
         params_str = ", ".join(params) if params else ""
         return_type = self.map_type(func.return_type) if func.return_type else "None"
 
@@ -218,20 +230,20 @@ class MojoCodeGen:
             code += f"@compute_shader\n"
 
         code += f"fn {func.name}({params_str}) -> {return_type}:\n"
-        
+
         # Generate function body
         if func.body:
             for stmt in func.body:
                 code += self.generate_statement(stmt, indent + 1)
         else:
             code += "    pass\n"
-        
+
         code += "\n"
         return code
 
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
-        
+
         if isinstance(stmt, VariableNode):
             return f"{indent_str}var {stmt.name}: {self.map_type(stmt.vtype)}\n"
         elif isinstance(stmt, ArrayNode):
@@ -256,7 +268,7 @@ class MojoCodeGen:
         indent_str = "    " * indent
         element_type = self.map_type(node.element_type)
         size = get_array_size_from_node(node)
-        
+
         if size is None:
             return f"{indent_str}var {node.name}: DynamicVector[{element_type}]\n"
         else:
@@ -272,46 +284,48 @@ class MojoCodeGen:
         indent_str = "    " * indent
         condition = self.generate_expression(node.if_condition)
         code = f"{indent_str}if {condition}:\n"
-        
+
         # Generate if body
         for stmt in node.if_body:
             code += self.generate_statement(stmt, indent + 1)
-        
+
         # Generate else if conditions
-        if hasattr(node, 'else_if_conditions') and node.else_if_conditions:
-            for else_if_condition, else_if_body in zip(node.else_if_conditions, node.else_if_bodies):
+        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
+            for else_if_condition, else_if_body in zip(
+                node.else_if_conditions, node.else_if_bodies
+            ):
                 condition = self.generate_expression(else_if_condition)
                 code += f"{indent_str}elif {condition}:\n"
                 for stmt in else_if_body:
                     code += self.generate_statement(stmt, indent + 1)
-        
+
         # Generate else body
         if node.else_body:
             code += f"{indent_str}else:\n"
             for stmt in node.else_body:
                 code += self.generate_statement(stmt, indent + 1)
-        
+
         return code
 
     def generate_for(self, node, indent):
         indent_str = "    " * indent
-        
+
         # Extract init, condition, and update
         init = self.generate_statement(node.init, 0).strip()
         condition = self.generate_expression(node.condition)
         update = self.generate_expression(node.update)
-        
+
         # In Mojo, we'll use a while loop for C-style for loops
         code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
-        
+
         # Generate loop body
         for stmt in node.body:
             code += self.generate_statement(stmt, indent + 1)
-        
+
         # Add update at the end of the loop
         code += f"{indent_str}    {update}\n"
-        
+
         return code
 
     def generate_expression(self, expr):
@@ -320,9 +334,9 @@ class MojoCodeGen:
         elif isinstance(expr, (int, float, bool)):
             return str(expr)
         elif isinstance(expr, VariableNode):
-            if hasattr(expr, 'vtype') and expr.vtype and expr.name:
+            if hasattr(expr, "vtype") and expr.vtype and expr.name:
                 return f"{expr.name}"
-            elif hasattr(expr, 'name'):
+            elif hasattr(expr, "name"):
                 return expr.name
             else:
                 return str(expr)
@@ -344,13 +358,23 @@ class MojoCodeGen:
         elif isinstance(expr, FunctionCallNode):
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(expr.name, expr.name)
-            
+
             # Handle vector constructors
-            if expr.name in ["vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "uvec2", "uvec3", "uvec4"]:
+            if expr.name in [
+                "vec2",
+                "vec3",
+                "vec4",
+                "ivec2",
+                "ivec3",
+                "ivec4",
+                "uvec2",
+                "uvec3",
+                "uvec4",
+            ]:
                 mojo_type = self.map_type(expr.name)
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{mojo_type}({args})"
-            
+
             # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             return f"{func_name}({args})"
@@ -375,7 +399,7 @@ class MojoCodeGen:
                     return f"StaticTuple[{base_mapped}, {size}]"
                 else:
                     return f"DynamicVector[{base_mapped}]"
-            
+
             # Use regular type mapping
             return self.type_mapping.get(vtype, vtype)
         return vtype

@@ -396,7 +396,7 @@ class MojoParser:
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
             "ASSIGN_XOR",
-            "ASSIGN_OR", 
+            "ASSIGN_OR",
             "ASSIGN_AND",
         ]:
             op = self.current_token[1]

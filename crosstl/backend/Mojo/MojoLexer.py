@@ -90,7 +90,7 @@ KEYWORDS = {
     "for": "FOR",
     "while": "WHILE",
     "switch": "SWITCH",
-    "case": "CASE", 
+    "case": "CASE",
     "default": "DEFAULT",
     "break": "BREAK",
     "continue": "CONTINUE",
