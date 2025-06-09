@@ -116,8 +116,8 @@ class MojoCodeGen:
     def generate(self, ast):
         code = "# Generated Mojo Shader Code\n"
         code += "from math import *\n"
-        code += "from tensor import *\n"
-        code += "from algorithm import *\n\n"
+        code += "from simd import *\n"
+        code += "from gpu import *\n\n"
 
         # Generate structs
         for node in ast.structs:
