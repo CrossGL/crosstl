@@ -246,19 +246,24 @@ class MojoCodeGen:
 
         if isinstance(stmt, VariableNode):
             # Handle variable declarations
-            if hasattr(stmt, 'vtype') and stmt.vtype:
+            if hasattr(stmt, "vtype") and stmt.vtype:
                 # Check if this is actually an array declaration disguised as a variable
                 vtype_str = str(stmt.vtype)
-                if "ArrayAccessNode" in vtype_str and "array=" in vtype_str and "index=" in vtype_str:
+                if (
+                    "ArrayAccessNode" in vtype_str
+                    and "array=" in vtype_str
+                    and "index=" in vtype_str
+                ):
                     # This is likely an array declaration
                     import re
-                    array_match = re.search(r'array=(\w+).*?index=(\w+)', vtype_str)
+
+                    array_match = re.search(r"array=(\w+).*?index=(\w+)", vtype_str)
                     if array_match:
-                        array_name = array_match.group(1)
+                        array_match.group(1)
                         size = array_match.group(2)
                         base_type = "Float32"  # Default, could be improved
                         return f"{indent_str}var {stmt.name}: StaticTuple[{base_type}, {size}]\n"
-                
+
                 # Regular variable declaration
                 return f"{indent_str}var {stmt.name}: {self.map_type(stmt.vtype)}\n"
             else:
@@ -379,7 +384,7 @@ class MojoCodeGen:
             return f"({op}{operand})"
         elif isinstance(expr, ArrayAccessNode):
             # Handle array access properly
-            if hasattr(expr, 'array') and hasattr(expr, 'index'):
+            if hasattr(expr, "array") and hasattr(expr, "index"):
                 array = self.generate_expression(expr.array)
                 index = self.generate_expression(expr.index)
                 return f"{array}[{index}]"
@@ -421,13 +426,18 @@ class MojoCodeGen:
             # For unknown expression types, handle special cases
             expr_str = str(expr)
             # Check if this looks like an array declaration being misinterpreted
-            if "ArrayAccessNode" in expr_str and "array=" in expr_str and "index=" in expr_str:
+            if (
+                "ArrayAccessNode" in expr_str
+                and "array=" in expr_str
+                and "index=" in expr_str
+            ):
                 # Try to extract array name and size for array declarations
                 import re
-                array_match = re.search(r'array=(\w+).*?index=(\w+)', expr_str)
+
+                array_match = re.search(r"array=(\w+).*?index=(\w+)", expr_str)
                 if array_match:
                     array_name = array_match.group(1)
-                    size = array_match.group(2)
+                    array_match.group(2)
                     return f"{array_name}"  # Just return the array name for now
             return expr_str
 
