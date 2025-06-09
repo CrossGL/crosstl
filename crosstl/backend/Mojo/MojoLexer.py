@@ -15,6 +15,7 @@ TOKENS = tuple(
         ("FN", r"\bfn\b"),
         ("RETURN", r"\breturn\b"),
         ("IF", r"\bif\b"),
+        ("ELIF", r"\belif\b"),
         ("ELSE", r"\belse\b"),
         ("FOR", r"\bfor\b"),
         ("WHILE", r"\bwhile\b"),
@@ -60,6 +61,9 @@ TOKENS = tuple(
         ("ASSIGN_XOR", r"\^="),
         ("ASSIGN_OR", r"\|="),
         ("ASSIGN_AND", r"\&="),
+        ("ASSIGN_SHIFT_LEFT", r"<<="),
+        ("ASSIGN_SHIFT_RIGHT", r">>="),
+        ("ASSIGN_MOD", r"%="),
         ("PLUS", r"\+"),
         ("MINUS", r"-"),
         ("MULTIPLY", r"\*"),
@@ -73,6 +77,7 @@ TOKENS = tuple(
         ("EQUALS", r"="),
         ("WHITESPACE", r"\s+"),
         ("MOD", r"%"),
+        ("AT", r"@"),
         ("ATTRIBUTE", r"\[\[[^\]]*\]\]"),
     ]
 )
@@ -86,6 +91,7 @@ KEYWORDS = {
     "fn": "FN",
     "return": "RETURN",
     "if": "IF",
+    "elif": "ELIF",
     "else": "ELSE",
     "for": "FOR",
     "while": "WHILE",

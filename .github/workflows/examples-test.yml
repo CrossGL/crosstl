@@ -97,7 +97,13 @@ jobs:
           - { backend: "metal", example: "PerlinNoise", extension: ".metal" }
           - { backend: "metal", example: "ComplexShader", extension: ".metal" }
 
-          # Slang and Mojo backends are excluded as they're still experimental
+          # Mojo backend
+          - { backend: "mojo", example: "ArrayTest", extension: ".mojo" }
+          - { backend: "mojo", example: "SimpleShader", extension: ".mojo" }
+          - { backend: "mojo", example: "PerlinNoise", extension: ".mojo" }
+          - { backend: "mojo", example: "ComplexShader", extension: ".mojo" }
+
+          # Slang backend is excluded as it's still experimental
           # and not fully implemented
 
     steps:
