@@ -13,7 +13,14 @@ class TernaryOpNode:
 
 
 class ShaderNode:
-    def __init__(self, structs, functions, global_variables, impl_blocks=None, use_statements=None):
+    def __init__(
+        self,
+        structs,
+        functions,
+        global_variables,
+        impl_blocks=None,
+        use_statements=None,
+    ):
         self.structs = structs
         self.functions = functions
         self.global_variables = global_variables
@@ -30,7 +37,9 @@ class StructNode(ASTNode):
     def __init__(self, name, members, attributes=None, visibility=None, generics=None):
         self.name = name
         self.members = members  # List of VariableNode objects
-        self.attributes = attributes if attributes else []  # Rust attributes like #[repr(C)]
+        self.attributes = (
+            attributes if attributes else []
+        )  # Rust attributes like #[repr(C)]
         self.visibility = visibility  # pub, pub(crate), etc.
         self.generics = generics if generics else []  # Generic parameters
 
@@ -43,7 +52,7 @@ class StructNode(ASTNode):
 
 class ImplNode(ASTNode):
     """Node representing an impl block."""
-    
+
     def __init__(self, struct_name, functions, trait_name=None, generics=None):
         self.struct_name = struct_name
         self.functions = functions
@@ -56,7 +65,7 @@ class ImplNode(ASTNode):
 
 class TraitNode(ASTNode):
     """Node representing a trait declaration."""
-    
+
     def __init__(self, name, functions, generics=None, visibility=None):
         self.name = name
         self.functions = functions
@@ -68,12 +77,24 @@ class TraitNode(ASTNode):
 
 
 class FunctionNode(ASTNode):
-    def __init__(self, return_type, name, params, body, attributes=None, visibility=None, generics=None, is_unsafe=False):
+    def __init__(
+        self,
+        return_type,
+        name,
+        params,
+        body,
+        attributes=None,
+        visibility=None,
+        generics=None,
+        is_unsafe=False,
+    ):
         self.return_type = return_type
         self.name = name
         self.params = params
         self.body = body
-        self.attributes = attributes if attributes else []  # Rust attributes like #[vertex_shader]
+        self.attributes = (
+            attributes if attributes else []
+        )  # Rust attributes like #[vertex_shader]
         self.visibility = visibility  # pub, pub(crate), etc.
         self.generics = generics if generics else []
         self.is_unsafe = is_unsafe
@@ -95,7 +116,7 @@ class VariableNode(ASTNode):
 
 class LetNode(ASTNode):
     """Node representing a let binding."""
-    
+
     def __init__(self, name, value, vtype=None, is_mutable=False):
         self.name = name
         self.value = value
@@ -147,7 +168,7 @@ class WhileNode(ASTNode):
 
 class LoopNode(ASTNode):
     """Node representing an infinite loop."""
-    
+
     def __init__(self, body, label=None):
         self.body = body
         self.label = label  # Optional loop label
@@ -158,7 +179,7 @@ class LoopNode(ASTNode):
 
 class MatchNode(ASTNode):
     """Node representing a match expression."""
-    
+
     def __init__(self, expression, arms):
         self.expression = expression
         self.arms = arms  # List of MatchArmNode objects
@@ -169,7 +190,7 @@ class MatchNode(ASTNode):
 
 class MatchArmNode(ASTNode):
     """Node representing a match arm."""
-    
+
     def __init__(self, pattern, guard, body):
         self.pattern = pattern
         self.guard = guard  # Optional guard condition
@@ -256,7 +277,7 @@ class UnaryOpNode(ASTNode):
 
 class UseNode(ASTNode):
     """Node representing a use statement."""
-    
+
     def __init__(self, path, alias=None, visibility=None):
         self.path = path  # The path being imported
         self.alias = alias  # Optional alias (as keyword)
@@ -268,7 +289,7 @@ class UseNode(ASTNode):
 
 class AttributeNode(ASTNode):
     """Node representing an attribute (e.g., #[derive(Debug)])."""
-    
+
     def __init__(self, name, args=None):
         self.name = name
         self.args = args if args else []
@@ -279,7 +300,7 @@ class AttributeNode(ASTNode):
 
 class GenericParameterNode(ASTNode):
     """Node representing a generic parameter."""
-    
+
     def __init__(self, name, bounds=None, default=None):
         self.name = name
         self.bounds = bounds if bounds else []  # Trait bounds
@@ -291,7 +312,7 @@ class GenericParameterNode(ASTNode):
 
 class ArrayAccessNode(ASTNode):
     """Node representing array/slice access."""
-    
+
     def __init__(self, array, index):
         self.array = array
         self.index = index
@@ -302,19 +323,21 @@ class ArrayAccessNode(ASTNode):
 
 class RangeNode(ASTNode):
     """Node representing a range expression."""
-    
+
     def __init__(self, start, end, inclusive=False):
         self.start = start
         self.end = end
         self.inclusive = inclusive  # .. vs ..=
 
     def __repr__(self):
-        return f"RangeNode(start={self.start}, end={self.end}, inclusive={self.inclusive})"
+        return (
+            f"RangeNode(start={self.start}, end={self.end}, inclusive={self.inclusive})"
+        )
 
 
 class TupleNode(ASTNode):
     """Node representing a tuple."""
-    
+
     def __init__(self, elements):
         self.elements = elements
 
@@ -324,7 +347,7 @@ class TupleNode(ASTNode):
 
 class ArrayNode(ASTNode):
     """Node representing an array literal."""
-    
+
     def __init__(self, elements):
         self.elements = elements
 
@@ -334,18 +357,20 @@ class ArrayNode(ASTNode):
 
 class ReferenceNode(ASTNode):
     """Node representing a reference (&expr)."""
-    
+
     def __init__(self, expression, is_mutable=False):
         self.expression = expression
         self.is_mutable = is_mutable
 
     def __repr__(self):
-        return f"ReferenceNode(expression={self.expression}, is_mutable={self.is_mutable})"
+        return (
+            f"ReferenceNode(expression={self.expression}, is_mutable={self.is_mutable})"
+        )
 
 
 class DereferenceNode(ASTNode):
     """Node representing a dereference (*expr)."""
-    
+
     def __init__(self, expression):
         self.expression = expression
 
@@ -355,7 +380,7 @@ class DereferenceNode(ASTNode):
 
 class CastNode(ASTNode):
     """Node representing a type cast (expr as Type)."""
-    
+
     def __init__(self, expression, target_type):
         self.expression = expression
         self.target_type = target_type
@@ -366,7 +391,7 @@ class CastNode(ASTNode):
 
 class BlockNode(ASTNode):
     """Node representing a block expression."""
-    
+
     def __init__(self, statements, expression=None):
         self.statements = statements
         self.expression = expression  # Optional final expression
@@ -377,7 +402,7 @@ class BlockNode(ASTNode):
 
 class ConstNode(ASTNode):
     """Node representing a const declaration."""
-    
+
     def __init__(self, name, vtype, value, visibility=None):
         self.name = name
         self.vtype = vtype
@@ -390,7 +415,7 @@ class ConstNode(ASTNode):
 
 class StaticNode(ASTNode):
     """Node representing a static declaration."""
-    
+
     def __init__(self, name, vtype, value, is_mutable=False, visibility=None):
         self.name = name
         self.vtype = vtype
@@ -399,4 +424,4 @@ class StaticNode(ASTNode):
         self.visibility = visibility
 
     def __repr__(self):
-        return f"StaticNode(name={self.name}, vtype={self.vtype}, value={self.value}, is_mutable={self.is_mutable}, visibility={self.visibility})" 
+        return f"StaticNode(name={self.name}, vtype={self.vtype}, value={self.value}, is_mutable={self.is_mutable}, visibility={self.visibility})"

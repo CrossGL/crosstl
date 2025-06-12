@@ -203,7 +203,7 @@ KEYWORDS = {
     "isize": "ISIZE",
     "Vec2": "VEC2",
     "Vec3": "VEC3",
-    "Vec4": "VEC4",  
+    "Vec4": "VEC4",
     "Mat2": "MAT2",
     "Mat3": "MAT3",
     "Mat4": "MAT4",
@@ -438,4 +438,4 @@ class Lexer:
     def peek(self):
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
-        return ("EOF", "") 
+        return ("EOF", "")
