@@ -7,6 +7,7 @@ from .translator.codegen import (
     metal_codegen,
     SPIRV_codegen,
     mojo_codegen,
+    rust_codegen,
 )
 from .translator.ast import ASTNode
 import argparse
@@ -77,6 +78,11 @@ def translate(
 
         lexer = MojoLexer(shader_code)
         parser = MojoParser(lexer.tokenize())
+    elif file_path.endswith(".rs") or file_path.endswith(".rust"):
+        from .backend.Rust import RustLexer, RustParser
+
+        lexer = RustLexer(shader_code)
+        parser = RustParser(lexer.tokenize())
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -93,6 +99,8 @@ def translate(
             codegen = SPIRV_codegen.VulkanSPIRVCodeGen()
         elif backend == "mojo":
             codegen = mojo_codegen.MojoCodeGen()
+        elif backend == "rust":
+            codegen = rust_codegen.RustCodeGen()
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
@@ -119,6 +127,10 @@ def translate(
                 from .backend.Mojo.MojoCrossGLCodeGen import MojoToCrossGLConverter
 
                 codegen = MojoToCrossGLConverter()
+            elif file_path.endswith(".rs") or file_path.endswith(".rust"):
+                from .backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
+
+                codegen = RustToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
         else:
@@ -150,7 +162,7 @@ def main():
         "--backend",
         "-b",
         default="cgl",
-        help="Target backend (metal, directx, opengl, vulkan, mojo, cgl)",
+        help="Target backend (metal, directx, opengl, vulkan, mojo, rust, cgl)",
     )
     parser.add_argument("--output", "-o", help="Output file path")
     parser.add_argument(
@@ -174,6 +186,7 @@ def main():
                 "opengl": ".glsl",
                 "vulkan": ".spirv",
                 "mojo": ".mojo",
+                "rust": ".rs",
                 "cgl": ".cgl",
             }
             output_path = base + ext_map.get(args.backend, ".out")
