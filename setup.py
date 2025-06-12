@@ -12,6 +12,7 @@ setup(
         "crosstl/backend/GLSL",
         "crosstl/backend/SPIRV",
         "crosstl/backend/Mojo",
+        "crosstl/backend/Rust",
     ],
     version="0.0.1.3",
     author="CrossGL team",
