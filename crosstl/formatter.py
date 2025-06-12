@@ -90,7 +90,12 @@ class CodeFormatter:
                 language = ShaderLanguage.UNKNOWN
 
         # Apply appropriate formatter
-        if language in [ShaderLanguage.HLSL, ShaderLanguage.GLSL, ShaderLanguage.METAL, ShaderLanguage.RUST]:
+        if language in [
+            ShaderLanguage.HLSL,
+            ShaderLanguage.GLSL,
+            ShaderLanguage.METAL,
+            ShaderLanguage.RUST,
+        ]:
             return self._format_with_clang(code, language)
         elif language == ShaderLanguage.SPIRV:
             return self._format_spirv(code)

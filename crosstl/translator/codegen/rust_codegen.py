@@ -172,7 +172,9 @@ class RustCodeGen:
                     if member.semantic
                     else ""
                 )
-                code += f"    pub {member.name}: {self.map_type(member.vtype)},{semantic}\n"
+                code += (
+                    f"    pub {member.name}: {self.map_type(member.vtype)},{semantic}\n"
+                )
 
         code += "}\n\n"
         return code
@@ -190,7 +192,9 @@ class RustCodeGen:
                         else:
                             code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
                     else:
-                        code += f"    pub {member.name}: {self.map_type(member.vtype)},\n"
+                        code += (
+                            f"    pub {member.name}: {self.map_type(member.vtype)},\n"
+                        )
                 code += "}\n\n"
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
                 code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
@@ -202,13 +206,15 @@ class RustCodeGen:
                         else:
                             code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
                     else:
-                        code += f"    pub {member.name}: {self.map_type(member.vtype)},\n"
+                        code += (
+                            f"    pub {member.name}: {self.map_type(member.vtype)},\n"
+                        )
                 code += "}\n\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
-        
+
         # Add shader type attributes for Rust GPU programming
         if shader_type == "vertex":
             code += f"#[vertex_shader]\n"
@@ -225,7 +231,9 @@ class RustCodeGen:
             )
             # Convert parameter attributes to Rust GPU attributes
             attributes = self.generate_param_attributes(p)
-            param_str = f"{attributes}{p.name}: {self.map_type(p.vtype)}{param_semantic}"
+            param_str = (
+                f"{attributes}{p.name}: {self.map_type(p.vtype)}{param_semantic}"
+            )
             params.append(param_str)
 
         params_str = ", ".join(params) if params else ""
@@ -247,7 +255,7 @@ class RustCodeGen:
         """Generate Rust GPU parameter attributes based on semantic"""
         if not param.semantic:
             return ""
-            
+
         semantic = param.semantic.lower()
         if "position" in semantic:
             return "#[location(0)] "
@@ -283,6 +291,7 @@ class RustCodeGen:
                 ):
                     # This is likely an array declaration
                     import re
+
                     array_match = re.search(r"array=(\w+).*?index=(\w+)", vtype_str)
                     if array_match:
                         array_match.group(1)
@@ -427,8 +436,18 @@ class RustCodeGen:
 
             # Handle vector constructors
             if expr.name in [
-                "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", 
-                "uvec2", "uvec3", "uvec4", "bvec2", "bvec3", "bvec4"
+                "vec2",
+                "vec3",
+                "vec4",
+                "ivec2",
+                "ivec3",
+                "ivec4",
+                "uvec2",
+                "uvec3",
+                "uvec4",
+                "bvec2",
+                "bvec3",
+                "bvec4",
             ]:
                 rust_type = self.map_type(expr.name)
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
@@ -462,6 +481,7 @@ class RustCodeGen:
             ):
                 # Try to extract array name and size for array declarations
                 import re
+
                 array_match = re.search(r"array=(\w+).*?index=(\w+)", expr_str)
                 if array_match:
                     array_name = array_match.group(1)
@@ -523,4 +543,4 @@ class RustCodeGen:
     def map_semantic(self, semantic):
         if semantic:
             return self.semantic_map.get(semantic, semantic)
-        return "" 
+        return ""
