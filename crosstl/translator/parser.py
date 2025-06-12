@@ -903,6 +903,13 @@ class Parser:
         ]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
+        elif self.current_token[0] == "IDENTIFIER":
+            # Check if this might be a custom type followed by another identifier
+            if self.pos + 1 < len(self.tokens) and self.tokens[self.pos + 1][0] == "IDENTIFIER":
+                # This looks like a type declaration: CustomType variableName
+                type_name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                return self.parse_variable_declaration(type_name, update_condition)
         if self.current_token[0] == "IDENTIFIER":
             return self.parse_variable_declaration(type_name, update_condition)
         if self.current_token[0] in ["INCREMENT", "DECREMENT"]:
