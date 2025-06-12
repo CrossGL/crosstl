@@ -172,6 +172,10 @@ class MojoParser:
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
 
+        # Consume the colon that starts the function body in Mojo syntax
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+
         body = self.parse_block()
 
         return FunctionNode(qualifier, return_type, name, params, body, attributes)
@@ -237,21 +241,28 @@ class MojoParser:
         return attributes
 
     def parse_block(self):
-        if self.current_token[0] == "COLON":
-            self.eat("COLON")
-        elif self.current_token[0] == "LBRACE":
+        if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
+            statements = []
+            while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                statements.append(self.parse_statement())
+            if self.current_token[0] == "RBRACE":
+                self.eat("RBRACE")
+            return statements
         else:
-            raise SyntaxError(f"Expected COLON or LBRACE, got {self.current_token[0]}")
-
-        statements = []
-        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            statements.append(self.parse_statement())
-
-        if self.current_token[0] == "RBRACE":
-            self.eat("RBRACE")
-
-        return statements
+            # Handle Mojo/Python-style blocks (statements follow after colon)
+            statements = []
+            # Parse statements until we hit a dedent or EOF
+            while (
+                self.current_token[0] != "EOF"
+                and self.current_token[0] not in ["ELSE", "ELIF", "CASE", "DEFAULT"]
+                and self.pos < len(self.tokens) - 1
+            ):
+                statements.append(self.parse_statement())
+                # Break if we're at the end or hit something that looks like end of block
+                if self.current_token[0] in ["EOF", "FN", "STRUCT", "CLASS"]:
+                    break
+            return statements
 
     def parse_statement(self):
         if self.current_token[0] in [
@@ -275,6 +286,21 @@ class MojoParser:
             return self.parse_while_statement()
         elif self.current_token[0] == "RETURN":
             return self.parse_return_statement()
+        elif self.current_token[0] == "BREAK":
+            self.eat("BREAK")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            return BreakNode()
+        elif self.current_token[0] == "CONTINUE":
+            self.eat("CONTINUE")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            return ContinueNode()
+        elif self.current_token[0] == "PASS":
+            self.eat("PASS")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            return PassNode()
         elif self.current_token[0] == "SWITCH":
             return self.parse_switch_statement()
         elif self.current_token[0] == "STRUCT":
@@ -289,10 +315,11 @@ class MojoParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
+            vtype = None
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
-                self.current_token[1]
-                self.eat(self.current_token[0])
+                # Parse the type, which might be a generic type with square brackets
+                vtype = self.parse_type()
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -303,54 +330,112 @@ class MojoParser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
 
-            return VariableDeclarationNode(var_type, name, initial_value)
+            return VariableDeclarationNode(var_type, name, initial_value, vtype)
         else:
             return self.parse_assignment()
 
     def parse_if_statement(self):
         self.eat("IF")
-        self.eat("LPAREN")
         condition = self.parse_expression()
-        self.eat("RPAREN")
+        self.eat("COLON")
         if_body = self.parse_block()
+
+        # Handle elif and else statements properly
         else_body = None
+        while self.current_token[0] == "ELIF":
+            self.eat("ELIF")
+            elif_condition = self.parse_expression()
+            self.eat("COLON")
+            elif_body = self.parse_block()
+            # Create nested if for elif
+            elif_node = IfNode(elif_condition, elif_body, None)
+            if else_body is None:
+                else_body = [elif_node]
+            else:
+                # Find the deepest else and add the elif there
+                current = else_body[0]
+                while isinstance(current, IfNode) and current.else_body:
+                    current = current.else_body[0]
+                current.else_body = [elif_node]
+
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            else_body = self.parse_block()
+            self.eat("COLON")
+            final_else_body = self.parse_block()
+            if else_body is None:
+                else_body = final_else_body
+            else:
+                # Find the deepest else and add the final else there
+                current = else_body[0]
+                while isinstance(current, IfNode) and current.else_body:
+                    current = current.else_body[0]
+                current.else_body = final_else_body
+
         return IfNode(condition, if_body, else_body)
 
     def parse_for_statement(self):
         self.eat("FOR")
-        self.eat("LPAREN")
 
-        init = self.parse_variable_declaration_or_assignment()
-        self.eat("SEMICOLON")
-        condition = self.parse_expression()
-        self.eat("SEMICOLON")
-        update = self.parse_expression()
-        self.eat("RPAREN")
-        body = self.parse_block()
+        # Check if this is a C-style for loop (with semicolons) or Python-style
+        # Save current position to look ahead
+        saved_pos = self.pos
+        saved_token = self.current_token
 
-        return ForNode(init, condition, update, body)
+        # Try to parse as C-style for loop first
+        try:
+            init = self.parse_variable_declaration_or_assignment()
+            # The variable declaration may have already consumed the semicolon
+            # So we need to check if we're at the condition part
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+
+            # Now parse the condition
+            condition = self.parse_expression()
+            self.eat("SEMICOLON")
+            update = self.parse_expression()
+            self.eat("COLON")
+            body = self.parse_block()
+            return ForNode(init, condition, update, body)
+
+        except Exception:
+            # Restore position if C-style parsing failed
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+        # Try Python-style for loop: for item in iterable:
+        if self.current_token[0] == "IDENTIFIER":
+            var_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "IN":
+                self.eat("IN")
+                iterable = self.parse_expression()
+                self.eat("COLON")
+                body = self.parse_block()
+                # Create a Python-style for loop node
+                return ForNode(VariableNode("", var_name), iterable, None, body)
+
+        # If neither worked, error out
+        raise SyntaxError(
+            f"Invalid for loop syntax. Expected C-style 'for init; condition; update:' or Python-style 'for var in iterable:'"
+        )
 
     def parse_while_statement(self):
         self.eat("WHILE")
-        self.eat("LPAREN")
         condition = self.parse_expression()
-        self.eat("RPAREN")
+        self.eat("COLON")
         body = self.parse_block()
         return WhileNode(condition, body)
 
     def parse_switch_statement(self):
         self.eat("SWITCH")
-        self.eat("LPAREN")
         expression = self.parse_expression()
-        self.eat("RPAREN")
-        self.eat("LBRACE")
+        self.eat("COLON")
         cases = []
-        while self.current_token[0] != "RBRACE":
+        while self.current_token[0] != "EOF" and self.current_token[0] in [
+            "CASE",
+            "DEFAULT",
+        ]:
             cases.append(self.parse_switch_case())
-        self.eat("RBRACE")
         return SwitchNode(expression, cases)
 
     def parse_switch_case(self):
@@ -381,7 +466,9 @@ class MojoParser:
 
     def parse_expression_statement(self):
         expr = self.parse_expression()
-        self.eat("SEMICOLON")
+        # Semicolons are optional in Mojo/Python-style syntax
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
         return expr
 
     def parse_expression(self):
@@ -395,6 +482,12 @@ class MojoParser:
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
+            "ASSIGN_XOR",
+            "ASSIGN_OR",
+            "ASSIGN_AND",
+            "ASSIGN_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
+            "ASSIGN_MOD",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -418,10 +511,37 @@ class MojoParser:
         return left
 
     def parse_logical_and(self):
-        left = self.parse_equality()
+        left = self.parse_bitwise_or()
         while self.current_token[0] == "AND":
             op = self.current_token[1]
             self.eat("AND")
+            right = self.parse_bitwise_or()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_or(self):
+        left = self.parse_bitwise_xor()
+        while self.current_token[0] == "BITWISE_OR":
+            op = self.current_token[1]
+            self.eat("BITWISE_OR")
+            right = self.parse_bitwise_xor()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_xor(self):
+        left = self.parse_bitwise_and()
+        while self.current_token[0] == "BITWISE_XOR":
+            op = self.current_token[1]
+            self.eat("BITWISE_XOR")
+            right = self.parse_bitwise_and()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_and(self):
+        left = self.parse_equality()
+        while self.current_token[0] == "BITWISE_AND":
+            op = self.current_token[1]
+            self.eat("BITWISE_AND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
         return left
@@ -436,13 +556,22 @@ class MojoParser:
         return left
 
     def parse_relational(self):
-        left = self.parse_additive()
+        left = self.parse_shift()
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
         ]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_shift()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_shift(self):
+        left = self.parse_additive()
+        while self.current_token[0] in ["SHIFT_LEFT", "SHIFT_RIGHT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_additive()
@@ -476,45 +605,40 @@ class MojoParser:
         return self.parse_primary()
 
     def parse_primary(self):
-        if self.current_token[0] in [
-            "IDENTIFIER",
-            "NUMBER",
-            "INT",
-            "FLOAT",
-            "BOOL",
-            "STRING",
-        ]:
-            if self.current_token[0] in ["INT", "FLOAT", "BOOL", "STRING"]:
-                type_name = self.current_token[1]
-                self.eat(self.current_token[0])
-                if self.current_token[0] == "IDENTIFIER":
-                    var_name = self.current_token[1]
-                    self.eat("IDENTIFIER")
-                    if self.current_token[0] == "COLON":
-                        self.eat("COLON")
-                        type_annotation = self.current_token[1]
-                        self.eat(self.current_token[0])
-                        return VariableNode(type_annotation, var_name)
-                    return VariableNode(type_name, var_name)
-                elif self.current_token[0] == "LPAREN":
-                    return self.parse_function_call_or_identifier()
-            elif self.current_token[0] == "NUMBER":
-                value = self.current_token[1]
-                self.eat("NUMBER")
-                return value
-
+        if self.current_token[0] == "IDENTIFIER":
             return self.parse_function_call_or_identifier()
-
+        elif self.current_token[0] == "NUMBER":
+            value = self.current_token[1]
+            self.eat("NUMBER")
+            return value
+        elif self.current_token[0] == "STRING_LITERAL":
+            value = self.current_token[1]
+            self.eat("STRING_LITERAL")
+            return value
+        elif self.current_token[0] in ["INT", "FLOAT", "BOOL", "STRING"]:
+            type_name = self.current_token[1]
+            self.eat(self.current_token[0])
+            if self.current_token[0] == "IDENTIFIER":
+                var_name = self.current_token[1]
+                self.eat("IDENTIFIER")
+                if self.current_token[0] == "COLON":
+                    self.eat("COLON")
+                    type_annotation = self.current_token[1]
+                    self.eat(self.current_token[0])
+                    return VariableNode(type_annotation, var_name)
+                return VariableNode(type_name, var_name)
+            elif self.current_token[0] == "LPAREN":
+                # Handle vector constructors like float4(...)
+                return self.parse_vector_constructor(type_name)
+            return type_name
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
-
         # Handle top-level keywords
         elif self.current_token[0] in ["FN", "STRUCT", "CLASS", "LET", "VAR"]:
             raise SyntaxError(f"Unexpected top-level keyword: {self.current_token[0]}")
-
         else:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
@@ -539,6 +663,8 @@ class MojoParser:
                 return self.parse_function_call(name)
             elif self.current_token[0] == "DOT":
                 return self.parse_member_access(name)
+            elif self.current_token[0] == "LBRACKET":
+                return self.parse_array_access(name)
             elif self.current_token[0] == "COLON":
                 self.eat("COLON")
                 type_annotation = self.current_token[1]
@@ -600,3 +726,49 @@ class MojoParser:
                     self.eat("COMMA")
             self.eat("RPAREN")
         return DecoratorNode(name, args)
+
+    def parse_array_access(self, name):
+        self.eat("LBRACKET")
+        index = self.parse_expression()
+        self.eat("RBRACKET")
+        return ArrayAccessNode(name, index)
+
+    def parse_type(self):
+        """Parse a type, which might be a generic type with square brackets"""
+        type_name = ""
+
+        # Handle basic type name
+        if self.current_token[0] in ["IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"]:
+            type_name = self.current_token[1]
+            self.eat(self.current_token[0])
+
+            # Handle generic types with square brackets like StaticTuple[Float32, 4]
+            if self.current_token[0] == "LBRACKET":
+                type_name += "["
+                self.eat("LBRACKET")
+
+                # Parse type parameters
+                while self.current_token[0] != "RBRACKET":
+                    if self.current_token[0] == "IDENTIFIER":
+                        type_name += self.current_token[1]
+                        self.eat("IDENTIFIER")
+                    elif self.current_token[0] == "NUMBER":
+                        type_name += self.current_token[1]
+                        self.eat("NUMBER")
+                    elif self.current_token[0] == "COMMA":
+                        type_name += ", "
+                        self.eat("COMMA")
+                    elif self.current_token[0] in ["INT", "FLOAT", "BOOL", "STRING"]:
+                        type_name += self.current_token[1]
+                        self.eat(self.current_token[0])
+                    else:
+                        # Handle nested generic types or other complex type constructs
+                        type_name += self.current_token[1]
+                        self.eat(self.current_token[0])
+
+                type_name += "]"
+                self.eat("RBRACKET")
+
+            return type_name
+        else:
+            raise SyntaxError(f"Expected type name, got {self.current_token[0]}")

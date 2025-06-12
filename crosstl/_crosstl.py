@@ -6,6 +6,7 @@ from .translator.codegen import (
     directx_codegen,
     metal_codegen,
     SPIRV_codegen,
+    mojo_codegen,
 )
 from .translator.ast import ASTNode
 import argparse
@@ -71,6 +72,11 @@ def translate(
 
         lexer = VulkanLexer(shader_code)
         parser = VulkanParser(lexer.tokenize())
+    elif file_path.endswith(".mojo"):
+        from .backend.Mojo import MojoLexer, MojoParser
+
+        lexer = MojoLexer(shader_code)
+        parser = MojoParser(lexer.tokenize())
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -85,6 +91,8 @@ def translate(
             codegen = GLSL_codegen.GLSLCodeGen()
         elif backend == "vulkan":
             codegen = SPIRV_codegen.VulkanSPIRVCodeGen()
+        elif backend == "mojo":
+            codegen = mojo_codegen.MojoCodeGen()
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
@@ -107,6 +115,10 @@ def translate(
                 from .backend.slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
 
                 codegen = SlangToCrossGLConverter()
+            elif file_path.endswith(".mojo"):
+                from .backend.Mojo.MojoCrossGLCodeGen import MojoToCrossGLConverter
+
+                codegen = MojoToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
         else:
@@ -138,7 +150,7 @@ def main():
         "--backend",
         "-b",
         default="cgl",
-        help="Target backend (metal, directx, opengl, vulkan, cgl)",
+        help="Target backend (metal, directx, opengl, vulkan, mojo, cgl)",
     )
     parser.add_argument("--output", "-o", help="Output file path")
     parser.add_argument(
@@ -161,6 +173,7 @@ def main():
                 "directx": ".hlsl",
                 "opengl": ".glsl",
                 "vulkan": ".spirv",
+                "mojo": ".mojo",
                 "cgl": ".cgl",
             }
             output_path = base + ext_map.get(args.backend, ".out")

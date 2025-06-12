@@ -16,6 +16,7 @@ class ShaderLanguage(Enum):
     GLSL = "glsl"
     METAL = "metal"
     SPIRV = "spirv"
+    MOJO = "mojo"
     UNKNOWN = "unknown"
 
 
@@ -310,6 +311,7 @@ def format_shader_code(code, backend, output_path=None):
         "directx": ShaderLanguage.HLSL,
         "opengl": ShaderLanguage.GLSL,
         "vulkan": ShaderLanguage.SPIRV,
+        "mojo": ShaderLanguage.MOJO,
     }
 
     language = language_map.get(backend.lower())
