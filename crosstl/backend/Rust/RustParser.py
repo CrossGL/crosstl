@@ -167,7 +167,7 @@ class RustParser:
         self.eat("IDENTIFIER")
 
         while self.current_token[0] == "DOUBLE_COLON":
-            self.eat("DOUBLE_COLON")      
+            self.eat("DOUBLE_COLON")
             # Handle glob imports (use module::*)
             if self.current_token[0] == "MULTIPLY":
                 path.append("*")
@@ -228,10 +228,7 @@ class RustParser:
             if self.current_token[0] == "POUND":
                 member_attrs = self.parse_attributes()
 
-
-            member_visibility = None
             if self.current_token[0] == "PUB":
-                member_visibility = "pub"
                 self.eat("PUB")
 
             # Parse member name
@@ -249,7 +246,7 @@ class RustParser:
             # Handle comma and potential continuation on the same line
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-                
+
                 # Check if there's another member on the same line
                 if self.current_token[0] == "PUB":
                     # Continue parsing the next member without breaking the loop
