@@ -1,7 +1,14 @@
 import pytest
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
-from crosstl.backend.Rust.RustAst import ConstNode, FunctionNode, ImplNode, StaticNode, StructNode, UseNode
+from crosstl.backend.Rust.RustAst import (
+    ConstNode,
+    FunctionNode,
+    ImplNode,
+    StaticNode,
+    StructNode,
+    UseNode,
+)
 
 
 def parse_code(code: str):
