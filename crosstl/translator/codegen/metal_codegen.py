@@ -349,7 +349,12 @@ class MetalCodeGen:
             return str(expr)
         elif isinstance(expr, VariableNode):
             name = self.generate_expression(expr.name)
-            return f"{self.map_type(expr.vtype)} {name}"
+            # If this is a variable declaration (has a type), include the type
+            if expr.vtype and expr.vtype.strip():
+                return f"{self.map_type(expr.vtype)} {name}"
+            else:
+                # Just a variable reference, return only the name
+                return name
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)

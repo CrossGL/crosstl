@@ -167,10 +167,14 @@ class RustParser:
         self.eat("IDENTIFIER")
 
         while self.current_token[0] == "DOUBLE_COLON":
-            self.eat("DOUBLE_COLON")
-            path.append(self.current_token[1])
-            self.eat("IDENTIFIER")
-
+            self.eat("DOUBLE_COLON")      
+            # Handle glob imports (use module::*)
+            if self.current_token[0] == "MULTIPLY":
+                path.append("*")
+                self.eat("MULTIPLY")
+            else:
+                path.append(self.current_token[1])
+                self.eat("IDENTIFIER")
         # Handle alias
         alias = None
         if self.current_token[0] == "AS":
@@ -224,8 +228,10 @@ class RustParser:
             if self.current_token[0] == "POUND":
                 member_attrs = self.parse_attributes()
 
-            # Parse visibility
+
+            member_visibility = None
             if self.current_token[0] == "PUB":
+                member_visibility = "pub"
                 self.eat("PUB")
 
             # Parse member name
@@ -237,11 +243,21 @@ class RustParser:
             # Parse member type
             member_type = self.parse_type()
 
-            if self.current_token[0] == "COMMA":
-                self.eat("COMMA")
-
             var = VariableNode(member_type, member_name, attributes=member_attrs)
             members.append(var)
+
+            # Handle comma and potential continuation on the same line
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                
+                # Check if there's another member on the same line
+                if self.current_token[0] == "PUB":
+                    # Continue parsing the next member without breaking the loop
+                    continue
+                elif self.current_token[0] == "IDENTIFIER":
+                    # Direct member without pub keyword
+                    continue
+                # If comma is followed by something else, just continue
 
         self.eat("RBRACE")
 
