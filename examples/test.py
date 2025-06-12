@@ -28,12 +28,6 @@ def main():
                 save_shader="output/ComplexShader.hlsl",
             )
 
-            rust_code = crosstl.translate(
-                "ComplexShader.cgl",
-                backend="rust",
-                save_shader="output/ComplexShader.rs",
-            )
-
             print("Complex shader translation successful!")
         except Exception as e:
             print(f"Warning: Complex shader translation failed: {e}")
@@ -58,12 +52,6 @@ def main():
                 save_shader="output/PerlinNoise.hlsl",
             )
 
-            rust_code = crosstl.translate(
-                "PerlinNoise.cgl",
-                backend="rust",
-                save_shader="output/PerlinNoise.rs",
-            )
-
             print("Perlin noise shader translation successful!")
         except Exception as e:
             print(f"Warning: Perlin noise shader translation failed: {e}")
@@ -86,10 +74,6 @@ def main():
                 "ArrayTest.cgl", backend="vulkan", save_shader="output/ArrayTest.spirv"
             )
 
-            rust_code = crosstl.translate(
-                "ArrayTest.cgl", backend="rust", save_shader="output/ArrayTest.rs"
-            )
-
             print("Array test shader translation successful!")
         except Exception as e:
             print(f"Warning: Array test shader translation failed: {e}")
@@ -107,12 +91,6 @@ def main():
             "SimpleShader.cgl",
             backend="directx",
             save_shader="output/SimpleShader.hlsl",
-        )
-
-        rust_code = crosstl.translate(
-            "SimpleShader.cgl",
-            backend="rust",
-            save_shader="output/SimpleShader.rs",
         )
 
         print("Simple shader translation successful!")
