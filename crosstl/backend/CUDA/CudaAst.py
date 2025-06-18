@@ -3,14 +3,20 @@
 
 class ASTNode:
     """Base class for all AST nodes"""
-    pass
+
 
 
 class ShaderNode(ASTNode):
     """Root node representing a complete CUDA program"""
-    
-    def __init__(self, includes=None, functions=None, structs=None, 
-                 global_variables=None, kernels=None):
+
+    def __init__(
+        self,
+        includes=None,
+        functions=None,
+        structs=None,
+        global_variables=None,
+        kernels=None,
+    ):
         self.includes = includes or []
         self.functions = functions or []
         self.structs = structs or []
@@ -23,9 +29,10 @@ class ShaderNode(ASTNode):
 
 class FunctionNode(ASTNode):
     """Node representing a function declaration"""
-    
-    def __init__(self, return_type, name, params, body, 
-                 qualifiers=None, attributes=None):
+
+    def __init__(
+        self, return_type, name, params, body, qualifiers=None, attributes=None
+    ):
         self.return_type = return_type
         self.name = name
         self.params = params
@@ -39,7 +46,7 @@ class FunctionNode(ASTNode):
 
 class KernelNode(FunctionNode):
     """Node representing a CUDA kernel function (marked with __global__)"""
-    
+
     def __init__(self, return_type, name, params, body, attributes=None):
         super().__init__(return_type, name, params, body, ["__global__"], attributes)
 
@@ -49,8 +56,10 @@ class KernelNode(FunctionNode):
 
 class KernelLaunchNode(ASTNode):
     """Node representing a kernel launch: kernel<<<blocks, threads>>>(args)"""
-    
-    def __init__(self, kernel_name, blocks, threads, shared_mem=None, stream=None, args=None):
+
+    def __init__(
+        self, kernel_name, blocks, threads, shared_mem=None, stream=None, args=None
+    ):
         self.kernel_name = kernel_name
         self.blocks = blocks
         self.threads = threads
@@ -64,7 +73,7 @@ class KernelLaunchNode(ASTNode):
 
 class StructNode(ASTNode):
     """Node representing a struct declaration"""
-    
+
     def __init__(self, name, members, attributes=None):
         self.name = name
         self.members = members
@@ -76,7 +85,7 @@ class StructNode(ASTNode):
 
 class VariableNode(ASTNode):
     """Node representing a variable declaration"""
-    
+
     def __init__(self, vtype, name, value=None, qualifiers=None):
         self.vtype = vtype
         self.name = name
@@ -89,7 +98,7 @@ class VariableNode(ASTNode):
 
 class AssignmentNode(ASTNode):
     """Node representing an assignment operation"""
-    
+
     def __init__(self, left, right, operator="="):
         self.left = left
         self.right = right
@@ -101,7 +110,7 @@ class AssignmentNode(ASTNode):
 
 class BinaryOpNode(ASTNode):
     """Node representing a binary operation"""
-    
+
     def __init__(self, left, op, right):
         self.left = left
         self.op = op
@@ -113,7 +122,7 @@ class BinaryOpNode(ASTNode):
 
 class UnaryOpNode(ASTNode):
     """Node representing a unary operation"""
-    
+
     def __init__(self, op, operand):
         self.op = op
         self.operand = operand
@@ -124,7 +133,7 @@ class UnaryOpNode(ASTNode):
 
 class FunctionCallNode(ASTNode):
     """Node representing a function call"""
-    
+
     def __init__(self, name, args):
         self.name = name
         self.args = args
@@ -135,7 +144,7 @@ class FunctionCallNode(ASTNode):
 
 class AtomicOperationNode(FunctionCallNode):
     """Node representing a CUDA atomic operation"""
-    
+
     def __init__(self, operation, args):
         super().__init__(operation, args)
         self.operation = operation  # atomicAdd, atomicSub, etc.
@@ -146,7 +155,7 @@ class AtomicOperationNode(FunctionCallNode):
 
 class SyncNode(ASTNode):
     """Node representing synchronization operations"""
-    
+
     def __init__(self, sync_type, args=None):
         self.sync_type = sync_type  # __syncthreads, __syncwarp
         self.args = args or []
@@ -157,7 +166,7 @@ class SyncNode(ASTNode):
 
 class MemberAccessNode(ASTNode):
     """Node representing member access (dot or arrow operator)"""
-    
+
     def __init__(self, object, member, is_pointer=False):
         self.object = object
         self.member = member
@@ -170,7 +179,7 @@ class MemberAccessNode(ASTNode):
 
 class ArrayAccessNode(ASTNode):
     """Node representing array access"""
-    
+
     def __init__(self, array, index):
         self.array = array
         self.index = index
@@ -181,7 +190,7 @@ class ArrayAccessNode(ASTNode):
 
 class IfNode(ASTNode):
     """Node representing an if statement"""
-    
+
     def __init__(self, condition, if_body, else_body=None):
         self.condition = condition
         self.if_body = if_body
@@ -193,7 +202,7 @@ class IfNode(ASTNode):
 
 class ForNode(ASTNode):
     """Node representing a for loop"""
-    
+
     def __init__(self, init, condition, update, body):
         self.init = init
         self.condition = condition
@@ -206,7 +215,7 @@ class ForNode(ASTNode):
 
 class WhileNode(ASTNode):
     """Node representing a while loop"""
-    
+
     def __init__(self, condition, body):
         self.condition = condition
         self.body = body
@@ -217,7 +226,7 @@ class WhileNode(ASTNode):
 
 class DoWhileNode(ASTNode):
     """Node representing a do-while loop"""
-    
+
     def __init__(self, body, condition):
         self.body = body
         self.condition = condition
@@ -228,7 +237,7 @@ class DoWhileNode(ASTNode):
 
 class SwitchNode(ASTNode):
     """Node representing a switch statement"""
-    
+
     def __init__(self, expression, cases, default_case=None):
         self.expression = expression
         self.cases = cases
@@ -240,7 +249,7 @@ class SwitchNode(ASTNode):
 
 class CaseNode(ASTNode):
     """Node representing a case in a switch statement"""
-    
+
     def __init__(self, value, body):
         self.value = value
         self.body = body
@@ -251,7 +260,7 @@ class CaseNode(ASTNode):
 
 class ReturnNode(ASTNode):
     """Node representing a return statement"""
-    
+
     def __init__(self, value=None):
         self.value = value
 
@@ -261,32 +270,34 @@ class ReturnNode(ASTNode):
 
 class BreakNode(ASTNode):
     """Node representing a break statement"""
-    
+
     def __repr__(self):
         return "BreakNode()"
 
 
 class ContinueNode(ASTNode):
     """Node representing a continue statement"""
-    
+
     def __repr__(self):
         return "ContinueNode()"
 
 
 class VectorConstructorNode(ASTNode):
     """Node representing CUDA vector constructor (make_float4, etc.)"""
-    
+
     def __init__(self, vector_type, args):
         self.vector_type = vector_type
         self.args = args
 
     def __repr__(self):
-        return f"VectorConstructorNode(vector_type={self.vector_type}, args={self.args})"
+        return (
+            f"VectorConstructorNode(vector_type={self.vector_type}, args={self.args})"
+        )
 
 
 class TernaryOpNode(ASTNode):
     """Node representing a ternary conditional operator"""
-    
+
     def __init__(self, condition, true_expr, false_expr):
         self.condition = condition
         self.true_expr = true_expr
@@ -298,7 +309,7 @@ class TernaryOpNode(ASTNode):
 
 class CastNode(ASTNode):
     """Node representing a type cast"""
-    
+
     def __init__(self, target_type, expression):
         self.target_type = target_type
         self.expression = expression
@@ -309,7 +320,7 @@ class CastNode(ASTNode):
 
 class PreprocessorNode(ASTNode):
     """Node representing preprocessor directives"""
-    
+
     def __init__(self, directive, content):
         self.directive = directive  # include, define, etc.
         self.content = content
@@ -320,7 +331,7 @@ class PreprocessorNode(ASTNode):
 
 class CudaBuiltinNode(ASTNode):
     """Node representing CUDA built-in variables (threadIdx, blockIdx, etc.)"""
-    
+
     def __init__(self, builtin_name, component=None):
         self.builtin_name = builtin_name  # threadIdx, blockIdx, etc.
         self.component = component  # x, y, z component
@@ -333,7 +344,7 @@ class CudaBuiltinNode(ASTNode):
 
 class TextureAccessNode(ASTNode):
     """Node representing texture memory access"""
-    
+
     def __init__(self, texture_name, coordinates):
         self.texture_name = texture_name
         self.coordinates = coordinates
@@ -344,20 +355,22 @@ class TextureAccessNode(ASTNode):
 
 class SharedMemoryNode(VariableNode):
     """Node representing shared memory variable declaration"""
-    
+
     def __init__(self, vtype, name, size=None):
         super().__init__(vtype, name, qualifiers=["__shared__"])
         self.size = size  # For dynamic shared memory
 
     def __repr__(self):
-        return f"SharedMemoryNode(vtype={self.vtype}, name={self.name}, size={self.size})"
+        return (
+            f"SharedMemoryNode(vtype={self.vtype}, name={self.name}, size={self.size})"
+        )
 
 
 class ConstantMemoryNode(VariableNode):
     """Node representing constant memory variable declaration"""
-    
+
     def __init__(self, vtype, name, value=None):
         super().__init__(vtype, name, value, qualifiers=["__constant__"])
 
     def __repr__(self):
-        return f"ConstantMemoryNode(vtype={self.vtype}, name={self.name}, value={self.value})" 
+        return f"ConstantMemoryNode(vtype={self.vtype}, name={self.name}, value={self.value})"

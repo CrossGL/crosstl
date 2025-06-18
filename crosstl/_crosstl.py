@@ -84,7 +84,11 @@ def translate(
 
         lexer = RustLexer(shader_code)
         parser = RustParser(lexer.tokenize())
-    elif file_path.endswith(".cu") or file_path.endswith(".cuh") or file_path.endswith(".cuda"):
+    elif (
+        file_path.endswith(".cu")
+        or file_path.endswith(".cuh")
+        or file_path.endswith(".cuda")
+    ):
         from .backend.CUDA import CudaLexer, CudaParser
 
         lexer = CudaLexer(shader_code)
@@ -139,7 +143,11 @@ def translate(
                 from .backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 
                 codegen = RustToCrossGLConverter()
-            elif file_path.endswith(".cu") or file_path.endswith(".cuh") or file_path.endswith(".cuda"):
+            elif (
+                file_path.endswith(".cu")
+                or file_path.endswith(".cuh")
+                or file_path.endswith(".cuda")
+            ):
                 from .backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 
                 codegen = CudaToCrossGLConverter()
