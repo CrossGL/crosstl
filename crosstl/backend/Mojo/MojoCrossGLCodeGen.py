@@ -461,4 +461,3 @@ class MojoToCrossGLConverter:
 
     def map_function(self, func_name):
         return self.function_map.get(func_name, func_name)
- 

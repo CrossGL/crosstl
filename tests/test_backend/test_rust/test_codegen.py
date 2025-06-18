@@ -380,7 +380,9 @@ def test_impl_block_conversion():
         result = parse_and_generate(code)
         assert "// Implementation for Vertex" in result
         assert "Vertex_new(" in result
-        assert "calculate_distance(" in result  # Currently not prefixed with struct name
+        assert (
+            "calculate_distance(" in result
+        )  # Currently not prefixed with struct name
     except Exception as e:
         pytest.fail(f"Impl block conversion failed: {e}")
 
@@ -479,7 +481,9 @@ def test_complex_shader_conversion():
         assert "struct VertexOutput {" in result
         assert "vertex {" in result
         assert "fragment {" in result
-        assert "world_position = " in result  # Variable assignments without explicit type
+        assert (
+            "world_position = " in result
+        )  # Variable assignments without explicit type
         assert "normalize(" in result
         assert "dot(" in result
         assert "max(" in result

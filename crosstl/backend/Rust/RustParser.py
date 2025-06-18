@@ -173,7 +173,9 @@ class RustParser:
             elif self.current_token[0] == "LBRACE":
                 self.eat("LBRACE")
                 items = []
-                while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                while (
+                    self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF"
+                ):
                     items.append(self.current_token[1])
                     self.eat("IDENTIFIER")
                     if self.current_token[0] == "COMMA":
@@ -400,56 +402,56 @@ class RustParser:
     def parse_where_clause(self):
         self.eat("WHERE")
         predicates = []
-        
+
         while self.current_token[0] != "LBRACE" and self.current_token[0] != "EOF":
             # Parse type parameter
             type_param = self.current_token[1]
             self.eat("IDENTIFIER")
-            
+
             self.eat("COLON")
-            
+
             # Parse trait bounds
             bounds = []
             bounds.append(self.current_token[1])
             self.eat("IDENTIFIER")
-            
+
             # Handle multiple bounds with +
             while self.current_token[0] == "PLUS":
                 self.eat("PLUS")
                 bounds.append(self.current_token[1])
                 self.eat("IDENTIFIER")
-            
+
             predicates.append((type_param, bounds))
-            
+
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             else:
                 break
-                
+
         return predicates
 
     def parse_struct_initialization(self, struct_name):
         """Parse struct initialization syntax: Name { field: value, ... }"""
         self.eat("LBRACE")
         fields = []
-        
+
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             # Parse field name
             field_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            
+
             self.eat("COLON")
-            
+
             # Parse field value
             field_value = self.parse_expression()
-            
+
             fields.append((field_name, field_value))
-            
+
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             else:
                 break
-        
+
         self.eat("RBRACE")
         return StructInitializationNode(struct_name, fields)
 
@@ -472,9 +474,8 @@ class RustParser:
             return_type = self.parse_type()
 
         # Parse optional WHERE clause
-        where_clause = []
         if self.current_token[0] == "WHERE":
-            where_clause = self.parse_where_clause()
+            self.parse_where_clause()
 
         # Parse function body
         self.eat("LBRACE")
@@ -602,7 +603,14 @@ class RustParser:
                     stmt = self.parse_let_statement()
                     statements.append(stmt)
                 # Assignment or expression
-                elif self.current_token[0] == "IDENTIFIER" or self.current_token[0] in ["VEC2", "VEC3", "VEC4", "MAT2", "MAT3", "MAT4"]:
+                elif self.current_token[0] == "IDENTIFIER" or self.current_token[0] in [
+                    "VEC2",
+                    "VEC3",
+                    "VEC4",
+                    "MAT2",
+                    "MAT3",
+                    "MAT4",
+                ]:
                     left = self.parse_expression()
 
                     if self.current_token[0] in [
@@ -671,7 +679,7 @@ class RustParser:
                     if self.current_token[0] == "EOF":
                         break
                     self.eat(self.current_token[0])
-            except SyntaxError as e:
+            except SyntaxError:
                 self.skip_until("SEMICOLON")
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
@@ -1000,7 +1008,7 @@ class RustParser:
                 self.eat("DOUBLE_COLON")
                 function_name = self.current_token[1]
                 self.eat("IDENTIFIER")
-                
+
                 # Must be followed by function call parentheses
                 if self.current_token[0] == "LPAREN":
                     self.eat("LPAREN")
@@ -1044,11 +1052,14 @@ class RustParser:
             # Handle vector types that are tokenized as specific tokens
             name = self.current_token[1]
             self.eat(self.current_token[0])
-            
+
             # Check for constructor syntax (::new)
             if self.current_token[0] == "DOUBLE_COLON":
                 self.eat("DOUBLE_COLON")
-                if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "new":
+                if (
+                    self.current_token[0] == "IDENTIFIER"
+                    and self.current_token[1] == "new"
+                ):
                     self.eat("IDENTIFIER")
                     self.eat("LPAREN")
                     args = []
@@ -1060,7 +1071,7 @@ class RustParser:
                             break
                     self.eat("RPAREN")
                     return VectorConstructorNode(name, args)
-            
+
             return name
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
@@ -1079,11 +1090,11 @@ class RustParser:
         elif self.current_token[0] == "SELF":
             name = self.current_token[1]
             self.eat("SELF")
-            
+
             # Check for struct initialization: Self { ... }
             if self.current_token[0] == "LBRACE":
                 return self.parse_struct_initialization(name)
-            
+
             return name
         elif self.current_token[0] == "LPAREN":
             # Parenthesized expression or tuple
