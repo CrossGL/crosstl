@@ -27,7 +27,7 @@ cbuffer TestBuffer : register(b0)
 // Vertex Shader
 VertexOutput VSMain(VertexInput input)
 {
-    output;
+    VertexOutput output;
     output.uv = input.texCoord;
     float scale = values[0] + values[1];
     float3 position = input.position * scale;
@@ -39,7 +39,7 @@ VertexOutput VSMain(VertexInput input)
 // Fragment Shader
 FragmentOutput PSMain(FragmentInput input)
 {
-    output;
+    FragmentOutput output;
     float3 color = colors[0];
     if (input.uv.x > 0.5)
     {

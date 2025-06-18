@@ -24,7 +24,7 @@ struct FragmentOutput:
 # Vertex Shader
 @vertex_shader
 fn main(input: VertexInput) -> VertexOutput:
-    var output
+    var output: VertexOutput
     (MemberAccessNode(object=output, member=uv) = input.texCoord)
     (MemberAccessNode(object=output, member=position) = SIMD[DType.float32, 4](input.position, 1.0))
     return output
@@ -32,7 +32,7 @@ fn main(input: VertexInput) -> VertexOutput:
 # Fragment Shader
 @fragment_shader
 fn main(input: FragmentInput) -> FragmentOutput:
-    var output
+    var output: FragmentOutput
     (r = input.uv.x)
     (g = input.uv.y)
     (b = 0.5)

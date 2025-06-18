@@ -24,7 +24,7 @@ TestBuffer {
 constant TestBuffer &TestBuffer [[buffer(0)]];
 // Vertex Shader
 vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
-  output;
+  VertexOutput output;
   output.uv = input.texCoord;
   float scale = values[0] + values[1];
   float3 position = input.position * scale;
@@ -34,7 +34,7 @@ vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
 
 // Fragment Shader
 fragment FragmentOutput fragment_main(FragmentInput input [[stage_in]]) {
-  output;
+  FragmentOutput output;
   float3 color = colors[0];
   if (input.uv.x > 0.5) {
     color = colors[1];

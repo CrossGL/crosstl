@@ -30,7 +30,7 @@ pub struct FragmentOutput {
 #[vertex_shader]
 pub fn
 main(input : VertexInput) -> VertexOutput {
-  let output;
+  let output : VertexOutput;
   (MemberAccessNode(object = output, member = uv) = (input.position.xy * 10.0));
   (MemberAccessNode(object = output, member = position) =
        Vec4<f32>::new (input.position, 1.0));
@@ -40,7 +40,7 @@ main(input : VertexInput) -> VertexOutput {
 // Fragment Shader
 #[fragment_shader]
 pub fn main(input : FragmentInput) -> FragmentOutput {
-  let output;
+  let output : FragmentOutput;
   (noise = perlinNoise(input.uv));
   (color = Vec3<f32>::new ((height / 10.0), (1.0 - (height / 10.0)), 0.0));
   return (output);

@@ -18,7 +18,7 @@ struct FragmentOutput {
 };
 // Vertex Shader
 vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
-  output;
+  VertexOutput output;
   output.uv = input.texCoord;
   output.position = float4(input.position, 1.0);
   return output;
@@ -26,7 +26,7 @@ vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
 
 // Fragment Shader
 fragment FragmentOutput fragment_main(FragmentInput input [[stage_in]]) {
-  output;
+  FragmentOutput output;
   float r = input.uv.x;
   float g = input.uv.y;
   float b = 0.5;

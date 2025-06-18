@@ -30,7 +30,7 @@ pub struct FragmentOutput {
 #[vertex_shader]
 pub fn
 main(input : VertexInput) -> VertexOutput {
-  let output;
+  let output : VertexOutput;
   (MemberAccessNode(object = output, member = uv) = input.texCoord);
   (MemberAccessNode(object = output, member = position) =
        Vec4<f32>::new (input.position, 1.0));
@@ -40,7 +40,7 @@ main(input : VertexInput) -> VertexOutput {
 // Fragment Shader
 #[fragment_shader]
 pub fn main(input : FragmentInput) -> FragmentOutput {
-  let output;
+  let output : FragmentOutput;
   (r = input.uv.x);
   (g = input.uv.y);
   (b = 0.5);

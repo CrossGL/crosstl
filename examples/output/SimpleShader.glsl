@@ -16,7 +16,7 @@ struct FragmentOutput {
 };
 // Vertex Shader
 void main() {
-  output;
+  VertexOutput output;
   output.uv = input.texCoord;
   output.position = vec4(input.position, 1.0);
   return output;
@@ -24,7 +24,7 @@ void main() {
 
 // Fragment Shader
 void main() {
-  output;
+  FragmentOutput output;
   float r = input.uv.x;
   float g = input.uv.y;
   float b = 0.5;

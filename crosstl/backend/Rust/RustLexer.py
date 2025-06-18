@@ -76,19 +76,13 @@ TOKENS = tuple(
         ("NONE", r"\bNone\b"),
         ("OK", r"\bOk\b"),
         ("ERR", r"\bErr\b"),
-        # Shader-specific attributes
-        ("VERTEX", r"\bvertex\b"),
-        ("FRAGMENT", r"\bfragment\b"),
-        ("COMPUTE", r"\bcompute\b"),
-        ("BINDING", r"\bbinding\b"),
-        ("GROUP", r"\bgroup\b"),
-        ("LOCATION", r"\blocation\b"),
-        ("BUILTIN", r"\bbuiltin\b"),
-        ("STAGE", r"\bstage\b"),
-        ("WORKGROUP_SIZE", r"\bworkgroup_size\b"),
-        # Identifiers and literals
+        # Note: shader-specific words like vertex, fragment are not Rust keywords
+        # They can be used as identifiers and only have meaning in attributes
+        # Numeric literals must come before identifiers to handle type suffixes
+        ("NUMBER", r"\d+(\.\d+)?((i|u)(8|16|32|64|128|size)|f(32|64))?"),
+        # Underscore must come before identifier to match wildcard patterns
+        ("UNDERSCORE", r"_"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("NUMBER", r"\d+(\.\d+)?([fFhHuUiI])?"),
         ("STRING", r'"([^"\\]|\\.)*"'),
         ("CHAR_LIT", r"'([^'\\]|\\.)'"),
         ("RAW_STRING", r'r#*"[^"]*"#*'),
@@ -104,30 +98,30 @@ TOKENS = tuple(
         ("DOUBLE_COLON", r"::"),
         ("COLON", r":"),
         ("QUESTION", r"\?"),
-        ("DOT", r"\."),
-        ("RANGE", r"\.\."),
+        # Range operators MUST come before DOT
         ("RANGE_INCLUSIVE", r"\.\.="),
+        ("RANGE", r"\.\."),
+        ("DOT", r"\."),
         ("ARROW", r"->"),
         ("FAT_ARROW", r"=>"),
         ("POUND", r"#"),
         ("EXCLAMATION", r"!"),
         ("AT", r"@"),
-        ("AMPERSAND", r"&"),
-        ("PIPE", r"\|"),
         ("CARET", r"\^"),
         ("TILDE", r"~"),
-        ("UNDERSCORE", r"_"),
-        # Operators
+        # Operators (multi-character operators MUST come before single-character ones)
         ("SHIFT_LEFT", r"<<"),
         ("SHIFT_RIGHT", r">>"),
         ("LESS_EQUAL", r"<="),
         ("GREATER_EQUAL", r">="),
-        ("LESS_THAN", r"<"),
-        ("GREATER_THAN", r">"),
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
         ("LOGICAL_AND", r"&&"),
         ("LOGICAL_OR", r"\|\|"),
+        ("LESS_THAN", r"<"),
+        ("GREATER_THAN", r">"),
+        ("AMPERSAND", r"&"),
+        ("PIPE", r"\|"),
         ("PLUS_EQUALS", r"\+="),
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),
@@ -213,15 +207,7 @@ KEYWORDS = {
     "None": "NONE",
     "Ok": "OK",
     "Err": "ERR",
-    "vertex": "VERTEX",
-    "fragment": "FRAGMENT",
-    "compute": "COMPUTE",
-    "binding": "BINDING",
-    "group": "GROUP",
-    "location": "LOCATION",
-    "builtin": "BUILTIN",
-    "stage": "STAGE",
-    "workgroup_size": "WORKGROUP_SIZE",
+    # Removed shader keywords - they should be identifiers, not reserved words
 }
 
 
@@ -293,15 +279,7 @@ class TokenType(Enum):
     NONE = auto()
     OK = auto()
     ERR = auto()
-    VERTEX = auto()
-    FRAGMENT = auto()
-    COMPUTE = auto()
-    BINDING = auto()
-    GROUP = auto()
-    LOCATION = auto()
-    BUILTIN = auto()
-    STAGE = auto()
-    WORKGROUP_SIZE = auto()
+    # Removed shader-specific tokens - they should be identifiers
     IDENTIFIER = auto()
     NUMBER = auto()
     STRING = auto()

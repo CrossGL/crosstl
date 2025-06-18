@@ -17,7 +17,7 @@ struct FragmentOutput {
 };
 // Vertex Shader
 vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
-  output;
+  VertexOutput output;
   output.uv = input.position.xy * 10.0;
   output.position = float4(input.position, 1.0);
   return output;
@@ -25,7 +25,7 @@ vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
 
 // Fragment Shader
 fragment FragmentOutput fragment_main(FragmentInput input [[stage_in]]) {
-  output;
+  FragmentOutput output;
   float noise = perlinNoise(input.uv);
   float3 color = float3(height / 10.0, 1.0 - height / 10.0, 0.0);
   return output;

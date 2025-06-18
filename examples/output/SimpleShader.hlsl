@@ -21,7 +21,7 @@ struct FragmentOutput
 // Vertex Shader
 VertexOutput VSMain(VertexInput input)
 {
-    output;
+    VertexOutput output;
     output.uv = input.texCoord;
     output.position = float4(input.position, 1.0);
     return output;
@@ -31,7 +31,7 @@ VertexOutput VSMain(VertexInput input)
 // Fragment Shader
 FragmentOutput PSMain(FragmentInput input)
 {
-    output;
+    FragmentOutput output;
     float r = input.uv.x;
     float g = input.uv.y;
     float b = 0.5;

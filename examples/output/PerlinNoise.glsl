@@ -15,7 +15,7 @@ struct FragmentOutput {
 };
 // Vertex Shader
 void main() {
-  output;
+  VertexOutput output;
   output.uv = input.position.xy * 10.0;
   output.position = vec4(input.position, 1.0);
   return output;
@@ -23,7 +23,7 @@ void main() {
 
 // Fragment Shader
 void main() {
-  output;
+  FragmentOutput output;
   float noise = perlinNoise(input.uv);
   vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
   return output;

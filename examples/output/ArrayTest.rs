@@ -37,7 +37,7 @@ pub struct TestBuffer {
 #[vertex_shader]
 pub fn
 main(input : VertexInput) -> VertexOutput {
-  let output;
+  let output : VertexOutput;
   (MemberAccessNode(object = output, member = uv) = input.texCoord);
   (scale = (values[0] + values[1]));
   (position = (input.position * scale));
@@ -49,7 +49,7 @@ main(input : VertexInput) -> VertexOutput {
 // Fragment Shader
 #[fragment_shader]
 pub fn main(input : FragmentInput) -> FragmentOutput {
-  let output;
+  let output : FragmentOutput;
   (color = colors[0]);
   if (input.uv.x > 0.5) {
     (color = colors[1]);

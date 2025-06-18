@@ -425,3 +425,14 @@ class StaticNode(ASTNode):
 
     def __repr__(self):
         return f"StaticNode(name={self.name}, vtype={self.vtype}, value={self.value}, is_mutable={self.is_mutable}, visibility={self.visibility})"
+
+
+class StructInitializationNode(ASTNode):
+    """Node representing struct initialization syntax: Name { field: value, ... }"""
+
+    def __init__(self, struct_name, fields):
+        self.struct_name = struct_name
+        self.fields = fields  # List of (field_name, field_value) tuples
+
+    def __repr__(self):
+        return f"StructInitializationNode(struct_name={self.struct_name}, fields={self.fields})"

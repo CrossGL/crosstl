@@ -20,7 +20,7 @@ struct FragmentOutput
 // Vertex Shader
 VertexOutput VSMain(VertexInput input)
 {
-    output;
+    VertexOutput output;
     output.uv = input.position.xy * 10.0;
     output.position = float4(input.position, 1.0);
     return output;
@@ -30,7 +30,7 @@ VertexOutput VSMain(VertexInput input)
 // Fragment Shader
 FragmentOutput PSMain(FragmentInput input)
 {
-    output;
+    FragmentOutput output;
     float noise = perlinNoise(input.uv);
     float3 color = float3(height / 10.0, 1.0 - height / 10.0, 0.0);
     return output;

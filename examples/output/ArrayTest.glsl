@@ -21,7 +21,7 @@ layout(std140, binding = 0) uniform TestBuffer {
 };
 // Vertex Shader
 void main() {
-  output;
+  VertexOutput output;
   output.uv = input.texCoord;
   float scale = values[0] + values[1];
   vec3 position = input.position * scale;
@@ -31,7 +31,7 @@ void main() {
 
 // Fragment Shader
 void main() {
-  output;
+  FragmentOutput output;
   vec3 color = colors[0];
   if (input.uv.x > 0.5) {
     color = colors[1];
