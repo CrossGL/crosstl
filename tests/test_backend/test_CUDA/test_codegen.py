@@ -19,10 +19,10 @@ class TestCudaCodeGen:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
-        
+
         assert "// CUDA to CrossGL conversion" in result
         assert "// Kernel: simple_kernel" in result
 
@@ -37,10 +37,10 @@ class TestCudaCodeGen:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
-        
+
         assert "// CUDA to CrossGL conversion" in result
         assert "// Function: add" in result
 
@@ -59,17 +59,17 @@ class TestCudaCodeGen:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
-        
+
         assert "// Kernel: kernel1" in result
         assert "// Kernel: kernel2" in result
 
     def test_type_conversion(self):
         """Test CUDA type to CrossGL type conversion"""
         codegen = CudaToCrossGLConverter()
-        
+
         # Test basic types
         assert codegen.convert_cuda_type_to_crossgl("int") == "i32"
         assert codegen.convert_cuda_type_to_crossgl("float") == "f32"
@@ -84,8 +84,8 @@ class TestCudaCodeGen:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
-        
-        assert "// CUDA to CrossGL conversion" in result 
+
+        assert "// CUDA to CrossGL conversion" in result

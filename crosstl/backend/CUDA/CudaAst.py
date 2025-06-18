@@ -5,7 +5,6 @@ class ASTNode:
     """Base class for all AST nodes"""
 
 
-
 class ShaderNode(ASTNode):
     """Root node representing a complete CUDA program"""
 

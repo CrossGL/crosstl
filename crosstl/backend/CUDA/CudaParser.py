@@ -1,6 +1,36 @@
 """CUDA Parser Implementation"""
 
-from .CudaAst import ArrayAccessNode, AssignmentNode, AtomicOperationNode, BinaryOpNode, BreakNode, CaseNode, CastNode, ConstantMemoryNode, ContinueNode, CudaBuiltinNode, DoWhileNode, ForNode, FunctionCallNode, FunctionNode, IfNode, KernelLaunchNode, KernelNode, MemberAccessNode, PreprocessorNode, ReturnNode, ShaderNode, SharedMemoryNode, StructNode, SwitchNode, SyncNode, TernaryOpNode, UnaryOpNode, VariableNode, WhileNode
+from .CudaAst import (
+    ArrayAccessNode,
+    AssignmentNode,
+    AtomicOperationNode,
+    BinaryOpNode,
+    BreakNode,
+    CaseNode,
+    CastNode,
+    ConstantMemoryNode,
+    ContinueNode,
+    CudaBuiltinNode,
+    DoWhileNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    KernelLaunchNode,
+    KernelNode,
+    MemberAccessNode,
+    PreprocessorNode,
+    ReturnNode,
+    ShaderNode,
+    SharedMemoryNode,
+    StructNode,
+    SwitchNode,
+    SyncNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    WhileNode,
+)
 from .CudaLexer import CudaLexer
 
 

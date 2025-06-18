@@ -10,15 +10,15 @@ class TestCudaLexer:
         code = "__global__ __device__ __shared__ __constant__"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
-        
+
         expected_tokens = [
             ("GLOBAL", "__global__"),
             ("DEVICE", "__device__"),
             ("SHARED", "__shared__"),
             ("CONSTANT", "__constant__"),
-            ("EOF", "")
+            ("EOF", ""),
         ]
-        
+
         assert tokens == expected_tokens
 
     def test_cuda_builtin_variables(self):
@@ -26,15 +26,15 @@ class TestCudaLexer:
         code = "threadIdx blockIdx gridDim blockDim"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
-        
+
         expected_tokens = [
             ("THREADIDX", "threadIdx"),
             ("BLOCKIDX", "blockIdx"),
             ("GRIDDIM", "gridDim"),
             ("BLOCKDIM", "blockDim"),
-            ("EOF", "")
+            ("EOF", ""),
         ]
-        
+
         assert tokens == expected_tokens
 
     def test_kernel_launch_syntax(self):
@@ -42,7 +42,7 @@ class TestCudaLexer:
         code = "kernel<<<blocks, threads>>>"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
-        
+
         expected_tokens = [
             ("IDENTIFIER", "kernel"),
             ("KERNEL_LAUNCH_START", "<<<"),
@@ -50,9 +50,9 @@ class TestCudaLexer:
             ("COMMA", ","),
             ("IDENTIFIER", "threads"),
             ("KERNEL_LAUNCH_END", ">>>"),
-            ("EOF", "")
+            ("EOF", ""),
         ]
-        
+
         assert tokens == expected_tokens
 
     def test_cuda_vector_types(self):
@@ -60,7 +60,7 @@ class TestCudaLexer:
         code = "float2 float3 float4 int2 int3 int4"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
-        
+
         expected_tokens = [
             ("FLOAT2", "float2"),
             ("FLOAT3", "float3"),
@@ -68,9 +68,9 @@ class TestCudaLexer:
             ("INT2", "int2"),
             ("INT3", "int3"),
             ("INT4", "int4"),
-            ("EOF", "")
+            ("EOF", ""),
         ]
-        
+
         assert tokens == expected_tokens
 
     def test_atomic_operations(self):
@@ -78,15 +78,15 @@ class TestCudaLexer:
         code = "atomicAdd atomicSub atomicMax atomicMin"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
-        
+
         expected_tokens = [
             ("ATOMICADD", "atomicAdd"),
             ("ATOMICSUB", "atomicSub"),
             ("ATOMICMAX", "atomicMax"),
             ("ATOMICMIN", "atomicMin"),
-            ("EOF", "")
+            ("EOF", ""),
         ]
-        
+
         assert tokens == expected_tokens
 
     def test_sync_functions(self):
@@ -94,11 +94,11 @@ class TestCudaLexer:
         code = "__syncthreads __syncwarp"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
-        
+
         expected_tokens = [
             ("SYNCTHREADS", "__syncthreads"),
             ("SYNCWARP", "__syncwarp"),
-            ("EOF", "")
+            ("EOF", ""),
         ]
-        
-        assert tokens == expected_tokens 
+
+        assert tokens == expected_tokens

@@ -3,7 +3,7 @@
 import pytest
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
-from crosstl.backend.CUDA.CudaAst import *
+from crosstl.backend.CUDA.CudaAst import ShaderNode
 
 
 class TestCudaParser:
@@ -19,7 +19,7 @@ class TestCudaParser:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
         assert ast.kernels[0].name == "simple_kernel"
@@ -35,7 +35,7 @@ class TestCudaParser:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         assert isinstance(ast, ShaderNode)
         assert len(ast.functions) == 1
         assert ast.functions[0].name == "add"
@@ -52,7 +52,7 @@ class TestCudaParser:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
@@ -68,7 +68,7 @@ class TestCudaParser:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
@@ -83,7 +83,7 @@ class TestCudaParser:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
@@ -98,7 +98,7 @@ class TestCudaParser:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
@@ -113,6 +113,6 @@ class TestCudaParser:
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
         ast = parser.parse()
-        
+
         assert isinstance(ast, ShaderNode)
-        assert len(ast.kernels) == 1 
+        assert len(ast.kernels) == 1
