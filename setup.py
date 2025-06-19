@@ -13,6 +13,7 @@ setup(
         "crosstl/backend/SPIRV",
         "crosstl/backend/Mojo",
         "crosstl/backend/Rust",
+        "crosstl/backend/CUDA",
     ],
     version="0.0.1.3",
     author="CrossGL team",

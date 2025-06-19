@@ -68,6 +68,7 @@ Imagine writing a shader _once_ and deploying it across:
 - ⚙️ **Slang**
 - 🔥 **Mojo**
 - 🦀 **Rust**
+- 🚀 **CUDA**
 
 ...all without changing a single line of code!
 
@@ -87,6 +88,7 @@ CrossTL now supports comprehensive translation to and from these major graphics 
 - **Slang** - Real-time shading language
 - **Mojo** - High-performance systems programming language
 - **Rust** - Systems programming language with GPU computing support
+- **CUDA** - NVIDIA's parallel computing platform and programming model
 
 ### Universal Format
 
@@ -208,6 +210,9 @@ rust_code = crosstl.translate('shader.cgl', backend='rust', save_shader='shader.
 
 # Translate to Slang
 slang_code = crosstl.translate('shader.cgl', backend='slang', save_shader='shader.slang')
+
+# Translate to CUDA
+cuda_code = crosstl.translate('shader.cgl', backend='cuda', save_shader='shader.cu')
 ```
 
 #### Converting from HLSL to CrossGL
@@ -359,6 +364,46 @@ crossgl_code = crosstl.translate('shader.mojo', backend='cgl', save_shader='shad
 print(crossgl_code)
 ```
 
+#### Converting from CUDA to CrossGL
+
+1. Write your CUDA shader (e.g., `shader.cu`):
+
+```cuda
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+
+struct VertexInput {
+    float3 position;
+    float2 texCoord;
+};
+
+struct VertexOutput {
+    float4 position;
+    float2 uv;
+};
+
+__global__ void compute_main() {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    // Compute shader logic here
+}
+
+__device__ VertexOutput vertex_main(VertexInput input) {
+    VertexOutput output;
+    output.position = make_float4(input.position, 1.0f);
+    output.uv = input.texCoord;
+    return output;
+}
+```
+
+2. Convert to CrossGL:
+
+```python
+import crosstl
+
+crossgl_code = crosstl.translate('shader.cu', backend='cgl', save_shader='shader.cgl')
+print(crossgl_code)
+```
+
 ## 🎯 Complete Translation Example
 
 Here's a complete example showing how to translate one CrossGL shader to all supported backends:
@@ -377,7 +422,8 @@ backends = {
     'vulkan': '.spirv',
     'mojo': '.mojo',
     'rust': '.rs',
-    'slang': '.slang'
+    'slang': '.slang',
+    'cuda': '.cu'
 }
 
 for backend, ext in backends.items():
@@ -399,7 +445,8 @@ conversions = [
     ('shader.hlsl', 'shader_from_hlsl.cgl'),
     ('shader.glsl', 'shader_from_glsl.cgl'),
     ('shader.rs', 'shader_from_rust.cgl'),
-    ('shader.mojo', 'shader_from_mojo.cgl')
+    ('shader.mojo', 'shader_from_mojo.cgl'),
+    ('shader.cu', 'shader_from_cuda.cgl')
 ]
 
 for input_file, output_file in conversions:

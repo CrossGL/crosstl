@@ -1,8 +1,13 @@
 include README.md
 include LICENSE
+include examples/*.cgl
 include backend/DirectX/*.py
 include backend/Metal/*.py
-include backend/Opengl/*.py
+include backend/GLSL/*.py
+include backend/CUDA/*.py
+include backend/Mojo/*.py
+include backend/Rust/*.py
+include backend/SPIRV/*.py
 include translator/*.py
 include translator/codegen/*.py
 include crosstl.py

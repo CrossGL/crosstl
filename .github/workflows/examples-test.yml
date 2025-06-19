@@ -46,6 +46,7 @@ jobs:
           python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='vulkan', save_shader='output/ArrayTest.spirv')"
           python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='mojo', save_shader='output/ArrayTest.mojo')"
           python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='rust', save_shader='output/ArrayTest.rs')"
+          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='cuda', save_shader='output/ArrayTest.cu')"
 
           # Simple Shader
           python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='metal', save_shader='output/SimpleShader.metal')"
@@ -54,6 +55,7 @@ jobs:
           python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='vulkan', save_shader='output/SimpleShader.spirv')"
           python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='mojo', save_shader='output/SimpleShader.mojo')"
           python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='rust', save_shader='output/SimpleShader.rs')"
+          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='cuda', save_shader='output/SimpleShader.cu')"
 
           # Perlin Noise
           python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='metal', save_shader='output/PerlinNoise.metal')"
@@ -62,6 +64,7 @@ jobs:
           python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='vulkan', save_shader='output/PerlinNoise.spirv')"
           python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='mojo', save_shader='output/PerlinNoise.mojo')"
           python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='rust', save_shader='output/PerlinNoise.rs')"
+          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='cuda', save_shader='output/PerlinNoise.cu')"
 
           # Complex Shader
           python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='metal', save_shader='output/ComplexShader.metal')"
@@ -70,6 +73,7 @@ jobs:
           python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='vulkan', save_shader='output/ComplexShader.spirv')"
           python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='mojo', save_shader='output/ComplexShader.mojo')"
           python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='rust', save_shader='output/ComplexShader.rs')"
+          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='cuda', save_shader='output/ComplexShader.cu')"
         shell: bash
         continue-on-error: true
 
@@ -116,6 +120,12 @@ jobs:
           - { backend: "rust", example: "SimpleShader", extension: ".rs" }
           - { backend: "rust", example: "PerlinNoise", extension: ".rs" }
           - { backend: "rust", example: "ComplexShader", extension: ".rs" }
+
+          # CUDA backend
+          - { backend: "cuda", example: "ArrayTest", extension: ".cu" }
+          - { backend: "cuda", example: "SimpleShader", extension: ".cu" }
+          - { backend: "cuda", example: "PerlinNoise", extension: ".cu" }
+          - { backend: "cuda", example: "ComplexShader", extension: ".cu" }
 
           # Slang backend is excluded as it's still experimental
           # and not fully implemented
