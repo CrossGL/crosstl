@@ -41,15 +41,15 @@ jobs:
       - name: Validate output structure and content
         run: |
           cd examples
-          echo "🔍 Checking output directory structure..."
+          echo "[CHECKING] Checking output directory structure..."
           ls -la output/ || echo "No output directory found"
-          echo "📁 Checking Metal outputs..."
+          echo "[METAL] Checking Metal outputs..."
           find output/metal -name "*.metal" -type f 2>/dev/null | head -5 || echo "No Metal outputs found"
-          echo "🚀 Checking CUDA outputs..."
+          echo "[CUDA] Checking CUDA outputs..."
           find output/cuda -name "*.cu" -type f 2>/dev/null | head -5 || echo "No CUDA outputs found"
-          echo "🦀 Checking Rust outputs..."
+          echo "[RUST] Checking Rust outputs..."
           find output/rust -name "*.rs" -type f 2>/dev/null | head -5 || echo "No Rust outputs found"
-          echo "📊 Output file sizes (first 10):"
+          echo "[STATS] Output file sizes (first 10):"
           find output -type f \( -name "*.metal" -o -name "*.cu" -o -name "*.rs" \) 2>/dev/null | head -10 | xargs ls -lh 2>/dev/null || echo "No output files to check"
         shell: bash
         continue-on-error: true
@@ -73,7 +73,7 @@ jobs:
         continue-on-error: true
 
   backend-specific:
-    name: ${{ matrix.combination.category }}/${{ matrix.combination.example }} → ${{ matrix.combination.backend }}
+    name: ${{ matrix.combination.category }}/${{ matrix.combination.example }} -> ${{ matrix.combination.backend }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -268,7 +268,7 @@ jobs:
           mkdir -p output/${{ matrix.combination.category }}
         shell: bash
 
-      - name: Test ${{ matrix.combination.category }}/${{ matrix.combination.example }} → ${{ matrix.combination.backend }}
+      - name: Test ${{ matrix.combination.category }}/${{ matrix.combination.example }} -> ${{ matrix.combination.backend }}
         run: |
           python -c "import crosstl; crosstl.translate('${{ matrix.combination.category }}/${{ matrix.combination.example }}.cgl', backend='${{ matrix.combination.backend }}', save_shader='output/${{ matrix.combination.category }}/${{ matrix.combination.example }}${{ matrix.combination.extension }}')"
         shell: bash
@@ -280,14 +280,14 @@ jobs:
           OUTPUT_FILE="output/${{ matrix.combination.category }}/${{ matrix.combination.example }}${{ matrix.combination.extension }}"
           if [ -f "$OUTPUT_FILE" ]; then
             FILE_SIZE=$(wc -c < "$OUTPUT_FILE")
-            echo "✅ Output file created: $OUTPUT_FILE ($FILE_SIZE bytes)"
+            echo "[SUCCESS] Output file created: $OUTPUT_FILE ($FILE_SIZE bytes)"
             if [ "$FILE_SIZE" -gt 100 ]; then
-              echo "✅ Output file has substantial content"
+              echo "[SUCCESS] Output file has substantial content"
             else
-              echo "⚠️ Output file is quite small ($FILE_SIZE bytes)"
+              echo "[WARNING] Output file is quite small ($FILE_SIZE bytes)"
             fi
           else
-            echo "❌ Output file not created: $OUTPUT_FILE"
+            echo "[ERROR] Output file not created: $OUTPUT_FILE"
           fi
         shell: bash
         working-directory: examples
@@ -313,7 +313,7 @@ jobs:
       - name: Test most stable examples
         run: |
           cd examples
-          echo "🔧 Testing most stable examples across core backends..."
+          echo "[TESTING] Testing most stable examples across core backends..."
           python -c "
           import crosstl
           import os
@@ -335,24 +335,25 @@ jobs:
 
           for shader, backend, ext in stable_tests:
               try:
-                  output_file = f'output/stability/{shader.replace("/", "_").replace(".cgl", "_{backend}{ext}")}'
+                  filename_base = shader.replace('/', '_').replace('.cgl', '')
+                  output_file = f'output/stability/{filename_base}_{backend}{ext}'
                   result = crosstl.translate(shader, backend=backend, save_shader=output_file)
                   if os.path.exists(output_file) and os.path.getsize(output_file) > 100:
-                      print(f'✅ {shader} → {backend}')
+                      print(f'[SUCCESS] {shader} -> {backend}')
                       success_count += 1
                   else:
-                      print(f'⚠️  {shader} → {backend} (small output)')
+                      print(f'[WARNING] {shader} -> {backend} (small output)')
               except Exception as e:
-                  print(f'❌ {shader} → {backend}: {str(e)[:50]}...')
+                  print(f'[ERROR] {shader} -> {backend}: {str(e)[:50]}...')
 
           print(f'\\nStability Score: {success_count}/{len(stable_tests)} ({(success_count/len(stable_tests)*100):.1f}%)')
           "
         shell: bash
-      
+
       - name: Test cross-backend consistency
         run: |
           cd examples
-          echo "🔍 Testing cross-backend consistency..."
+          echo "[CONSISTENCY] Testing cross-backend consistency..."
           python -c "
           import crosstl
           import os
@@ -379,10 +380,10 @@ jobs:
                       outputs[backend] = 0
               except Exception as e:
                   outputs[backend] = 0
-                  print(f'❌ {backend}: {str(e)[:50]}...')
+                  print(f'[ERROR] {backend}: {str(e)[:50]}...')
 
           print(f'Output sizes: {outputs}')
           successful_backends = [k for k, v in outputs.items() if v > 100]
-          print(f'✅ {len(successful_backends)}/{len(backends)} backends produced substantial output')
+          print(f'[SUCCESS] {len(successful_backends)}/{len(backends)} backends produced substantial output')
           print(f'Successful backends: {successful_backends}')
           "
