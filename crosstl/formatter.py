@@ -19,6 +19,7 @@ class ShaderLanguage(Enum):
     MOJO = "mojo"
     RUST = "rust"
     CUDA = "cuda"
+    HIP = "hip"
     UNKNOWN = "unknown"
 
 
@@ -67,6 +68,8 @@ class CodeFormatter:
             return ShaderLanguage.RUST
         elif ext in [".cu", ".cuh", ".cuda"]:
             return ShaderLanguage.CUDA
+        elif ext in [".hip"]:
+            return ShaderLanguage.HIP
         else:
             return ShaderLanguage.UNKNOWN
 
@@ -99,6 +102,7 @@ class CodeFormatter:
             ShaderLanguage.METAL,
             ShaderLanguage.RUST,
             ShaderLanguage.CUDA,
+            ShaderLanguage.HIP,
         ]:
             return self._format_with_clang(code, language)
         elif language == ShaderLanguage.SPIRV:
@@ -120,6 +124,7 @@ class CodeFormatter:
             ShaderLanguage.METAL: "LLVM",
             ShaderLanguage.RUST: "LLVM",
             ShaderLanguage.CUDA: "Google",
+            ShaderLanguage.HIP: "Google",
         }
         style = style_map.get(language, "LLVM")
 
@@ -131,6 +136,7 @@ class CodeFormatter:
                 ShaderLanguage.METAL: ".metal",
                 ShaderLanguage.RUST: ".rs",
                 ShaderLanguage.CUDA: ".cu",
+                ShaderLanguage.HIP: ".hip",
             }
             ext = ext_map.get(language, ".txt")
 
@@ -330,6 +336,7 @@ def format_shader_code(code, backend, output_path=None):
         "mojo": ShaderLanguage.MOJO,
         "rust": ShaderLanguage.RUST,
         "cuda": ShaderLanguage.CUDA,
+        "hip": ShaderLanguage.HIP,
     }
 
     language = language_map.get(backend.lower())

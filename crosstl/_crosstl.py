@@ -9,6 +9,7 @@ from .translator.codegen import (
     mojo_codegen,
     rust_codegen,
     cuda_codegen,
+    hip_codegen,
 )
 from .translator.ast import ASTNode
 import argparse
@@ -93,6 +94,11 @@ def translate(
 
         lexer = CudaLexer(shader_code)
         parser = CudaParser(lexer.tokenize())
+    elif file_path.endswith(".hip"):
+        from .backend.HIP import HipLexer, HipParser
+
+        lexer = HipLexer(shader_code)
+        parser = HipParser(lexer.tokenize())
     else:
         raise ValueError(f"Unsupported shader file type: {file_path}")
 
@@ -113,6 +119,8 @@ def translate(
             codegen = rust_codegen.RustCodeGen()
         elif backend == "cuda":
             codegen = cuda_codegen.CudaCodeGen()
+        elif backend == "hip":
+            codegen = hip_codegen.HipCodeGen()
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
@@ -151,6 +159,10 @@ def translate(
                 from .backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 
                 codegen = CudaToCrossGLConverter()
+            elif file_path.endswith(".hip"):
+                from .backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+
+                codegen = HipToCrossGLConverter()
             else:
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
         else:
@@ -182,7 +194,7 @@ def main():
         "--backend",
         "-b",
         default="cgl",
-        help="Target backend (metal, directx, opengl, vulkan, mojo, rust, cuda, cgl)",
+        help="Target backend (metal, directx, opengl, vulkan, mojo, rust, cuda, hip, cgl)",
     )
     parser.add_argument("--output", "-o", help="Output file path")
     parser.add_argument(
@@ -208,6 +220,7 @@ def main():
                 "mojo": ".mojo",
                 "rust": ".rs",
                 "cuda": ".cu",
+                "hip": ".hip",
                 "cgl": ".cgl",
             }
             output_path = base + ext_map.get(args.backend, ".out")

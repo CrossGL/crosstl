@@ -8,6 +8,7 @@ include backend/CUDA/*.py
 include backend/Mojo/*.py
 include backend/Rust/*.py
 include backend/SPIRV/*.py
+include backend/HIP/*.py
 include translator/*.py
 include translator/codegen/*.py
 include crosstl.py
