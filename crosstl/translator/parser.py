@@ -762,42 +762,40 @@ class Parser:
     def parse_let_declaration(self):
         """Parse Rust-style let declarations: let name = expression;"""
         self.eat("LET")
-        
+
         # Handle mutable declarations (let mut)
         is_mutable = False
         if self.current_token[0] == "MUT":
             is_mutable = True
             self.eat("MUT")
-        
+
         # Variable name
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        
+
         # Optional type annotation: let name: type = expr;
         var_type = None
         if self.current_token[0] == "COLON":
             self.eat("COLON")
             var_type = self.parse_type()
-        
+
         # Assignment (required for let declarations)
         self.eat("EQUALS")
         initial_value = self.parse_expression()
         self.eat("SEMICOLON")
-        
+
         # Create VariableNode with let-specific attributes
         var_node = VariableNode(
-            name=name,
-            var_type=var_type,
-            initial_value=initial_value
+            name=name, var_type=var_type, initial_value=initial_value
         )
-        
+
         # Add mutable flag if needed (for Rust compatibility)
         if is_mutable:
-            var_node.qualifiers = getattr(var_node, 'qualifiers', []) + ['mut']
-        
+            var_node.qualifiers = getattr(var_node, "qualifiers", []) + ["mut"]
+
         # Add let flag to distinguish from regular variable declarations
         var_node.is_let_declaration = True
-        
+
         return var_node
 
     def parse_if_statement(self):

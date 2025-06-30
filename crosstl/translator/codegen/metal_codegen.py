@@ -534,35 +534,45 @@ class MetalCodeGen:
         else_branch = getattr(node, "else_branch", None)
         if else_branch:
             # Check if else branch is another IfNode (else-if chain)
-            if hasattr(else_branch, '__class__') and 'If' in str(else_branch.__class__):
+            if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
                 # Generate else if by recursively generating the nested if with else if prefix
                 elif_condition = self.generate_expression(
-                    else_branch.condition if hasattr(else_branch, "condition") else else_branch.if_condition
+                    else_branch.condition
+                    if hasattr(else_branch, "condition")
+                    else else_branch.if_condition
                 )
                 code += f" else if ({elif_condition}) {{\n"
-                
+
                 # Generate elif body
-                elif_body = getattr(else_branch, "then_branch", getattr(else_branch, "if_body", None))
+                elif_body = getattr(
+                    else_branch, "then_branch", getattr(else_branch, "if_body", None)
+                )
                 if hasattr(elif_body, "statements"):
                     for stmt in elif_body.statements:
                         code += self.generate_statement(stmt, indent + 1)
                 elif isinstance(elif_body, list):
                     for stmt in elif_body:
                         code += self.generate_statement(stmt, indent + 1)
-                
+
                 code += f"{indent_str}}}"
-                
+
                 # Recursively handle any remaining else-if chain
                 nested_else = getattr(else_branch, "else_branch", None)
                 if nested_else:
-                    if hasattr(nested_else, '__class__') and 'If' in str(nested_else.__class__):
+                    if hasattr(nested_else, "__class__") and "If" in str(
+                        nested_else.__class__
+                    ):
                         # Another else if - recursively handle
                         remaining_code = self.generate_if(nested_else, indent)
                         # Remove the "if" prefix and replace with "else if"
-                        remaining_lines = remaining_code.split('\n')
-                        if remaining_lines[0].strip().startswith('if ('):
-                            remaining_lines[0] = remaining_lines[0].replace('if (', ' else if (', 1)
-                        code += '\n'.join(remaining_lines[1:])  # Skip first line as we already handled it
+                        remaining_lines = remaining_code.split("\n")
+                        if remaining_lines[0].strip().startswith("if ("):
+                            remaining_lines[0] = remaining_lines[0].replace(
+                                "if (", " else if (", 1
+                            )
+                        code += "\n".join(
+                            remaining_lines[1:]
+                        )  # Skip first line as we already handled it
                     else:
                         # Final else clause
                         code += " else {\n"
