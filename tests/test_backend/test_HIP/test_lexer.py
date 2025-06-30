@@ -47,12 +47,30 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
-        # All vector types should be tokenized as identifiers
-        token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
+        # Vector types should be tokenized as specific token types
+        token_pairs = [
+            (token.type, token.value) for token in tokens if token.type != "NEWLINE"
+        ]
 
-        assert "int2" in token_values
-        assert "float3" in token_values
-        assert "double4" in token_values
+        expected_tokens = [
+            ("INT2", "int2"),
+            ("INT3", "int3"),
+            ("INT4", "int4"),
+            ("FLOAT2", "float2"),
+            ("FLOAT3", "float3"),
+            ("FLOAT4", "float4"),
+            ("DOUBLE2", "double2"),
+            ("DOUBLE3", "double3"),
+            ("DOUBLE4", "double4"),
+            ("UINT2", "uint2"),
+            ("UINT3", "uint3"),
+            ("UINT4", "uint4"),
+        ]
+
+        for expected_token in expected_tokens:
+            assert (
+                expected_token in token_pairs
+            ), f"Expected token {expected_token} not found in {token_pairs}"
 
     def test_hip_builtin_variables(self):
         """Test HIP built-in variable tokenization"""
@@ -78,11 +96,19 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
+        # Check specific token types
+        token_pairs = [
+            (token.type, token.value) for token in tokens if token.type != "NEWLINE"
+        ]
         token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
 
+        # These should be IDENTIFIER tokens
         assert "hipMalloc" in token_values
-        assert "__syncthreads" in token_values
         assert "__threadfence" in token_values
+        assert "__threadfence_block" in token_values
+
+        # __syncthreads should be a specific token type
+        assert ("SYNCTHREADS", "__syncthreads") in token_pairs
 
     def test_operators_tokenization(self):
         """Test operator tokenization"""
@@ -365,9 +391,15 @@ class TestHipLexer:
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
 
+        token_pairs = [
+            (token.type, token.value) for token in tokens if token.type != "NEWLINE"
+        ]
         token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
 
-        assert "hipError_t" in token_values
+        # hipError_t should be a specific token type
+        assert ("HIPERROR", "hipError_t") in token_pairs
+
+        # These should be IDENTIFIER tokens
         assert "hipMalloc" in token_values
         assert "hipLaunchKernelGGL" in token_values
 

@@ -30,387 +30,435 @@ from .HipAst import (
     PreprocessorNode,
     HipBuiltinNode,
 )
-from ...translator.ast import (
-    ShaderNode as CrossGLShaderNode,
-    FunctionNode as CrossGLFunctionNode,
-    VariableNode as CrossGLVariableNode,
-    StructNode as CrossGLStructNode,
-    BinaryOpNode as CrossGLBinaryOpNode,
-    UnaryOpNode as CrossGLUnaryOpNode,
-    FunctionCallNode as CrossGLFunctionCallNode,
-    AssignmentNode as CrossGLAssignmentNode,
-    ArrayAccessNode as CrossGLArrayAccessNode,
-    MemberAccessNode as CrossGLMemberAccessNode,
-)
 
 
 class HipToCrossGLConverter:
-    """Converts HIP AST to CrossGL AST"""
+    """Converts HIP AST to CrossGL format"""
 
     def __init__(self):
-        self.variable_map = {}
-        self.function_map = {}
-        self.struct_map = {}
-        self.current_function = None
-        self.in_device_code = False
+        self.indent_level = 0
+        self.output = []
 
-        # HIP to CrossGL type mapping
-        self.type_map = {
-            # Basic types
-            "int": "int",
-            "float": "float",
-            "double": "double",
-            "bool": "bool",
-            "char": "int",
-            "unsigned int": "uint",
-            "unsigned char": "uint",
-            "void": "void",
-            # HIP vector types
-            "int2": "ivec2",
-            "int3": "ivec3",
-            "int4": "ivec4",
-            "float2": "vec2",
-            "float3": "vec3",
-            "float4": "vec4",
-            "double2": "dvec2",
-            "double3": "dvec3",
-            "double4": "dvec4",
-            "uint2": "uvec2",
-            "uint3": "uvec3",
-            "uint4": "uvec4",
-            # HIP matrix types (map to arrays for now)
-            "float2x2": "mat2",
-            "float3x3": "mat3",
-            "float4x4": "mat4",
-            # Memory types
-            "hipDeviceptr_t": "buffer",
-            "texture": "sampler2D",
-            "surface": "image2D",
-        }
+    def generate(self, ast_node):
+        """Generate CrossGL code from HIP AST"""
+        self.output = []
+        self.indent_level = 0
+        self.visit(ast_node)
+        return "\n".join(self.output)
 
-        # HIP function mappings
-        self.function_map_builtin = {
-            # Math functions
-            "sqrtf": "sqrt",
-            "sinf": "sin",
-            "cosf": "cos",
-            "tanf": "tan",
-            "asinf": "asin",
-            "acosf": "acos",
-            "atanf": "atan",
-            "atan2f": "atan2",
-            "expf": "exp",
-            "exp2f": "exp2",
-            "logf": "log",
-            "log2f": "log2",
-            "powf": "pow",
-            "fabsf": "abs",
-            "floorf": "floor",
-            "ceilf": "ceil",
-            "fmodf": "mod",
-            "fminf": "min",
-            "fmaxf": "max",
-            "rsqrtf": "inversesqrt",
-            # Vector functions
-            "make_float2": "vec2",
-            "make_float3": "vec3",
-            "make_float4": "vec4",
-            "make_int2": "ivec2",
-            "make_int3": "ivec3",
-            "make_int4": "ivec4",
-            "dot": "dot",
-            "cross": "cross",
-            "normalize": "normalize",
-            "length": "length",
-            "distance": "distance",
-            # Texture functions
-            "tex2D": "texture",
-            "tex3D": "texture",
-            "texCubemap": "texture",
-            # Atomic functions
-            "atomicAdd": "atomicAdd",
-            "atomicSub": "atomicSub",
-            "atomicMax": "atomicMax",
-            "atomicMin": "atomicMin",
-            "atomicExch": "atomicExchange",
-            # Sync functions
-            "__syncthreads": "barrier",
-            "__threadfence": "memoryBarrier",
-        }
+    def visit(self, node):
+        """Visit a node and generate code"""
+        method_name = f"visit_{type(node).__name__}"
+        visitor = getattr(self, method_name, self.generic_visit)
+        return visitor(node)
 
-        # Built-in variable mappings
-        self.builtin_map = {
-            "threadIdx.x": "gl_LocalInvocationID.x",
-            "threadIdx.y": "gl_LocalInvocationID.y",
-            "threadIdx.z": "gl_LocalInvocationID.z",
-            "blockIdx.x": "gl_WorkGroupID.x",
-            "blockIdx.y": "gl_WorkGroupID.y",
-            "blockIdx.z": "gl_WorkGroupID.z",
-            "blockDim.x": "gl_WorkGroupSize.x",
-            "blockDim.y": "gl_WorkGroupSize.y",
-            "blockDim.z": "gl_WorkGroupSize.z",
-            "gridDim.x": "gl_NumWorkGroups.x",
-            "gridDim.y": "gl_NumWorkGroups.y",
-            "gridDim.z": "gl_NumWorkGroups.z",
-        }
-
-    def convert(self, node: Any) -> Any:
-        """Convert HIP AST node to CrossGL AST node"""
-        if node is None:
-            return None
-
-        # Handle different node types from HipParser
-        if hasattr(node, "statements"):  # HipProgramNode
-            return self.convert_program(node)
-        elif isinstance(node, FunctionNode):
-            return self.convert_function(node)
-        elif isinstance(node, KernelNode):
-            return self.convert_kernel(node)
-        elif isinstance(node, StructNode):
-            return self.convert_struct(node)
-        elif isinstance(node, VariableNode):
-            return self.convert_variable(node)
-        elif isinstance(node, BinaryOpNode):
-            return self.convert_binary_op(node)
-        elif isinstance(node, UnaryOpNode):
-            return self.convert_unary_op(node)
-        elif isinstance(node, FunctionCallNode):
-            return self.convert_function_call(node)
-        elif isinstance(node, ArrayAccessNode):
-            return self.convert_array_access(node)
-        elif isinstance(node, MemberAccessNode):
-            return self.convert_member_access(node)
-        elif isinstance(node, AssignmentNode):
-            return self.convert_assignment(node)
-        elif isinstance(node, HipBuiltinNode):
-            return self.convert_builtin(node)
-        elif isinstance(node, PreprocessorNode):
-            return self.convert_preprocessor(node)
-        elif isinstance(node, str):
-            return node  # Return string directly for identifiers
-        elif isinstance(node, (int, float)):
-            return str(node)  # Return string representation for literals
-        elif isinstance(node, list):
-            return [self.convert(item) for item in node]
-        else:
-            # Return as-is for unknown types
+    def generic_visit(self, node):
+        """Default visitor for unknown nodes"""
+        if isinstance(node, str):
             return node
+        elif isinstance(node, list):
+            return [self.visit(item) for item in node]
+        else:
+            return str(node)
 
-    def convert_program(self, node: Any) -> CrossGLShaderNode:
-        """Convert HIP program to CrossGL shader"""
-        functions = []
-        structs = []
-        variables = []
-        cbuffers = []
+    def emit(self, code):
+        """Emit code with proper indentation"""
+        if code.strip():
+            self.output.append("    " * self.indent_level + code)
+        else:
+            self.output.append("")
 
+    def visit_HipProgramNode(self, node):
+        """Visit HIP program node (main program)"""
+        # Always emit the comment first
+        self.emit("// HIP to CrossGL conversion")
+
+        # Process all statements
         for stmt in node.statements:
-            converted = self.convert(stmt)
-            if converted:
-                if isinstance(converted, CrossGLFunctionNode):
-                    functions.append(converted)
-                elif isinstance(converted, CrossGLStructNode):
-                    structs.append(converted)
-                elif isinstance(converted, CrossGLVariableNode):
-                    variables.append(converted)
+            if isinstance(stmt, FunctionNode):
+                if hasattr(stmt, "qualifiers") and "__global__" in getattr(
+                    stmt, "qualifiers", []
+                ):
+                    self.emit(f"// Kernel: {stmt.name}")
+                    self.visit_kernel_as_compute_shader(stmt)
+                else:
+                    self.emit(f"// Function: {stmt.name}")
+                    self.visit(stmt)
+                self.emit("")
+            elif isinstance(stmt, StructNode):
+                self.visit(stmt)
+                self.emit("")
+            elif isinstance(stmt, VariableNode):
+                self.visit(stmt)
+                self.emit("")
+            else:
+                self.visit(stmt)
 
-        # Create shader with required arguments
-        shader = CrossGLShaderNode(structs, functions, variables, cbuffers)
+    def visit_FunctionNode(self, node):
+        """Visit function declaration"""
+        # Skip device functions in CrossGL (they become inline)
+        if hasattr(node, "qualifiers") and "__device__" in getattr(
+            node, "qualifiers", []
+        ):
+            return
 
-        return shader
-
-    def convert_function(self, node: FunctionNode) -> CrossGLFunctionNode:
-        """Convert HIP function to CrossGL function"""
-        self.current_function = node.name
-
-        # Convert return type
-        return_type = (
-            self.convert_type(node.return_type) if node.return_type else "void"
+        return_type = self.convert_hip_type_to_crossgl(
+            node.return_type if hasattr(node, "return_type") else "void"
         )
-
-        # Convert parameters
         params = []
+
         if hasattr(node, "params") and node.params:
             for param in node.params:
                 if isinstance(param, dict):
-                    param_type = self.convert_type(param.get("type", "int"))
+                    param_type = self.convert_hip_type_to_crossgl(
+                        param.get("type", "int")
+                    )
                     param_name = param.get("name", "param")
-                    params.append(CrossGLVariableNode(param_name, param_type))
+                    params.append(f"{param_type} {param_name}")
                 else:
-                    params.append(self.convert(param))
+                    param_type = self.convert_hip_type_to_crossgl(
+                        getattr(param, "vtype", "int")
+                    )
+                    param_name = getattr(param, "name", "param")
+                    params.append(f"{param_type} {param_name}")
 
-        # Convert body
-        body = None
+        param_str = ", ".join(params)
+        self.emit(f"{return_type} {node.name}({param_str}) {{")
+
+        self.indent_level += 1
         if hasattr(node, "body") and node.body:
-            body = self.convert(node.body)
+            if isinstance(node.body, list):
+                for stmt in node.body:
+                    self.visit(stmt)
+            else:
+                self.visit(node.body)
+        self.indent_level -= 1
 
-        # Check if this is a kernel (has __global__ qualifier)
-        is_kernel = hasattr(node, "qualifiers") and "__global__" in getattr(
-            node, "qualifiers", []
-        )
+        self.emit("}")
 
-        func = CrossGLFunctionNode(node.name, return_type, params, body)
+    def visit_kernel_as_compute_shader(self, kernel):
+        """Convert HIP kernel to CrossGL compute shader"""
+        # Generate compute shader layout
+        self.emit("@compute")
+        self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
-        if is_kernel:
-            func.shader_type = "compute"
+        # Generate function signature
+        params = []
+        if hasattr(kernel, "params") and kernel.params:
+            for param in kernel.params:
+                if isinstance(param, dict):
+                    param_type = self.convert_hip_type_to_crossgl(
+                        param.get("type", "int")
+                    )
+                    param_name = param.get("name", "param")
+                    # Add storage buffer qualifiers for pointer parameters
+                    if "*" in param.get("type", ""):
+                        params.append(
+                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{param_type.replace('*', '').strip()}>"
+                        )
+                    else:
+                        params.append(f"{param_type} {param_name}")
+                else:
+                    param_type = self.convert_hip_type_to_crossgl(
+                        getattr(param, "vtype", "int")
+                    )
+                    param_name = getattr(param, "name", "param")
+                    if "*" in getattr(param, "vtype", ""):
+                        params.append(
+                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{param_type.replace('*', '').strip()}>"
+                        )
+                    else:
+                        params.append(f"{param_type} {param_name}")
 
-        self.current_function = None
-        return func
+        self.emit(f"fn {kernel.name}(")
+        self.indent_level += 1
+        for i, param in enumerate(params):
+            if i == len(params) - 1:
+                self.emit(f"{param}")
+            else:
+                self.emit(f"{param},")
+        self.indent_level -= 1
+        self.emit(") {")
 
-    def convert_kernel(self, node: KernelNode) -> CrossGLFunctionNode:
-        """Convert HIP kernel to CrossGL compute function"""
-        return self.convert_function(node)
+        # Add built-in variable declarations
+        self.indent_level += 1
+        self.emit("let thread_id = gl_GlobalInvocationID;")
+        self.emit("let block_id = gl_WorkGroupID;")
+        self.emit("let thread_local_id = gl_LocalInvocationID;")
+        self.emit("let block_dim = gl_WorkGroupSize;")
+        self.emit("")
 
-    def convert_struct(self, node: StructNode) -> CrossGLStructNode:
-        """Convert HIP struct to CrossGL struct"""
-        members = []
+        # Process kernel body
+        if hasattr(kernel, "body") and kernel.body:
+            if isinstance(kernel.body, list):
+                for stmt in kernel.body:
+                    self.visit(stmt)
+            else:
+                self.visit(kernel.body)
+
+        self.indent_level -= 1
+        self.emit("}")
+
+    def visit_StructNode(self, node):
+        """Visit struct declaration"""
+        self.emit(f"struct {node.name} {{")
+        self.indent_level += 1
 
         if hasattr(node, "members") and node.members:
             for member in node.members:
-                converted = self.convert(member)
-                if converted:
-                    members.append(converted)
+                if isinstance(member, VariableNode):
+                    member_type = self.convert_hip_type_to_crossgl(
+                        getattr(member, "vtype", "int")
+                    )
+                    self.emit(f"{member_type} {member.name};")
 
-        return CrossGLStructNode(node.name, members)
+        self.indent_level -= 1
+        self.emit("};")
 
-    def convert_variable(self, node: VariableNode) -> CrossGLVariableNode:
-        """Convert HIP variable to CrossGL variable"""
-        var_type = (
-            self.convert_type(node.vtype)
-            if hasattr(node, "vtype")
-            else self.convert_type(getattr(node, "type", "int"))
-        )
-        var_name = node.name
-
-        var = CrossGLVariableNode(var_name, var_type)
+    def visit_VariableNode(self, node):
+        """Visit variable declaration"""
+        var_type = self.convert_hip_type_to_crossgl(getattr(node, "vtype", "int"))
 
         if hasattr(node, "value") and node.value:
-            var.value = self.convert(node.value)
+            value = self.visit(node.value)
+            self.emit(f"var {node.name}: {var_type} = {value};")
+        else:
+            self.emit(f"var {node.name}: {var_type};")
 
-        return var
+    def visit_AssignmentNode(self, node):
+        """Visit assignment"""
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        operator = getattr(node, "operator", "=")
+        self.emit(f"{left} {operator} {right};")
 
-    def convert_binary_op(self, node: BinaryOpNode) -> CrossGLBinaryOpNode:
-        """Convert HIP binary operation to CrossGL binary operation"""
-        left = self.convert(node.left)
-        right = self.convert(node.right)
+    def visit_BinaryOpNode(self, node):
+        """Visit binary operation"""
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        return f"({left} {node.op} {right})"
 
-        # Map HIP operators to CrossGL operators
-        op_map = {
-            "&&": "and",
-            "||": "or",
-            "==": "==",
-            "!=": "!=",
-            "<": "<",
-            ">": ">",
-            "<=": "<=",
-            ">=": ">=",
-            "+": "+",
-            "-": "-",
-            "*": "*",
-            "/": "/",
-            "%": "%",
-            "&": "&",
-            "|": "|",
-            "^": "^",
-            "<<": "<<",
-            ">>": ">>",
-        }
+    def visit_UnaryOpNode(self, node):
+        """Visit unary operation"""
+        operand = self.visit(node.operand)
+        if hasattr(node, "postfix") and node.postfix:
+            return f"({operand}{node.op})"
+        else:
+            return f"({node.op}{operand})"
 
-        operator = op_map.get(node.op, node.op)
-        return CrossGLBinaryOpNode(left, operator, right)
+    def visit_FunctionCallNode(self, node):
+        """Visit function call"""
+        args = []
+        if hasattr(node, "args") and node.args:
+            args = [self.visit(arg) for arg in node.args]
+        elif hasattr(node, "arguments") and node.arguments:
+            args = [self.visit(arg) for arg in node.arguments]
 
-    def convert_unary_op(self, node: UnaryOpNode) -> CrossGLUnaryOpNode:
-        """Convert HIP unary operation to CrossGL unary operation"""
-        operand = self.convert(node.operand)
+        args_str = ", ".join(args)
 
-        # Map HIP unary operators
-        op_map = {
-            "!": "not",
-            "-": "-",
-            "+": "+",
-            "~": "~",
-            "++": "++",
-            "--": "--",
-            "*": "*",  # dereference
-            "&": "&",  # address-of
-        }
-
-        operator = op_map.get(node.op, node.op)
-        return CrossGLUnaryOpNode(operator, operand)
-
-    def convert_function_call(self, node: FunctionCallNode) -> CrossGLFunctionCallNode:
-        """Convert HIP function call to CrossGL function call"""
-        # Convert function name
+        # Get function name
         if hasattr(node, "name"):
             func_name = node.name
         else:
             func_name = str(node.function) if hasattr(node, "function") else "unknown"
 
-        # Map HIP built-in functions
-        mapped_name = self.function_map_builtin.get(func_name, func_name)
-        function = mapped_name  # Use string directly for function name
+        # Convert HIP built-in functions
+        crossgl_func = self.convert_hip_builtin_function(func_name)
+        return f"{crossgl_func}({args_str})"
 
-        # Convert arguments
-        args = []
-        if hasattr(node, "args") and node.args:
-            args = [self.convert(arg) for arg in node.args]
-        elif hasattr(node, "arguments") and node.arguments:
-            args = [self.convert(arg) for arg in node.arguments]
-
-        return CrossGLFunctionCallNode(function, args)
-
-    def convert_array_access(self, node: ArrayAccessNode) -> CrossGLArrayAccessNode:
-        """Convert HIP array access to CrossGL array access"""
-        array = self.convert(node.array)
-        index = self.convert(node.index)
-        return CrossGLArrayAccessNode(array, index)
-
-    def convert_member_access(self, node: MemberAccessNode) -> CrossGLMemberAccessNode:
-        """Convert HIP member access to CrossGL member access"""
-        object_expr = self.convert(node.object)
-        return CrossGLMemberAccessNode(object_expr, node.member)
-
-    def convert_assignment(self, node: AssignmentNode) -> CrossGLAssignmentNode:
-        """Convert HIP assignment to CrossGL assignment"""
-        left = self.convert(node.left)
-        right = self.convert(node.right)
-        operator = getattr(node, "operator", "=")
-        return CrossGLAssignmentNode(left, right, operator)
-
-    def convert_builtin(self, node: HipBuiltinNode) -> str:
-        """Convert HIP built-in variable to CrossGL built-in"""
-        if node.component:
-            builtin_name = f"{node.builtin_name}.{node.component}"
+    def visit_MemberAccessNode(self, node):
+        """Visit member access"""
+        obj = self.visit(node.object)
+        if hasattr(node, "is_pointer") and node.is_pointer:
+            # Convert pointer access to direct access in CrossGL
+            return f"{obj}.{node.member}"
         else:
-            builtin_name = node.builtin_name
+            return f"{obj}.{node.member}"
 
-        mapped_name = self.builtin_map.get(builtin_name, builtin_name)
-        return CrossGLIdentifierNode(mapped_name)
+    def visit_ArrayAccessNode(self, node):
+        """Visit array access"""
+        array = self.visit(node.array)
+        index = self.visit(node.index)
+        return f"{array}[{index}]"
 
-    def convert_preprocessor(self, node: PreprocessorNode) -> None:
-        """Convert HIP preprocessor directive (mostly ignored)"""
-        # Skip preprocessor directives in CrossGL
-        return None
+    def visit_HipBuiltinNode(self, node):
+        """Visit HIP built-in variables"""
+        builtin_map = {
+            "threadIdx": "gl_LocalInvocationID",
+            "blockIdx": "gl_WorkGroupID",
+            "gridDim": "gl_NumWorkGroups",
+            "blockDim": "gl_WorkGroupSize",
+        }
 
-    def convert_type(self, type_info: Any) -> str:
-        """Convert HIP type to CrossGL type"""
-        if type_info is None:
+        base_name = builtin_map.get(node.builtin_name, node.builtin_name)
+        if hasattr(node, "component") and node.component:
+            return f"{base_name}.{node.component}"
+        else:
+            return base_name
+
+    def visit_ReturnNode(self, node):
+        """Visit return statement"""
+        if hasattr(node, "value") and node.value:
+            value = self.visit(node.value)
+            self.emit(f"return {value};")
+        else:
+            self.emit("return;")
+
+    def visit_IfNode(self, node):
+        """Visit if statement"""
+        condition = self.visit(node.condition)
+        self.emit(f"if ({condition}) {{")
+
+        self.indent_level += 1
+        if hasattr(node, "if_body") and node.if_body:
+            if isinstance(node.if_body, list):
+                for stmt in node.if_body:
+                    self.visit(stmt)
+            else:
+                self.visit(node.if_body)
+        self.indent_level -= 1
+
+        if hasattr(node, "else_body") and node.else_body:
+            self.emit("} else {")
+            self.indent_level += 1
+            if isinstance(node.else_body, list):
+                for stmt in node.else_body:
+                    self.visit(stmt)
+            else:
+                self.visit(node.else_body)
+            self.indent_level -= 1
+
+        self.emit("}")
+
+    def visit_ForNode(self, node):
+        """Visit for loop"""
+        init = self.visit(node.init) if hasattr(node, "init") and node.init else ""
+        condition = (
+            self.visit(node.condition)
+            if hasattr(node, "condition") and node.condition
+            else ""
+        )
+        update = (
+            self.visit(node.update) if hasattr(node, "update") and node.update else ""
+        )
+
+        self.emit(f"for ({init}; {condition}; {update}) {{")
+
+        self.indent_level += 1
+        if hasattr(node, "body") and node.body:
+            if isinstance(node.body, list):
+                for stmt in node.body:
+                    self.visit(stmt)
+            else:
+                self.visit(node.body)
+        self.indent_level -= 1
+
+        self.emit("}")
+
+    def convert_hip_type_to_crossgl(self, hip_type):
+        """Convert HIP types to CrossGL equivalents"""
+        if hip_type is None:
             return "void"
 
-        if isinstance(type_info, str):
-            return self.type_map.get(type_info, type_info)
+        if not isinstance(hip_type, str):
+            hip_type = str(hip_type)
 
-        # Handle complex type objects
-        if hasattr(type_info, "name"):
-            type_name = type_info.name
-        elif hasattr(type_info, "base_type"):
-            type_name = type_info.base_type
-        else:
-            type_name = str(type_info)
+        type_mapping = {
+            # Basic types
+            "void": "void",
+            "bool": "bool",
+            "char": "i8",
+            "unsigned char": "u8",
+            "short": "i16",
+            "unsigned short": "u16",
+            "int": "i32",
+            "unsigned int": "u32",
+            "long": "i64",
+            "unsigned long": "u64",
+            "float": "f32",
+            "double": "f64",
+            "size_t": "u32",
+            # HIP vector types
+            "float2": "vec2<f32>",
+            "float3": "vec3<f32>",
+            "float4": "vec4<f32>",
+            "double2": "vec2<f64>",
+            "double3": "vec3<f64>",
+            "double4": "vec4<f64>",
+            "int2": "vec2<i32>",
+            "int3": "vec3<i32>",
+            "int4": "vec4<i32>",
+            "uint2": "vec2<u32>",
+            "uint3": "vec3<u32>",
+            "uint4": "vec4<u32>",
+        }
 
-        return self.type_map.get(type_name, type_name)
+        # Handle pointers
+        if "*" in hip_type:
+            base_type = hip_type.replace("*", "").strip()
+            mapped_base = type_mapping.get(base_type, base_type)
+            return f"ptr<{mapped_base}>"
+
+        # Handle arrays
+        if "[" in hip_type and "]" in hip_type:
+            parts = hip_type.split("[")
+            base_type = parts[0].strip()
+            size = parts[1].split("]")[0]
+            mapped_base = type_mapping.get(base_type, base_type)
+            return f"array<{mapped_base}, {size}>"
+
+        return type_mapping.get(hip_type, hip_type)
+
+    def convert_hip_builtin_function(self, func_name):
+        """Convert HIP built-in functions to CrossGL equivalents"""
+        function_mapping = {
+            # Math functions
+            "sqrtf": "sqrt",
+            "powf": "pow",
+            "sinf": "sin",
+            "cosf": "cos",
+            "tanf": "tan",
+            "logf": "log",
+            "expf": "exp",
+            "fabsf": "abs",
+            "fminf": "min",
+            "fmaxf": "max",
+            "floorf": "floor",
+            "ceilf": "ceil",
+            # Double precision variants
+            "sqrt": "sqrt",
+            "pow": "pow",
+            "sin": "sin",
+            "cos": "cos",
+            "tan": "tan",
+            "log": "log",
+            "exp": "exp",
+            "fabs": "abs",
+            "fmin": "min",
+            "fmax": "max",
+            "floor": "floor",
+            "ceil": "ceil",
+            # Vector functions
+            "make_float2": "vec2<f32>",
+            "make_float3": "vec3<f32>",
+            "make_float4": "vec4<f32>",
+            "make_int2": "vec2<i32>",
+            "make_int3": "vec3<i32>",
+            "make_int4": "vec4<i32>",
+            # Sync functions
+            "__syncthreads": "workgroupBarrier",
+            "__threadfence": "memoryBarrier",
+        }
+
+        return function_mapping.get(func_name, func_name)
+
+    # Legacy method for backwards compatibility
+    def convert(self, node):
+        """Legacy convert method for compatibility"""
+        return self.generate(node)
 
 
-def hip_to_crossgl(hip_ast: Any) -> CrossGLShaderNode:
-    """Convert HIP AST to CrossGL AST"""
+def hip_to_crossgl(hip_ast: Any) -> str:
+    """Convert HIP AST to CrossGL code string"""
     converter = HipToCrossGLConverter()
-    return converter.convert(hip_ast)
+    return converter.generate(hip_ast)

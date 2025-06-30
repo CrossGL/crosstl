@@ -129,6 +129,18 @@ class HipParser:
         if self.match("CLASS"):
             return self.parse_class()
 
+        # Parse return statements
+        if self.match("RETURN"):
+            return self.parse_return_statement()
+
+        # Parse control flow statements
+        if self.match("IF"):
+            return self.parse_if_statement()
+        elif self.match("FOR"):
+            return self.parse_for_statement()
+        elif self.match("WHILE"):
+            return self.parse_while_statement()
+
         # Try to parse function or variable declaration
         if self.is_function_declaration():
             return self.parse_simple_function()
@@ -384,7 +396,7 @@ class HipParser:
             type_name = "int"  # Default type
 
         # Handle pointer types
-        while self.match("ASTERISK"):
+        while self.match("ASTERISK", "STAR"):
             type_name += "*"
             self.advance()
 
@@ -415,6 +427,78 @@ class HipParser:
                 break
 
         return params
+
+    def parse_return_statement(self):
+        """Parse return statement"""
+        self.consume("RETURN")
+
+        value = None
+        if not self.match("SEMICOLON"):
+            value = self.parse_expression()
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        return ReturnNode(value)
+
+    def parse_if_statement(self):
+        """Parse if statement"""
+        self.consume("IF")
+        self.consume("LPAREN")
+        condition = self.parse_expression()
+        self.consume("RPAREN")
+
+        # Parse if body - could be a single statement or block
+        if_body = None
+        if self.match("LBRACE"):
+            if_body = self.parse_block()
+        else:
+            if_body = self.parse_statement()
+
+        else_body = None
+        if self.match("ELSE"):
+            self.advance()
+            if self.match("LBRACE"):
+                else_body = self.parse_block()
+            else:
+                else_body = self.parse_statement()
+
+        return IfNode(condition, if_body, else_body)
+
+    def parse_for_statement(self):
+        """Parse for statement"""
+        self.consume("FOR")
+        self.consume("LPAREN")
+
+        init = None
+        if not self.match("SEMICOLON"):
+            init = self.parse_expression()
+        self.consume("SEMICOLON")
+
+        condition = None
+        if not self.match("SEMICOLON"):
+            condition = self.parse_expression()
+        self.consume("SEMICOLON")
+
+        update = None
+        if not self.match("RPAREN"):
+            update = self.parse_expression()
+        self.consume("RPAREN")
+
+        body = self.parse_statement()
+
+        return ForNode(init, condition, update, body)
+
+    def parse_while_statement(self):
+        """Parse while statement"""
+        self.consume("WHILE")
+        self.consume("LPAREN")
+        condition = self.parse_expression()
+        self.consume("RPAREN")
+
+        body = self.parse_statement()
+
+        return WhileNode(condition, body)
 
     def parse_block(self):
         """Parse a block of statements"""
@@ -520,7 +604,7 @@ class HipParser:
         """Parse multiplicative expressions"""
         left = self.parse_unary_expression()
 
-        while self.match("MULTIPLY", "DIVIDE", "MODULO"):
+        while self.match("MULTIPLY", "STAR", "DIVIDE", "SLASH", "MODULO", "PERCENT"):
             op = self.current_token.value
             self.advance()
             right = self.parse_unary_expression()
@@ -530,7 +614,9 @@ class HipParser:
 
     def parse_unary_expression(self):
         """Parse unary expressions"""
-        if self.match("PLUS", "MINUS", "NOT", "BITWISE_NOT", "INCREMENT", "DECREMENT"):
+        if self.match(
+            "PLUS", "MINUS", "NOT", "BITWISE_NOT", "INCREMENT", "DECREMENT", "STAR"
+        ):
             op = self.current_token.value
             self.advance()
             operand = self.parse_unary_expression()
@@ -588,7 +674,21 @@ class HipParser:
 
             return name
 
-        elif self.match("INTEGER", "FLOAT_NUM", "STRING"):
+        elif self.match("THREADIDX", "BLOCKIDX", "BLOCKDIM", "GRIDDIM"):
+            # Handle built-in variables as specific tokens
+            name = self.current_token.value
+            self.advance()
+
+            component = None
+            if self.match("DOT"):
+                self.advance()
+                if self.match("IDENTIFIER"):
+                    component = self.current_token.value
+                    self.advance()
+
+            return HipBuiltinNode(name, component)
+
+        elif self.match("INTEGER", "FLOAT_NUM", "FLOAT", "STRING"):
             value = self.current_token.value
             self.advance()
             return value

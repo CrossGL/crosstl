@@ -14,6 +14,7 @@ setup(
         "crosstl/backend/Mojo",
         "crosstl/backend/Rust",
         "crosstl/backend/CUDA",
+        "crosstl/backend/HIP",
     ],
     version="0.0.1.3",
     author="CrossGL team",
