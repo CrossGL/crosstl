@@ -244,10 +244,7 @@ class TestVulkanSPIRVCodeGen:
         float_type = PrimitiveType("float")
         vec2_type = PrimitiveType("vec2")  # Simplified for test
 
-        struct_members = [
-            VariableNode("x", float_type), 
-            VariableNode("uv", vec2_type)
-        ]
+        struct_members = [VariableNode("x", float_type), VariableNode("uv", vec2_type)]
 
         struct_node = StructNode("TestStruct", struct_members)
 
@@ -257,7 +254,7 @@ class TestVulkanSPIRVCodeGen:
             name="testFunction",
             return_type=float_type,
             parameters=[VariableNode("param", float_type)],
-            body=function_body
+            body=function_body,
         )
 
         # Use the correct ShaderNode constructor with required parameters

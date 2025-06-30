@@ -676,7 +676,7 @@ class VulkanSPIRVCodeGen:
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
-        
+
         if type_str == "float":
             return self.register_primitive_type("float")
         elif type_str == "int":
@@ -716,16 +716,16 @@ class VulkanSPIRVCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
-        if hasattr(type_node, 'name'):
+        if hasattr(type_node, "name"):
             # PrimitiveType
             return type_node.name
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             # VectorType or ArrayType
-            if hasattr(type_node, 'rows'):
+            if hasattr(type_node, "rows"):
                 # MatrixType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 return f"mat{type_node.rows}x{type_node.cols}"
-            elif str(type(type_node)).find('ArrayType') != -1:
+            elif str(type(type_node)).find("ArrayType") != -1:
                 # ArrayType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
@@ -757,12 +757,14 @@ class VulkanSPIRVCodeGen:
 
             if isinstance(member, VariableNode):
                 # Regular struct member - handle both old and new AST
-                if hasattr(member, 'var_type'):
+                if hasattr(member, "var_type"):
                     # New AST structure
                     vtype_str = self.convert_type_node_to_string(member.var_type)
-                elif hasattr(member, 'vtype'):
+                elif hasattr(member, "vtype"):
                     # Old AST structure
-                    if hasattr(member.vtype, 'name') or hasattr(member.vtype, 'element_type'):
+                    if hasattr(member.vtype, "name") or hasattr(
+                        member.vtype, "element_type"
+                    ):
                         # TypeNode object
                         vtype_str = self.convert_type_node_to_string(member.vtype)
                     else:
@@ -851,7 +853,9 @@ class VulkanSPIRVCodeGen:
 
         # Map parameter types
         param_types = []
-        for param in getattr(function_node, "parameters", getattr(function_node, "params", [])):
+        for param in getattr(
+            function_node, "parameters", getattr(function_node, "params", [])
+        ):
             if hasattr(param, "vtype"):
                 param_type = self.map_crossgl_type(param.vtype)
             else:
@@ -864,7 +868,9 @@ class VulkanSPIRVCodeGen:
 
         # Add parameters
         parameters = []
-        for i, param in enumerate(getattr(function_node, "parameters", getattr(function_node, "params", []))):
+        for i, param in enumerate(
+            getattr(function_node, "parameters", getattr(function_node, "params", []))
+        ):
             if hasattr(param, "name"):
                 param_name = param.name
             else:
@@ -893,7 +899,7 @@ class VulkanSPIRVCodeGen:
     def process_statements(self, statements):
         """Process a list of CrossGL statements."""
         # Handle both List and BlockNode structures
-        if hasattr(statements, 'statements'):
+        if hasattr(statements, "statements"):
             # BlockNode structure (new AST)
             stmt_list = statements.statements
         elif isinstance(statements, list):
@@ -902,7 +908,7 @@ class VulkanSPIRVCodeGen:
         else:
             # Single statement - wrap in list
             stmt_list = [statements]
-            
+
         for stmt in stmt_list:
             self.process_statement(stmt)
 
@@ -1495,7 +1501,7 @@ class VulkanSPIRVCodeGen:
                 qualifier = func.qualifier
             else:
                 qualifier = None
-                
+
             if qualifier == "vertex":
                 self.is_vertex_shader = True
                 break
@@ -1540,7 +1546,7 @@ class VulkanSPIRVCodeGen:
                 qualifier = func.qualifier
             else:
                 qualifier = None
-                
+
             if func.name == "main" or qualifier in ["vertex", "fragment"]:
                 # Main shader function - save for later
                 if self.main_fn_id is None:
@@ -1558,7 +1564,7 @@ class VulkanSPIRVCodeGen:
                 qualifier = func.qualifier
             else:
                 qualifier = None
-                
+
             if qualifier in ["vertex", "fragment"]:
                 self.process_function_node(func)
 

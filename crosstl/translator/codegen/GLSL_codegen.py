@@ -444,7 +444,9 @@ class GLSLCodeGen:
 
     def generate_if(self, node, indent, is_main=False):
         indent_str = "    " * indent
-        condition = self.generate_expression(node.condition if hasattr(node, 'condition') else node.if_condition)
+        condition = self.generate_expression(
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
         code = f"{indent_str}if ({condition}) {{\n"
 
         # Generate if body - handle BlockNode structure
@@ -477,7 +479,7 @@ class GLSLCodeGen:
                 code += f"{indent_str}}}"
 
         # Generate else body
-        if hasattr(node, 'else_body') and node.else_body:
+        if hasattr(node, "else_body") and node.else_body:
             code += f" else {{\n"
             else_body = node.else_body
             if hasattr(else_body, "statements"):

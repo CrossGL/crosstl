@@ -95,8 +95,12 @@ class CudaCodeGen:
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
                     # Set the stage type context for proper qualifier handling
-                    stage_name = str(stage_type).split(".")[-1].lower() if hasattr(stage_type, 'name') else str(stage_type).lower()
-                    
+                    stage_name = (
+                        str(stage_type).split(".")[-1].lower()
+                        if hasattr(stage_type, "name")
+                        else str(stage_type).lower()
+                    )
+
                     # Temporarily set qualifier for compute stages
                     if stage_name == "compute" or "compute" in stage_name:
                         # Set the function qualifier to compute for proper __global__ generation
@@ -105,7 +109,7 @@ class CudaCodeGen:
                                 stage.entry_point.qualifiers.append("compute")
                         else:
                             stage.entry_point.qualifiers = ["compute"]
-                    
+
                     self.visit(stage.entry_point)
                     self.emit("")
 
@@ -573,16 +577,16 @@ class CudaCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
-        if hasattr(type_node, 'name'):
+        if hasattr(type_node, "name"):
             # PrimitiveType
             return type_node.name
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             # VectorType or ArrayType
-            if hasattr(type_node, 'rows'):
+            if hasattr(type_node, "rows"):
                 # MatrixType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 return f"mat{type_node.rows}x{type_node.cols}"
-            elif str(type(type_node)).find('ArrayType') != -1:
+            elif str(type(type_node)).find("ArrayType") != -1:
                 # ArrayType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:

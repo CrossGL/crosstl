@@ -439,51 +439,57 @@ class RustCodeGen:
                 vtype = stmt.vtype
             else:
                 vtype = "f32"
-            
+
             # Handle initialization
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
                 init_expr = self.generate_expression(stmt.initial_value)
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
             else:
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)};\n"
-                
+
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
-            
+
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
-            
+
         elif isinstance(stmt, IfNode):
             return self.generate_if(stmt, indent)
-            
+
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
-            
+
         elif isinstance(stmt, ReturnNode):
-            if hasattr(stmt, 'value') and stmt.value is not None:
+            if hasattr(stmt, "value") and stmt.value is not None:
                 # Handle both single values and lists
                 if isinstance(stmt.value, list):
                     # Multiple return values (tuple)
-                    values = ", ".join(self.generate_expression(val) for val in stmt.value)
+                    values = ", ".join(
+                        self.generate_expression(val) for val in stmt.value
+                    )
                     return f"{indent_str}return ({values});\n"
                 else:
                     # Single return value
-                    return f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                    return (
+                        f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                    )
             else:
                 # Void return
                 return f"{indent_str}return;\n"
-                
-        elif hasattr(stmt, '__class__') and 'ExpressionStatement' in str(stmt.__class__):
+
+        elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
+            stmt.__class__
+        ):
             # Handle ExpressionStatementNode
-            if hasattr(stmt, 'expression'):
+            if hasattr(stmt, "expression"):
                 return f"{indent_str}{self.generate_expression(stmt.expression)};\n"
             else:
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
-                
+
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode as statement - likely misclassified
             return f"{indent_str}// Unhandled ArrayAccessNode: {stmt}\n"
-            
+
         else:
             # Try to generate as expression
             expr_result = self.generate_expression(stmt)
@@ -504,21 +510,23 @@ class RustCodeGen:
 
     def generate_assignment(self, node):
         # Handle both old and new AST assignment structures
-        if hasattr(node, 'target') and hasattr(node, 'value'):
+        if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
             lhs = self.generate_expression(node.target)
             rhs = self.generate_expression(node.value)
-            op = getattr(node, 'operator', '=')
+            op = getattr(node, "operator", "=")
         else:
             # Old AST structure
             lhs = self.generate_expression(node.left)
             rhs = self.generate_expression(node.right)
-            op = getattr(node, 'operator', '=')
+            op = getattr(node, "operator", "=")
         return f"{lhs} {op} {rhs}"
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(node.condition if hasattr(node, 'condition') else node.if_condition)
+        condition = self.generate_expression(
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
         code = f"{indent_str}if {condition} {{\n"
 
         # Generate if body - handle BlockNode structure
@@ -551,7 +559,7 @@ class RustCodeGen:
                 code += f"{indent_str}}}"
 
         # Generate else body
-        if hasattr(node, 'else_body') and node.else_body:
+        if hasattr(node, "else_body") and node.else_body:
             code += f" else {{\n"
             else_body = node.else_body
             if hasattr(else_body, "statements"):
@@ -608,49 +616,51 @@ class RustCodeGen:
             if isinstance(expr, bool):
                 return "true" if expr else "false"
             return str(expr)
-        elif hasattr(expr, '__class__') and 'Literal' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             # Handle LiteralNode
-            if hasattr(expr, 'value'):
+            if hasattr(expr, "value"):
                 value = expr.value
-                if isinstance(value, str) and not (value.startswith('"') and value.endswith('"')):
+                if isinstance(value, str) and not (
+                    value.startswith('"') and value.endswith('"')
+                ):
                     return f'"{value}"'  # Add quotes for string literals
                 return str(value)
             return str(expr)
-        elif hasattr(expr, '__class__') and 'Identifier' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return getattr(expr, 'name', str(expr))
+            return getattr(expr, "name", str(expr))
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "name"):
                 return expr.name
             else:
                 return str(expr)
-        elif hasattr(expr, '__class__') and 'BinaryOp' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             # Handle BinaryOpNode
-            left = self.generate_expression(getattr(expr, 'left', ''))
-            right = self.generate_expression(getattr(expr, 'right', ''))
-            op = getattr(expr, 'operator', getattr(expr, 'op', '+'))
+            left = self.generate_expression(getattr(expr, "left", ""))
+            right = self.generate_expression(getattr(expr, "right", ""))
+            op = getattr(expr, "operator", getattr(expr, "op", "+"))
             return f"({left} {self.map_operator(op)} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
-        elif hasattr(expr, '__class__') and 'UnaryOp' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             # Handle UnaryOpNode
-            operand = self.generate_expression(getattr(expr, 'operand', ''))
-            op = getattr(expr, 'operator', getattr(expr, 'op', '+'))
+            operand = self.generate_expression(getattr(expr, "operand", ""))
+            op = getattr(expr, "operator", getattr(expr, "op", "+"))
             return f"({self.map_operator(op)}{operand})"
-        elif hasattr(expr, '__class__') and 'ArrayAccess' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             # Handle ArrayAccessNode
-            array_expr = getattr(expr, 'array_expr', getattr(expr, 'array', ''))
-            index_expr = getattr(expr, 'index_expr', getattr(expr, 'index', ''))
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
+            index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
             array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
             return f"{array}[{index}]"
-        elif hasattr(expr, '__class__') and 'FunctionCall' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             # Handle FunctionCallNode
-            func_name = getattr(expr, 'function', getattr(expr, 'name', 'unknown'))
-            if hasattr(func_name, 'name'):
+            func_name = getattr(expr, "function", getattr(expr, "name", "unknown"))
+            if hasattr(func_name, "name"):
                 func_name = func_name.name
-            args = getattr(expr, 'arguments', getattr(expr, 'args', []))
-            
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+
             # Map function names to Rust equivalents
             func_name = self.function_map.get(func_name, func_name)
 
@@ -682,17 +692,17 @@ class RustCodeGen:
             # Handle standard function calls
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{func_name}({args_str})"
-        elif hasattr(expr, '__class__') and 'MemberAccess' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             # Handle MemberAccessNode
-            obj_expr = getattr(expr, 'object_expr', getattr(expr, 'object', ''))
-            member = getattr(expr, 'member', '')
+            obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
+            member = getattr(expr, "member", "")
             obj = self.generate_expression(obj_expr)
             return f"{obj}.{member}"
-        elif hasattr(expr, '__class__') and 'TernaryOp' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
             # Handle TernaryOpNode
-            condition = self.generate_expression(getattr(expr, 'condition', ''))
-            true_expr = self.generate_expression(getattr(expr, 'true_expr', ''))
-            false_expr = self.generate_expression(getattr(expr, 'false_expr', ''))
+            condition = self.generate_expression(getattr(expr, "condition", ""))
+            true_expr = self.generate_expression(getattr(expr, "true_expr", ""))
+            false_expr = self.generate_expression(getattr(expr, "false_expr", ""))
             return f"(if {condition} {{ {true_expr} }} else {{ {false_expr} }})"
         else:
             # Fallback - return string representation
@@ -701,13 +711,13 @@ class RustCodeGen:
     def map_type(self, vtype):
         if vtype is None:
             return "f32"
-        
+
         # Handle TypeNode objects by converting to string first
-        if hasattr(vtype, 'name') or hasattr(vtype, 'element_type'):
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
-        
+
         # Handle array types
         if "[" in vtype_str and "]" in vtype_str:
             base_type, size = parse_array_type(vtype_str)

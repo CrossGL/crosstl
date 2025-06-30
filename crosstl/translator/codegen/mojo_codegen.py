@@ -409,6 +409,7 @@ class MojoCodeGen:
                 ):
                     # This is likely an array declaration
                     import re
+
                     array_match = re.search(r"array=(\w+).*?index=(\w+)", vtype_str)
                     if array_match:
                         array_match.group(1)
@@ -470,7 +471,9 @@ class MojoCodeGen:
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(node.condition if hasattr(node, 'condition') else node.if_condition)
+        condition = self.generate_expression(
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
         code = f"{indent_str}if {condition}:\n"
 
         # Generate if body - handle BlockNode structure
@@ -500,7 +503,7 @@ class MojoCodeGen:
                         code += self.generate_statement(stmt, indent + 1)
 
         # Generate else body
-        if hasattr(node, 'else_body') and node.else_body:
+        if hasattr(node, "else_body") and node.else_body:
             code += f"{indent_str}else:\n"
             else_body = node.else_body
             if hasattr(else_body, "statements"):
@@ -580,13 +583,13 @@ class MojoCodeGen:
         elif isinstance(expr, FunctionCallNode):
             # Extract function name properly (might be IdentifierNode)
             func_name = expr.name
-            if hasattr(func_name, 'name'):
+            if hasattr(func_name, "name"):
                 # It's an IdentifierNode, extract the name
                 func_name = func_name.name
             elif not isinstance(func_name, str):
                 # Convert to string if it's some other type
                 func_name = str(func_name)
-            
+
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
 
@@ -617,20 +620,24 @@ class MojoCodeGen:
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)
             return f"({true_expr} if {condition} else {false_expr})"
-        elif hasattr(expr, '__class__') and 'Literal' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             # Handle LiteralNode
-            if hasattr(expr, 'value'):
+            if hasattr(expr, "value"):
                 value = expr.value
-                if isinstance(value, str) and not (value.startswith('"') and value.endswith('"')):
+                if isinstance(value, str) and not (
+                    value.startswith('"') and value.endswith('"')
+                ):
                     return f'"{value}"'  # Add quotes for string literals
                 return str(value)
             return str(expr)
-        elif hasattr(expr, '__class__') and 'Identifier' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return getattr(expr, 'name', str(expr))
-        elif hasattr(expr, '__class__') and 'ExpressionStatement' in str(expr.__class__):
+            return getattr(expr, "name", str(expr))
+        elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
+            expr.__class__
+        ):
             # Handle ExpressionStatementNode
-            if hasattr(expr, 'expression'):
+            if hasattr(expr, "expression"):
                 return self.generate_expression(expr.expression)
             else:
                 return self.generate_expression(expr)
@@ -656,13 +663,13 @@ class MojoCodeGen:
     def map_type(self, vtype):
         if vtype is None:
             return "Float32"
-        
+
         # Handle TypeNode objects by converting to string first
-        if hasattr(vtype, 'name') or hasattr(vtype, 'element_type'):
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
-        
+
         # Handle array types first
         if "[" in vtype_str and "]" in vtype_str:
             base_type, size = parse_array_type(vtype_str)

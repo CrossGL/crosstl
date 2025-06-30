@@ -95,10 +95,14 @@ class HLSLCodeGen:
                             # New AST structure - check if it's an ArrayType
                             if str(type(member.member_type)).find("ArrayType") != -1:
                                 # Handle array types with C-style syntax for struct members
-                                element_type = self.convert_type_node_to_string(member.member_type.element_type)
+                                element_type = self.convert_type_node_to_string(
+                                    member.member_type.element_type
+                                )
                                 element_type = self.map_type(element_type)
                                 if member.member_type.size is not None:
-                                    size_str = self.expression_to_string(member.member_type.size)
+                                    size_str = self.expression_to_string(
+                                        member.member_type.size
+                                    )
                                     array_syntax = f"[{size_str}]"
                                 else:
                                     array_syntax = "[]"
@@ -329,7 +333,7 @@ class HLSLCodeGen:
 
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
-        
+
         if isinstance(stmt, VariableNode):
             # Handle both old and new AST variable structures
             if hasattr(stmt, "var_type"):
@@ -338,14 +342,16 @@ class HLSLCodeGen:
                 vtype = stmt.vtype
             else:
                 vtype = "float"
-            
+
             # Handle initialization
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
                 init_expr = self.generate_expression(stmt.initial_value)
-                return f"{indent_str}{self.map_type(vtype)} {stmt.name} = {init_expr};\n"
+                return (
+                    f"{indent_str}{self.map_type(vtype)} {stmt.name} = {init_expr};\n"
+                )
             else:
                 return f"{indent_str}{self.map_type(vtype)} {stmt.name};\n"
-            
+
         elif isinstance(stmt, ArrayNode):
             # Improved array node handling
             element_type = self.map_type(stmt.element_type)
@@ -357,18 +363,18 @@ class HLSLCodeGen:
                 return f"{indent_str}{element_type}[1024] {stmt.name};\n"
             else:
                 return f"{indent_str}{element_type}[{size}] {stmt.name};\n"
-                
+
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
-            
+
         elif isinstance(stmt, IfNode):
             return self.generate_if(stmt, indent)
-            
+
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
-            
+
         elif isinstance(stmt, ReturnNode):
-            if hasattr(stmt, 'value') and stmt.value is not None:
+            if hasattr(stmt, "value") and stmt.value is not None:
                 # Handle both single values and lists
                 if isinstance(stmt.value, list):
                     # Multiple return values
@@ -380,48 +386,52 @@ class HLSLCodeGen:
                     return f"{indent_str}return {code};\n"
                 else:
                     # Single return value
-                    return f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                    return (
+                        f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                    )
             else:
                 # Void return
                 return f"{indent_str}return;\n"
-                
-        elif hasattr(stmt, '__class__') and 'ExpressionStatement' in str(stmt.__class__):
+
+        elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
+            stmt.__class__
+        ):
             # Handle ExpressionStatementNode
-            if hasattr(stmt, 'expression'):
+            if hasattr(stmt, "expression"):
                 return f"{indent_str}{self.generate_expression(stmt.expression)};\n"
             else:
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
-                
+
         else:
             # Try to generate as expression
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
     def generate_assignment(self, node):
         # Handle both old and new AST assignment structures
-        if hasattr(node, 'target') and hasattr(node, 'value'):
+        if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
             lhs = self.generate_expression(node.target)
             rhs = self.generate_expression(node.value)
-            op = getattr(node, 'operator', '=')
+            op = getattr(node, "operator", "=")
         else:
             # Old AST structure
             lhs = self.generate_expression(node.left)
             rhs = self.generate_expression(node.right)
-            op = getattr(node, 'operator', '=')
+            op = getattr(node, "operator", "=")
         return f"{lhs} {op} {rhs}"
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        
+
         # Handle both old and new AST if structures
-        condition = getattr(node, 'condition', getattr(node, 'if_condition', None))
-        then_body = getattr(node, 'then_branch', getattr(node, 'if_body', []))
-        else_body = getattr(node, 'else_branch', getattr(node, 'else_body', []))
-        
+        condition = getattr(node, "condition", getattr(node, "if_condition", None))
+        then_body = getattr(node, "then_branch", getattr(node, "if_body", []))
+        else_body = getattr(node, "else_branch", getattr(node, "else_body", []))
+
         code = f"{indent_str}if ({self.generate_expression(condition)}) {{\n"
-        
+
         # Handle then body
-        if hasattr(then_body, 'statements'):
+        if hasattr(then_body, "statements"):
             # BlockNode structure
             for stmt in then_body.statements:
                 code += self.generate_statement(stmt, indent + 1)
@@ -432,11 +442,11 @@ class HLSLCodeGen:
         else:
             # Single statement
             code += self.generate_statement(then_body, indent + 1)
-            
+
         code += f"{indent_str}}}"
 
         # Handle else if conditions (old AST)
-        if hasattr(node, 'else_if_conditions') and hasattr(node, 'else_if_bodies'):
+        if hasattr(node, "else_if_conditions") and hasattr(node, "else_if_bodies"):
             for else_if_condition, else_if_body in zip(
                 node.else_if_conditions, node.else_if_bodies
             ):
@@ -448,7 +458,7 @@ class HLSLCodeGen:
         # Handle else body
         if else_body:
             code += " else {\n"
-            if hasattr(else_body, 'statements'):
+            if hasattr(else_body, "statements"):
                 # BlockNode structure
                 for stmt in else_body.statements:
                     code += self.generate_statement(stmt, indent + 1)
@@ -460,7 +470,7 @@ class HLSLCodeGen:
                 # Single statement
                 code += self.generate_statement(else_body, indent + 1)
             code += f"{indent_str}}}"
-            
+
         code += "\n"
         return code
 
@@ -471,30 +481,30 @@ class HLSLCodeGen:
         init = ""
         condition = ""
         update = ""
-        
-        if hasattr(node, 'init') and node.init:
+
+        if hasattr(node, "init") and node.init:
             if isinstance(node.init, str):
                 init = node.init
             else:
                 init = self.generate_expression(node.init).strip().rstrip(";")
-                
-        if hasattr(node, 'condition') and node.condition:
+
+        if hasattr(node, "condition") and node.condition:
             if isinstance(node.condition, str):
                 condition = node.condition
             else:
                 condition = self.generate_expression(node.condition).strip().rstrip(";")
-                
-        if hasattr(node, 'update') and node.update:
+
+        if hasattr(node, "update") and node.update:
             if isinstance(node.update, str):
                 update = node.update
             else:
                 update = self.generate_expression(node.update).strip().rstrip(";")
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
-        
+
         # Handle body
-        body = getattr(node, 'body', [])
-        if hasattr(body, 'statements'):
+        body = getattr(node, "body", [])
+        if hasattr(body, "statements"):
             # BlockNode structure
             for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
@@ -505,7 +515,7 @@ class HLSLCodeGen:
         else:
             # Single statement
             code += self.generate_statement(body, indent + 1)
-            
+
         code += f"{indent_str}}}\n"
         return code
 
@@ -516,48 +526,50 @@ class HLSLCodeGen:
             return expr
         elif isinstance(expr, (int, float)):
             return str(expr)
-        elif hasattr(expr, '__class__') and 'Literal' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             # Handle LiteralNode
-            if hasattr(expr, 'value'):
+            if hasattr(expr, "value"):
                 value = expr.value
-                if isinstance(value, str) and not (value.startswith('"') and value.endswith('"')):
+                if isinstance(value, str) and not (
+                    value.startswith('"') and value.endswith('"')
+                ):
                     return f'"{value}"'  # Add quotes for string literals
                 return str(value)
             return str(expr)
-        elif hasattr(expr, '__class__') and 'Identifier' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return getattr(expr, 'name', str(expr))
+            return getattr(expr, "name", str(expr))
         elif isinstance(expr, VariableNode):
             # Variable reference, just return the name
             return expr.name
-        elif hasattr(expr, '__class__') and 'BinaryOp' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             # Handle BinaryOpNode
-            left = self.generate_expression(getattr(expr, 'left', ''))
-            right = self.generate_expression(getattr(expr, 'right', ''))
-            op = getattr(expr, 'operator', getattr(expr, 'op', '+'))
+            left = self.generate_expression(getattr(expr, "left", ""))
+            right = self.generate_expression(getattr(expr, "right", ""))
+            op = getattr(expr, "operator", getattr(expr, "op", "+"))
             return f"({left} {self.map_operator(op)} {right})"
         elif isinstance(expr, AssignmentNode):
             # Handle assignment as expression
             return self.generate_assignment(expr)
-        elif hasattr(expr, '__class__') and 'UnaryOp' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             # Handle UnaryOpNode
-            operand = self.generate_expression(getattr(expr, 'operand', ''))
-            op = getattr(expr, 'operator', getattr(expr, 'op', '+'))
+            operand = self.generate_expression(getattr(expr, "operand", ""))
+            op = getattr(expr, "operator", getattr(expr, "op", "+"))
             return f"{self.map_operator(op)}{operand}"
-        elif hasattr(expr, '__class__') and 'ArrayAccess' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             # Handle ArrayAccessNode
-            array_expr = getattr(expr, 'array_expr', getattr(expr, 'array', ''))
-            index_expr = getattr(expr, 'index_expr', getattr(expr, 'index', ''))
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
+            index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
             array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
             return f"{array}[{index}]"
-        elif hasattr(expr, '__class__') and 'FunctionCall' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             # Handle FunctionCallNode
-            func_name = getattr(expr, 'function', getattr(expr, 'name', 'unknown'))
-            if hasattr(func_name, 'name'):
+            func_name = getattr(expr, "function", getattr(expr, "name", "unknown"))
+            if hasattr(func_name, "name"):
                 func_name = func_name.name
-            args = getattr(expr, 'arguments', getattr(expr, 'args', []))
-            
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+
             # Handle special vector constructor calls
             if func_name in ["vec2", "vec3", "vec4"]:
                 mapped_type = self.map_type(func_name)
@@ -566,17 +578,17 @@ class HLSLCodeGen:
             # Standard function call
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{func_name}({args_str})"
-        elif hasattr(expr, '__class__') and 'MemberAccess' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             # Handle MemberAccessNode
-            obj_expr = getattr(expr, 'object_expr', getattr(expr, 'object', ''))
-            member = getattr(expr, 'member', '')
+            obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
+            member = getattr(expr, "member", "")
             obj = self.generate_expression(obj_expr)
             return f"{obj}.{member}"
-        elif hasattr(expr, '__class__') and 'TernaryOp' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
             # Handle TernaryOpNode
-            condition = self.generate_expression(getattr(expr, 'condition', ''))
-            true_expr = self.generate_expression(getattr(expr, 'true_expr', ''))
-            false_expr = self.generate_expression(getattr(expr, 'false_expr', ''))
+            condition = self.generate_expression(getattr(expr, "condition", ""))
+            true_expr = self.generate_expression(getattr(expr, "true_expr", ""))
+            false_expr = self.generate_expression(getattr(expr, "false_expr", ""))
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             # Fallback - return string representation
@@ -585,19 +597,19 @@ class HLSLCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         # Handle different TypeNode types
-        if hasattr(type_node, 'name'):
+        if hasattr(type_node, "name"):
             # PrimitiveType
             return type_node.name
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             # Check if it's VectorType vs ArrayType
-            if hasattr(type_node, 'rows'):
+            if hasattr(type_node, "rows"):
                 # MatrixType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.rows == type_node.cols:
                     return f"float{type_node.rows}x{type_node.rows}"
                 else:
                     return f"float{type_node.cols}x{type_node.rows}"
-            elif str(type(type_node)).find('ArrayType') != -1:
+            elif str(type(type_node)).find("ArrayType") != -1:
                 # ArrayType - handle C-style arrays
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
@@ -613,7 +625,7 @@ class HLSLCodeGen:
                 # VectorType - map to proper DirectX vector types
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
-                
+
                 # Map to DirectX vector types
                 if element_type == "float":
                     return f"float{size}"
@@ -631,9 +643,9 @@ class HLSLCodeGen:
 
     def expression_to_string(self, expr):
         """Convert an expression node to a string representation."""
-        if hasattr(expr, 'value'):
+        if hasattr(expr, "value"):
             return str(expr.value)
-        elif hasattr(expr, 'name'):
+        elif hasattr(expr, "name"):
             return str(expr.name)
         else:
             return self.generate_expression(expr)
@@ -642,13 +654,13 @@ class HLSLCodeGen:
         """Map types to DirectX equivalents, handling both strings and TypeNode objects."""
         if vtype is None:
             return "float"
-        
+
         # Handle TypeNode objects
-        if hasattr(vtype, 'name') or hasattr(vtype, 'element_type'):
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
-        
+
         # Handle array types
         if "[" in vtype_str and "]" in vtype_str:
             base_type, size = parse_array_type(vtype_str)

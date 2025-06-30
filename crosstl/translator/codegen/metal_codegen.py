@@ -186,11 +186,15 @@ class MetalCodeGen:
                                         member.member_type.size
                                     )
                                     # For Metal, use C-style array syntax: type name[size]
-                                    semantic_attr = self.map_semantic(semantic) if semantic else ""
+                                    semantic_attr = (
+                                        self.map_semantic(semantic) if semantic else ""
+                                    )
                                     code += f"    {element_type} {member.name}[{size_str}]{semantic_attr};\n"
                                 else:
                                     # Dynamic arrays - use array<type> syntax
-                                    semantic_attr = self.map_semantic(semantic) if semantic else ""
+                                    semantic_attr = (
+                                        self.map_semantic(semantic) if semantic else ""
+                                    )
                                     code += f"    array<{element_type}> {member.name}{semantic_attr};\n"
                                 continue  # Skip the normal member_type handling
                             else:
@@ -369,7 +373,7 @@ class MetalCodeGen:
                     if hasattr(attr, "name"):
                         semantic = attr.name
                         break
-            
+
             # Use semantic-specific attribute or default to [[stage_in]]
             param_attr = self.map_semantic(semantic) if semantic else " [[stage_in]]"
             params.append(f"{param_type} {p.name}{param_attr}")
@@ -494,23 +498,25 @@ class MetalCodeGen:
 
     def generate_assignment(self, node):
         # Handle both old and new AST assignment structures
-        if hasattr(node, 'target') and hasattr(node, 'value'):
+        if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
             lhs = self.generate_expression(node.target)
             rhs = self.generate_expression(node.value)
-            op = getattr(node, 'operator', '=')
+            op = getattr(node, "operator", "=")
         else:
             # Old AST structure
             lhs = self.generate_expression(node.left)
             rhs = self.generate_expression(node.right)
-            op = getattr(node, 'operator', '=')
+            op = getattr(node, "operator", "=")
         return f"{lhs} {op} {rhs}"
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(node.condition if hasattr(node, 'condition') else node.if_condition)
+        condition = self.generate_expression(
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
         code = f"{indent_str}if ({condition}) {{\n"
-        
+
         # Generate if body - handle BlockNode structure
         if_body = node.if_body
         if hasattr(if_body, "statements"):
@@ -521,7 +527,7 @@ class MetalCodeGen:
             # Old AST structure - list of statements
             for stmt in if_body:
                 code += self.generate_statement(stmt, indent + 1)
-        
+
         code += f"{indent_str}}}"
 
         # Generate else if conditions
@@ -540,7 +546,7 @@ class MetalCodeGen:
                 code += f"{indent_str}}}"
 
         # Generate else body
-        if hasattr(node, 'else_body') and node.else_body:
+        if hasattr(node, "else_body") and node.else_body:
             code += " else {\n"
             else_body = node.else_body
             if hasattr(else_body, "statements"):
@@ -552,7 +558,7 @@ class MetalCodeGen:
                 for stmt in else_body:
                     code += self.generate_statement(stmt, indent + 1)
             code += f"{indent_str}}}"
-        
+
         code += "\n"
         return code
 
@@ -570,7 +576,7 @@ class MetalCodeGen:
         update = self.generate_statement(node.update, 0).strip()[:-1]
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
-        
+
         # Handle BlockNode structure
         if hasattr(node.body, "statements"):
             # New AST BlockNode structure
@@ -583,7 +589,7 @@ class MetalCodeGen:
         else:
             # Single statement
             code += self.generate_statement(node.body, indent + 1)
-            
+
         code += f"{indent_str}}}\n"
         return code
 
@@ -617,13 +623,13 @@ class MetalCodeGen:
         elif isinstance(expr, FunctionCallNode):
             # Extract function name properly (might be IdentifierNode)
             func_name = expr.name
-            if hasattr(func_name, 'name'):
+            if hasattr(func_name, "name"):
                 # It's an IdentifierNode, extract the name
                 func_name = func_name.name
             elif not isinstance(func_name, str):
                 # Convert to string if it's some other type
                 func_name = str(func_name)
-            
+
             # Special handling for texture sampling
             if func_name == "texture":
                 # texture() is used for sampling in GLSL, but in Metal we need to use sample() method
@@ -680,17 +686,19 @@ class MetalCodeGen:
             return f"{obj}.{expr.member}"
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
-        elif hasattr(expr, '__class__') and 'Literal' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             # Handle LiteralNode
-            if hasattr(expr, 'value'):
+            if hasattr(expr, "value"):
                 value = expr.value
-                if isinstance(value, str) and not (value.startswith('"') and value.endswith('"')):
+                if isinstance(value, str) and not (
+                    value.startswith('"') and value.endswith('"')
+                ):
                     return f'"{value}"'  # Add quotes for string literals
                 return str(value)
             return str(expr)
-        elif hasattr(expr, '__class__') and 'Identifier' in str(expr.__class__):
+        elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return getattr(expr, 'name', str(expr))
+            return getattr(expr, "name", str(expr))
         else:
             return str(expr)
 
