@@ -17,11 +17,10 @@ struct FragmentOutput
 {
     float4 color;
 };
-struct TestBuffer
-{
-    float values[4];
-    float3 colors[2];
-};
+ArrayType(element_type = PrimitiveType(name = float, size_bits = None),
+          size = LiteralNode(value = 4, literal_type = PrimitiveType(name = int, size_bits = None))) values;
+ArrayType(element_type = VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3),
+          size = LiteralNode(value = 2, literal_type = PrimitiveType(name = int, size_bits = None))) colors;
 // Vertex Shader
 VertexOutput main(VertexInput input)
 {

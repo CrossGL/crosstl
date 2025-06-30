@@ -19,12 +19,18 @@ struct FragmentOutput {
   float4 color;
 };
 
-struct TestBuffer {
-  float[LiteralNode(value = 4, literal_type = PrimitiveType(
-                                   name = int, size_bits = None))] values;
-  vec3[LiteralNode(value = 2, literal_type = PrimitiveType(
-                                  name = int, size_bits = None))] colors;
-};
+ArrayType(element_type = PrimitiveType(name = float, size_bits = None),
+          size = LiteralNode(value = 4,
+                             literal_type = PrimitiveType(
+                                 name = int, size_bits = None))) values;
+
+ArrayType(
+    element_type = VectorType(element_type = PrimitiveType(name = float,
+                                                           size_bits = None),
+                              size = 3),
+    size = LiteralNode(value = 2,
+                       literal_type = PrimitiveType(name = int,
+                                                    size_bits = None))) colors;
 
 __device__ VertexOutput main(VertexInput input) {
   VertexOutput output;

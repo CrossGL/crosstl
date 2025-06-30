@@ -14,10 +14,18 @@ struct FragmentInput {
 struct FragmentOutput {
   vec4 color;
 };
-struct TestBuffer {
-  float values[4];
-  vec3 colors[2];
-};
+layout(std140, binding = 0)
+    ArrayType(element_type = PrimitiveType(name = float, size_bits = None),
+              size = LiteralNode(value = 4,
+                                 literal_type = PrimitiveType(
+                                     name = int, size_bits = None))) values;
+layout(std140, binding = 1) ArrayType(
+    element_type = VectorType(element_type = PrimitiveType(name = float,
+                                                           size_bits = None),
+                              size = 3),
+    size = LiteralNode(value = 2,
+                       literal_type = PrimitiveType(name = int,
+                                                    size_bits = None))) colors;
 // Vertex Shader
 void main() {
   VertexOutput output;

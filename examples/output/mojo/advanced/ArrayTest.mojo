@@ -21,11 +21,8 @@ struct FragmentInput:
 struct FragmentOutput:
     var color: SIMD[DType.float32, 4]
 
-@value
-struct TestBuffer:
-    var values: vecLiteralNode(value=4, literal_type=PrimitiveType(name=int, size_bits=None))
-    var colors: vec3LiteralNode(value=2, literal_type=PrimitiveType(name=int, size_bits=None))
-
+var values: ArrayType(element_type=PrimitiveType(name=float, size_bits=None), size=LiteralNode(value=4, literal_type=PrimitiveType(name=int, size_bits=None)))
+var colors: ArrayType(element_type=VectorType(element_type=PrimitiveType(name=float, size_bits=None), size=3), size=LiteralNode(value=2, literal_type=PrimitiveType(name=int, size_bits=None)))
 # Vertex Shader
 @vertex_shader
 fn main(input: VertexInput) -> VertexOutput:

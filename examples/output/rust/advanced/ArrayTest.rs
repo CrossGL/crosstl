@@ -26,22 +26,17 @@ pub struct FragmentOutput {
   pub color : Vec4<f32>,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct TestBuffer {
-  pub values : vecLiteralNode(value = 4,
-                              literal_type = PrimitiveType(name = int,
-                                                           size_bits = None)),
-               pub colors
-      : vec3LiteralNode(value = 2,
-                        literal_type = PrimitiveType(name = int,
-                                                     size_bits = None)),
-}
-
+static values
+    : vecLiteralNode(value = 4,
+                     literal_type = PrimitiveType(
+                         name = int, size_bits = None)) = Default::default();
+static colors
+    : vec3LiteralNode(value = 2,
+                      literal_type = PrimitiveType(
+                          name = int, size_bits = None)) = Default::default();
 // Vertex Shader
 #[vertex_shader]
-pub fn
-main(input : VertexInput) -> VertexOutput {
+pub fn main(input : VertexInput) -> VertexOutput {
   let mut output : VertexOutput;
   output.uv = input.texCoord;
   let mut scale : f32 = (values[0] + values[1]);

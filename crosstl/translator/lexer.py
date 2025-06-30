@@ -50,6 +50,8 @@ TOKENS = OrderedDict(
         ("EXTERN", r"\bextern\b"),
         ("UNIFORM", r"\buniform\b"),
         ("CBUFFER", r"\bcbuffer\b"),
+        ("BUFFER", r"\bbuffer\b"),
+        ("BUFFER", r"\bbuffer\b"),
         # Visibility/Access
         ("PUBLIC", r"\bpub\b"),
         ("PRIVATE", r"\bpriv\b"),
@@ -74,6 +76,7 @@ TOKENS = OrderedDict(
         ("SHARED", r"\bshared\b"),
         ("THREADGROUP", r"\bthreadgroup\b"),
         ("WORKGROUP", r"\bworkgroup\b"),
+        ("LAYOUT", r"\blayout\b"),
         # Types - Primitives
         ("BOOL", r"\bbool\b"),
         ("I8", r"\bi8\b"),
@@ -264,6 +267,7 @@ KEYWORDS = {
     "extern": "EXTERN",
     "uniform": "UNIFORM",
     "cbuffer": "CBUFFER",
+    "buffer": "BUFFER",
     # Visibility
     "pub": "PUBLIC",
     "priv": "PRIVATE",
@@ -288,6 +292,7 @@ KEYWORDS = {
     "shared": "SHARED",
     "threadgroup": "THREADGROUP",
     "workgroup": "WORKGROUP",
+    "layout": "LAYOUT",
     # Types
     "bool": "BOOL",
     "i8": "I8",

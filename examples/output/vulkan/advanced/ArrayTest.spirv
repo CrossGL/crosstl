@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: Khronos SPIR-V Tools Assembler; 0
-; Bound: 15
+; Bound: 14
 ; Schema: 0
                OpCapability Shader
           %1 = OpExtInstImport "GLSL.std.450"
@@ -21,6 +21,4 @@
                OpName %_struct_11 "FragmentInput"
  %_struct_12 = OpTypeStruct
                OpName %_struct_12 "FragmentOutput"
- %_struct_13 = OpTypeStruct
-               OpName %_struct_13 "TestBuffer"
-               OpExecutionMode %14 OriginUpperLeft
+               OpExecutionMode %13 OriginUpperLeft

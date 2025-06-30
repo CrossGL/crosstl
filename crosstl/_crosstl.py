@@ -71,8 +71,8 @@ def translate(
 
         lexer = SlangLexer(shader_code)
         parser = SlangParser(lexer.tokenize())
-    elif file_path.endswith(".spv"):
-        from .backend.Vulkan import VulkanLexer, VulkanParser
+    elif file_path.endswith(".spv") or file_path.endswith(".spirv"):
+        from .backend.SPIRV import VulkanLexer, VulkanParser
 
         lexer = VulkanLexer(shader_code)
         parser = VulkanParser(lexer.tokenize())
