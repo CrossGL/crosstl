@@ -36,6 +36,7 @@ jobs:
         run: |
           cd examples
           python test.py
+        shell: bash
 
       - name: Validate output structure and content
         run: |
@@ -346,7 +347,8 @@ jobs:
 
           print(f'\\nStability Score: {success_count}/{len(stable_tests)} ({(success_count/len(stable_tests)*100):.1f}%)')
           "
-
+        shell: bash
+      
       - name: Test cross-backend consistency
         run: |
           cd examples
