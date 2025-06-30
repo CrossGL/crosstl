@@ -181,5 +181,21 @@ def test_bitwise_not_parsing():
         pytest.fail("Bitwise NOT operator parsing not implemented")
 
 
+def test_const_declarations():
+    code = """
+    void main() {
+        const float PI = 3.14159;
+        const int VERSION = 100;
+        float radius = 5.0;
+        float area = PI * radius * radius;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        parse_code(tokens)
+    except SyntaxError as e:
+        pytest.fail(f"Const variable declaration parsing not implemented: {e}")
+
+
 if __name__ == "__main__":
     pytest.main()

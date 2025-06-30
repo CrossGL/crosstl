@@ -59,9 +59,11 @@ class VariableNode(ASTNode):
         self.vtype = vtype
         self.name = name
         self.attributes = attributes or []
+        self.is_const = False  # Default is not constant
 
     def __repr__(self):
-        return f"VariableNode(vtype='{self.vtype}', name='{self.name}', attributes={self.attributes})"
+        const_str = "const " if self.is_const else ""
+        return f"VariableNode(vtype='{const_str}{self.vtype}', name='{self.name}', attributes={self.attributes})"
 
 
 class AttributeNode(ASTNode):
@@ -159,12 +161,15 @@ class UnaryOpNode(ASTNode):
 
 
 class TextureSampleNode(ASTNode):
-    def __init__(self, texture, sampler, coordinates):
+    def __init__(self, texture, sampler, coordinates, lod=None):
         self.texture = texture
         self.sampler = sampler
         self.coordinates = coordinates
+        self.lod = lod
 
     def __repr__(self):
+        if self.lod is not None:
+            return f"TextureSampleNode(texture={self.texture}, sampler={self.sampler}, coordinates={self.coordinates}, lod={self.lod})"
         return f"TextureSampleNode(texture={self.texture}, sampler={self.sampler}, coordinates={self.coordinates})"
 
 
@@ -183,3 +188,22 @@ class ConstantBufferNode(ASTNode):
 
     def __repr__(self):
         return f"ConstantBufferNode(name={self.name}, members={self.members})"
+
+
+class SwitchNode(ASTNode):
+    def __init__(self, expression, cases, default=None):
+        self.expression = expression
+        self.cases = cases  # List of CaseNode
+        self.default = default  # List of statements or None
+
+    def __repr__(self):
+        return f"SwitchNode(expression={self.expression}, cases={self.cases}, default={self.default})"
+
+
+class CaseNode(ASTNode):
+    def __init__(self, value, statements):
+        self.value = value
+        self.statements = statements
+
+    def __repr__(self):
+        return f"CaseNode(value={self.value}, statements={self.statements})"

@@ -1,0 +1,44 @@
+; SPIR-V
+; Version: 1.0
+; Generator: Khronos SPIR-V Tools Assembler; 0
+; Bound: 23
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+       %void = OpTypeVoid
+       %bool = OpTypeBool
+        %int = OpTypeInt 32 1
+      %float = OpTypeFloat 32
+    %v2float = OpTypeVector %float 2
+    %v3float = OpTypeVector %float 3
+    %v4float = OpTypeVector %float 4
+  %_struct_9 = OpTypeStruct %v3float
+               OpName %_struct_9 "VertexInput"
+               OpMemberName %_struct_9 0 "position"
+ %_struct_10 = OpTypeStruct %v2float %v4float
+               OpName %_struct_10 "VertexOutput"
+               OpMemberName %_struct_10 0 "uv"
+               OpMemberName %_struct_10 1 "position"
+ %_struct_11 = OpTypeStruct %v2float
+               OpName %_struct_11 "FragmentInput"
+               OpMemberName %_struct_11 0 "uv"
+ %_struct_12 = OpTypeStruct %v4float
+               OpName %_struct_12 "FragmentOutput"
+               OpMemberName %_struct_12 0 "color"
+         %13 = OpTypeFunction %_struct_10 %_struct_9
+         %14 = OpFunction %_struct_10 None %13
+         %15 = OpFunctionParameter %_struct_9
+               OpName %15 "input"
+         %16 = OpLabel
+    %float_0 = OpConstant %float 0
+               OpReturnValue %float_0
+               OpFunctionEnd
+         %18 = OpTypeFunction %_struct_12 %_struct_11
+         %19 = OpFunction %_struct_12 None %18
+         %20 = OpFunctionParameter %_struct_11
+               OpName %20 "input"
+         %21 = OpLabel
+               OpReturnValue %float_0
+               OpFunctionEnd
+               OpEntryPoint Vertex %22 "main"

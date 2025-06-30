@@ -1,29 +1,42 @@
 shader PerlinNoise {
+    struct VertexInput {
+        vec3 position;
+    }
+    
+    struct VertexOutput {
+        vec2 uv;
+        vec4 position;
+    }
+    
+    struct FragmentInput {
+        vec2 uv;
+    }
+    
+    struct FragmentOutput {
+        vec4 color;
+    }
+    
     vertex {
-        input vec3 position;
-        output vec2 vUV;
-
-        void main() {
-            vUV = position.xy * 10.0;
-            gl_Position = vec4(position, 1.0);
+        VertexOutput main(VertexInput input) {
+            VertexOutput output;
+            output.uv = input.position.xy * 10.0;
+            output.position = vec4(input.position, 1.0);
+            return output;
         }
     }
 
-    // Perlin Noise Function
-    float perlinNoise(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-    }
-
-    // Fragment Shader
     fragment {
-        input vec2 vUV;
-        output vec4 fragColor;
+        float perlinNoise(vec2 p) {
+            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+        }
 
-        void main() {
-            float noise = perlinNoise(vUV);
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            float noise = perlinNoise(input.uv);
             float height = noise * 10.0;
             vec3 color = vec3(height / 10.0, 1.0 - height / 10.0, 0.0);
-            fragColor = vec4(color, 1.0);
+            output.color = vec4(color, 1.0);
+            return output;
         }
     }
 }

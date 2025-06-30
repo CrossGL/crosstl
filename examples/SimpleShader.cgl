@@ -1,0 +1,42 @@
+shader SimpleShader {
+    struct VertexInput {
+        vec3 position;
+        vec2 texCoord;
+    }
+    
+    struct VertexOutput {
+        vec2 uv;
+        vec4 position;
+    }
+    
+    struct FragmentInput {
+        vec2 uv;
+    }
+    
+    struct FragmentOutput {
+        vec4 color;
+    }
+    
+    vertex {
+        VertexOutput main(VertexInput input) {
+            VertexOutput output;
+            output.uv = input.texCoord;
+            output.position = vec4(input.position, 1.0);
+            return output;
+        }
+    }
+
+    fragment {
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            
+            // Simple color based on UV coordinates
+            float r = input.uv.x;
+            float g = input.uv.y;
+            float b = 0.5;
+            
+            output.color = vec4(r, g, b, 1.0);
+            return output;
+        }
+    }
+} 

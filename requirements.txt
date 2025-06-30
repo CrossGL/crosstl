@@ -1,2 +1,15 @@
 gast
 pytest
+numpy
+jinja2
+
+# Development Dependencies (optional)
+# pytest-cov
+# black
+# isort
+# flake8
+
+# Formatting Tools (optional)
+# clang-format>=14.0.0  # For C-like languages (HLSL, Metal)
+# spirv-tools            # For SPIR-V validation and assembly
+# glslang                # For GLSL validation

@@ -43,13 +43,14 @@ class FunctionNode(MojoASTNode):
 
 
 class VariableDeclarationNode(MojoASTNode):
-    def __init__(self, var_type, name, initial_value=None):
+    def __init__(self, var_type, name, initial_value=None, vtype=None):
         self.var_type = var_type
         self.name = name
         self.initial_value = initial_value
+        self.vtype = vtype
 
     def __repr__(self):
-        return f"VariableDeclarationNode(var_type={self.var_type}, name={self.name}, initial_value={self.initial_value})"
+        return f"VariableDeclarationNode(var_type={self.var_type}, name={self.name}, initial_value={self.initial_value}, vtype={self.vtype})"
 
 
 class ArrayAccessNode(MojoASTNode):
@@ -118,6 +119,15 @@ class WhileNode(MojoASTNode):
 
     def __repr__(self):
         return f"WhileNode(condition={self.condition}, body={self.body})"
+
+
+class DoWhileNode(MojoASTNode):
+    def __init__(self, condition, body):
+        self.condition = condition
+        self.body = body
+
+    def __repr__(self):
+        return f"DoWhileNode(condition={self.condition}, body={self.body})"
 
 
 class ReturnNode(MojoASTNode):
@@ -247,3 +257,53 @@ class SwitchNode(MojoASTNode):
 
     def __repr__(self):
         return f"SwitchNode(expression={self.expression}, cases={self.cases})"
+
+
+class CaseNode(MojoASTNode):
+    def __init__(self, value, body):
+        self.value = value
+        self.body = body
+
+    def __repr__(self):
+        return f"CaseNode(value={self.value}, body={self.body})"
+
+
+class PragmaNode(MojoASTNode):
+    def __init__(self, directive, value):
+        self.directive = directive
+        self.value = value
+
+    def __repr__(self):
+        return f"PragmaNode(directive={self.directive}, value={self.value})"
+
+
+class IncludeNode(MojoASTNode):
+    def __init__(self, path):
+        self.path = path
+
+    def __repr__(self):
+        return f"IncludeNode(path={self.path})"
+
+
+class BreakNode(MojoASTNode):
+    def __init__(self):
+        pass
+
+    def __repr__(self):
+        return "BreakNode()"
+
+
+class ContinueNode(MojoASTNode):
+    def __init__(self):
+        pass
+
+    def __repr__(self):
+        return "ContinueNode()"
+
+
+class PassNode(MojoASTNode):
+    def __init__(self):
+        pass
+
+    def __repr__(self):
+        return "PassNode()"

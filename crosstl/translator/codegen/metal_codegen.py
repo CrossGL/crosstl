@@ -1,5 +1,7 @@
 from ..ast import (
     AssignmentNode,
+    ArrayNode,
+    ArrayAccessNode,
     BinaryOpNode,
     ForNode,
     FunctionCallNode,
@@ -11,6 +13,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
 
 class CharTypeMapper:
@@ -155,8 +158,16 @@ class MetalCodeGen:
             if isinstance(node, StructNode):
                 code += f"struct {node.name} {{\n"
                 for member in node.members:
-                    code += f"    {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
-                code += "}\n"
+                    if isinstance(member, ArrayNode):
+                        # Handle array types in structs
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in Metal use array<type>
+                            code += f"    array<{self.map_type(member.element_type)}> {member.name};\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
+                code += "};\n"
         # Generate global variables
         for i, node in enumerate(ast.global_variables):
             if node.vtype in ["sampler2D", "samplerCube"]:
@@ -193,10 +204,31 @@ class MetalCodeGen:
             if isinstance(node, StructNode):
                 code += f"{node.name} {{\n"
                 for member in node.members:
-                    code += f"    {self.map_type(member.vtype)} {member.name};\n"
-                code += "}\n"
+                    if isinstance(member, ArrayNode):
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in buffer blocks
+                            code += f"    array<{self.map_type(member.element_type)}> {member.name};\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                code += "};\n"
+            elif hasattr(node, "name") and hasattr(
+                node, "members"
+            ):  # CbufferNode handling
+                code += f"{node.name} {{\n"
+                for member in node.members:
+                    if isinstance(member, ArrayNode):
+                        if member.size:
+                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                        else:
+                            # Dynamic arrays in buffer blocks
+                            code += f"    array<{self.map_type(member.element_type)}> {member.name};\n"
+                    else:
+                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                code += "};\n"
         for i, node in enumerate(ast.cbuffers):
-            if isinstance(node, StructNode):
+            if isinstance(node, StructNode) or hasattr(node, "name"):
                 code += f"constant {node.name} &{node.name} [[buffer({i})]];\n"
         return code
 
@@ -236,6 +268,16 @@ class MetalCodeGen:
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
             return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
+        elif isinstance(stmt, ArrayNode):
+            # Improved array node handling
+            element_type = self.map_type(stmt.element_type)
+            size = get_array_size_from_node(stmt)
+
+            if size is None:
+                # Dynamic arrays in Metal need a size, use a large enough buffer
+                return f"{indent_str}device array<{element_type}, 1024> {stmt.name};\n"
+            else:
+                return f"{indent_str}array<{element_type}, {size}> {stmt.name};\n"
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
         elif isinstance(stmt, IfNode):
@@ -303,29 +345,87 @@ class MetalCodeGen:
     def generate_expression(self, expr):
         if isinstance(expr, str):
             return expr
+        elif isinstance(expr, int) or isinstance(expr, float):
+            return str(expr)
         elif isinstance(expr, VariableNode):
             name = self.generate_expression(expr.name)
-            return f"{self.map_type(expr.vtype)} {name}"
+            # If this is a variable declaration (has a type), include the type
+            if expr.vtype and expr.vtype.strip():
+                return f"{self.map_type(expr.vtype)} {name}"
+            else:
+                # Just a variable reference, return only the name
+                return name
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             return f"{left} {self.map_operator(expr.op)} {right}"
-
         elif isinstance(expr, AssignmentNode):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             return f"{left} {self.map_operator(expr.operator)} {right}"
-
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
+        elif isinstance(expr, ArrayAccessNode):
+            # Handle array access
+            array = self.generate_expression(expr.array)
+            index = self.generate_expression(expr.index)
+            return f"{array}[{index}]"
         elif isinstance(expr, FunctionCallNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            return f"{expr.name}({args})"
+            # Special handling for texture sampling
+            if expr.name == "texture":
+                # texture() is used for sampling in GLSL, but in Metal we need to use sample() method
+                if len(expr.args) >= 2:
+                    texture_name = self.generate_expression(expr.args[0])
+                    coord = self.generate_expression(expr.args[1])
+
+                    # Handle texture sampling in Metal
+                    if isinstance(expr.args[0], str) and expr.args[0] in [
+                        v[0].name for v in self.texture_variables
+                    ]:
+                        # Check if we have a sampler with the same name
+                        sampler_arg = ""
+                        for s in self.sampler_variables:
+                            if s[0].name == texture_name + "Sampler":
+                                sampler_arg = s[0].name
+                                break
+
+                        # If no explicit sampler, use the default sampler
+                        if not sampler_arg:
+                            return f"{texture_name}.sample(sampler(mag_filter::linear, min_filter::linear), {coord})"
+                        else:
+                            return f"{texture_name}.sample({sampler_arg}, {coord})"
+                    else:
+                        # Fallback to standard texture function if not a texture variable
+                        args = ", ".join(
+                            self.generate_expression(arg) for arg in expr.args
+                        )
+                        return f"{texture_name}.sample(sampler(mag_filter::linear, min_filter::linear), {coord})"
+                else:
+                    # Handle incomplete texture call more gracefully
+                    args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                    return f"texture({args})"
+            # Special handling for common GLSL functions
+            elif expr.name == "normalize":
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"normalize({args})"
+            elif expr.name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
+                # These function names are the same in GLSL and Metal
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{expr.name}({args})"
+            # Vector constructors
+            elif expr.name in ["vec2", "vec3", "vec4"]:
+                # Map to Metal's float2, float3, float4
+                metal_type = self.map_type(expr.name)
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{metal_type}({args})"
+            else:
+                # Standard function call
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{expr.name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
-
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
         else:
@@ -333,6 +433,13 @@ class MetalCodeGen:
 
     def map_type(self, vtype):
         if vtype:
+            # Handle array types with a more robust approach
+            if "[" in vtype and "]" in vtype:
+                base_type, size = parse_array_type(vtype)
+                base_mapped = self.type_mapping.get(base_type, base_type)
+                return format_array_type(base_mapped, size, "metal")
+
+            # Use the regular type mapping for non-array types
             return self.type_mapping.get(vtype, vtype)
         return vtype
 
