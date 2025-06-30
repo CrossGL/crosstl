@@ -79,13 +79,12 @@ float4x4 projection_matrix;
 float3x3 normal_matrix;
 CameraData camera;
 RenderSettings settings;
-float4x4[] shadow_matrices;
-texture2d<float>[] shadow_maps;
+float4x4 shadow_matrices[MAX_SHADOW_CASCADES];
 MaterialProperties material;
 EnvironmentData environment;
 CameraData camera;
 RenderSettings settings;
-LightData[] lights;
+LightData lights[MAX_LIGHTS];
 int active_light_count;
 float3 getNormalFromMap(
     texture2d<float> normal_map [[stage_in]],
@@ -410,7 +409,8 @@ fragment void fragment_main(, texture2d<float> albedo_map [[texture(7)]],
                             [[texture(9)]],
                             texture2d<float> ao_map [[texture(10)]],
                             texture2d<float> emission_map [[texture(11)]],
-                            texture2d<float> height_map [[texture(12)]]) {}
+                            texture2d<float> height_map [[texture(12)]],
+                            texture2d<float> shadow_maps [[texture(13)]]) {}
 
 // Compute Shader
 kernel void kernel_precompute_environment() {

@@ -146,7 +146,10 @@ class HLSLCodeGen:
                     node.var_type, "element_type"
                 ):
                     # Check if it's an ArrayType and handle specially for global variables
-                    if hasattr(node.var_type, "element_type"):  # ArrayType
+                    if (
+                        hasattr(node.var_type, "element_type")
+                        and str(type(node.var_type)).find("ArrayType") != -1
+                    ):  # ArrayType
                         base_type = self.convert_type_node_to_string(
                             node.var_type.element_type
                         )

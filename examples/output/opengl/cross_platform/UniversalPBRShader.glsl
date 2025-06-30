@@ -92,19 +92,19 @@ layout(std140, binding = 4) CameraData camera;
 layout(std140, binding = 5) RenderSettings settings;
 layout(std140, binding = 6)
     MatrixType(element_type = PrimitiveType(name = float, size_bits = None),
-               rows = 4, cols = 4)[] shadow_matrices;
+               rows = 4, cols = 4) shadow_matrices[MAX_SHADOW_CASCADES];
 layout(std140, binding = 7) sampler2D albedo_map;
 layout(std140, binding = 8) sampler2D normal_map;
 layout(std140, binding = 9) sampler2D metallic_roughness_map;
 layout(std140, binding = 10) sampler2D ao_map;
 layout(std140, binding = 11) sampler2D emission_map;
 layout(std140, binding = 12) sampler2D height_map;
-layout(std140, binding = 13) sampler2D[] shadow_maps;
+layout(std140, binding = 13) sampler2D shadow_maps[MAX_SHADOW_CASCADES];
 layout(std140, binding = 14) MaterialProperties material;
 layout(std140, binding = 15) EnvironmentData environment;
 layout(std140, binding = 16) CameraData camera;
 layout(std140, binding = 17) RenderSettings settings;
-layout(std140, binding = 18) LightData[] lights;
+layout(std140, binding = 18) LightData lights[MAX_LIGHTS];
 layout(std140, binding = 19) int active_light_count;
 VectorType(element_type = PrimitiveType(name = float, size_bits = None),
            size = 3)

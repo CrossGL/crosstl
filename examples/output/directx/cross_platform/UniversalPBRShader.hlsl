@@ -82,25 +82,20 @@ MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 
 MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 3, cols = 3) normal_matrix;
 CameraData camera;
 RenderSettings settings;
-MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4)[] shadow_matrices;
-// Texture Samplers
-Texture2D albedo_map : register(t7);
-// Texture Samplers
-Texture2D normal_map : register(t8);
-// Texture Samplers
-Texture2D metallic_roughness_map : register(t9);
-// Texture Samplers
-Texture2D ao_map : register(t10);
-// Texture Samplers
-Texture2D emission_map : register(t11);
-// Texture Samplers
-Texture2D height_map : register(t12);
-Texture2D[] shadow_maps;
+MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4,
+           cols = 4) shadow_matrices[MAX_SHADOW_CASCADES];
+sampler2D albedo_map;
+sampler2D normal_map;
+sampler2D metallic_roughness_map;
+sampler2D ao_map;
+sampler2D emission_map;
+sampler2D height_map;
+sampler2D shadow_maps[MAX_SHADOW_CASCADES];
 MaterialProperties material;
 EnvironmentData environment;
 CameraData camera;
 RenderSettings settings;
-LightData[] lights;
+LightData lights[MAX_LIGHTS];
 int active_light_count;
 VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3)
     getNormalFromMap(Texture2D normal_map,
