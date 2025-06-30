@@ -1,0 +1,387 @@
+shader GenericPatternMatching {
+    // Generic type definitions
+    generic<T> struct Option {
+        enum OptionType {
+            Some(T),
+            None
+        }
+        OptionType variant;
+    }
+    
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+    
+    generic<T> struct Vec3 {
+        T x;
+        T y;
+        T z;
+    }
+    
+    generic<T> struct Matrix3x3 {
+        Vec3<T> row0;
+        Vec3<T> row1;
+        Vec3<T> row2;
+    }
+    
+    // Trait-like interface definitions
+    trait Numeric {
+        fn add(self, other: Self) -> Self;
+        fn mul(self, other: Self) -> Self;
+        fn zero() -> Self;
+        fn one() -> Self;
+    }
+    
+    trait VectorOps<T: Numeric> {
+        fn dot(self, other: Self) -> T;
+        fn cross(self, other: Self) -> Self;
+        fn magnitude(self) -> T;
+        fn normalize(self) -> Option<Self>;
+    }
+    
+    // Error types for robust error handling
+    enum MathError {
+        DivisionByZero,
+        InvalidInput,
+        Overflow,
+        Underflow
+    }
+    
+    enum ShaderError {
+        MathError(MathError),
+        TextureError(str),
+        BufferError(str),
+        InvalidState
+    }
+    
+    // Complex data structures with nested generics
+    struct RenderState<T: Numeric> {
+        transform: Matrix3x3<T>;
+        position: Vec3<T>;
+        color: Vec3<T>;
+        material_id: Option<int>;
+        lighting_model: LightingModel;
+    }
+    
+    enum LightingModel {
+        Phong {
+            ambient: vec3,
+            diffuse: vec3,
+            specular: vec3,
+            shininess: float
+        },
+        PBR {
+            albedo: vec3,
+            metallic: float,
+            roughness: float,
+            ao: float
+        },
+        Toon {
+            base_color: vec3,
+            levels: int,
+            smoothing: float
+        }
+    }
+    
+    // Advanced generic functions with pattern matching
+    generic<T: Numeric> fn safe_divide(a: T, b: T) -> Result<T, MathError> {
+        match b {
+            zero if zero == T::zero() => Result::Err(MathError::DivisionByZero),
+            _ => Result::Ok(a / b)
+        }
+    }
+    
+    generic<T: Numeric> fn vector_operation(
+        v1: Vec3<T>, 
+        v2: Vec3<T>, 
+        op: VectorOp
+    ) -> Result<Vec3<T>, MathError> {
+        match op {
+            VectorOp::Add => Result::Ok(Vec3 {
+                x: v1.x.add(v2.x),
+                y: v1.y.add(v2.y),
+                z: v1.z.add(v2.z)
+            }),
+            VectorOp::Multiply => Result::Ok(Vec3 {
+                x: v1.x.mul(v2.x),
+                y: v1.y.mul(v2.y),
+                z: v1.z.mul(v2.z)
+            }),
+            VectorOp::Cross => {
+                let cross_result = Vec3 {
+                    x: v1.y.mul(v2.z) - v1.z.mul(v2.y),
+                    y: v1.z.mul(v2.x) - v1.x.mul(v2.z),
+                    z: v1.x.mul(v2.y) - v1.y.mul(v2.x)
+                };
+                Result::Ok(cross_result)
+            },
+            VectorOp::Normalize => {
+                let mag_squared = v1.x.mul(v1.x) + v1.y.mul(v1.y) + v1.z.mul(v1.z);
+                match safe_divide(T::one(), sqrt(mag_squared)) {
+                    Result::Ok(inv_mag) => Result::Ok(Vec3 {
+                        x: v1.x.mul(inv_mag),
+                        y: v1.y.mul(inv_mag),
+                        z: v1.z.mul(inv_mag)
+                    }),
+                    Result::Err(e) => Result::Err(e)
+                }
+            }
+        }
+    }
+    
+    enum VectorOp {
+        Add,
+        Multiply,
+        Cross,
+        Normalize
+    }
+    
+    // Advanced pattern matching with guards and destructuring
+    fn process_lighting_model(model: LightingModel, light_dir: vec3, view_dir: vec3, normal: vec3) -> vec3 {
+        match model {
+            LightingModel::Phong { ambient, diffuse, specular, shininess } => {
+                let n_dot_l = max(0.0, dot(normal, light_dir));
+                let reflect_dir = reflect(-light_dir, normal);
+                let r_dot_v = max(0.0, dot(reflect_dir, view_dir));
+                
+                ambient + diffuse * n_dot_l + specular * pow(r_dot_v, shininess)
+            },
+            
+            LightingModel::PBR { albedo, metallic, roughness, ao } => {
+                // Simplified PBR calculation
+                let half_vector = normalize(light_dir + view_dir);
+                let n_dot_l = max(0.0, dot(normal, light_dir));
+                let n_dot_v = max(0.0, dot(normal, view_dir));
+                let n_dot_h = max(0.0, dot(normal, half_vector));
+                
+                // Fresnel
+                let f0 = mix(vec3(0.04), albedo, metallic);
+                let fresnel = f0 + (1.0 - f0) * pow(1.0 - n_dot_v, 5.0);
+                
+                // Distribution and geometry terms (simplified)
+                let alpha = roughness * roughness;
+                let distribution = alpha / (3.14159 * pow(n_dot_h * n_dot_h * (alpha - 1.0) + 1.0, 2.0));
+                
+                let geometry = (n_dot_l * n_dot_v) / (n_dot_l + n_dot_v - n_dot_l * n_dot_v + 0.001);
+                
+                let brdf = (distribution * geometry * fresnel) / 
+                          (4.0 * n_dot_l * n_dot_v + 0.001);
+                
+                let diffuse_contribution = (1.0 - fresnel) * (1.0 - metallic) * albedo / 3.14159;
+                
+                (diffuse_contribution + brdf) * n_dot_l * ao
+            },
+            
+            LightingModel::Toon { base_color, levels, smoothing } if levels > 0 => {
+                let n_dot_l = dot(normal, light_dir);
+                let toon_level = floor(n_dot_l * float(levels)) / float(levels);
+                let smooth_factor = smoothstep(toon_level - smoothing, toon_level + smoothing, n_dot_l);
+                
+                base_color * smooth_factor
+            },
+            
+            LightingModel::Toon { base_color, .. } => {
+                // Fallback for invalid levels
+                base_color * 0.5
+            }
+        }
+    }
+    
+    // Recursive function with pattern matching
+    generic<T: Numeric> fn matrix_determinant(matrix: Matrix3x3<T>) -> T {
+        match matrix {
+            Matrix3x3 { row0, row1, row2 } => {
+                // 3x3 determinant calculation using pattern matching
+                let a = row0.x;
+                let b = row0.y;
+                let c = row0.z;
+                
+                let minor_a = row1.y.mul(row2.z) - row1.z.mul(row2.y);
+                let minor_b = row1.x.mul(row2.z) - row1.z.mul(row2.x);
+                let minor_c = row1.x.mul(row2.y) - row1.y.mul(row2.x);
+                
+                a.mul(minor_a) - b.mul(minor_b) + c.mul(minor_c)
+            }
+        }
+    }
+    
+    // Higher-order functions and closures
+    generic<T, U> fn map_option(opt: Option<T>, mapper: fn(T) -> U) -> Option<U> {
+        match opt {
+            Option::Some(value) => Option::Some(mapper(value)),
+            Option::None => Option::None
+        }
+    }
+    
+    generic<T> fn chain_operations(
+        input: T,
+        operations: [fn(T) -> Result<T, MathError>]
+    ) -> Result<T, MathError> {
+        let mut current = Result::Ok(input);
+        
+        for op in operations {
+            match current {
+                Result::Ok(value) => {
+                    current = op(value);
+                },
+                Result::Err(e) => return Result::Err(e)
+            }
+        }
+        
+        current
+    }
+    
+    // Complex nested pattern matching
+    fn process_render_command(command: RenderCommand) -> Result<RenderOutput, ShaderError> {
+        match command {
+            RenderCommand::Draw { 
+                geometry, 
+                material: Some(material), 
+                transform,
+                lighting
+            } => {
+                // Process drawing with material
+                match material.validate() {
+                    Result::Ok(_) => {
+                        let transformed_geometry = transform_geometry(geometry, transform);
+                        let lit_result = apply_lighting(transformed_geometry, material, lighting);
+                        
+                        match lit_result {
+                            Result::Ok(output) => Result::Ok(RenderOutput::Success(output)),
+                            Result::Err(lighting_error) => Result::Err(ShaderError::MathError(lighting_error))
+                        }
+                    },
+                    Result::Err(validation_error) => Result::Err(ShaderError::InvalidState)
+                }
+            },
+            
+            RenderCommand::Draw { geometry, material: None, .. } => {
+                Result::Err(ShaderError::InvalidState)
+            },
+            
+            RenderCommand::Clear { color, depth } => {
+                Result::Ok(RenderOutput::Clear { color, depth })
+            },
+            
+            RenderCommand::SetState { state } => {
+                match validate_state(state) {
+                    true => Result::Ok(RenderOutput::StateSet),
+                    false => Result::Err(ShaderError::InvalidState)
+                }
+            }
+        }
+    }
+    
+    enum RenderCommand {
+        Draw {
+            geometry: Geometry,
+            material: Option<Material>,
+            transform: mat4,
+            lighting: LightingEnvironment
+        },
+        Clear {
+            color: vec4,
+            depth: float
+        },
+        SetState {
+            state: RenderState<float>
+        }
+    }
+    
+    enum RenderOutput {
+        Success(RenderedFrame),
+        Clear { color: vec4, depth: float },
+        StateSet
+    }
+    
+    // Vertex shader with advanced type usage
+    vertex {
+        struct VertexInput {
+            position: vec3,
+            normal: vec3,
+            uv: vec2,
+            color: vec4
+        }
+        
+        struct VertexOutput {
+            position: vec4,
+            world_position: vec3,
+            normal: vec3,
+            uv: vec2,
+            color: vec4
+        }
+        
+        uniform mat4 mvp_matrix;
+        uniform mat4 model_matrix;
+        uniform mat3 normal_matrix;
+        
+        VertexOutput main(VertexInput input) {
+            let world_pos = model_matrix * vec4(input.position, 1.0);
+            let clip_pos = mvp_matrix * vec4(input.position, 1.0);
+            let world_normal = normalize(normal_matrix * input.normal);
+            
+            // Using our generic vector operations
+            let position_vec3 = Vec3 { x: world_pos.x, y: world_pos.y, z: world_pos.z };
+            let normal_vec3 = Vec3 { x: world_normal.x, y: world_normal.y, z: world_normal.z };
+            
+            // Pattern match on potential errors
+            let processed_normal = match vector_operation(
+                normal_vec3, 
+                normal_vec3, 
+                VectorOp::Normalize
+            ) {
+                Result::Ok(normalized) => vec3(normalized.x, normalized.y, normalized.z),
+                Result::Err(_) => world_normal // Fallback
+            };
+            
+            VertexOutput {
+                position: clip_pos,
+                world_position: world_pos.xyz,
+                normal: processed_normal,
+                uv: input.uv,
+                color: input.color
+            }
+        }
+    }
+    
+    // Fragment shader with pattern matching
+    fragment {
+        struct FragmentInput {
+            world_position: vec3,
+            normal: vec3,
+            uv: vec2,
+            color: vec4
+        }
+        
+        uniform LightingModel lighting_model;
+        uniform vec3 light_direction;
+        uniform vec3 camera_position;
+        uniform sampler2D main_texture;
+        
+        vec4 main(FragmentInput input) -> vec4 {
+            let view_dir = normalize(camera_position - input.world_position);
+            let normal = normalize(input.normal);
+            let light_dir = normalize(-light_direction);
+            
+            // Sample texture
+            let tex_color = texture(main_texture, input.uv);
+            
+            // Calculate lighting using our pattern matching function
+            let lighting_contribution = process_lighting_model(
+                lighting_model,
+                light_dir,
+                view_dir,
+                normal
+            );
+            
+            // Combine results
+            let final_color = tex_color.rgb * lighting_contribution * input.color.rgb;
+            
+            vec4(final_color, tex_color.a * input.color.a)
+        }
+    }
+} 

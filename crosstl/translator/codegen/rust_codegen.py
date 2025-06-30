@@ -134,8 +134,9 @@ class RustCodeGen:
             else:
                 code += f"static {node.name}: {self.map_type(node.vtype)} = Default::default();\n"
 
-        # Generate cbuffers as structs
-        if ast.cbuffers:
+        # Generate cbuffers/constants as structs (backward compatibility)
+        cbuffers = getattr(ast, 'cbuffers', None) or getattr(ast, 'constants', [])
+        if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
@@ -181,7 +182,8 @@ class RustCodeGen:
 
     def generate_cbuffers(self, ast):
         code = ""
-        for node in ast.cbuffers:
+        cbuffers = getattr(ast, 'cbuffers', None) or getattr(ast, 'constants', [])
+        for node in cbuffers:
             if isinstance(node, StructNode):
                 code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
                 code += f"pub struct {node.name} {{\n"
