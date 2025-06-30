@@ -13,6 +13,9 @@ from crosstl.translator.ast import (
     AssignmentNode,
     ReturnNode,
     BinaryOpNode,
+    ExecutionModel,
+    PrimitiveType,
+    BlockNode,
 )
 
 
@@ -237,21 +240,34 @@ class TestVulkanSPIRVCodeGen:
         # Test a simple shader with struct and function
         gen = VulkanSPIRVCodeGen()
 
-        struct_members = [VariableNode("float", "x"), VariableNode("vec2", "uv")]
+        # Create proper TypeNode objects
+        float_type = PrimitiveType("float")
+        vec2_type = PrimitiveType("vec2")  # Simplified for test
+
+        struct_members = [
+            VariableNode("x", float_type), 
+            VariableNode("uv", vec2_type)
+        ]
 
         struct_node = StructNode("TestStruct", struct_members)
 
-        function_body = [ReturnNode([1.0])]
+        function_body = BlockNode([ReturnNode()])
 
         function_node = FunctionNode(
-            "float", "testFunction", [VariableNode("float", "param")], function_body
+            name="testFunction",
+            return_type=float_type,
+            parameters=[VariableNode("param", float_type)],
+            body=function_body
         )
 
+        # Use the correct ShaderNode constructor with required parameters
         shader_node = ShaderNode(
+            name="TestShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
             structs=[struct_node],
             functions=[function_node],
             global_variables=[],
-            cbuffers=[],
+            constants=[],
         )
 
         # Generate SPIR-V
@@ -263,7 +279,7 @@ class TestVulkanSPIRVCodeGen:
         assert "OpMemoryModel Logical GLSL450" in spv_code
         assert "OpTypeStruct" in spv_code
         assert "OpFunction" in spv_code
-        assert "OpReturnValue" in spv_code
+        assert "OpReturn" in spv_code
         assert "OpFunctionEnd" in spv_code
 
     def test_register_input(self):

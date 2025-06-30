@@ -214,6 +214,18 @@ class HipCodeGen:
         if hasattr(node, "stages") and node.stages:
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
+                    # Set the stage type context for proper qualifier handling
+                    stage_name = str(stage_type).split(".")[-1].lower() if hasattr(stage_type, 'name') else str(stage_type).lower()
+                    
+                    # Temporarily set qualifier for compute stages
+                    if stage_name == "compute" or "compute" in stage_name:
+                        # Set the function qualifier to compute for proper __global__ generation
+                        if hasattr(stage.entry_point, "qualifiers"):
+                            if "compute" not in stage.entry_point.qualifiers:
+                                stage.entry_point.qualifiers.append("compute")
+                        else:
+                            stage.entry_point.qualifiers = ["compute"]
+                    
                     self.visit(stage.entry_point)
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
@@ -320,11 +332,8 @@ class HipCodeGen:
         members = getattr(node, "members", [])
         for member in members:
             if hasattr(member, "member_type"):
-                # New AST structure
-                if hasattr(member.member_type, "name"):
-                    member_type = self.map_type(member.member_type.name)
-                else:
-                    member_type = self.map_type(str(member.member_type))
+                # New AST structure - pass TypeNode directly to map_type
+                member_type = self.map_type(member.member_type)
             elif hasattr(member, "vtype"):
                 # Old AST structure
                 member_type = self.map_type(member.vtype)
@@ -541,16 +550,83 @@ class HipCodeGen:
         false_expr = self.visit(node.false_expr)
         return f"({condition} ? {true_expr} : {false_expr})"
 
-    def map_type(self, type_name: str) -> str:
+    def visit_LiteralNode(self, node) -> str:
+        """Visit literal node"""
+        if hasattr(node, "value"):
+            if isinstance(node.value, str):
+                return f'"{node.value}"'
+            elif isinstance(node.value, bool):
+                return "true" if node.value else "false"
+            else:
+                return str(node.value)
+        return str(node)
+
+    def visit_IdentifierNode(self, node) -> str:
+        """Visit identifier node"""
+        name = getattr(node, "name", str(node))
+        # Handle built-in variables mapping
+        return self.builtin_map.get(name, name)
+
+    def visit_ExpressionStatementNode(self, node) -> str:
+        """Visit expression statement node"""
+        expr = self.visit(node.expression)
+        self.add_line(f"{expr};")
+        return ""
+
+    def visit_BlockNode(self, node) -> str:
+        """Visit block node"""
+        if hasattr(node, "statements"):
+            for stmt in node.statements:
+                self.visit(stmt)
+        return ""
+
+    def convert_type_node_to_string(self, type_node) -> str:
+        """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, 'name'):
+            # PrimitiveType
+            return type_node.name
+        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+            # VectorType or ArrayType
+            if hasattr(type_node, 'rows'):
+                # MatrixType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                return f"float{type_node.rows}x{type_node.cols}"
+            elif str(type(type_node)).find('ArrayType') != -1:
+                # ArrayType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                if type_node.size is not None:
+                    return f"{element_type}[{type_node.size}]"
+                else:
+                    return f"{element_type}[]"
+            else:
+                # VectorType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                size = type_node.size
+                if element_type == "float":
+                    return f"float{size}"
+                elif element_type == "int":
+                    return f"int{size}"
+                else:
+                    return f"{element_type}{size}"
+        else:
+            return str(type_node)
+
+    def map_type(self, type_name) -> str:
         """Map CrossGL type to HIP type"""
+        # Handle TypeNode objects
+        if hasattr(type_name, 'name') or hasattr(type_name, 'element_type'):
+            type_str = self.convert_type_node_to_string(type_name)
+        else:
+            type_str = str(type_name)
+
         # Handle array types
-        if "[" in type_name and "]" in type_name:
-            base_type = type_name.split("[")[0]
-            array_part = type_name[type_name.find("[") :]
+        if "[" in type_str and "]" in type_str:
+            base_type = type_str.split("[")[0]
+            array_part = type_str[type_str.find("[") :]
             mapped_base = self.type_map.get(base_type, base_type)
             return f"{mapped_base}{array_part}"
 
-        return self.type_map.get(type_name, type_name)
+        return self.type_map.get(type_str, type_str)
 
     def generate_kernel_wrapper(self, kernel_node: FunctionNode) -> str:
         """Generate host-side kernel launch wrapper"""

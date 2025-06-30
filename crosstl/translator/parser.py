@@ -411,6 +411,11 @@ class Parser:
         parameters = self.parse_parameter_list()
         self.eat("RPAREN")
 
+        # Parse post-parameter attributes (e.g., return value semantics)
+        post_attributes = []
+        if self.current_token[0] == "AT":
+            post_attributes = self.parse_attributes()
+
         # Parse function body
         body = None
         if self.current_token[0] == "LBRACE":
@@ -424,7 +429,7 @@ class Parser:
             parameters=parameters,
             body=body,
             generic_params=generic_params,
-            attributes=attributes,
+            attributes=attributes + post_attributes,  # Combine pre and post attributes
             qualifiers=qualifiers,
             is_async="async" in qualifiers,
             is_unsafe="unsafe" in qualifiers,
@@ -459,6 +464,14 @@ class Parser:
         param_type = self.parse_type()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+
+        # Handle @ semantic annotations for parameters (e.g., int vertexID @ gl_VertexID)
+        if self.current_token[0] == "AT":
+            self.eat("AT")
+            semantic_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            # Add semantic as an attribute
+            attributes.append(AttributeNode(name=semantic_name, arguments=[]))
 
         default_value = None
         if self.current_token[0] == "EQUALS":

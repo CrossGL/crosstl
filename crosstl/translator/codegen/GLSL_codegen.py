@@ -86,6 +86,63 @@ class GLSLCodeGen:
             "samplerCube": "samplerCube",
         }
 
+        # Function mapping for GLSL
+        self.function_map = {
+            "atan2": "atan",
+            "lerp": "mix",
+            "frac": "fract",
+            "saturate": "clamp",
+            "tex2D": "texture",
+            "tex2Dproj": "textureProj",
+            "tex2Dlod": "textureLod",
+            "tex2Dbias": "texture",
+            "tex2Dgrad": "textureGrad",
+            "texCUBE": "texture",
+            "texCUBElod": "textureLod",
+            "texCUBEbias": "texture",
+            "texCUBEgrad": "textureGrad",
+            "mul": "*",  # Matrix multiplication
+            "ddx": "dFdx",
+            "ddy": "dFdy",
+            "rsqrt": "inversesqrt",
+            "sincos": "sin_cos",  # Custom function needed
+            "clip": "discard",  # HLSL clip becomes GLSL discard
+            "log2": "log2",
+            "exp2": "exp2",
+            "pow": "pow",
+            "sqrt": "sqrt",
+            "abs": "abs",
+            "sign": "sign",
+            "floor": "floor",
+            "ceil": "ceil",
+            "round": "round",
+            "fmod": "mod",
+            "trunc": "trunc",
+            "min": "min",
+            "max": "max",
+            "clamp": "clamp",
+            "step": "step",
+            "smoothstep": "smoothstep",
+            "length": "length",
+            "distance": "distance",
+            "dot": "dot",
+            "cross": "cross",
+            "normalize": "normalize",
+            "reflect": "reflect",
+            "refract": "refract",
+            "all": "all",
+            "any": "any",
+            "sin": "sin",
+            "cos": "cos",
+            "tan": "tan",
+            "asin": "asin",
+            "acos": "acos",
+            "atan": "atan",
+            "sinh": "sinh",
+            "cosh": "cosh",
+            "tanh": "tanh",
+        }
+
     def generate(self, ast):
         code = "\n"
         code += "#version 450 core\n"
@@ -344,7 +401,12 @@ class GLSLCodeGen:
             else:
                 var_type = "float"
 
-            return f"{indent_str}{self.map_type(var_type)} {stmt.name};\n"
+            # Handle initialization
+            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+                init_expr = self.generate_expression(stmt.initial_value)
+                return f"{indent_str}{self.map_type(var_type)} {stmt.name} = {init_expr};\n"
+            else:
+                return f"{indent_str}{self.map_type(var_type)} {stmt.name};\n"
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
@@ -382,12 +444,19 @@ class GLSLCodeGen:
 
     def generate_if(self, node, indent, is_main=False):
         indent_str = "    " * indent
-        condition = self.generate_expression(node.if_condition)
+        condition = self.generate_expression(node.condition if hasattr(node, 'condition') else node.if_condition)
         code = f"{indent_str}if ({condition}) {{\n"
 
-        # Generate if body
-        for stmt in node.if_body:
-            code += self.generate_statement(stmt, indent + 1)
+        # Generate if body - handle BlockNode structure
+        if_body = node.if_body
+        if hasattr(if_body, "statements"):
+            # New AST BlockNode structure
+            for stmt in if_body.statements:
+                code += self.generate_statement(stmt, indent + 1)
+        elif isinstance(if_body, list):
+            # Old AST structure - list of statements
+            for stmt in if_body:
+                code += self.generate_statement(stmt, indent + 1)
 
         code += f"{indent_str}}}"
 
@@ -398,15 +467,27 @@ class GLSLCodeGen:
             ):
                 condition = self.generate_expression(else_if_condition)
                 code += f" else if ({condition}) {{\n"
-                for stmt in else_if_body:
-                    code += self.generate_statement(stmt, indent + 1)
+                # Handle BlockNode for else if body
+                if hasattr(else_if_body, "statements"):
+                    for stmt in else_if_body.statements:
+                        code += self.generate_statement(stmt, indent + 1)
+                elif isinstance(else_if_body, list):
+                    for stmt in else_if_body:
+                        code += self.generate_statement(stmt, indent + 1)
                 code += f"{indent_str}}}"
 
         # Generate else body
-        if node.else_body:
+        if hasattr(node, 'else_body') and node.else_body:
             code += f" else {{\n"
-            for stmt in node.else_body:
-                code += self.generate_statement(stmt, indent + 1)
+            else_body = node.else_body
+            if hasattr(else_body, "statements"):
+                # New AST BlockNode structure
+                for stmt in else_body.statements:
+                    code += self.generate_statement(stmt, indent + 1)
+            elif isinstance(else_body, list):
+                # Old AST structure
+                for stmt in else_body:
+                    code += self.generate_statement(stmt, indent + 1)
             code += f"{indent_str}}}"
 
         code += "\n"
@@ -422,9 +503,16 @@ class GLSLCodeGen:
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
 
-        # Generate loop body
-        for stmt in node.body:
-            code += self.generate_statement(stmt, indent + 1)
+        # Generate loop body - handle BlockNode structure
+        body = node.body
+        if hasattr(body, "statements"):
+            # New AST BlockNode structure
+            for stmt in body.statements:
+                code += self.generate_statement(stmt, indent + 1)
+        elif isinstance(body, list):
+            # Old AST structure - list of statements
+            for stmt in body:
+                code += self.generate_statement(stmt, indent + 1)
 
         code += f"{indent_str}}}\n"
 

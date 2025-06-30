@@ -94,6 +94,18 @@ class CudaCodeGen:
         if hasattr(node, "stages") and node.stages:
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
+                    # Set the stage type context for proper qualifier handling
+                    stage_name = str(stage_type).split(".")[-1].lower() if hasattr(stage_type, 'name') else str(stage_type).lower()
+                    
+                    # Temporarily set qualifier for compute stages
+                    if stage_name == "compute" or "compute" in stage_name:
+                        # Set the function qualifier to compute for proper __global__ generation
+                        if hasattr(stage.entry_point, "qualifiers"):
+                            if "compute" not in stage.entry_point.qualifiers:
+                                stage.entry_point.qualifiers.append("compute")
+                        else:
+                            stage.entry_point.qualifiers = ["compute"]
+                    
                     self.visit(stage.entry_point)
                     self.emit("")
 
@@ -193,15 +205,9 @@ class CudaCodeGen:
         members = getattr(node, "members", [])
         for member in members:
             if hasattr(member, "member_type"):
-                # New AST structure
-                if hasattr(member.member_type, "name"):
-                    member_type = self.convert_crossgl_type_to_cuda(
-                        member.member_type.name
-                    )
-                else:
-                    member_type = self.convert_crossgl_type_to_cuda(
-                        str(member.member_type)
-                    )
+                # New AST structure - convert TypeNode properly
+                member_type_str = self.convert_type_node_to_string(member.member_type)
+                member_type = self.convert_crossgl_type_to_cuda(member_type_str)
             elif hasattr(member, "vtype"):
                 # Old AST structure
                 member_type = self.convert_crossgl_type_to_cuda(member.vtype)
@@ -564,3 +570,36 @@ class CudaCodeGen:
     def visit_float(self, node):
         """Visit float literals"""
         return str(node)
+
+    def convert_type_node_to_string(self, type_node) -> str:
+        """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, 'name'):
+            # PrimitiveType
+            return type_node.name
+        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+            # VectorType or ArrayType
+            if hasattr(type_node, 'rows'):
+                # MatrixType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                return f"mat{type_node.rows}x{type_node.cols}"
+            elif str(type(type_node)).find('ArrayType') != -1:
+                # ArrayType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                if type_node.size is not None:
+                    return f"{element_type}[{type_node.size}]"
+                else:
+                    return f"{element_type}[]"
+            else:
+                # VectorType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                size = type_node.size
+                if element_type == "float":
+                    return f"vec{size}"
+                elif element_type == "int":
+                    return f"ivec{size}"
+                elif element_type == "uint":
+                    return f"uvec{size}"
+                else:
+                    return f"{element_type}{size}"
+        else:
+            return str(type_node)

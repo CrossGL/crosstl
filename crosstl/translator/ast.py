@@ -1,19 +1,3 @@
-"""
-CrossGL Universal Intermediate Representation (IR)
-
-This module defines a comprehensive AST that serves as the universal intermediate
-representation for all supported backends including graphics APIs (Metal, DirectX,
-OpenGL, Vulkan), GPU computing platforms (CUDA, HIP), and modern programming
-languages (Rust, Mojo, Slang).
-
-Design Principles:
-- Complete coverage of all backend features
-- Extensible for future backends
-- Maintains semantic information for accurate translation
-- Supports both graphics and compute paradigms
-- Handles complex language features (generics, pattern matching, etc.)
-"""
-
 from typing import List, Optional, Any, Union, Dict
 from enum import Enum
 
