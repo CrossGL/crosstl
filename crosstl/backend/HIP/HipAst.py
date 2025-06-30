@@ -394,4 +394,4 @@ class HipDevicePropertyNode(ASTNode):
         self.device_id = device_id
 
     def __repr__(self):
-        return f"HipDevicePropertyNode(property_name={self.property_name}, device_id={self.device_id})" 
+        return f"HipDevicePropertyNode(property_name={self.property_name}, device_id={self.device_id})"

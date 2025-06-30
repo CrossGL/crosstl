@@ -1,6 +1,6 @@
 """HIP Backend for CrossGL Translator"""
 
 from .HipLexer import HipLexer
-from .HipParser import HipParser  
+from .HipParser import HipParser
 from .HipAst import *
-from .HipCrossGLCodeGen import HipToCrossGLConverter 
+from .HipCrossGLCodeGen import HipToCrossGLConverter
