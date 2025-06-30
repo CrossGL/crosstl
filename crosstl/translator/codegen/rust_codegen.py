@@ -122,37 +122,64 @@ class RustCodeGen:
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
 
-        # Generate structs
-        for node in ast.structs:
+        # Generate structs - handle both old and new AST
+        structs = getattr(ast, "structs", [])
+        for node in structs:
             if isinstance(node, StructNode):
                 code += self.generate_struct(node)
 
-        # Generate global variables
-        for node in ast.global_variables:
+        # Generate global variables - handle both old and new AST
+        global_vars = getattr(ast, "global_variables", [])
+        for node in global_vars:
             if isinstance(node, ArrayNode):
                 code += self.generate_array_declaration(node)
             else:
-                code += f"static {node.name}: {self.map_type(node.vtype)} = Default::default();\n"
+                # Handle both old and new AST variable structures
+                if hasattr(node, "var_type"):
+                    var_type = self.convert_type_node_to_string(node.var_type)
+                elif hasattr(node, "vtype"):
+                    var_type = node.vtype
+                else:
+                    var_type = "float"
+                code += f"static {node.name}: {self.map_type(var_type)} = Default::default();\n"
 
-        # Generate cbuffers/constants as structs (backward compatibility)
+        # Generate cbuffers/constants as structs
         cbuffers = getattr(ast, 'cbuffers', None) or getattr(ast, 'constants', [])
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        # Generate functions
-        for func in ast.functions:
-            if func.qualifier == "vertex":
+        # Generate functions - handle both old and new AST
+        functions = getattr(ast, "functions", [])
+        for func in functions:
+            # Handle both old and new AST function structures
+            if hasattr(func, "qualifiers") and func.qualifiers:
+                qualifier = func.qualifiers[0] if func.qualifiers else None
+            else:
+                qualifier = getattr(func, "qualifier", None)
+            
+            if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
-            elif func.qualifier == "fragment":
+            elif qualifier == "fragment":
                 code += "// Fragment Shader\n"
                 code += self.generate_function(func, shader_type="fragment")
-            elif func.qualifier == "compute":
+            elif qualifier == "compute":
                 code += "// Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
             else:
                 code += self.generate_function(func)
+
+        # Handle shader stages (new AST structure)
+        if hasattr(ast, "stages") and ast.stages:
+            for stage_type, stage in ast.stages.items():
+                if hasattr(stage, "entry_point"):
+                    stage_name = str(stage_type).split('.')[-1].lower()
+                    code += f"// {stage_name.title()} Shader\n"
+                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                if hasattr(stage, "local_functions"):
+                    for func in stage.local_functions:
+                        code += self.generate_function(func)
 
         return code
 
@@ -160,25 +187,121 @@ class RustCodeGen:
         code = f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
         code += f"pub struct {node.name} {{\n"
 
-        # Generate struct members
-        for member in node.members:
+        # Generate struct members - handle both old and new AST
+        members = getattr(node, "members", [])
+        for member in members:
             if isinstance(member, ArrayNode):
+                element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
                 if member.size:
-                    code += f"    pub {member.name}: [{self.map_type(member.element_type)}; {member.size}],\n"
+                    code += f"    pub {member.name}: [{self.map_type_to_rust(element_type)}; {member.size}],\n"
                 else:
-                    code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
+                    code += f"    pub {member.name}: Vec<{self.map_type_to_rust(element_type)}>,\n"
             else:
-                semantic = (
-                    f"  // {self.map_semantic(member.semantic)}"
-                    if member.semantic
+                # Handle both old and new AST member structures
+                if hasattr(member, "member_type"):
+                    # New AST structure
+                    member_type = self.convert_type_node_to_string(member.member_type)
+                elif hasattr(member, "vtype"):
+                    # Old AST structure  
+                    member_type = member.vtype
+                else:
+                    member_type = "float"
+                
+                # Handle semantic - get from attributes in new AST
+                semantic = None
+                if hasattr(member, "semantic"):
+                    semantic = member.semantic
+                elif hasattr(member, "attributes"):
+                    semantic = self.extract_semantic_from_attributes(member.attributes)
+                
+                semantic_comment = (
+                    f"  // {self.map_semantic(semantic)}"
+                    if semantic
                     else ""
                 )
-                code += (
-                    f"    pub {member.name}: {self.map_type(member.vtype)},{semantic}\n"
-                )
+                code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
 
         code += "}\n\n"
         return code
+
+    def convert_type_node_to_string(self, type_node) -> str:
+        """Convert new AST TypeNode to string representation."""
+        # Handle different TypeNode types
+        if hasattr(type_node, 'name'):
+            # PrimitiveType
+            return type_node.name
+        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+            # VectorType - map to proper Rust vector types
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = type_node.size
+            
+            # Map to Rust vector types
+            if element_type == "float":
+                return f"vec{size}"  # This will be mapped to Vec{size}<f32> later
+            elif element_type == "int":
+                return f"ivec{size}"  # This will be mapped to Vec{size}<i32> later
+            elif element_type == "uint":
+                return f"uvec{size}"  # This will be mapped to Vec{size}<u32> later
+            else:
+                return f"{element_type}{size}"
+        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'rows'):
+            # MatrixType
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            return f"mat{type_node.rows}x{type_node.cols}"  # Will be mapped later
+        else:
+            # Fallback
+            return str(type_node)
+
+    def extract_semantic_from_attributes(self, attributes):
+        """Extract semantic information from new AST attributes."""
+        semantic_attrs = [
+            "position", "color", "texcoord", "normal", "tangent", "binormal",
+            "POSITION", "COLOR", "TEXCOORD", "NORMAL", "TANGENT", "BINORMAL",
+            "TEXCOORD0", "TEXCOORD1", "TEXCOORD2", "TEXCOORD3"
+        ]
+        
+        for attr in attributes:
+            if hasattr(attr, 'name') and attr.name in semantic_attrs:
+                return attr.name
+        return None
+
+    def map_type_to_rust(self, type_str):
+        """Enhanced type mapping for Rust."""
+        # Handle vector types first
+        if type_str.startswith('float') and len(type_str) > 5:
+            size = type_str[5:]
+            if size.isdigit():
+                return f"Vec{size}<f32>"
+        elif type_str.startswith('int') and len(type_str) > 3:
+            size = type_str[3:]
+            if size.isdigit():
+                return f"Vec{size}<i32>"
+                
+        # Standard type mapping
+        type_map = {
+            "void": "()",
+            "bool": "bool",
+            "int": "i32",
+            "uint": "u32",
+            "float": "f32",
+            "double": "f64",
+            "vec2": "Vec2<f32>",
+            "vec3": "Vec3<f32>",
+            "vec4": "Vec4<f32>",
+            "ivec2": "Vec2<i32>",
+            "ivec3": "Vec3<i32>",
+            "ivec4": "Vec4<i32>",
+            "uvec2": "Vec2<u32>",
+            "uvec3": "Vec3<u32>",
+            "uvec4": "Vec4<u32>",
+            "mat2": "Mat2<f32>",
+            "mat3": "Mat3<f32>",
+            "mat4": "Mat4<f32>",
+            "float2": "Vec2<f32>",
+            "float3": "Vec3<f32>",
+            "float4": "Vec4<f32>",
+        }
+        return type_map.get(type_str, type_str)
 
     def generate_cbuffers(self, ast):
         code = ""
@@ -216,8 +339,32 @@ class RustCodeGen:
 
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
+        code += "  " * indent
 
-        # Add shader type attributes for Rust GPU programming
+        # Handle parameters - support both old and new AST
+        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        params = []
+        for p in param_list:
+            if hasattr(p, "param_type"):
+                # New AST structure
+                param_type = self.convert_type_node_to_string(p.param_type)
+            elif hasattr(p, "vtype"):
+                # Old AST structure
+                param_type = p.vtype
+            else:
+                param_type = "float"
+            
+            params.append(f"{p.name}: {self.map_type(param_type)}")
+
+        params_str = ", ".join(params) if params else ""
+
+        # Handle return type - support both old and new AST
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+
+        # Add shader type decorators
         if shader_type == "vertex":
             code += f"#[vertex_shader]\n"
         elif shader_type == "fragment":
@@ -225,32 +372,20 @@ class RustCodeGen:
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
 
-        # Generate function parameters
-        params = []
-        for p in func.params:
-            param_semantic = (
-                f"  // {self.map_semantic(p.semantic)}" if p.semantic else ""
-            )
-            # Convert parameter attributes to Rust GPU attributes
-            attributes = self.generate_param_attributes(p)
-            param_str = (
-                f"{attributes}{p.name}: {self.map_type(p.vtype)}{param_semantic}"
-            )
-            params.append(param_str)
+        code += f"pub fn {func.name}({params_str}) -> {self.map_type(return_type)} {{\n"
 
-        params_str = ", ".join(params) if params else ""
-        return_type = self.map_type(func.return_type) if func.return_type else "()"
-
-        code += f"pub fn {func.name}({params_str}) -> {return_type} {{\n"
-
-        # Generate function body
-        if func.body:
-            for stmt in func.body:
+        # Handle function body - support both old and new AST
+        body = getattr(func, "body", [])
+        if hasattr(body, "statements"):
+            # New AST BlockNode structure
+            for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
-        else:
-            code += "    // Empty function body\n"
+        elif isinstance(body, list):
+            # Old AST structure
+            for stmt in body:
+                code += self.generate_statement(stmt, indent + 1)
 
-        code += "}\n\n"
+        code += "  " * indent + "}\n\n"
         return code
 
     def generate_param_attributes(self, param):

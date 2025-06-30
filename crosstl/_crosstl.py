@@ -10,6 +10,7 @@ from .translator.codegen import (
     rust_codegen,
     cuda_codegen,
     hip_codegen,
+    slang_codegen,
 )
 from .translator.ast import ASTNode
 import argparse
@@ -121,6 +122,8 @@ def translate(
             codegen = cuda_codegen.CudaCodeGen()
         elif backend == "hip":
             codegen = hip_codegen.HipCodeGen()
+        elif backend == "slang":
+            codegen = slang_codegen.SlangCodeGen()
         else:
             raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
     else:
@@ -194,7 +197,7 @@ def main():
         "--backend",
         "-b",
         default="cgl",
-        help="Target backend (metal, directx, opengl, vulkan, mojo, rust, cuda, hip, cgl)",
+        help="Target backend (metal, directx, opengl, vulkan, mojo, rust, cuda, hip, slang, cgl)",
     )
     parser.add_argument("--output", "-o", help="Output file path")
     parser.add_argument(
@@ -221,6 +224,7 @@ def main():
                 "rust": ".rs",
                 "cuda": ".cu",
                 "hip": ".hip",
+                "slang": ".slang",
                 "cgl": ".cgl",
             }
             output_path = base + ext_map.get(args.backend, ".out")

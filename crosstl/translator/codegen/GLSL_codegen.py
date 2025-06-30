@@ -89,99 +89,199 @@ class GLSLCodeGen:
     def generate(self, ast):
         code = "\n"
         code += "#version 450 core\n"
-        # Generate structs
-        for node in ast.structs:
+        
+        # Generate structs - handle both old and new AST
+        structs = getattr(ast, "structs", [])
+        for node in structs:
             if isinstance(node, StructNode):
                 if node.name == "VSInput":
-                    for member in node.members:
-                        code += f"{self.map_semantic(member.semantic)} in {member.vtype} {member.name};\n"
-                elif node.name == "VSOutput":
-                    for member in node.members:
-                        code += f"out {member.vtype} {member.name};\n"
-                elif node.name == "PSInput":
-                    for member in node.members:
-                        code += f"in {member.vtype} {member.name};\n"
-                elif node.name == "PSOutput":
-                    for member in node.members:
-                        code += f"{self.map_semantic(member.semantic)} out {member.vtype} {member.name};\n"
-                else:
-                    code += f"struct {node.name} {{\n"
-                    for member in node.members:
-                        if isinstance(member, ArrayNode):
-                            if member.size:
-                                code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
-                            else:
-                                # Dynamic arrays in GLSL
-                                code += f"    {self.map_type(member.element_type)} {member.name}[];\n"
+                    members = getattr(node, "members", [])
+                    for member in members:
+                        # Handle both old and new AST member structures
+                        if hasattr(member, "member_type"):
+                            member_type = str(member.member_type)
                         else:
-                            code += (
-                                f"    {self.map_type(member.vtype)} {member.name};\n"
-                            )
-                    code += "};\n"
+                            member_type = getattr(member, "vtype", "float")
+                        
+                        # Handle semantic
+                        semantic = None
+                        if hasattr(member, "semantic"):
+                            semantic = member.semantic
+                        elif hasattr(member, "attributes"):
+                            for attr in member.attributes:
+                                if hasattr(attr, "name"):
+                                    semantic = attr.name
+                                    break
+                        
+                        code += f"{self.map_semantic(semantic)} in {member_type} {member.name};\n"
+                elif node.name == "VSOutput":
+                    members = getattr(node, "members", [])
+                    for member in members:
+                        if hasattr(member, "member_type"):
+                            member_type = str(member.member_type)
+                        else:
+                            member_type = getattr(member, "vtype", "float")
+                        code += f"out {member_type} {member.name};\n"
+                elif node.name == "PSInput":
+                    members = getattr(node, "members", [])
+                    for member in members:
+                        if hasattr(member, "member_type"):
+                            member_type = str(member.member_type)
+                        else:
+                            member_type = getattr(member, "vtype", "float")
+                        code += f"in {member_type} {member.name};\n"
+                elif node.name == "PSOutput":
+                    members = getattr(node, "members", [])
+                    for member in members:
+                        if hasattr(member, "member_type"):
+                            member_type = str(member.member_type)
+                        else:
+                            member_type = getattr(member, "vtype", "float")
+                        
+                        # Handle semantic
+                        semantic = None
+                        if hasattr(member, "semantic"):
+                            semantic = member.semantic
+                        elif hasattr(member, "attributes"):
+                            for attr in member.attributes:
+                                if hasattr(attr, "name"):
+                                    semantic = attr.name
+                                    break
+                        
+                        code += f"{self.map_semantic(semantic)} out {member_type} {member.name};\n"
+                else:
+                    code += self.generate_struct(node)
 
-        # Generate global variables
-        for i, node in enumerate(ast.global_variables):
-            code += f"layout(std140, binding = {i}) {self.map_type(node.vtype)} {node.name};\n"
-        # Generate cbuffers
-        if ast.cbuffers:
+        # Generate global variables - handle both old and new AST
+        global_vars = getattr(ast, "global_variables", [])
+        for i, node in enumerate(global_vars):
+            # Handle both old and new AST variable structures
+            if hasattr(node, "var_type"):
+                if hasattr(node.var_type, "name"):
+                    vtype = node.var_type.name
+                else:
+                    vtype = str(node.var_type)
+            elif hasattr(node, "vtype"):
+                vtype = node.vtype
+            else:
+                vtype = "float"
+            code += f"layout(std140, binding = {i}) {self.map_type(vtype)} {node.name};\n"
+        
+        # Generate cbuffers - handle both old and new AST
+        cbuffers = getattr(ast, "cbuffers", [])
+        if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        # Generate custom functions
-        for func in ast.functions:
-            if func.qualifier == "vertex":
+        # Generate custom functions - handle both old and new AST
+        functions = getattr(ast, "functions", [])
+        for func in functions:
+            # Handle both old and new AST function structures
+            if hasattr(func, "qualifiers") and func.qualifiers:
+                qualifier = func.qualifiers[0] if func.qualifiers else None
+            else:
+                qualifier = getattr(func, "qualifier", None)
+            
+            if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
-            elif func.qualifier == "fragment":
+            elif qualifier == "fragment":
                 code += "// Fragment Shader\n"
                 code += self.generate_function(func, shader_type="fragment")
-
-            elif func.qualifier == "compute":
+            elif qualifier == "compute":
                 code += "// Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
             else:
                 code += self.generate_function(func)
 
+        # Handle shader stages (new AST structure)
+        if hasattr(ast, "stages") and ast.stages:
+            for stage_type, stage in ast.stages.items():
+                if hasattr(stage, "entry_point"):
+                    stage_name = str(stage_type).split('.')[-1].lower()  # Extract stage name from enum
+                    code += f"// {stage_name.title()} Shader\n"
+                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                if hasattr(stage, "local_functions"):
+                    for func in stage.local_functions:
+                        code += self.generate_function(func)
+
         return code
 
     def generate_cbuffers(self, ast):
         code = ""
-        for i, node in enumerate(ast.cbuffers):
+        cbuffers = getattr(ast, "cbuffers", [])
+        for i, node in enumerate(cbuffers):
             if isinstance(node, StructNode):
                 code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
-                for member in node.members:
+                members = getattr(node, "members", [])
+                for member in members:
                     if isinstance(member, ArrayNode):
+                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
                         if member.size:
-                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += f"    {self.map_type(member.element_type)} {member.name}[];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[];\n"
                     else:
-                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                        if hasattr(member, "member_type"):
+                            member_type = str(member.member_type)
+                        else:
+                            member_type = getattr(member, "vtype", "float")
+                        code += f"    {self.map_type(member_type)} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, "name") and hasattr(
-                node, "members"
-            ):  # CbufferNode handling
+            elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode handling
                 code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
+                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
                         if member.size:
-                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += f"    {self.map_type(member.element_type)} {member.name}[];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[];\n"
                     else:
-                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                        if hasattr(member, "member_type"):
+                            member_type = str(member.member_type)
+                        else:
+                            member_type = getattr(member, "vtype", "float")
+                        code += f"    {self.map_type(member_type)} {member.name};\n"
                 code += "};\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
         code += "  " * indent
-        params = ", ".join(
-            f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.semantic)}"
-            for p in func.params
-        )
+        
+        # Handle parameters - support both old and new AST
+        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        params = []
+        for p in param_list:
+            if hasattr(p, "param_type"):
+                # New AST structure
+                if hasattr(p.param_type, "name"):
+                    param_type = self.map_type(p.param_type.name)
+                else:
+                    param_type = self.map_type(str(p.param_type))
+            elif hasattr(p, "vtype"):
+                # Old AST structure
+                param_type = self.map_type(p.vtype)
+            else:
+                param_type = "float"
+            
+            # Handle semantic
+            semantic = None
+            if hasattr(p, "semantic"):
+                semantic = p.semantic
+            elif hasattr(p, "attributes"):
+                for attr in p.attributes:
+                    if hasattr(attr, "name"):
+                        semantic = attr.name
+                        break
+            
+            params.append(f"{param_type} {p.name} {self.map_semantic(semantic)}")
+        
+        params_str = ", ".join(params)
+
         if shader_type == "vertex":
             code += f"void main(){{\n"
         elif shader_type == "fragment":
@@ -189,147 +289,221 @@ class GLSLCodeGen:
         elif shader_type == "compute":
             code += f"void main() {{\n"
         else:
-            code += f"{self.map_type(func.return_type)} {func.name}({params}) {{\n"
+            # Handle return type - support both old and new AST
+            if hasattr(func, "return_type"):
+                if hasattr(func.return_type, "name"):
+                    return_type = self.map_type(func.return_type.name)
+                else:
+                    return_type = self.map_type(str(func.return_type))
+            else:
+                return_type = "void"
+            
+            code += f"{return_type} {func.name}({params_str}) {{\n"
 
-        for stmt in func.body:
-            code += self.generate_statement(stmt, 1)
+        # Handle function body - support both old and new AST
+        body = getattr(func, "body", [])
+        if hasattr(body, "statements"):
+            # New AST BlockNode structure
+            for stmt in body.statements:
+                code += self.generate_statement(stmt, 1)
+        elif isinstance(body, list):
+            # Old AST structure
+            for stmt in body:
+                code += self.generate_statement(stmt, 1)
+        
         code += "}\n\n"
-
         return code
 
-    def generate_statement(self, stmt, indent=0, is_main=False):
+    def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
+
         if isinstance(stmt, VariableNode):
-            # Handle variable declarations
-            return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
-        elif isinstance(stmt, ArrayNode):
-            # Improved array node handling for GLSL
-            element_type = self.map_type(stmt.element_type)
-            size = get_array_size_from_node(stmt)
-
-            if size is None:
-                # In GLSL, dynamic sized arrays need special handling
-                # For instance in shader storage blocks, but for simple cases:
-                return f"{indent_str}{element_type} {stmt.name}[];\n"
+            # Handle both old and new AST variable structures
+            if hasattr(stmt, "var_type"):
+                # New AST structure
+                var_type = self.convert_type_node_to_string(stmt.var_type)
+            elif hasattr(stmt, "vtype"):
+                # Old AST structure
+                var_type = stmt.vtype
             else:
-                return f"{indent_str}{element_type} {stmt.name}[{size}];\n"
+                var_type = "float"
+            
+            return f"{indent_str}{self.map_type(var_type)} {stmt.name};\n"
+        elif isinstance(stmt, ArrayNode):
+            return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
-            return f"{indent_str}{self.generate_assignment(stmt, is_main)};\n"
+            return f"{indent_str}{self.generate_assignment(stmt)};\n"
         elif isinstance(stmt, IfNode):
-            return self.generate_if(stmt, indent, is_main)
+            return self.generate_if(stmt, indent)
         elif isinstance(stmt, ForNode):
-            return self.generate_for(stmt, indent, is_main)
+            return self.generate_for(stmt, indent)
         elif isinstance(stmt, ReturnNode):
-            code = ""
-            for i, return_stmt in enumerate(stmt.value):
-                if i > 0:
-                    code += ", "
-                code += self.generate_expression(return_stmt, is_main)
-            return f"{indent_str}return {code};\n"
+            if isinstance(stmt.value, list):
+                # Multiple return values
+                values = ", ".join(self.generate_expression(val) for val in stmt.value)
+                return f"{indent_str}return {values};\n"
+            else:
+                return f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+        elif hasattr(stmt, '__class__') and 'ExpressionStatementNode' in str(type(stmt)):
+            # Handle ExpressionStatementNode
+            expr_code = self.generate_expression_statement(stmt)
+            return f"{indent_str}{expr_code};\n"
         else:
-            return f"{indent_str}{self.generate_expression(stmt, is_main)};\n"
+            # Handle expressions that may be used as statements
+            expr_result = self.generate_expression(stmt)
+            if expr_result.strip():
+                return f"{indent_str}{expr_result};\n"
+            else:
+                return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
 
-    def generate_assignment(self, node, is_main):
-        lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_expression(node.right, is_main)
+    def generate_assignment(self, node, is_main=False):
+        left = self.generate_expression(node.left)
+        right = self.generate_expression(node.right)
         op = self.map_operator(node.operator)
-        if is_main and isinstance(node.left, MemberAccessNode):
-            if node.left.object == "output" and node.left.member == "position":
-                return f"gl_Position = {rhs}"
-            elif node.left.object in ["input", "output"]:
-                return f"{node.left.member} = {rhs}"
-        return f"{lhs} {op} {rhs}"
+        return f"{left} {op} {right}"
 
-    def generate_if(self, node, indent, is_main):
+    def generate_if(self, node, indent, is_main=False):
         indent_str = "    " * indent
-        code = f"{indent_str}if ({self.generate_expression(node.if_condition)}) {{\n"
+        condition = self.generate_expression(node.if_condition)
+        code = f"{indent_str}if ({condition}) {{\n"
+
+        # Generate if body
         for stmt in node.if_body:
             code += self.generate_statement(stmt, indent + 1)
+
         code += f"{indent_str}}}"
 
-        for else_if_condition, else_if_body in zip(
-            node.else_if_conditions, node.else_if_bodies
-        ):
-            code += f" else if ({self.generate_expression(else_if_condition)}) {{\n"
-            for stmt in else_if_body:
-                code += self.generate_statement(stmt, indent + 1)
-            code += f"{indent_str}}}"
+        # Generate else if conditions
+        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
+            for else_if_condition, else_if_body in zip(
+                node.else_if_conditions, node.else_if_bodies
+            ):
+                condition = self.generate_expression(else_if_condition)
+                code += f" else if ({condition}) {{\n"
+                for stmt in else_if_body:
+                    code += self.generate_statement(stmt, indent + 1)
+                code += f"{indent_str}}}"
 
+        # Generate else body
         if node.else_body:
-            code += " else {\n"
+            code += f" else {{\n"
             for stmt in node.else_body:
                 code += self.generate_statement(stmt, indent + 1)
             code += f"{indent_str}}}"
+
         code += "\n"
         return code
 
-    def generate_for(self, node, indent, is_main):
+    def generate_for(self, node, indent, is_main=False):
         indent_str = "    " * indent
 
-        init = self.generate_statement(node.init, 0).strip()[
-            :-1
-        ]  # Remove trailing semicolon
-
-        condition = self.generate_statement(node.condition, 0).strip()[
-            :-1
-        ]  # Remove trailing semicolon
-
-        update = self.generate_statement(node.update, 0).strip()[:-1]
+        # Extract init, condition, and update
+        init = self.generate_statement(node.init, 0).strip()
+        condition = self.generate_expression(node.condition)
+        update = self.generate_expression(node.update)
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
+
+        # Generate loop body
         for stmt in node.body:
             code += self.generate_statement(stmt, indent + 1)
+
         code += f"{indent_str}}}\n"
+
         return code
 
     def generate_expression(self, expr, is_main=False):
         if isinstance(expr, str):
             return expr
-        elif isinstance(expr, VariableNode):
-            name = self.generate_expression(expr.name, is_main)
-            return f"{self.map_type(expr.vtype)} {name}"
-        elif isinstance(expr, BinaryOpNode):
-            left = self.generate_expression(expr.left, is_main)
-            right = self.generate_expression(expr.right, is_main)
-            return f"{left} {self.map_operator(expr.op)} {right}"
-        elif isinstance(expr, AssignmentNode):
-            return self.generate_assignment(expr, is_main)
-        elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.operand, is_main)
-            return f"{self.map_operator(expr.op)}{operand}"
-        elif isinstance(expr, FunctionCallNode):
-            args = ", ".join(
-                self.generate_expression(arg, is_main) for arg in expr.args
-            )
-            return f"{expr.name}({args})"
-        elif isinstance(expr, MemberAccessNode):
-            if is_main and expr.object in ["input", "output"]:
-                return expr.member
-            obj = self.generate_expression(expr.object, is_main)
+        elif isinstance(expr, (int, float, bool)):
+            if isinstance(expr, bool):
+                return "true" if expr else "false"
+            return str(expr)
+        elif hasattr(expr, '__class__') and 'VariableNode' in str(type(expr)):
+            if hasattr(expr, "name"):
+                return expr.name
+            else:
+                return str(expr)
+        elif hasattr(expr, '__class__') and 'IdentifierNode' in str(type(expr)):
+            return expr.name
+        elif hasattr(expr, '__class__') and 'LiteralNode' in str(type(expr)):
+            return str(expr.value)
+        elif hasattr(expr, '__class__') and 'BinaryOpNode' in str(type(expr)):
+            left = self.generate_expression(expr.left)
+            right = self.generate_expression(expr.right)
+            op = self.map_operator(expr.op)
+            return f"({left} {op} {right})"
+        elif hasattr(expr, '__class__') and 'AssignmentNode' in str(type(expr)):
+            left = self.generate_expression(expr.target if hasattr(expr, 'target') else expr.left)
+            right = self.generate_expression(expr.value if hasattr(expr, 'value') else expr.right)
+            op = expr.operator if hasattr(expr, 'operator') else expr.op
+            op = self.map_operator(op)
+            return f"{left} {op} {right}"
+        elif hasattr(expr, '__class__') and 'UnaryOpNode' in str(type(expr)):
+            operand = self.generate_expression(expr.operand)
+            op = self.map_operator(expr.op)
+            return f"({op}{operand})"
+        elif hasattr(expr, '__class__') and 'ArrayAccessNode' in str(type(expr)):
+            # Handle array access properly
+            if hasattr(expr, "array") and hasattr(expr, "index"):
+                array = self.generate_expression(expr.array)
+                index = self.generate_expression(expr.index)
+                return f"{array}[{index}]"
+            else:
+                return str(expr)
+        elif hasattr(expr, '__class__') and 'FunctionCallNode' in str(type(expr)):
+            # Map function names to GLSL equivalents
+            func_name = self.function_map.get(expr.name, expr.name)
+
+            # Handle vector constructors
+            if expr.name in [
+                "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4",
+                "uvec2", "uvec3", "uvec4", "bvec2", "bvec3", "bvec4",
+            ]:
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{expr.name}({args})"
+
+            # Handle matrix constructors
+            if expr.name in ["mat2", "mat3", "mat4"]:
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{expr.name}({args})"
+
+            # Handle standard function calls
+            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+            return f"{func_name}({args})"
+        elif hasattr(expr, '__class__') and 'MemberAccessNode' in str(type(expr)):
+            obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
-        elif isinstance(expr, ArrayAccessNode):
-            array = self.generate_expression(expr.array, is_main)
-            index = self.generate_expression(expr.index, is_main)
-            return f"{array}[{index}]"
-        elif isinstance(expr, TernaryOpNode):
-            condition = self.generate_expression(expr.condition, is_main)
-            true_expr = self.generate_expression(expr.true_expr, is_main)
-            false_expr = self.generate_expression(expr.false_expr, is_main)
-            return f"{condition} ? {true_expr} : {false_expr}"
+        elif hasattr(expr, '__class__') and 'TernaryOpNode' in str(type(expr)):
+            condition = self.generate_expression(expr.condition)
+            true_expr = self.generate_expression(expr.true_expr)
+            false_expr = self.generate_expression(expr.false_expr)
+            return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
 
     def map_type(self, vtype):
-        if vtype:
-            # Handle array types with a more robust approach
-            if "[" in vtype and "]" in vtype:
-                base_type, size = parse_array_type(vtype)
-                # GLSL can directly use the same syntax as CrossGL
-                return vtype
+        """Map types to GLSL equivalents, handling both strings and TypeNode objects."""
+        if vtype is None:
+            return "float"
+        
+        # Handle TypeNode objects
+        if hasattr(vtype, 'name') or hasattr(vtype, 'element_type'):
+            vtype_str = self.convert_type_node_to_string(vtype)
+        else:
+            vtype_str = str(vtype)
+        
+        # Handle array types
+        if "[" in vtype_str and "]" in vtype_str:
+            base_type, size = parse_array_type(vtype_str)
+            base_mapped = self.type_mapping.get(base_type, base_type)
+            if size:
+                return f"{base_mapped}[{size}]"
+            else:
+                return f"{base_mapped}[]"
 
-            # Use the regular type mapping for non-array types
-            return self.type_mapping.get(vtype, vtype)
-        return vtype
+        # Use regular type mapping
+        return self.type_mapping.get(vtype_str, vtype_str)
 
     def map_operator(self, op):
         op_map = {
@@ -373,3 +547,133 @@ class GLSLCodeGen:
             return f"{self.semantic_map.get(semantic, semantic)}"
         else:
             return ""
+
+    def convert_type_node_to_string(self, type_node) -> str:
+        """Convert new AST TypeNode to string representation."""
+        # Handle different TypeNode types
+        if hasattr(type_node, 'name'):
+            # PrimitiveType
+            return type_node.name
+        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+            # Check if it's VectorType vs ArrayType
+            if hasattr(type_node, 'rows'):
+                # MatrixType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                if type_node.rows == type_node.cols:
+                    return f"mat{type_node.rows}"
+                else:
+                    return f"mat{type_node.cols}x{type_node.rows}"
+            elif str(type(type_node)).find('ArrayType') != -1:
+                # ArrayType - handle C-style arrays
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                if type_node.size is not None:
+                    if isinstance(type_node.size, int):
+                        return f"{element_type}[{type_node.size}]"
+                    else:
+                        # Size is an expression node
+                        size_str = self.expression_to_string(type_node.size)
+                        return f"{element_type}[{size_str}]"
+                else:
+                    return f"{element_type}[]"
+            else:
+                # VectorType - map to proper GLSL vector types
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                size = type_node.size
+                
+                # Map to GLSL vector types
+                if element_type == "float":
+                    return f"vec{size}"
+                elif element_type == "int":
+                    return f"ivec{size}"
+                elif element_type == "uint":
+                    return f"uvec{size}"
+                elif element_type == "bool":
+                    return f"bvec{size}"
+                else:
+                    return f"{element_type}{size}"
+        else:
+            # Fallback
+            return str(type_node)
+
+    def expression_to_string(self, expr):
+        """Convert an expression node to a string representation."""
+        if hasattr(expr, 'value'):
+            return str(expr.value)
+        elif hasattr(expr, 'name'):
+            return str(expr.name)
+        else:
+            return self.generate_expression(expr)
+
+    def extract_semantic_from_attributes(self, attributes):
+        """Extract semantic information from new AST attributes."""
+        semantic_attrs = [
+            "position", "color", "texcoord", "normal", "tangent", "binormal",
+            "POSITION", "COLOR", "TEXCOORD", "NORMAL", "TANGENT", "BINORMAL",
+            "TEXCOORD0", "TEXCOORD1", "TEXCOORD2", "TEXCOORD3"
+        ]
+        
+        for attr in attributes:
+            if hasattr(attr, 'name') and attr.name in semantic_attrs:
+                return attr.name
+        return None
+
+    def generate_array_declaration(self, stmt, indent):
+        indent_str = "    " * indent
+        element_type = self.map_type(stmt.element_type)
+        size = get_array_size_from_node(stmt)
+
+        if size is None:
+            # In GLSL, dynamic sized arrays need special handling
+            # For instance in shader storage blocks, but for simple cases:
+            return f"{indent_str}{element_type} {stmt.name}[];\n"
+        else:
+            return f"{indent_str}{element_type} {stmt.name}[{size}];\n"
+
+    def generate_struct(self, node):
+        code = f"struct {node.name} {{\n"
+        
+        # Generate struct members - handle both old and new AST
+        members = getattr(node, "members", [])
+        for member in members:
+            if isinstance(member, ArrayNode):
+                element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                if member.size:
+                    code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
+                else:
+                    code += f"    {self.map_type(element_type)} {member.name}[];\n"
+            else:
+                # Handle both old and new AST member structures
+                if hasattr(member, "member_type"):
+                    # New AST structure - check if it's an ArrayType
+                    if str(type(member.member_type)).find('ArrayType') != -1:
+                        # Handle array types with C-style syntax for struct members
+                        element_type = self.convert_type_node_to_string(member.member_type.element_type)
+                        element_type = self.map_type(element_type)
+                        if member.member_type.size is not None:
+                            size_str = self.expression_to_string(member.member_type.size)
+                            code += f"    {element_type} {member.name}[{size_str}];\n"
+                        else:
+                            code += f"    {element_type} {member.name}[];\n"
+                    else:
+                        # Regular type
+                        member_type_str = self.convert_type_node_to_string(member.member_type)
+                        member_type = self.map_type(member_type_str)
+                        code += f"    {member_type} {member.name};\n"
+                elif hasattr(member, "vtype"):
+                    # Old AST structure  
+                    member_type = self.map_type(member.vtype)
+                    code += f"    {member_type} {member.name};\n"
+                else:
+                    code += f"    float {member.name};\n"
+        
+        code += "};\n"
+        return code
+
+    def generate_expression_statement(self, stmt):
+        """Generate code for expression statements."""
+        if hasattr(stmt, 'expression'):
+            expr = self.generate_expression(stmt.expression)
+            return expr
+        else:
+            # Fallback for direct expression
+            return self.generate_expression(stmt)

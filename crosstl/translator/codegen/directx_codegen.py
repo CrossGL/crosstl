@@ -70,101 +70,221 @@ class HLSLCodeGen:
 
     def generate(self, ast):
         code = "\n"
-        # Generate structs
-        for node in ast.structs:
+        
+        # Generate structs - handle both old and new AST
+        structs = getattr(ast, "structs", [])
+        for node in structs:
             if isinstance(node, StructNode):
                 code += f"struct {node.name} {{\n"
-                for member in node.members:
+                members = getattr(node, "members", [])
+                for member in members:
                     if isinstance(member, ArrayNode):
+                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
                         if member.size:
-                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in HLSL
-                            code += f"    {self.map_type(member.element_type)}[] {member.name};\n"
+                            code += f"    {self.map_type(element_type)}[] {member.name};\n"
                     else:
-                        code += f"    {self.map_type(member.vtype)} {member.name}{self.map_semantic(member.semantic)};\n"
+                        # Handle both old and new AST member structures
+                        if hasattr(member, "member_type"):
+                            # New AST structure
+                            if hasattr(member.member_type, "name"):
+                                member_type = self.map_type(member.member_type.name)
+                            else:
+                                member_type = self.map_type(str(member.member_type))
+                        elif hasattr(member, "vtype"):
+                            # Old AST structure
+                            member_type = self.map_type(member.vtype)
+                        else:
+                            member_type = "float"
+                        
+                        # Handle semantic - get from attributes in new AST
+                        semantic = None
+                        if hasattr(member, "semantic"):
+                            semantic = member.semantic
+                        elif hasattr(member, "attributes"):
+                            for attr in member.attributes:
+                                if hasattr(attr, "name") and attr.name in ["position", "color", "texcoord", "normal"]:
+                                    semantic = attr.name
+                                    break
+                        
+                        code += f"    {member_type} {member.name}{self.map_semantic(semantic)};\n"
                 code += "};\n"
 
-        # Generate global variables
-        for i, node in enumerate(ast.global_variables):
-            if node.vtype in ["sampler2D", "samplerCube"]:
-                code += "// Texture Samplers\n"
-                code += f"{self.map_type(node.vtype)} {node.name} :register(t{i});\n"
-            elif node.vtype in ["sampler"]:
-                code += "// Sampler States\n"
-                code += f"{self.map_type(node.vtype)} {node.name} :register(s{i});\n"
+        # Generate global variables - handle both old and new AST
+        global_vars = getattr(ast, "global_variables", [])
+        for i, node in enumerate(global_vars):
+            # Handle both old and new AST variable structures
+            if hasattr(node, "var_type"):
+                if hasattr(node.var_type, "name"):
+                    vtype = node.var_type.name
+                else:
+                    vtype = str(node.var_type)
+            elif hasattr(node, "vtype"):
+                vtype = node.vtype
             else:
-                code += f"{self.map_type(node.vtype)} {node.name};\n"
+                vtype = "float"
+            
+            if vtype in ["sampler2D", "samplerCube"]:
+                code += "// Texture Samplers\n"
+                code += f"{self.map_type(vtype)} {node.name} :register(t{i});\n"
+            elif vtype in ["sampler"]:
+                code += "// Sampler States\n"
+                code += f"{self.map_type(vtype)} {node.name} :register(s{i});\n"
+            else:
+                code += f"{self.map_type(vtype)} {node.name};\n"
 
-        # Generate cbuffers
-        if ast.cbuffers:
+        # Generate cbuffers - handle both old and new AST
+        cbuffers = getattr(ast, "cbuffers", [])
+        if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        # Generate custom functions
-        for func in ast.functions:
-            if func.qualifier == "vertex":
+        # Generate custom functions - handle both old and new AST
+        functions = getattr(ast, "functions", [])
+        for func in functions:
+            # Handle both old and new AST function structures
+            if hasattr(func, "qualifiers") and func.qualifiers:
+                qualifier = func.qualifiers[0] if func.qualifiers else None
+            else:
+                qualifier = getattr(func, "qualifier", None)
+            
+            if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
-            elif func.qualifier == "fragment":
+            elif qualifier == "fragment":
                 code += "// Fragment Shader\n"
                 code += self.generate_function(func, shader_type="fragment")
-            elif func.qualifier == "compute":
+            elif qualifier == "compute":
                 code += "// Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
             else:
                 code += self.generate_function(func)
 
+        # Handle shader stages (new AST structure)
+        if hasattr(ast, "stages") and ast.stages:
+            for stage_type, stage in ast.stages.items():
+                if hasattr(stage, "entry_point"):
+                    stage_name = str(stage_type).split('.')[-1].lower()  # Extract stage name from enum
+                    code += f"// {stage_name.title()} Shader\n"
+                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                if hasattr(stage, "local_functions"):
+                    for func in stage.local_functions:
+                        code += self.generate_function(func)
+
         return code
 
     def generate_cbuffers(self, ast):
         code = ""
-        for i, node in enumerate(ast.cbuffers):
+        cbuffers = getattr(ast, "cbuffers", [])
+        for i, node in enumerate(cbuffers):
             if isinstance(node, StructNode):
                 code += f"cbuffer {node.name} : register(b{i}) {{\n"
-                for member in node.members:
+                members = getattr(node, "members", [])
+                for member in members:
                     if isinstance(member, ArrayNode):
+                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
                         if member.size:
-                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in cbuffers usually not supported, so we'll make it fixed size
-                            code += f"    {self.map_type(member.element_type)} {member.name}[1];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[1];\n"
                     else:
-                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                        # Handle both old and new AST member structures
+                        if hasattr(member, "member_type"):
+                            member_type = self.map_type(str(member.member_type))
+                        else:
+                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                        code += f"    {member_type} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, "name") and hasattr(
-                node, "members"
-            ):  # Generic cbuffer handling
+            elif hasattr(node, "name") and hasattr(node, "members"):  # Generic cbuffer handling
                 code += f"cbuffer {node.name} : register(b{i}) {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
+                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
                         if member.size:
-                            code += f"    {self.map_type(member.element_type)} {member.name}[{member.size}];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in cbuffers usually not supported
-                            code += f"    {self.map_type(member.element_type)} {member.name}[1];\n"
+                            code += f"    {self.map_type(element_type)} {member.name}[1];\n"
                     else:
-                        code += f"    {self.map_type(member.vtype)} {member.name};\n"
+                        # Handle both old and new AST member structures
+                        if hasattr(member, "member_type"):
+                            member_type = self.map_type(str(member.member_type))
+                        else:
+                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                        code += f"    {member_type} {member.name};\n"
                 code += "};\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
         code += "  " * indent
-        params = ", ".join(
-            f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.semantic)}"
-            for p in func.params
-        )
+        
+        # Handle parameters - support both old and new AST
+        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        params = []
+        for p in param_list:
+            if hasattr(p, "param_type"):
+                # New AST structure
+                if hasattr(p.param_type, "name"):
+                    param_type = self.map_type(p.param_type.name)
+                else:
+                    param_type = self.map_type(str(p.param_type))
+            elif hasattr(p, "vtype"):
+                # Old AST structure
+                param_type = self.map_type(p.vtype)
+            else:
+                param_type = "float"
+            
+            # Handle semantic
+            semantic = None
+            if hasattr(p, "semantic"):
+                semantic = p.semantic
+            elif hasattr(p, "attributes"):
+                for attr in p.attributes:
+                    if hasattr(attr, "name"):
+                        semantic = attr.name
+                        break
+            
+            params.append(f"{param_type} {p.name} {self.map_semantic(semantic)}")
+        
+        params_str = ", ".join(params)
         shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
 
-        if func.qualifier in shader_map:
-            code += f"// {func.qualifier.capitalize()} Shader\n"
-            code += f"{self.map_type(func.return_type)} {shader_map[func.qualifier]}({params}) {{\n"
+        # Handle return type - support both old and new AST
+        if hasattr(func, "return_type"):
+            if hasattr(func.return_type, "name"):
+                return_type = self.map_type(func.return_type.name)
+            else:
+                return_type = self.map_type(str(func.return_type))
         else:
-            code += f"{self.map_type(func.return_type)} {func.name}({params}) {{\n"
+            return_type = "void"
 
-        for stmt in func.body:
-            code += self.generate_statement(stmt, indent + 1)
+        # Handle qualifier
+        if hasattr(func, "qualifiers") and func.qualifiers:
+            qualifier = func.qualifiers[0] if func.qualifiers else None
+        else:
+            qualifier = getattr(func, "qualifier", None)
+
+        if qualifier in shader_map:
+            code += f"// {qualifier.capitalize()} Shader\n"
+            code += f"{return_type} {shader_map[qualifier]}({params_str}) {{\n"
+        else:
+            code += f"{return_type} {func.name}({params_str}) {{\n"
+
+        # Handle function body - support both old and new AST
+        body = getattr(func, "body", [])
+        if hasattr(body, "statements"):
+            # New AST BlockNode structure
+            for stmt in body.statements:
+                code += self.generate_statement(stmt, indent + 1)
+        elif isinstance(body, list):
+            # Old AST structure
+            for stmt in body:
+                code += self.generate_statement(stmt, indent + 1)
+        
         code += "  " * indent + "}\n\n"
         return code
 

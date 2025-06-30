@@ -191,20 +191,33 @@ class HipCodeGen:
     def visit_ShaderNode(self, node: ShaderNode) -> str:
         """Visit shader node"""
         # Generate structs
-        for struct in node.structs:
+        structs = getattr(node, "structs", [])
+        for struct in structs:
             self.visit(struct)
 
         # Generate global variables
-        for var in node.global_variables:
+        global_vars = getattr(node, "global_variables", [])
+        for var in global_vars:
             self.visit(var)
 
-        # Generate cbuffers
-        for cbuffer in node.cbuffers:
+        # Generate cbuffers (legacy compatibility)
+        cbuffers = getattr(node, "cbuffers", [])
+        for cbuffer in cbuffers:
             self.visit(cbuffer)
 
         # Generate functions
-        for func in node.functions:
+        functions = getattr(node, "functions", [])
+        for func in functions:
             self.visit(func)
+
+        # Handle shader stages (new AST structure)
+        if hasattr(node, "stages") and node.stages:
+            for stage_type, stage in node.stages.items():
+                if hasattr(stage, "entry_point"):
+                    self.visit(stage.entry_point)
+                if hasattr(stage, "local_functions"):
+                    for func in stage.local_functions:
+                        self.visit(func)
 
         return ""
 
@@ -212,35 +225,62 @@ class HipCodeGen:
         """Visit function node"""
         self.current_function = node.name
 
-        # Determine function qualifiers
+        # Determine function qualifiers - handle both old and new AST
         qualifiers = []
-        if hasattr(node, "qualifier") and node.qualifier:
+        if hasattr(node, "qualifiers") and node.qualifiers:
+            for qualifier in node.qualifiers:
+                if "kernel" in qualifier or "compute" in qualifier:
+                    qualifiers.append("__global__")
+                elif "device" in qualifier:
+                    qualifiers.append("__device__")
+                else:
+                    qualifiers.append("__device__")
+        elif hasattr(node, "qualifier") and node.qualifier:
             if "kernel" in node.qualifier or "compute" in node.qualifier:
                 qualifiers.append("__global__")
             elif "device" in node.qualifier:
                 qualifiers.append("__device__")
             else:
-                qualifiers.append("__device__")  # Default for HIP
+                qualifiers.append("__device__")
         else:
             qualifiers.append("__device__")  # Default for HIP
 
-        # Function signature
-        return_type = self.map_type(node.return_type)
-        params = ", ".join(self.visit_parameter(param) for param in node.params)
+        # Function signature - handle both old and new AST
+        if hasattr(node, "return_type"):
+            if hasattr(node.return_type, "name"):
+                return_type = self.map_type(node.return_type.name)
+            else:
+                return_type = self.map_type(str(node.return_type))
+        else:
+            return_type = "void"
+
+        # Handle parameters - support both old and new AST
+        param_list = getattr(node, "parameters", getattr(node, "params", []))
+        params = ", ".join(self.visit_parameter(param) for param in param_list)
 
         qualifier_str = " ".join(qualifiers)
         signature = f"{qualifier_str} {return_type} {node.name}({params})"
 
         self.add_line(signature)
 
-        if node.body:
+        # Handle function body - support both old and new AST
+        body = getattr(node, "body", [])
+        if body:
             self.add_line("{")
             self.indent_level += 1
-            if isinstance(node.body, list):
-                for stmt in node.body:
+            
+            if hasattr(body, "statements"):
+                # New AST BlockNode structure
+                for stmt in body.statements:
+                    self.visit(stmt)
+            elif isinstance(body, list):
+                # Old AST structure
+                for stmt in body:
                     self.visit(stmt)
             else:
-                self.visit(node.body)
+                # Single statement
+                self.visit(body)
+                
             self.indent_level -= 1
             self.add_line("}")
         else:
@@ -256,8 +296,19 @@ class HipCodeGen:
             param_type = self.map_type(param.get("type", "int"))
             param_name = param.get("name", "param")
         else:
-            param_type = self.map_type(getattr(param, "vtype", "int"))
+            # Handle both old and new AST parameter structures
+            if hasattr(param, "param_type"):
+                if hasattr(param.param_type, "name"):
+                    param_type = self.map_type(param.param_type.name)
+                else:
+                    param_type = self.map_type(str(param.param_type))
+            elif hasattr(param, "vtype"):
+                param_type = self.map_type(param.vtype)
+            else:
+                param_type = "int"
+            
             param_name = getattr(param, "name", "param")
+            
         return f"{param_type} {param_name}"
 
     def visit_StructNode(self, node: StructNode) -> str:
@@ -266,12 +317,24 @@ class HipCodeGen:
         self.add_line("{")
         self.indent_level += 1
 
-        for member in node.members:
-            if isinstance(member, VariableNode):
-                member_type = self.map_type(
-                    getattr(member, "vtype", getattr(member, "var_type", "int"))
-                )
-                self.add_line(f"{member_type} {member.name};")
+        members = getattr(node, "members", [])
+        for member in members:
+            if hasattr(member, "member_type"):
+                # New AST structure
+                if hasattr(member.member_type, "name"):
+                    member_type = self.map_type(member.member_type.name)
+                else:
+                    member_type = self.map_type(str(member.member_type))
+            elif hasattr(member, "vtype"):
+                # Old AST structure
+                member_type = self.map_type(member.vtype)
+            elif hasattr(member, "var_type"):
+                # Alternative structure
+                member_type = self.map_type(str(member.var_type))
+            else:
+                member_type = "float"
+            
+            self.add_line(f"{member_type} {member.name};")
 
         self.indent_level -= 1
         self.add_line("};")
@@ -280,9 +343,22 @@ class HipCodeGen:
 
     def visit_VariableNode(self, node: VariableNode) -> str:
         """Visit variable node"""
-        var_type = self.map_type(node.vtype)
+        # Handle both old and new AST structures
+        if hasattr(node, "var_type"):
+            if hasattr(node.var_type, "name"):
+                var_type = self.map_type(node.var_type.name)
+            else:
+                var_type = self.map_type(str(node.var_type))
+        elif hasattr(node, "vtype"):
+            var_type = self.map_type(node.vtype)
+        else:
+            var_type = "int"
 
-        if hasattr(node, "value") and node.value:
+        # Handle initial value
+        if hasattr(node, "initial_value") and node.initial_value:
+            value = self.visit(node.initial_value)
+            self.add_line(f"{var_type} {node.name} = {value};")
+        elif hasattr(node, "value") and node.value:
             value = self.visit(node.value)
             self.add_line(f"{var_type} {node.name} = {value};")
         else:
