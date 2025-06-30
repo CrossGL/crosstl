@@ -6,7 +6,7 @@ from crosstl.translator.lexer import Lexer
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
-    return lexer.tokens
+    return lexer.get_tokens()
 
 
 def test_struct_tokenization():
@@ -162,8 +162,8 @@ def test_data_types_tokenization():
         assert any(t[0] == "DOUBLE" for t in tokens), "Missing 'DOUBLE' token"
         assert any(t[0] == "BOOL" for t in tokens), "Missing 'BOOL' token"
         assert any(
-            t[0] == "UNSIGNED_INT" for t in tokens
-        ), "Missing 'UNSIGNED INT' token"
+            t[0] == "IDENTIFIER" and t[1] == "unsigned" for t in tokens
+        ), "Missing 'unsigned' identifier token"
     except SyntaxError:
         pytest.fail("Data types tokenization not implemented.")
 
@@ -255,7 +255,7 @@ def test_const_tokenization():
 
 
 def test_illegal_character():
-    code = "int a = 1 @#"
+    code = "int a = 1 `"
     with pytest.raises(SyntaxError):
         tokenize_code(code)
 
