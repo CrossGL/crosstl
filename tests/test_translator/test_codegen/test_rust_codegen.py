@@ -9,7 +9,7 @@ from typing import List
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
-    return lexer.tokens
+    return lexer.get_tokens()
 
 
 def parse_code(tokens: List):
@@ -672,8 +672,8 @@ def test_let_binding():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "(x = " in generated_code  # Rust codegen outputs variable assignments
-        assert "(y = " in generated_code
+        assert "let mut x:" in generated_code  # Rust let binding syntax
+        assert "let mut y:" in generated_code  # Rust let binding syntax
         print(generated_code)
     except SyntaxError:
         pytest.fail("Let binding codegen not implemented")

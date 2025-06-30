@@ -9,7 +9,7 @@ from typing import List
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
-    return lexer.tokens
+    return lexer.get_tokens()
 
 
 def parse_code(tokens: List):
@@ -104,6 +104,7 @@ def test_if_statement():
             return vec4(colorWithBloom, 1.0);
         }
     }
+}
 
     """
     try:
@@ -176,6 +177,7 @@ def test_else_if_statement():
                 output.color = vec4(0.0, 0.0, 0.0, 1.0);
             } else {
                 output.color = vec4(0.5, 0.5, 0.5, 1.0);
+            }
 
             // Pass through texture coordinates as color
             output.color = vec4(input.texCoord, 0.0, 1.0);
@@ -183,9 +185,8 @@ def test_else_if_statement():
             return output;
         }
     }
-}
 
-fragment {
+    fragment {
         vec4 main(VSOutput input) @ gl_FragColor {
             // Sample brightness and calculate bloom
             float brightness = texture(iChannel0, input.color.xy).r;

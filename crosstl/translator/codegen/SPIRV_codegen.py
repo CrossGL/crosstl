@@ -671,42 +671,81 @@ class VulkanSPIRVCodeGen:
 
     def map_crossgl_type(self, type_name) -> SpirvId:
         """Map a CrossGL type name to a SPIR-V type ID."""
-        if type_name == "float":
+        # Handle TypeNode objects by converting to string first
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_str = self.convert_type_node_to_string(type_name)
+        else:
+            type_str = str(type_name)
+
+        if type_str == "float":
             return self.register_primitive_type("float")
-        elif type_name == "int":
+        elif type_str == "int":
             return self.register_primitive_type("int")
         elif type_name == "bool":
             return self.register_primitive_type("bool")
-        elif type_name == "void":
+        elif type_str == "void":
             return self.register_primitive_type("void")
-        elif type_name.startswith("vec"):
+        elif type_str.startswith("vec"):
             # Vector types (vec2, vec3, vec4)
-            size = int(type_name[3:])
+            size = int(type_str[3:])
             float_type = self.register_primitive_type("float")
             return self.register_vector_type(float_type, size)
-        elif type_name.startswith("ivec"):
+        elif type_str.startswith("ivec"):
             # Integer vector types (ivec2, ivec3, ivec4)
-            size = int(type_name[4:])
+            size = int(type_str[4:])
             int_type = self.register_primitive_type("int")
             return self.register_vector_type(int_type, size)
-        elif type_name.startswith("bvec"):
+        elif type_str.startswith("bvec"):
             # Boolean vector types (bvec2, bvec3, bvec4)
-            size = int(type_name[4:])
+            size = int(type_str[4:])
             bool_type = self.register_primitive_type("bool")
             return self.register_vector_type(bool_type, size)
-        elif type_name.startswith("mat"):
+        elif type_str.startswith("mat"):
             # Matrix types (mat2, mat3, mat4)
-            dim = int(type_name[3:])
+            dim = int(type_str[3:])
             float_type = self.register_primitive_type("float")
             col_type = self.register_vector_type(float_type, dim)
             return self.register_matrix_type(col_type, dim)
-        elif type_name in self.struct_types:
+        elif type_str in self.struct_types:
             # Struct type (reference to existing struct)
-            return self.struct_types[type_name]
+            return self.struct_types[type_str]
         else:
             # If type is unknown, return a default float type
-            self.emit(f"; WARNING: Unknown type {type_name}, using float as default")
+            self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
+
+    def convert_type_node_to_string(self, type_node) -> str:
+        """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "name"):
+            # PrimitiveType
+            return type_node.name
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
+            # VectorType or ArrayType
+            if hasattr(type_node, "rows"):
+                # MatrixType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                return f"mat{type_node.rows}x{type_node.cols}"
+            elif str(type(type_node)).find("ArrayType") != -1:
+                # ArrayType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                if type_node.size is not None:
+                    return f"{element_type}[{type_node.size}]"
+                else:
+                    return f"{element_type}[]"
+            else:
+                # VectorType
+                element_type = self.convert_type_node_to_string(type_node.element_type)
+                size = type_node.size
+                if element_type == "float":
+                    return f"vec{size}"
+                elif element_type == "int":
+                    return f"ivec{size}"
+                elif element_type == "uint":
+                    return f"uvec{size}"
+                else:
+                    return f"{element_type}{size}"
+        else:
+            return str(type_node)
 
     def process_crossgl_struct(self, struct_node: StructNode) -> SpirvId:
         """Process a CrossGL struct definition."""
@@ -717,31 +756,46 @@ class VulkanSPIRVCodeGen:
             member_name = member.name
 
             if isinstance(member, VariableNode):
-                # Regular struct member
-                if member.vtype == "float":
+                # Regular struct member - handle both old and new AST
+                if hasattr(member, "var_type"):
+                    # New AST structure
+                    vtype_str = self.convert_type_node_to_string(member.var_type)
+                elif hasattr(member, "vtype"):
+                    # Old AST structure
+                    if hasattr(member.vtype, "name") or hasattr(
+                        member.vtype, "element_type"
+                    ):
+                        # TypeNode object
+                        vtype_str = self.convert_type_node_to_string(member.vtype)
+                    else:
+                        # String
+                        vtype_str = str(member.vtype)
+                else:
+                    vtype_str = "float"
+
+                if vtype_str == "float":
                     member_type = self.register_primitive_type("float")
-                elif member.vtype == "int":
+                elif vtype_str == "int":
                     member_type = self.register_primitive_type("int")
-                elif member.vtype == "bool":
+                elif vtype_str == "bool":
                     member_type = self.register_primitive_type("bool")
-                elif member.vtype.startswith("vec"):
-                    size = int(member.vtype[3:])
+                elif vtype_str.startswith("vec"):
+                    size = int(vtype_str[3:])
                     float_type = self.register_primitive_type("float")
                     member_type = self.register_vector_type(float_type, size)
-                elif member.vtype.startswith("mat"):
-                    # Handle matrix types (mat2, mat3, mat4, etc.)
-                    dim = int(member.vtype[3:])
+                elif vtype_str.startswith("mat"):
+                    dim = int(vtype_str[3:])
                     float_type = self.register_primitive_type("float")
                     col_type = self.register_vector_type(float_type, dim)
                     member_type = self.register_matrix_type(col_type, dim)
                 else:
                     # Struct type (reference to another struct)
-                    if member.vtype in self.struct_types:
-                        member_type = self.struct_types[member.vtype]
+                    if vtype_str in self.struct_types:
+                        member_type = self.struct_types[vtype_str]
                     else:
                         # Use a default type if unknown
                         self.emit(
-                            f"; WARNING: Unknown type {member.vtype} in struct {struct_node.name}"
+                            f"; WARNING: Unknown type {vtype_str} in struct {struct_node.name}"
                         )
                         member_type = self.register_primitive_type("float")
 
@@ -799,7 +853,9 @@ class VulkanSPIRVCodeGen:
 
         # Map parameter types
         param_types = []
-        for param in function_node.params:
+        for param in getattr(
+            function_node, "parameters", getattr(function_node, "params", [])
+        ):
             if hasattr(param, "vtype"):
                 param_type = self.map_crossgl_type(param.vtype)
             else:
@@ -812,7 +868,9 @@ class VulkanSPIRVCodeGen:
 
         # Add parameters
         parameters = []
-        for i, param in enumerate(function_node.params):
+        for i, param in enumerate(
+            getattr(function_node, "parameters", getattr(function_node, "params", []))
+        ):
             if hasattr(param, "name"):
                 param_name = param.name
             else:
@@ -838,9 +896,20 @@ class VulkanSPIRVCodeGen:
         # Clear local variables
         self.local_variables.clear()
 
-    def process_statements(self, statements: List):
+    def process_statements(self, statements):
         """Process a list of CrossGL statements."""
-        for stmt in statements:
+        # Handle both List and BlockNode structures
+        if hasattr(statements, "statements"):
+            # BlockNode structure (new AST)
+            stmt_list = statements.statements
+        elif isinstance(statements, list):
+            # List of statements (old AST)
+            stmt_list = statements
+        else:
+            # Single statement - wrap in list
+            stmt_list = [statements]
+
+        for stmt in stmt_list:
             self.process_statement(stmt)
 
     def process_statement(self, stmt):
@@ -1425,7 +1494,15 @@ class VulkanSPIRVCodeGen:
 
         # Shader preprocess - identify vertex/fragment shaders
         for func in ast.functions:
-            if func.qualifier == "vertex":
+            # Handle both old and new AST structures
+            if hasattr(func, "qualifiers") and func.qualifiers:
+                qualifier = func.qualifiers[0] if func.qualifiers else None
+            elif hasattr(func, "qualifier"):
+                qualifier = func.qualifier
+            else:
+                qualifier = None
+
+            if qualifier == "vertex":
                 self.is_vertex_shader = True
                 break
 
@@ -1462,7 +1539,15 @@ class VulkanSPIRVCodeGen:
 
         # Process functions
         for func in ast.functions:
-            if func.name == "main" or func.qualifier in ["vertex", "fragment"]:
+            # Handle both old and new AST structures for function qualifiers
+            if hasattr(func, "qualifiers") and func.qualifiers:
+                qualifier = func.qualifiers[0] if func.qualifiers else None
+            elif hasattr(func, "qualifier"):
+                qualifier = func.qualifier
+            else:
+                qualifier = None
+
+            if func.name == "main" or qualifier in ["vertex", "fragment"]:
                 # Main shader function - save for later
                 if self.main_fn_id is None:
                     self.main_fn_id = self.get_id()
@@ -1472,7 +1557,15 @@ class VulkanSPIRVCodeGen:
 
         # Process main shader function last
         for func in ast.functions:
-            if func.qualifier in ["vertex", "fragment"]:
+            # Handle both old and new AST structures for function qualifiers
+            if hasattr(func, "qualifiers") and func.qualifiers:
+                qualifier = func.qualifiers[0] if func.qualifiers else None
+            elif hasattr(func, "qualifier"):
+                qualifier = func.qualifier
+            else:
+                qualifier = None
+
+            if qualifier in ["vertex", "fragment"]:
                 self.process_function_node(func)
 
         # === Entry point ===

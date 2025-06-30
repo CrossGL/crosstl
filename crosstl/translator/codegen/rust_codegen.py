@@ -122,36 +122,66 @@ class RustCodeGen:
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
 
-        # Generate structs
-        for node in ast.structs:
+        # Generate structs - handle both old and new AST
+        structs = getattr(ast, "structs", [])
+        for node in structs:
             if isinstance(node, StructNode):
                 code += self.generate_struct(node)
 
-        # Generate global variables
-        for node in ast.global_variables:
+        # Generate global variables - handle both old and new AST
+        global_vars = getattr(ast, "global_variables", [])
+        for node in global_vars:
             if isinstance(node, ArrayNode):
                 code += self.generate_array_declaration(node)
             else:
-                code += f"static {node.name}: {self.map_type(node.vtype)} = Default::default();\n"
+                # Handle both old and new AST variable structures
+                if hasattr(node, "var_type"):
+                    var_type = self.convert_type_node_to_string(node.var_type)
+                elif hasattr(node, "vtype"):
+                    var_type = node.vtype
+                else:
+                    var_type = "float"
+                code += f"static {node.name}: {self.map_type(var_type)} = Default::default();\n"
 
-        # Generate cbuffers as structs
-        if ast.cbuffers:
+        # Generate cbuffers/constants as structs
+        cbuffers = getattr(ast, "cbuffers", None) or getattr(ast, "constants", [])
+        if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        # Generate functions
-        for func in ast.functions:
-            if func.qualifier == "vertex":
+        # Generate functions - handle both old and new AST
+        functions = getattr(ast, "functions", [])
+        for func in functions:
+            # Handle both old and new AST function structures
+            if hasattr(func, "qualifiers") and func.qualifiers:
+                qualifier = func.qualifiers[0] if func.qualifiers else None
+            else:
+                qualifier = getattr(func, "qualifier", None)
+
+            if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
-            elif func.qualifier == "fragment":
+            elif qualifier == "fragment":
                 code += "// Fragment Shader\n"
                 code += self.generate_function(func, shader_type="fragment")
-            elif func.qualifier == "compute":
+            elif qualifier == "compute":
                 code += "// Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
             else:
                 code += self.generate_function(func)
+
+        # Handle shader stages (new AST structure)
+        if hasattr(ast, "stages") and ast.stages:
+            for stage_type, stage in ast.stages.items():
+                if hasattr(stage, "entry_point"):
+                    stage_name = str(stage_type).split(".")[-1].lower()
+                    code += f"// {stage_name.title()} Shader\n"
+                    code += self.generate_function(
+                        stage.entry_point, shader_type=stage_name
+                    )
+                if hasattr(stage, "local_functions"):
+                    for func in stage.local_functions:
+                        code += self.generate_function(func)
 
         return code
 
@@ -159,29 +189,139 @@ class RustCodeGen:
         code = f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
         code += f"pub struct {node.name} {{\n"
 
-        # Generate struct members
-        for member in node.members:
+        # Generate struct members - handle both old and new AST
+        members = getattr(node, "members", [])
+        for member in members:
             if isinstance(member, ArrayNode):
+                element_type = getattr(
+                    member, "element_type", getattr(member, "vtype", "float")
+                )
                 if member.size:
-                    code += f"    pub {member.name}: [{self.map_type(member.element_type)}; {member.size}],\n"
+                    code += f"    pub {member.name}: [{self.map_type_to_rust(element_type)}; {member.size}],\n"
                 else:
-                    code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
+                    code += f"    pub {member.name}: Vec<{self.map_type_to_rust(element_type)}>,\n"
             else:
-                semantic = (
-                    f"  // {self.map_semantic(member.semantic)}"
-                    if member.semantic
-                    else ""
+                # Handle both old and new AST member structures
+                if hasattr(member, "member_type"):
+                    # New AST structure
+                    member_type = self.convert_type_node_to_string(member.member_type)
+                elif hasattr(member, "vtype"):
+                    # Old AST structure
+                    member_type = member.vtype
+                else:
+                    member_type = "float"
+
+                # Handle semantic - get from attributes in new AST
+                semantic = None
+                if hasattr(member, "semantic"):
+                    semantic = member.semantic
+                elif hasattr(member, "attributes"):
+                    semantic = self.extract_semantic_from_attributes(member.attributes)
+
+                semantic_comment = (
+                    f"  // {self.map_semantic(semantic)}" if semantic else ""
                 )
-                code += (
-                    f"    pub {member.name}: {self.map_type(member.vtype)},{semantic}\n"
-                )
+                code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
 
         code += "}\n\n"
         return code
 
+    def convert_type_node_to_string(self, type_node) -> str:
+        """Convert new AST TypeNode to string representation."""
+        # Handle different TypeNode types
+        if hasattr(type_node, "name"):
+            # PrimitiveType
+            return type_node.name
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
+            # VectorType - map to proper Rust vector types
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = type_node.size
+
+            # Map to Rust vector types
+            if element_type == "float":
+                return f"vec{size}"  # This will be mapped to Vec{size}<f32> later
+            elif element_type == "int":
+                return f"ivec{size}"  # This will be mapped to Vec{size}<i32> later
+            elif element_type == "uint":
+                return f"uvec{size}"  # This will be mapped to Vec{size}<u32> later
+            else:
+                return f"{element_type}{size}"
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
+            # MatrixType
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            return f"mat{type_node.rows}x{type_node.cols}"  # Will be mapped later
+        else:
+            # Fallback
+            return str(type_node)
+
+    def extract_semantic_from_attributes(self, attributes):
+        """Extract semantic information from new AST attributes."""
+        semantic_attrs = [
+            "position",
+            "color",
+            "texcoord",
+            "normal",
+            "tangent",
+            "binormal",
+            "POSITION",
+            "COLOR",
+            "TEXCOORD",
+            "NORMAL",
+            "TANGENT",
+            "BINORMAL",
+            "TEXCOORD0",
+            "TEXCOORD1",
+            "TEXCOORD2",
+            "TEXCOORD3",
+        ]
+
+        for attr in attributes:
+            if hasattr(attr, "name") and attr.name in semantic_attrs:
+                return attr.name
+        return None
+
+    def map_type_to_rust(self, type_str):
+        """Enhanced type mapping for Rust."""
+        # Handle vector types first
+        if type_str.startswith("float") and len(type_str) > 5:
+            size = type_str[5:]
+            if size.isdigit():
+                return f"Vec{size}<f32>"
+        elif type_str.startswith("int") and len(type_str) > 3:
+            size = type_str[3:]
+            if size.isdigit():
+                return f"Vec{size}<i32>"
+
+        # Standard type mapping
+        type_map = {
+            "void": "()",
+            "bool": "bool",
+            "int": "i32",
+            "uint": "u32",
+            "float": "f32",
+            "double": "f64",
+            "vec2": "Vec2<f32>",
+            "vec3": "Vec3<f32>",
+            "vec4": "Vec4<f32>",
+            "ivec2": "Vec2<i32>",
+            "ivec3": "Vec3<i32>",
+            "ivec4": "Vec4<i32>",
+            "uvec2": "Vec2<u32>",
+            "uvec3": "Vec3<u32>",
+            "uvec4": "Vec4<u32>",
+            "mat2": "Mat2<f32>",
+            "mat3": "Mat3<f32>",
+            "mat4": "Mat4<f32>",
+            "float2": "Vec2<f32>",
+            "float3": "Vec3<f32>",
+            "float4": "Vec4<f32>",
+        }
+        return type_map.get(type_str, type_str)
+
     def generate_cbuffers(self, ast):
         code = ""
-        for node in ast.cbuffers:
+        cbuffers = getattr(ast, "cbuffers", None) or getattr(ast, "constants", [])
+        for node in cbuffers:
             if isinstance(node, StructNode):
                 code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
                 code += f"pub struct {node.name} {{\n"
@@ -214,8 +354,32 @@ class RustCodeGen:
 
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
+        code += "  " * indent
 
-        # Add shader type attributes for Rust GPU programming
+        # Handle parameters - support both old and new AST
+        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        params = []
+        for p in param_list:
+            if hasattr(p, "param_type"):
+                # New AST structure
+                param_type = self.convert_type_node_to_string(p.param_type)
+            elif hasattr(p, "vtype"):
+                # Old AST structure
+                param_type = p.vtype
+            else:
+                param_type = "float"
+
+            params.append(f"{p.name}: {self.map_type(param_type)}")
+
+        params_str = ", ".join(params) if params else ""
+
+        # Handle return type - support both old and new AST
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+
+        # Add shader type decorators
         if shader_type == "vertex":
             code += f"#[vertex_shader]\n"
         elif shader_type == "fragment":
@@ -223,32 +387,20 @@ class RustCodeGen:
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
 
-        # Generate function parameters
-        params = []
-        for p in func.params:
-            param_semantic = (
-                f"  // {self.map_semantic(p.semantic)}" if p.semantic else ""
-            )
-            # Convert parameter attributes to Rust GPU attributes
-            attributes = self.generate_param_attributes(p)
-            param_str = (
-                f"{attributes}{p.name}: {self.map_type(p.vtype)}{param_semantic}"
-            )
-            params.append(param_str)
+        code += f"pub fn {func.name}({params_str}) -> {self.map_type(return_type)} {{\n"
 
-        params_str = ", ".join(params) if params else ""
-        return_type = self.map_type(func.return_type) if func.return_type else "()"
-
-        code += f"pub fn {func.name}({params_str}) -> {return_type} {{\n"
-
-        # Generate function body
-        if func.body:
-            for stmt in func.body:
+        # Handle function body - support both old and new AST
+        body = getattr(func, "body", [])
+        if hasattr(body, "statements"):
+            # New AST BlockNode structure
+            for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
-        else:
-            code += "    // Empty function body\n"
+        elif isinstance(body, list):
+            # Old AST structure
+            for stmt in body:
+                code += self.generate_statement(stmt, indent + 1)
 
-        code += "}\n\n"
+        code += "  " * indent + "}\n\n"
         return code
 
     def generate_param_attributes(self, param):
@@ -280,51 +432,68 @@ class RustCodeGen:
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
-            # Handle variable declarations
-            if hasattr(stmt, "vtype") and stmt.vtype:
-                # Check if this is an array declaration
-                vtype_str = str(stmt.vtype)
-                if (
-                    "ArrayAccessNode" in vtype_str
-                    and "array=" in vtype_str
-                    and "index=" in vtype_str
-                ):
-                    # This is likely an array declaration
-                    import re
-
-                    array_match = re.search(r"array=(\w+).*?index=(\w+)", vtype_str)
-                    if array_match:
-                        array_match.group(1)
-                        size = array_match.group(2)
-                        base_type = "f32"  # Default
-                        return f"{indent_str}let {stmt.name}: [{base_type}; {size}];\n"
-
-                # Regular variable declaration
-                return f"{indent_str}let {stmt.name}: {self.map_type(stmt.vtype)};\n"
+            # Handle both old and new AST variable structures
+            if hasattr(stmt, "var_type"):
+                vtype = stmt.var_type
+            elif hasattr(stmt, "vtype"):
+                vtype = stmt.vtype
             else:
-                return f"{indent_str}let {stmt.name};\n"
+                vtype = "f32"
+
+            # Handle initialization
+            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+                init_expr = self.generate_expression(stmt.initial_value)
+                return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
+            else:
+                return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)};\n"
+
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
+
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
+
         elif isinstance(stmt, IfNode):
             return self.generate_if(stmt, indent)
+
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
+
         elif isinstance(stmt, ReturnNode):
-            if isinstance(stmt.value, list):
-                # Multiple return values (tuple)
-                values = ", ".join(self.generate_expression(val) for val in stmt.value)
-                return f"{indent_str}return ({values});\n"
+            if hasattr(stmt, "value") and stmt.value is not None:
+                # Handle both single values and lists
+                if isinstance(stmt.value, list):
+                    # Multiple return values (tuple)
+                    values = ", ".join(
+                        self.generate_expression(val) for val in stmt.value
+                    )
+                    return f"{indent_str}return ({values});\n"
+                else:
+                    # Single return value
+                    return (
+                        f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                    )
             else:
-                return f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                # Void return
+                return f"{indent_str}return;\n"
+
+        elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
+            stmt.__class__
+        ):
+            # Handle ExpressionStatementNode
+            if hasattr(stmt, "expression"):
+                return f"{indent_str}{self.generate_expression(stmt.expression)};\n"
+            else:
+                return f"{indent_str}{self.generate_expression(stmt)};\n"
+
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode as statement - likely misclassified
             return f"{indent_str}// Unhandled ArrayAccessNode: {stmt}\n"
+
         else:
-            # Handle expressions that may be used as statements
+            # Try to generate as expression
             expr_result = self.generate_expression(stmt)
-            if expr_result.strip():
+            if expr_result and expr_result.strip():
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
@@ -340,39 +509,109 @@ class RustCodeGen:
             return f"{indent_str}let {node.name}: [{element_type}; {size}] = [Default::default(); {size}];\n"
 
     def generate_assignment(self, node):
-        left = self.generate_expression(node.left)
-        right = self.generate_expression(node.right)
-        op = self.map_operator(node.operator)
-        return f"{left} {op} {right}"
+        # Handle both old and new AST assignment structures
+        if hasattr(node, "target") and hasattr(node, "value"):
+            # New AST structure
+            lhs = self.generate_expression(node.target)
+            rhs = self.generate_expression(node.value)
+            op = getattr(node, "operator", "=")
+        else:
+            # Old AST structure
+            lhs = self.generate_expression(node.left)
+            rhs = self.generate_expression(node.right)
+            op = getattr(node, "operator", "=")
+        return f"{lhs} {op} {rhs}"
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(node.if_condition)
+        condition = self.generate_expression(
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
         code = f"{indent_str}if {condition} {{\n"
 
-        # Generate if body
-        for stmt in node.if_body:
-            code += self.generate_statement(stmt, indent + 1)
+        # Generate if body - handle BlockNode structure
+        if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
+        if hasattr(if_body, "statements"):
+            # New AST BlockNode structure
+            for stmt in if_body.statements:
+                code += self.generate_statement(stmt, indent + 1)
+        elif isinstance(if_body, list):
+            # Old AST structure - list of statements
+            for stmt in if_body:
+                code += self.generate_statement(stmt, indent + 1)
 
         code += f"{indent_str}}}"
 
-        # Generate else if conditions
-        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
-            for else_if_condition, else_if_body in zip(
-                node.else_if_conditions, node.else_if_bodies
-            ):
-                condition = self.generate_expression(else_if_condition)
-                code += f" else if {condition} {{\n"
-                for stmt in else_if_body:
-                    code += self.generate_statement(stmt, indent + 1)
+        # Handle else branch - check if it's another if statement (else-if chain)
+        else_branch = getattr(node, "else_branch", None)
+        if else_branch:
+            # Check if else branch is another IfNode (else-if chain)
+            if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
+                # Generate else if by recursively generating the nested if with else if prefix
+                elif_condition = self.generate_expression(
+                    else_branch.condition
+                    if hasattr(else_branch, "condition")
+                    else else_branch.if_condition
+                )
+                code += f" else if {elif_condition} {{\n"
+
+                # Generate elif body
+                elif_body = getattr(
+                    else_branch, "then_branch", getattr(else_branch, "if_body", None)
+                )
+                if hasattr(elif_body, "statements"):
+                    for stmt in elif_body.statements:
+                        code += self.generate_statement(stmt, indent + 1)
+                elif isinstance(elif_body, list):
+                    for stmt in elif_body:
+                        code += self.generate_statement(stmt, indent + 1)
+
                 code += f"{indent_str}}}"
 
-        # Generate else body
-        if node.else_body:
-            code += f" else {{\n"
-            for stmt in node.else_body:
-                code += self.generate_statement(stmt, indent + 1)
-            code += f"{indent_str}}}"
+                # Recursively handle any remaining else-if chain
+                nested_else = getattr(else_branch, "else_branch", None)
+                if nested_else:
+                    if hasattr(nested_else, "__class__") and "If" in str(
+                        nested_else.__class__
+                    ):
+                        # Another else if - recursively handle
+                        remaining_code = self.generate_if(nested_else, indent)
+                        # Remove the "if" prefix and replace with "else if"
+                        remaining_lines = remaining_code.split("\n")
+                        if remaining_lines[0].strip().startswith("if "):
+                            remaining_lines[0] = remaining_lines[0].replace(
+                                "if ", " else if ", 1
+                            )
+                        code += "\n".join(
+                            remaining_lines[1:]
+                        )  # Skip first line as we already handled it
+                    else:
+                        # Final else clause
+                        code += f" else {{\n"
+                        if hasattr(nested_else, "statements"):
+                            for stmt in nested_else.statements:
+                                code += self.generate_statement(stmt, indent + 1)
+                        elif isinstance(nested_else, list):
+                            for stmt in nested_else:
+                                code += self.generate_statement(stmt, indent + 1)
+                        else:
+                            code += self.generate_statement(nested_else, indent + 1)
+                        code += f"{indent_str}}}"
+            else:
+                # Regular else clause
+                code += f" else {{\n"
+                if hasattr(else_branch, "statements"):
+                    # New AST BlockNode structure
+                    for stmt in else_branch.statements:
+                        code += self.generate_statement(stmt, indent + 1)
+                elif isinstance(else_branch, list):
+                    # Old AST structure
+                    for stmt in else_branch:
+                        code += self.generate_statement(stmt, indent + 1)
+                else:
+                    # Single statement
+                    code += self.generate_statement(else_branch, indent + 1)
+                code += f"{indent_str}}}"
 
         code += "\n"
         return code
@@ -390,8 +629,18 @@ class RustCodeGen:
         code += f"{indent_str}while {condition} {{\n"
 
         # Generate loop body
-        for stmt in node.body:
-            code += self.generate_statement(stmt, indent + 1)
+        # Handle BlockNode structure
+        if hasattr(node.body, "statements"):
+            # New AST BlockNode structure
+            for stmt in node.body.statements:
+                code += self.generate_statement(stmt, indent + 1)
+        elif isinstance(node.body, list):
+            # Old AST list structure
+            for stmt in node.body:
+                code += self.generate_statement(stmt, indent + 1)
+        else:
+            # Single statement
+            code += self.generate_statement(node.body, indent + 1)
 
         # Add update at the end of the loop
         code += f"{indent_str}    {update};\n"
@@ -400,42 +649,64 @@ class RustCodeGen:
         return code
 
     def generate_expression(self, expr):
-        if isinstance(expr, str):
+        if expr is None:
+            return ""
+        elif isinstance(expr, str):
             return expr
         elif isinstance(expr, (int, float, bool)):
             if isinstance(expr, bool):
                 return "true" if expr else "false"
             return str(expr)
+        elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
+            # Handle LiteralNode
+            if hasattr(expr, "value"):
+                value = expr.value
+                if isinstance(value, str) and not (
+                    value.startswith('"') and value.endswith('"')
+                ):
+                    return f'"{value}"'  # Add quotes for string literals
+                return str(value)
+            return str(expr)
+        elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            # Handle IdentifierNode
+            return getattr(expr, "name", str(expr))
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "name"):
                 return expr.name
             else:
                 return str(expr)
-        elif isinstance(expr, BinaryOpNode):
-            left = self.generate_expression(expr.left)
-            right = self.generate_expression(expr.right)
-            op = self.map_operator(expr.op)
-            return f"({left} {op} {right})"
+        elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
+            # Handle BinaryOpNode
+            left = self.generate_expression(getattr(expr, "left", ""))
+            right = self.generate_expression(getattr(expr, "right", ""))
+            op = getattr(expr, "operator", getattr(expr, "op", "+"))
+            return f"({left} {self.map_operator(op)} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
-        elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.operand)
-            op = self.map_operator(expr.op)
-            return f"({op}{operand})"
-        elif isinstance(expr, ArrayAccessNode):
-            # Handle array access properly
-            if hasattr(expr, "array") and hasattr(expr, "index"):
-                array = self.generate_expression(expr.array)
-                index = self.generate_expression(expr.index)
-                return f"{array}[{index}]"
-            else:
-                return str(expr)
-        elif isinstance(expr, FunctionCallNode):
+        elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
+            # Handle UnaryOpNode
+            operand = self.generate_expression(getattr(expr, "operand", ""))
+            op = getattr(expr, "operator", getattr(expr, "op", "+"))
+            return f"({self.map_operator(op)}{operand})"
+        elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
+            # Handle ArrayAccessNode
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
+            index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
+            array = self.generate_expression(array_expr)
+            index = self.generate_expression(index_expr)
+            return f"{array}[{index}]"
+        elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
+            # Handle FunctionCallNode
+            func_name = getattr(expr, "function", getattr(expr, "name", "unknown"))
+            if hasattr(func_name, "name"):
+                func_name = func_name.name
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+
             # Map function names to Rust equivalents
-            func_name = self.function_map.get(expr.name, expr.name)
+            func_name = self.function_map.get(func_name, func_name)
 
             # Handle vector constructors
-            if expr.name in [
+            if func_name in [
                 "vec2",
                 "vec3",
                 "vec4",
@@ -449,59 +720,56 @@ class RustCodeGen:
                 "bvec3",
                 "bvec4",
             ]:
-                rust_type = self.map_type(expr.name)
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"{rust_type}::new({args})"
+                rust_type = self.map_type(func_name)
+                args_str = ", ".join(self.generate_expression(arg) for arg in args)
+                return f"{rust_type}::new({args_str})"
 
             # Handle matrix constructors
-            if expr.name in ["mat2", "mat3", "mat4"]:
-                rust_type = self.map_type(expr.name)
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"{rust_type}::new({args})"
+            if func_name in ["mat2", "mat3", "mat4"]:
+                rust_type = self.map_type(func_name)
+                args_str = ", ".join(self.generate_expression(arg) for arg in args)
+                return f"{rust_type}::new({args_str})"
 
             # Handle standard function calls
-            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            return f"{func_name}({args})"
-        elif isinstance(expr, MemberAccessNode):
-            obj = self.generate_expression(expr.object)
-            return f"{obj}.{expr.member}"
-        elif isinstance(expr, TernaryOpNode):
-            condition = self.generate_expression(expr.condition)
-            true_expr = self.generate_expression(expr.true_expr)
-            false_expr = self.generate_expression(expr.false_expr)
+            args_str = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{func_name}({args_str})"
+        elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
+            # Handle MemberAccessNode
+            obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
+            member = getattr(expr, "member", "")
+            obj = self.generate_expression(obj_expr)
+            return f"{obj}.{member}"
+        elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
+            # Handle TernaryOpNode
+            condition = self.generate_expression(getattr(expr, "condition", ""))
+            true_expr = self.generate_expression(getattr(expr, "true_expr", ""))
+            false_expr = self.generate_expression(getattr(expr, "false_expr", ""))
             return f"(if {condition} {{ {true_expr} }} else {{ {false_expr} }})"
         else:
-            # For unknown expression types, handle special cases
-            expr_str = str(expr)
-            # Check if this looks like an array declaration being misinterpreted
-            if (
-                "ArrayAccessNode" in expr_str
-                and "array=" in expr_str
-                and "index=" in expr_str
-            ):
-                # Try to extract array name and size for array declarations
-                import re
-
-                array_match = re.search(r"array=(\w+).*?index=(\w+)", expr_str)
-                if array_match:
-                    array_name = array_match.group(1)
-                    return f"{array_name}"
-            return expr_str
+            # Fallback - return string representation
+            return str(expr)
 
     def map_type(self, vtype):
-        if vtype:
-            # Handle array types
-            if "[" in vtype and "]" in vtype:
-                base_type, size = parse_array_type(vtype)
-                base_mapped = self.type_mapping.get(base_type, base_type)
-                if size:
-                    return f"[{base_mapped}; {size}]"
-                else:
-                    return f"Vec<{base_mapped}>"
+        if vtype is None:
+            return "f32"
 
-            # Use regular type mapping
-            return self.type_mapping.get(vtype, vtype)
-        return vtype
+        # Handle TypeNode objects by converting to string first
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            vtype_str = self.convert_type_node_to_string(vtype)
+        else:
+            vtype_str = str(vtype)
+
+        # Handle array types
+        if "[" in vtype_str and "]" in vtype_str:
+            base_type, size = parse_array_type(vtype_str)
+            base_mapped = self.type_mapping.get(base_type, base_type)
+            if size:
+                return f"[{base_mapped}; {size}]"
+            else:
+                return f"Vec<{base_mapped}>"
+
+        # Use regular type mapping
+        return self.type_mapping.get(vtype_str, vtype_str)
 
     def map_operator(self, op):
         op_map = {

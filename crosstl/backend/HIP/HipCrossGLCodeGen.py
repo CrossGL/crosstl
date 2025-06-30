@@ -304,6 +304,14 @@ class HipToCrossGLConverter:
         else:
             self.emit("return;")
 
+    def visit_BreakNode(self, node):
+        """Visit break statement"""
+        self.emit("break;")
+
+    def visit_ContinueNode(self, node):
+        """Visit continue statement"""
+        self.emit("continue;")
+
     def visit_IfNode(self, node):
         """Visit if statement"""
         condition = self.visit(node.condition)
@@ -451,6 +459,26 @@ class HipToCrossGLConverter:
         }
 
         return function_mapping.get(func_name, func_name)
+
+    def visit_BreakNode(self, node):
+        """Visit break statement"""
+        self.emit("break;")
+
+    def visit_EnumNode(self, node):
+        """Visit enum declaration"""
+        self.emit(f"enum {node.name} {{")
+        self.indent_level += 1
+
+        if hasattr(node, "variants") and node.variants:
+            for i, variant in enumerate(node.variants):
+                if hasattr(variant, "value") and variant.value:
+                    value = self.visit(variant.value)
+                    self.emit(f"{variant.name} = {value},")
+                else:
+                    self.emit(f"{variant.name},")
+
+        self.indent_level -= 1
+        self.emit("}")
 
     # Legacy method for backwards compatibility
     def convert(self, node):

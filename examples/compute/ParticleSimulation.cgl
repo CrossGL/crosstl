@@ -1,0 +1,287 @@
+shader ParticleSimulation {
+    // Complex data structures for particle simulation
+    struct Particle {
+        vec3 position;
+        vec3 velocity;
+        vec3 acceleration;
+        float mass;
+        float lifetime;
+        vec4 color;
+        int type;
+        bool active;
+    }
+    
+    struct PhysicsConstants {
+        float gravity;
+        float damping;
+        float timestep;
+        float collision_radius;
+        vec3 world_bounds_min;
+        vec3 world_bounds_max;
+        int max_particles;
+        float attraction_strength;
+    }
+    
+    struct SimulationState {
+        int active_particle_count;
+        int frame_number;
+        float total_time;
+        vec3 attractor_position;
+    }
+    
+    // Buffer declarations with explicit binding
+    struct ParticleBuffer {
+        Particle particles[4096];
+    }
+    
+    struct AtomicCounters {
+        int collision_count;
+        int active_count;
+        int spawn_count;
+    }
+    
+    // Constants
+    const int MAX_PARTICLES = 4096;
+    const int WORKGROUP_SIZE = 64;
+    const float PI = 3.14159265359;
+    const vec3 GRAVITY_VECTOR = vec3(0.0, -9.81, 0.0);
+    
+    // Utility functions
+    float random(vec2 st) {
+        return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+    }
+    
+    vec3 random3(vec3 seed) {
+        vec3 p = vec3(
+            dot(seed, vec3(127.1, 311.7, 74.7)),
+            dot(seed, vec3(269.5, 183.3, 246.1)),
+            dot(seed, vec3(113.5, 271.9, 124.6))
+        );
+        return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+    }
+    
+    // Advanced physics calculations
+    vec3 calculateAttraction(vec3 position, vec3 attractor_pos, float strength) {
+        vec3 direction = attractor_pos - position;
+        float distance = length(direction);
+        
+        if (distance < 0.001) return vec3(0.0);
+        
+        // Inverse square law with smoothing
+        float force = strength / (distance * distance + 0.1);
+        return normalize(direction) * force;
+    }
+    
+    bool checkCollision(vec3 pos1, vec3 pos2, float radius) {
+        return length(pos1 - pos2) < radius * 2.0;
+    }
+    
+    vec3 resolveCollision(vec3 pos1, vec3 vel1, vec3 pos2, vec3 vel2, float mass1, float mass2) {
+        vec3 relative_pos = pos1 - pos2;
+        vec3 relative_vel = vel1 - vel2;
+        float distance = length(relative_pos);
+        
+        if (distance < 0.001) return vel1;
+        
+        vec3 normal = relative_pos / distance;
+        float relative_speed = dot(relative_vel, normal);
+        
+        // Only resolve if particles are moving towards each other
+        if (relative_speed > 0.0) {
+            return vel1;
+        }
+        
+        // Elastic collision response
+        float impulse = 2.0 * relative_speed / (mass1 + mass2);
+        return vel1 - impulse * mass2 * normal;
+    }
+    
+    compute {
+        layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+        
+        uniform PhysicsConstants physics;
+        uniform SimulationState sim_state;
+        
+        buffer ParticleBuffer particle_buffer;
+        buffer AtomicCounters counters;
+        
+        // Shared memory for workgroup collaboration
+        shared vec3 shared_positions[WORKGROUP_SIZE];
+        shared vec3 shared_velocities[WORKGROUP_SIZE];
+        shared int shared_types[WORKGROUP_SIZE];
+        shared bool shared_active[WORKGROUP_SIZE];
+        
+        void main() {
+            // Get thread/particle index
+            int particle_id = int(gl_GlobalInvocationID.x);
+            int local_id = int(gl_LocalInvocationID.x);
+            
+            // Bounds check
+            if (particle_id >= physics.max_particles) return;
+            
+            // Load particle data
+            Particle particle = particle_buffer.particles[particle_id];
+            
+            // Skip inactive particles
+            if (!particle.active) {
+                shared_active[local_id] = false;
+                barrier();
+                return;
+            }
+            
+            // Load into shared memory for collision detection
+            shared_positions[local_id] = particle.position;
+            shared_velocities[local_id] = particle.velocity;
+            shared_types[local_id] = particle.type;
+            shared_active[local_id] = true;
+            
+            // Synchronize workgroup
+            barrier();
+            
+            // Physics integration
+            vec3 force = vec3(0.0);
+            
+            // Apply gravity based on particle type
+            if (particle.type == 0) { // Heavy particles
+                force += GRAVITY_VECTOR * particle.mass;
+            }
+            
+            // Apply attraction to attractor point
+            if (particle.type != 2) { // Skip repulsive particles
+                force += calculateAttraction(
+                    particle.position, 
+                    sim_state.attractor_position, 
+                    physics.attraction_strength
+                );
+            }
+            
+            // Inter-particle forces and collision detection
+            int collision_count = 0;
+            for (int i = 0; i < WORKGROUP_SIZE; i++) {
+                if (i == local_id || !shared_active[i]) continue;
+                
+                if (checkCollision(particle.position, shared_positions[i], physics.collision_radius)) {
+                    collision_count++;
+                    
+                    // Resolve collision
+                    particle.velocity = resolveCollision(
+                        particle.position, particle.velocity,
+                        shared_positions[i], shared_velocities[i],
+                        particle.mass, 1.0 // Assume unit mass for simplicity
+                    );
+                    
+                    // Color change on collision
+                    particle.color = mix(particle.color, vec4(1.0, 0.0, 0.0, 1.0), 0.1);
+                }
+                
+                // Particle-specific interactions
+                if (shared_types[i] == 1 && particle.type == 0) {
+                    // Attractive interaction between type 0 and 1
+                    vec3 attraction = calculateAttraction(
+                        particle.position, shared_positions[i], 0.5
+                    );
+                    force += attraction;
+                }
+            }
+            
+            // Update physics
+            particle.acceleration = force / particle.mass;
+            particle.velocity += particle.acceleration * physics.timestep;
+            particle.velocity *= physics.damping; // Apply damping
+            particle.position += particle.velocity * physics.timestep;
+            
+            // Boundary conditions
+            if (particle.position.x < physics.world_bounds_min.x || 
+                particle.position.x > physics.world_bounds_max.x) {
+                particle.velocity.x *= -0.8; // Bounce with energy loss
+                particle.position.x = clamp(particle.position.x, 
+                    physics.world_bounds_min.x, physics.world_bounds_max.x);
+            }
+            
+            if (particle.position.y < physics.world_bounds_min.y || 
+                particle.position.y > physics.world_bounds_max.y) {
+                particle.velocity.y *= -0.8;
+                particle.position.y = clamp(particle.position.y, 
+                    physics.world_bounds_min.y, physics.world_bounds_max.y);
+            }
+            
+            if (particle.position.z < physics.world_bounds_min.z || 
+                particle.position.z > physics.world_bounds_max.z) {
+                particle.velocity.z *= -0.8;
+                particle.position.z = clamp(particle.position.z, 
+                    physics.world_bounds_min.z, physics.world_bounds_max.z);
+            }
+            
+            // Update lifetime
+            particle.lifetime -= physics.timestep;
+            if (particle.lifetime <= 0.0) {
+                particle.active = false;
+                atomicAdd(counters.active_count, -1);
+            }
+            
+            // Color evolution based on velocity
+            float speed = length(particle.velocity);
+            particle.color.rgb = mix(
+                vec3(0.2, 0.4, 1.0), // Blue for slow
+                vec3(1.0, 0.4, 0.2), // Red for fast
+                clamp(speed / 10.0, 0.0, 1.0)
+            );
+            
+            // Write back particle data
+            particle_buffer.particles[particle_id] = particle;
+            
+            // Update atomic counters
+            if (collision_count > 0) {
+                atomicAdd(counters.collision_count, collision_count);
+            }
+        }
+    }
+    
+    // Particle spawning compute shader
+    compute spawn {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        
+        uniform PhysicsConstants physics;
+        uniform SimulationState sim_state;
+        buffer ParticleBuffer particle_buffer;
+        buffer AtomicCounters counters;
+        
+        void main() {
+            // Only spawn if we have room for more particles
+            if (counters.active_count >= physics.max_particles) return;
+            
+            // Find an inactive particle slot
+            for (int i = 0; i < physics.max_particles; i++) {
+                if (!particle_buffer.particles[i].active) {
+                    // Initialize new particle
+                    Particle new_particle;
+                    
+                    // Random position near spawn point
+                    vec3 random_offset = random3(vec3(i, sim_state.frame_number, sim_state.total_time));
+                    new_particle.position = sim_state.attractor_position + random_offset * 2.0;
+                    
+                    // Random initial velocity
+                    new_particle.velocity = random3(vec3(i + 1000, sim_state.frame_number, sim_state.total_time)) * 5.0;
+                    new_particle.acceleration = vec3(0.0);
+                    
+                    // Random properties
+                    new_particle.mass = 1.0 + random(vec2(i, sim_state.frame_number)) * 2.0;
+                    new_particle.lifetime = 10.0 + random(vec2(i + 500, sim_state.frame_number)) * 20.0;
+                    new_particle.color = vec4(
+                        random(vec2(i + 100, sim_state.frame_number)),
+                        random(vec2(i + 200, sim_state.frame_number)),
+                        random(vec2(i + 300, sim_state.frame_number)),
+                        1.0
+                    );
+                    new_particle.type = int(random(vec2(i + 400, sim_state.frame_number)) * 3.0);
+                    new_particle.active = true;
+                    
+                    particle_buffer.particles[i] = new_particle;
+                    atomicAdd(counters.active_count, 1);
+                    atomicAdd(counters.spawn_count, 1);
+                    break;
+                }
+            }
+        }
+    }
+} 

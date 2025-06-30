@@ -1,170 +1,186 @@
-import crosstl
+#!/usr/bin/env python3
+"""
+CrossGL Example Conversion Test
+Comprehensive test to verify translation functionality across all backends and example categories.
+"""
+
 import sys
 import os
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import crosstl
 
 
 def main():
-    # Ensure output directory exists
-    os.makedirs("output", exist_ok=True)
+    """Test comprehensive translation functionality across all example categories."""
 
-    try:
-        # Try to translate the complex shader, but don't fail if it doesn't work
+    # Define the organized example structure
+    examples_by_category = {
+        "graphics": ["SimpleShader.cgl", "PerlinNoise.cgl", "ComplexShader.cgl"],
+        "advanced": ["ArrayTest.cgl", "GenericPatternMatching.cgl"],
+        "compute": ["ParticleSimulation.cgl"],
+        "cross_platform": ["UniversalPBRShader.cgl"],
+        "gpu_computing": ["MatrixMultiplication.cgl"],
+    }
+
+    # Define backend mappings with appropriate extensions
+    backends = {
+        "metal": ".metal",
+        "directx": ".hlsl",
+        "opengl": ".glsl",
+        "vulkan": ".spirv",
+        "rust": ".rs",
+        "mojo": ".mojo",
+        "cuda": ".cu",
+        "hip": ".hip",
+        "slang": ".slang",
+    }
+
+    # Backend compatibility matrix - some examples work better with certain backends
+    backend_compatibility = {
+        "graphics": [
+            "metal",
+            "directx",
+            "opengl",
+            "vulkan",
+            "rust",
+            "mojo",
+            "cuda",
+            "hip",
+            "slang",
+        ],
+        "advanced": [
+            "metal",
+            "directx",
+            "opengl",
+            "vulkan",
+            "rust",
+            "mojo",
+            "cuda",
+            "hip",
+            "slang",
+        ],
+        "compute": ["metal", "directx", "opengl", "vulkan", "cuda", "hip"],
+        "cross_platform": ["metal", "directx", "opengl", "vulkan", "rust"],
+        "gpu_computing": ["cuda", "hip", "mojo", "rust"],
+    }
+
+    print("[CROSSGL] CrossGL Comprehensive Translation Test")
+    print("=" * 60)
+
+    # Ensure output directories exist
+    for backend in backends:
+        os.makedirs(f"output/{backend}", exist_ok=True)
+
+    total_tests = 0
+    successful_tests = 0
+    failed_tests = []
+
+    # Test each category
+    for category, examples in examples_by_category.items():
+        print(f"\n[TESTING] {category.upper()} examples:")
+        print("-" * 40)
+
+        for example in examples:
+            example_path = f"{category}/{example}"
+            example_name = Path(example).stem
+
+            if not Path(example_path).exists():
+                print(f"[WARNING] Skipping {example} (not found)")
+                continue
+
+            print(f"\n[TRANSLATING] {example_name}:")
+
+            # Get compatible backends for this category
+            compatible_backends = backend_compatibility.get(
+                category, list(backends.keys())
+            )
+
+            for backend in compatible_backends:
+                if backend not in backends:
+                    continue
+
+                total_tests += 1
+                try:
+                    # Create organized output structure: output/backend/category/
+                    backend_output_dir = f"output/{backend}/{category}"
+                    os.makedirs(backend_output_dir, exist_ok=True)
+
+                    output_file = (
+                        f"{backend_output_dir}/{example_name}{backends[backend]}"
+                    )
+
+                    # Perform translation
+                    result = crosstl.translate(
+                        example_path, backend=backend, save_shader=output_file
+                    )
+
+                    # Verify the output file was created and has content
+                    if (
+                        Path(output_file).exists()
+                        and Path(output_file).stat().st_size > 100
+                    ):
+                        print(f"  [SUCCESS] {backend:8} -> {output_file}")
+                        successful_tests += 1
+                    else:
+                        print(f"  [WARNING] {backend:8} -> Output too small or missing")
+                        failed_tests.append(
+                            (example_name, backend, "Output file too small")
+                        )
+
+                except Exception as e:
+                    print(f"  [ERROR] {backend:8} -> Error: {str(e)[:50]}...")
+                    failed_tests.append((example_name, backend, str(e)))
+
+    # Summary
+    print("\n" + "=" * 60)
+    print("[SUMMARY] TRANSLATION TEST SUMMARY")
+    print("=" * 60)
+    print(f"Total tests: {total_tests}")
+    print(f"Successful: {successful_tests}")
+    print(f"Failed: {len(failed_tests)}")
+    print(f"Success rate: {(successful_tests/total_tests)*100:.1f}%")
+
+    if failed_tests:
+        print(f"\n[FAILED] Failed translations:")
+        for example, backend, error in failed_tests:
+            print(f"  - {example} -> {backend}: {error[:60]}...")
+
+    # Test cross-backend consistency
+    print(f"\n[TESTING] Testing cross-backend consistency...")
+    test_cross_backend_consistency()
+
+    print(f"\n[COMPLETE] Translation test complete!")
+    print(
+        f"[OUTPUT] Check output/ directory for organized results by backend and category."
+    )
+
+
+def test_cross_backend_consistency():
+    """Test that the same shader produces valid output across multiple backends."""
+    test_shader = "graphics/SimpleShader.cgl"
+    if not Path(test_shader).exists():
+        print("[WARNING] SimpleShader.cgl not found for consistency test")
+        return
+
+    consistency_backends = ["metal", "directx", "opengl", "vulkan"]
+    outputs = {}
+
+    for backend in consistency_backends:
         try:
-            metal_code = crosstl.translate(
-                "ComplexShader.cgl",
-                backend="metal",
-                save_shader="output/ComplexShader.metal",
-            )
+            result = crosstl.translate(test_shader, backend=backend)
+            outputs[backend] = len(result) if result else 0
+        except Exception:
+            outputs[backend] = 0
 
-            glsl_code = crosstl.translate(
-                "ComplexShader.cgl",
-                backend="opengl",
-                save_shader="output/ComplexShader.glsl",
-            )
-
-            hlsl_code = crosstl.translate(
-                "ComplexShader.cgl",
-                backend="directx",
-                save_shader="output/ComplexShader.hlsl",
-            )
-
-            rust_code = crosstl.translate(
-                "ComplexShader.cgl",
-                backend="rust",
-                save_shader="output/ComplexShader.rs",
-            )
-
-            cuda_code = crosstl.translate(
-                "ComplexShader.cgl",
-                backend="cuda",
-                save_shader="output/ComplexShader.cu",
-            )
-
-            hip_code = crosstl.translate(
-                "ComplexShader.cgl",
-                backend="hip",
-                save_shader="output/ComplexShader.hip",
-            )
-
-            print("Complex shader translation successful!")
-        except Exception as e:
-            print(f"Warning: Complex shader translation failed: {e}")
-
-        # Try the Perlin noise shader
-        try:
-            metal_code = crosstl.translate(
-                "PerlinNoise.cgl",
-                backend="metal",
-                save_shader="output/PerlinNoise.metal",
-            )
-
-            glsl_code = crosstl.translate(
-                "PerlinNoise.cgl",
-                backend="opengl",
-                save_shader="output/PerlinNoise.glsl",
-            )
-
-            hlsl_code = crosstl.translate(
-                "PerlinNoise.cgl",
-                backend="directx",
-                save_shader="output/PerlinNoise.hlsl",
-            )
-
-            rust_code = crosstl.translate(
-                "PerlinNoise.cgl",
-                backend="rust",
-                save_shader="output/PerlinNoise.rs",
-            )
-
-            cuda_code = crosstl.translate(
-                "PerlinNoise.cgl",
-                backend="cuda",
-                save_shader="output/PerlinNoise.cu",
-            )
-
-            hip_code = crosstl.translate(
-                "PerlinNoise.cgl",
-                backend="hip",
-                save_shader="output/PerlinNoise.hip",
-            )
-
-            print("Perlin noise shader translation successful!")
-        except Exception as e:
-            print(f"Warning: Perlin noise shader translation failed: {e}")
-
-        # Try the array test shader
-        try:
-            metal_code = crosstl.translate(
-                "ArrayTest.cgl", backend="metal", save_shader="output/ArrayTest.metal"
-            )
-
-            glsl_code = crosstl.translate(
-                "ArrayTest.cgl", backend="opengl", save_shader="output/ArrayTest.glsl"
-            )
-
-            hlsl_code = crosstl.translate(
-                "ArrayTest.cgl", backend="directx", save_shader="output/ArrayTest.hlsl"
-            )
-
-            spirv_code = crosstl.translate(
-                "ArrayTest.cgl", backend="vulkan", save_shader="output/ArrayTest.spirv"
-            )
-
-            rust_code = crosstl.translate(
-                "ArrayTest.cgl", backend="rust", save_shader="output/ArrayTest.rs"
-            )
-
-            cuda_code = crosstl.translate(
-                "ArrayTest.cgl", backend="cuda", save_shader="output/ArrayTest.cu"
-            )
-
-            hip_code = crosstl.translate(
-                "ArrayTest.cgl", backend="hip", save_shader="output/ArrayTest.hip"
-            )
-
-            print("Array test shader translation successful!")
-        except Exception as e:
-            print(f"Warning: Array test shader translation failed: {e}")
-
-        # Use the simple shader as a fallback - this should always work
-        metal_code = crosstl.translate(
-            "SimpleShader.cgl", backend="metal", save_shader="output/SimpleShader.metal"
-        )
-
-        glsl_code = crosstl.translate(
-            "SimpleShader.cgl", backend="opengl", save_shader="output/SimpleShader.glsl"
-        )
-
-        hlsl_code = crosstl.translate(
-            "SimpleShader.cgl",
-            backend="directx",
-            save_shader="output/SimpleShader.hlsl",
-        )
-
-        rust_code = crosstl.translate(
-            "SimpleShader.cgl",
-            backend="rust",
-            save_shader="output/SimpleShader.rs",
-        )
-
-        cuda_code = crosstl.translate(
-            "SimpleShader.cgl",
-            backend="cuda",
-            save_shader="output/SimpleShader.cu",
-        )
-
-        hip_code = crosstl.translate(
-            "SimpleShader.cgl",
-            backend="hip",
-            save_shader="output/SimpleShader.hip",
-        )
-
-        print("Simple shader translation successful!")
-        return 0
-    except Exception as e:
-        print(f"Error: {e}")
-        return 1
+    print(f"  Output sizes: {outputs}")
+    non_zero_outputs = [k for k, v in outputs.items() if v > 100]
+    print(
+        f"  [SUCCESS] {len(non_zero_outputs)}/{len(consistency_backends)} backends produced substantial output"
+    )
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

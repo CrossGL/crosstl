@@ -265,7 +265,8 @@ def test_assign_shift_right():
         VSOutput main(VSInput input) {
             VSOutput output;
             output.color = addColor(vec4(1.0, 1.0, 1.0, 1.0), vec4(0.5, 0.5, 0.5, 1.0));
-            uint a >>= 1;
+            uint a = 8;
+            a >>= 1;
             uint b = 2;
             // Pass through texture coordinates as color
             output.color = vec4(input.texCoord, 0.0, 1.0);
@@ -279,7 +280,8 @@ def test_assign_shift_right():
             float brightness = texture(iChannel0, input.color.xy).r;
             float bloom = max(0.0, brightness - 0.5);
             // Apply bloom to the texture color
-            uint a >>= 1;
+            uint a = 8;
+            a >>= 1;
             uint b = 2;
             vec3 texColor = texture(iChannel0, input.color.xy).rgb;
             vec3 colorWithBloom = texColor + vec3(bloom);
