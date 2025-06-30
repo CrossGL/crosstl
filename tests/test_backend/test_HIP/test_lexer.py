@@ -21,22 +21,22 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         # Extract token types
         token_types = [token.type for token in tokens]
-        
+
         # Check for HIP-specific keywords
-        assert '__GLOBAL__' in token_types
-        assert '__DEVICE__' in token_types
-        assert '__HOST__' in token_types
-        assert '__SHARED__' in token_types
-        assert '__CONSTANT__' in token_types
-        assert '__FORCEINLINE__' in token_types
-        assert '__NOINLINE__' in token_types
-        assert 'TEMPLATE' in token_types
-        assert 'TYPENAME' in token_types
-        assert 'CLASS' in token_types
-        assert 'STRUCT' in token_types
+        assert "__GLOBAL__" in token_types
+        assert "__DEVICE__" in token_types
+        assert "__HOST__" in token_types
+        assert "__SHARED__" in token_types
+        assert "__CONSTANT__" in token_types
+        assert "__FORCEINLINE__" in token_types
+        assert "__NOINLINE__" in token_types
+        assert "TEMPLATE" in token_types
+        assert "TYPENAME" in token_types
+        assert "CLASS" in token_types
+        assert "STRUCT" in token_types
 
     def test_hip_vector_types(self):
         """Test HIP vector type tokenization"""
@@ -46,13 +46,13 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         # All vector types should be tokenized as identifiers
-        token_values = [token.value for token in tokens if token.type == 'IDENTIFIER']
-        
-        assert 'int2' in token_values
-        assert 'float3' in token_values
-        assert 'double4' in token_values
+        token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
+
+        assert "int2" in token_values
+        assert "float3" in token_values
+        assert "double4" in token_values
 
     def test_hip_builtin_variables(self):
         """Test HIP built-in variable tokenization"""
@@ -61,13 +61,13 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_values = [token.value for token in tokens]
-        
-        assert 'threadIdx' in token_values
-        assert 'blockIdx' in token_values
-        assert 'blockDim' in token_values
-        assert 'gridDim' in token_values
+
+        assert "threadIdx" in token_values
+        assert "blockIdx" in token_values
+        assert "blockDim" in token_values
+        assert "gridDim" in token_values
 
     def test_hip_memory_functions(self):
         """Test HIP memory function tokenization"""
@@ -77,12 +77,12 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
-        token_values = [token.value for token in tokens if token.type == 'IDENTIFIER']
-        
-        assert 'hipMalloc' in token_values
-        assert '__syncthreads' in token_values
-        assert '__threadfence' in token_values
+
+        token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
+
+        assert "hipMalloc" in token_values
+        assert "__syncthreads" in token_values
+        assert "__threadfence" in token_values
 
     def test_operators_tokenization(self):
         """Test operator tokenization"""
@@ -92,19 +92,19 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert 'PLUS' in token_types
-        assert 'MINUS' in token_types
-        assert 'STAR' in token_types
-        assert 'SLASH' in token_types
-        assert 'EQ' in token_types
-        assert 'NE' in token_types
-        assert 'AND' in token_types
-        assert 'OR' in token_types
-        assert 'ARROW' in token_types
-        assert 'SCOPE' in token_types
+
+        assert "PLUS" in token_types
+        assert "MINUS" in token_types
+        assert "STAR" in token_types
+        assert "SLASH" in token_types
+        assert "EQ" in token_types
+        assert "NE" in token_types
+        assert "AND" in token_types
+        assert "OR" in token_types
+        assert "ARROW" in token_types
+        assert "SCOPE" in token_types
 
     def test_numeric_literals(self):
         """Test numeric literal tokenization"""
@@ -113,25 +113,25 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         # Check for different numeric types
-        integers = [token for token in tokens if token.type == 'INTEGER']
-        floats = [token for token in tokens if token.type == 'FLOAT']
-        
+        integers = [token for token in tokens if token.type == "INTEGER"]
+        floats = [token for token in tokens if token.type == "FLOAT"]
+
         assert len(integers) >= 2  # At least decimal and hex
-        assert len(floats) >= 2   # At least regular float and scientific notation
+        assert len(floats) >= 2  # At least regular float and scientific notation
 
     def test_string_literals(self):
         """Test string literal tokenization"""
-        code = '''
+        code = """
         "hello world" 'c' "escaped \\"string\\"" "path/to/file"
-        '''
+        """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
-        strings = [token for token in tokens if token.type == 'STRING']
-        chars = [token for token in tokens if token.type == 'CHAR']
-        
+
+        strings = [token for token in tokens if token.type == "STRING"]
+        chars = [token for token in tokens if token.type == "CHAR"]
+
         assert len(strings) >= 3
         assert len(chars) >= 1
 
@@ -145,11 +145,11 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert 'HASH' in token_types
-        assert 'IDENTIFIER' in token_types  # include, define, etc.
+
+        assert "HASH" in token_types
+        assert "IDENTIFIER" in token_types  # include, define, etc.
 
     def test_delimiters_tokenization(self):
         """Test delimiter tokenization"""
@@ -158,19 +158,19 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert 'LPAREN' in token_types
-        assert 'RPAREN' in token_types
-        assert 'LBRACKET' in token_types
-        assert 'RBRACKET' in token_types
-        assert 'LBRACE' in token_types
-        assert 'RBRACE' in token_types
-        assert 'COMMA' in token_types
-        assert 'SEMICOLON' in token_types
-        assert 'COLON' in token_types
-        assert 'SCOPE' in token_types
+
+        assert "LPAREN" in token_types
+        assert "RPAREN" in token_types
+        assert "LBRACKET" in token_types
+        assert "RBRACKET" in token_types
+        assert "LBRACE" in token_types
+        assert "RBRACE" in token_types
+        assert "COMMA" in token_types
+        assert "SEMICOLON" in token_types
+        assert "COLON" in token_types
+        assert "SCOPE" in token_types
 
     def test_template_syntax(self):
         """Test template syntax tokenization"""
@@ -179,14 +179,14 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        token_values = [token.value for token in tokens]
-        
-        assert 'TEMPLATE' in token_types
-        assert 'LT' in token_types
-        assert 'GT' in token_types
-        assert 'TYPENAME' in token_types
+        [token.value for token in tokens]
+
+        assert "TEMPLATE" in token_types
+        assert "LT" in token_types
+        assert "GT" in token_types
+        assert "TYPENAME" in token_types
 
     def test_function_declaration(self):
         """Test function declaration tokenization"""
@@ -197,15 +197,15 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert '__GLOBAL__' in token_types
-        assert 'VOID' in token_types
-        assert 'LPAREN' in token_types
-        assert 'RPAREN' in token_types
-        assert 'LBRACE' in token_types
-        assert 'RBRACE' in token_types
+
+        assert "__GLOBAL__" in token_types
+        assert "VOID" in token_types
+        assert "LPAREN" in token_types
+        assert "RPAREN" in token_types
+        assert "LBRACE" in token_types
+        assert "RBRACE" in token_types
 
     def test_struct_declaration(self):
         """Test struct declaration tokenization"""
@@ -216,13 +216,13 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert 'STRUCT' in token_types
-        assert 'LBRACE' in token_types
-        assert 'RBRACE' in token_types
-        assert 'SEMICOLON' in token_types
+
+        assert "STRUCT" in token_types
+        assert "LBRACE" in token_types
+        assert "RBRACE" in token_types
+        assert "SEMICOLON" in token_types
 
     def test_control_flow_keywords(self):
         """Test control flow keyword tokenization"""
@@ -231,19 +231,19 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert 'IF' in token_types
-        assert 'ELSE' in token_types
-        assert 'FOR' in token_types
-        assert 'WHILE' in token_types
-        assert 'SWITCH' in token_types
-        assert 'CASE' in token_types
-        assert 'DEFAULT' in token_types
-        assert 'BREAK' in token_types
-        assert 'CONTINUE' in token_types
-        assert 'RETURN' in token_types
+
+        assert "IF" in token_types
+        assert "ELSE" in token_types
+        assert "FOR" in token_types
+        assert "WHILE" in token_types
+        assert "SWITCH" in token_types
+        assert "CASE" in token_types
+        assert "DEFAULT" in token_types
+        assert "BREAK" in token_types
+        assert "CONTINUE" in token_types
+        assert "RETURN" in token_types
 
     def test_access_specifiers(self):
         """Test access specifier tokenization"""
@@ -252,12 +252,12 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert 'PUBLIC' in token_types
-        assert 'PRIVATE' in token_types
-        assert 'PROTECTED' in token_types
+
+        assert "PUBLIC" in token_types
+        assert "PRIVATE" in token_types
+        assert "PROTECTED" in token_types
 
     def test_memory_qualifiers(self):
         """Test memory qualifier tokenization"""
@@ -267,11 +267,11 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert '__SHARED__' in token_types
-        assert '__CONSTANT__' in token_types
+
+        assert "__SHARED__" in token_types
+        assert "__CONSTANT__" in token_types
 
     def test_math_functions(self):
         """Test math function tokenization"""
@@ -280,12 +280,12 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
-        token_values = [token.value for token in tokens if token.type == 'IDENTIFIER']
-        
-        assert 'sinf' in token_values
-        assert 'sqrtf' in token_values
-        assert 'powf' in token_values
+
+        token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
+
+        assert "sinf" in token_values
+        assert "sqrtf" in token_values
+        assert "powf" in token_values
 
     def test_vector_constructors(self):
         """Test vector constructor tokenization"""
@@ -294,12 +294,12 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
-        token_values = [token.value for token in tokens if token.type == 'IDENTIFIER']
-        
-        assert 'make_float2' in token_values
-        assert 'make_int3' in token_values
-        assert 'make_float4' in token_values
+
+        token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
+
+        assert "make_float2" in token_values
+        assert "make_int3" in token_values
+        assert "make_float4" in token_values
 
     def test_comments(self):
         """Test comment tokenization"""
@@ -311,10 +311,10 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         # Comments should be filtered out, but code should still tokenize
-        token_values = [token.value for token in tokens if token.type == 'IDENTIFIER']
-        assert 'x' in token_values
+        token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
+        assert "x" in token_values
 
     def test_whitespace_handling(self):
         """Test whitespace and newline handling"""
@@ -327,14 +327,14 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         # Should have proper tokens despite irregular whitespace
-        token_types = [token.type for token in tokens if token.type != 'NEWLINE']
-        
-        assert 'INT' in token_types
-        assert 'IDENTIFIER' in token_types
-        assert 'ASSIGN' in token_types
-        assert 'INTEGER' in token_types
+        token_types = [token.type for token in tokens if token.type != "NEWLINE"]
+
+        assert "INT" in token_types
+        assert "IDENTIFIER" in token_types
+        assert "ASSIGN" in token_types
+        assert "INTEGER" in token_types
 
     def test_complex_expression(self):
         """Test complex expression tokenization"""
@@ -343,18 +343,18 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         token_types = [token.type for token in tokens]
-        
-        assert 'IDENTIFIER' in token_types
-        assert 'ASSIGN' in token_types
-        assert 'LPAREN' in token_types
-        assert 'DOT' in token_types
-        assert 'STAR' in token_types
-        assert 'PLUS' in token_types
-        assert 'LBRACKET' in token_types
-        assert 'ARROW' in token_types
-        assert 'SLASH' in token_types
+
+        assert "IDENTIFIER" in token_types
+        assert "ASSIGN" in token_types
+        assert "LPAREN" in token_types
+        assert "DOT" in token_types
+        assert "STAR" in token_types
+        assert "PLUS" in token_types
+        assert "LBRACKET" in token_types
+        assert "ARROW" in token_types
+        assert "SLASH" in token_types
 
     def test_hip_api_calls(self):
         """Test HIP API call tokenization"""
@@ -364,19 +364,19 @@ class TestHipLexer:
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
-        token_values = [token.value for token in tokens if token.type == 'IDENTIFIER']
-        
-        assert 'hipError_t' in token_values
-        assert 'hipMalloc' in token_values
-        assert 'hipLaunchKernelGGL' in token_values
+
+        token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
+
+        assert "hipError_t" in token_values
+        assert "hipMalloc" in token_values
+        assert "hipLaunchKernelGGL" in token_values
 
     def test_empty_input(self):
         """Test empty input handling"""
         code = ""
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         assert len(tokens) == 0
 
     def test_only_whitespace(self):
@@ -384,7 +384,7 @@ class TestHipLexer:
         code = "   \n  \t  \n  "
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
-        
+
         # Should only contain newlines
-        non_newline_tokens = [token for token in tokens if token.type != 'NEWLINE']
-        assert len(non_newline_tokens) == 0 
+        non_newline_tokens = [token for token in tokens if token.type != "NEWLINE"]
+        assert len(non_newline_tokens) == 0

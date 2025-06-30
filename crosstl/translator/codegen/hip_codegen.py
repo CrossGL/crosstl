@@ -6,7 +6,14 @@ HIP (Heterogeneous-Compute Interface for Portability) is AMD's CUDA-compatible r
 for GPU programming.
 """
 
-from ..ast import ASTNode, CbufferNode, FunctionNode, ShaderNode, StructNode, VariableNode
+from ..ast import (
+    ASTNode,
+    CbufferNode,
+    FunctionNode,
+    ShaderNode,
+    StructNode,
+    VariableNode,
+)
 
 
 class HipCodeGen:
