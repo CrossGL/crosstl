@@ -68,7 +68,7 @@ class CodeFormatter:
             return ShaderLanguage.RUST
         elif ext in [".cu", ".cuh", ".cuda"]:
             return ShaderLanguage.CUDA
-        elif ext in [".hip", ".cpp"]:
+        elif ext in [".hip"]:
             return ShaderLanguage.HIP
         else:
             return ShaderLanguage.UNKNOWN

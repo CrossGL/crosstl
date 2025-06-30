@@ -94,7 +94,7 @@ def translate(
 
         lexer = CudaLexer(shader_code)
         parser = CudaParser(lexer.tokenize())
-    elif file_path.endswith(".hip") or file_path.endswith(".cpp"):
+    elif file_path.endswith(".hip"):
         from .backend.HIP import HipLexer, HipParser
 
         lexer = HipLexer(shader_code)
@@ -159,7 +159,7 @@ def translate(
                 from .backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 
                 codegen = CudaToCrossGLConverter()
-            elif file_path.endswith(".hip") or file_path.endswith(".cpp"):
+            elif file_path.endswith(".hip"):
                 from .backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
                 codegen = HipToCrossGLConverter()

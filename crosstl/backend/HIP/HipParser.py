@@ -5,9 +5,9 @@ This module provides parsing functionality for HIP (HIP Is a Portable GPU Runtim
 HIP is AMD's CUDA-compatible runtime API for GPU programming.
 """
 
-from typing import List, Optional, Any
+from typing import List, Optional, Union, Any
 from .HipLexer import HipLexer
-from .HipAst import HipArrayAccessNode, HipBinaryOpNode, HipBlockNode, HipClassMemberNode, HipClassNode, HipConstructorNode, HipDestructorNode, HipEnumNode, HipEnumValueNode, HipExpressionNode, HipExpressionStatementNode, HipExternBlockNode, HipFunctionCallNode, HipFunctionNode, HipIdentifierNode, HipInheritanceNode, HipInitializerListNode, HipLiteralNode, HipMemberAccessNode, HipMemberFunctionNode, HipMemberInitializerNode, HipMemberVariableNode, HipNamespaceNode, HipOperatorOverloadNode, HipParameterNode, HipPointerMemberAccessNode, HipPostfixOpNode, HipPreprocessorNode, HipProgramNode, HipStructMemberNode, HipStructNode, HipTemplateNode, HipTemplateParameterNode, HipTypeNode, HipTypedefNode, HipUnaryOpNode, HipUsingNode, HipVariableDeclarationNode, HipVariableNode
+from .HipAst import *
 
 
 class HipParser:
@@ -233,8 +233,9 @@ class HipParser:
                     continue
 
                 # Parse access specifiers
+                access = None
                 if self.match("PUBLIC", "PRIVATE", "PROTECTED"):
-                    self.current_token.value
+                    access = self.current_token.value
                     self.advance()
                     self.consume("COLON")
                     continue
