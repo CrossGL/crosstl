@@ -268,7 +268,9 @@ class HipCodeGen:
 
         for member in node.members:
             if isinstance(member, VariableNode):
-                member_type = self.map_type(member.var_type)
+                member_type = self.map_type(
+                    getattr(member, "vtype", getattr(member, "var_type", "int"))
+                )
                 self.add_line(f"{member_type} {member.name};")
 
         self.indent_level -= 1
@@ -296,7 +298,9 @@ class HipCodeGen:
 
         for member in node.members:
             if isinstance(member, VariableNode):
-                member_type = self.map_type(member.vtype)
+                member_type = self.map_type(
+                    getattr(member, "vtype", getattr(member, "var_type", "int"))
+                )
                 self.add_line(f"{member_type} {member.name};")
 
         self.indent_level -= 1
