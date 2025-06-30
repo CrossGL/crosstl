@@ -32,113 +32,312 @@ jobs:
           pip install -e .
         shell: bash
 
-      - name: Run test script with all examples
+      - name: Run basic test script
         run: |
           cd examples
           python test.py
 
-      - name: Run individual examples with multiple backends
+      - name: Run advanced IR tests
         run: |
-          # Array Test
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='metal', save_shader='output/ArrayTest.metal')"
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='opengl', save_shader='output/ArrayTest.glsl')"
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='directx', save_shader='output/ArrayTest.hlsl')"
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='vulkan', save_shader='output/ArrayTest.spirv')"
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='mojo', save_shader='output/ArrayTest.mojo')"
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='rust', save_shader='output/ArrayTest.rs')"
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='cuda', save_shader='output/ArrayTest.cu')"
-          python -c "import crosstl; crosstl.translate('ArrayTest.cgl', backend='hip', save_shader='output/ArrayTest.hip')"
+          cd examples
+          python advanced_test.py
+        continue-on-error: true
 
-          # Simple Shader
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='metal', save_shader='output/SimpleShader.metal')"
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='opengl', save_shader='output/SimpleShader.glsl')"
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='directx', save_shader='output/SimpleShader.hlsl')"
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='vulkan', save_shader='output/SimpleShader.spirv')"
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='mojo', save_shader='output/SimpleShader.mojo')"
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='rust', save_shader='output/SimpleShader.rs')"
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='cuda', save_shader='output/SimpleShader.cu')"
-          python -c "import crosstl; crosstl.translate('SimpleShader.cgl', backend='hip', save_shader='output/SimpleShader.hip')"
+      - name: Test organized examples structure
+        run: |
+          # Graphics Examples
+          python -c "import crosstl; crosstl.translate('graphics/SimpleShader.cgl', backend='metal', save_shader='output/graphics_simple.metal')"
+          python -c "import crosstl; crosstl.translate('graphics/PerlinNoise.cgl', backend='opengl', save_shader='output/graphics_perlin.glsl')"
+          python -c "import crosstl; crosstl.translate('graphics/ComplexShader.cgl', backend='directx', save_shader='output/graphics_complex.hlsl')"
 
-          # Perlin Noise
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='metal', save_shader='output/PerlinNoise.metal')"
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='opengl', save_shader='output/PerlinNoise.glsl')"
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='directx', save_shader='output/PerlinNoise.hlsl')"
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='vulkan', save_shader='output/PerlinNoise.spirv')"
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='mojo', save_shader='output/PerlinNoise.mojo')"
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='rust', save_shader='output/PerlinNoise.rs')"
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='cuda', save_shader='output/PerlinNoise.cu')"
-          python -c "import crosstl; crosstl.translate('PerlinNoise.cgl', backend='hip', save_shader='output/PerlinNoise.hip')"
+          # Advanced Examples
+          python -c "import crosstl; crosstl.translate('advanced/ArrayTest.cgl', backend='rust', save_shader='output/advanced_array.rs')"
 
-          # Complex Shader
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='metal', save_shader='output/ComplexShader.metal')"
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='opengl', save_shader='output/ComplexShader.glsl')"
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='directx', save_shader='output/ComplexShader.hlsl')"
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='vulkan', save_shader='output/ComplexShader.spirv')"
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='mojo', save_shader='output/ComplexShader.mojo')"
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='rust', save_shader='output/ComplexShader.rs')"
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='cuda', save_shader='output/ComplexShader.cu')"
-          python -c "import crosstl; crosstl.translate('ComplexShader.cgl', backend='hip', save_shader='output/ComplexShader.hip')"
+          # Cross-Platform Examples
+          python -c "import crosstl; crosstl.translate('cross_platform/UniversalPBRShader.cgl', backend='metal', save_shader='output/pbr_metal.metal')"
+          python -c "import crosstl; crosstl.translate('cross_platform/UniversalPBRShader.cgl', backend='directx', save_shader='output/pbr_directx.hlsl')"
+
+          # Compute Examples
+          python -c "import crosstl; crosstl.translate('compute/ParticleSimulation.cgl', backend='opengl', save_shader='output/compute_particles.glsl')"
+
+          # GPU Computing Examples
+          python -c "import crosstl; crosstl.translate('gpu_computing/MatrixMultiplication.cgl', backend='cuda', save_shader='output/gpu_matrix.cu')"
+          python -c "import crosstl; crosstl.translate('gpu_computing/MatrixMultiplication.cgl', backend='hip', save_shader='output/gpu_matrix.hip')"
         shell: bash
         continue-on-error: true
 
   backend-specific:
-    name: ${{ matrix.combination.example }} on ${{ matrix.combination.backend }}
+    name: ${{ matrix.combination.category }}/${{ matrix.combination.example }} → ${{ matrix.combination.backend }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10"]
         combination:
-          # DirectX backend
-          - { backend: "directx", example: "ArrayTest", extension: ".hlsl" }
-          - { backend: "directx", example: "SimpleShader", extension: ".hlsl" }
-          - { backend: "directx", example: "PerlinNoise", extension: ".hlsl" }
-          - { backend: "directx", example: "ComplexShader", extension: ".hlsl" }
+          # Graphics category
+          - {
+              category: "graphics",
+              example: "SimpleShader",
+              backend: "metal",
+              extension: ".metal",
+            }
+          - {
+              category: "graphics",
+              example: "SimpleShader",
+              backend: "directx",
+              extension: ".hlsl",
+            }
+          - {
+              category: "graphics",
+              example: "SimpleShader",
+              backend: "opengl",
+              extension: ".glsl",
+            }
+          - {
+              category: "graphics",
+              example: "SimpleShader",
+              backend: "vulkan",
+              extension: ".spirv",
+            }
+          - {
+              category: "graphics",
+              example: "SimpleShader",
+              backend: "rust",
+              extension: ".rs",
+            }
+          - {
+              category: "graphics",
+              example: "SimpleShader",
+              backend: "cuda",
+              extension: ".cu",
+            }
+          - {
+              category: "graphics",
+              example: "SimpleShader",
+              backend: "hip",
+              extension: ".hip",
+            }
 
-          # Vulkan backend
-          - { backend: "vulkan", example: "ArrayTest", extension: ".spirv" }
-          - { backend: "vulkan", example: "SimpleShader", extension: ".spirv" }
-          - { backend: "vulkan", example: "PerlinNoise", extension: ".spirv" }
-          - { backend: "vulkan", example: "ComplexShader", extension: ".spirv" }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "metal",
+              extension: ".metal",
+            }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "directx",
+              extension: ".hlsl",
+            }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "opengl",
+              extension: ".glsl",
+            }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "vulkan",
+              extension: ".spirv",
+            }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "rust",
+              extension: ".rs",
+            }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "cuda",
+              extension: ".cu",
+            }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "hip",
+              extension: ".hip",
+            }
 
-          # OpenGL backend
-          - { backend: "opengl", example: "ArrayTest", extension: ".glsl" }
-          - { backend: "opengl", example: "SimpleShader", extension: ".glsl" }
-          - { backend: "opengl", example: "PerlinNoise", extension: ".glsl" }
-          - { backend: "opengl", example: "ComplexShader", extension: ".glsl" }
+          - {
+              category: "graphics",
+              example: "ComplexShader",
+              backend: "metal",
+              extension: ".metal",
+            }
+          - {
+              category: "graphics",
+              example: "ComplexShader",
+              backend: "directx",
+              extension: ".hlsl",
+            }
+          - {
+              category: "graphics",
+              example: "ComplexShader",
+              backend: "opengl",
+              extension: ".glsl",
+            }
+          - {
+              category: "graphics",
+              example: "ComplexShader",
+              backend: "vulkan",
+              extension: ".spirv",
+            }
+          - {
+              category: "graphics",
+              example: "ComplexShader",
+              backend: "rust",
+              extension: ".rs",
+            }
+          - {
+              category: "graphics",
+              example: "ComplexShader",
+              backend: "cuda",
+              extension: ".cu",
+            }
+          - {
+              category: "graphics",
+              example: "ComplexShader",
+              backend: "hip",
+              extension: ".hip",
+            }
 
-          # Metal backend
-          - { backend: "metal", example: "ArrayTest", extension: ".metal" }
-          - { backend: "metal", example: "SimpleShader", extension: ".metal" }
-          - { backend: "metal", example: "PerlinNoise", extension: ".metal" }
-          - { backend: "metal", example: "ComplexShader", extension: ".metal" }
+          # Advanced category
+          - {
+              category: "advanced",
+              example: "ArrayTest",
+              backend: "metal",
+              extension: ".metal",
+            }
+          - {
+              category: "advanced",
+              example: "ArrayTest",
+              backend: "directx",
+              extension: ".hlsl",
+            }
+          - {
+              category: "advanced",
+              example: "ArrayTest",
+              backend: "opengl",
+              extension: ".glsl",
+            }
+          - {
+              category: "advanced",
+              example: "ArrayTest",
+              backend: "vulkan",
+              extension: ".spirv",
+            }
+          - {
+              category: "advanced",
+              example: "ArrayTest",
+              backend: "rust",
+              extension: ".rs",
+            }
+          - {
+              category: "advanced",
+              example: "ArrayTest",
+              backend: "cuda",
+              extension: ".cu",
+            }
+          - {
+              category: "advanced",
+              example: "ArrayTest",
+              backend: "hip",
+              extension: ".hip",
+            }
 
-          # Mojo backend
-          - { backend: "mojo", example: "ArrayTest", extension: ".mojo" }
-          - { backend: "mojo", example: "SimpleShader", extension: ".mojo" }
-          - { backend: "mojo", example: "PerlinNoise", extension: ".mojo" }
-          - { backend: "mojo", example: "ComplexShader", extension: ".mojo" }
+          - {
+              category: "advanced",
+              example: "GenericPatternMatching",
+              backend: "rust",
+              extension: ".rs",
+            }
+          - {
+              category: "advanced",
+              example: "GenericPatternMatching",
+              backend: "mojo",
+              extension: ".mojo",
+            }
 
-          # Rust backend
-          - { backend: "rust", example: "ArrayTest", extension: ".rs" }
-          - { backend: "rust", example: "SimpleShader", extension: ".rs" }
-          - { backend: "rust", example: "PerlinNoise", extension: ".rs" }
-          - { backend: "rust", example: "ComplexShader", extension: ".rs" }
+          # Cross-platform category
+          - {
+              category: "cross_platform",
+              example: "UniversalPBRShader",
+              backend: "metal",
+              extension: ".metal",
+            }
+          - {
+              category: "cross_platform",
+              example: "UniversalPBRShader",
+              backend: "directx",
+              extension: ".hlsl",
+            }
+          - {
+              category: "cross_platform",
+              example: "UniversalPBRShader",
+              backend: "opengl",
+              extension: ".glsl",
+            }
+          - {
+              category: "cross_platform",
+              example: "UniversalPBRShader",
+              backend: "vulkan",
+              extension: ".spirv",
+            }
+          - {
+              category: "cross_platform",
+              example: "UniversalPBRShader",
+              backend: "rust",
+              extension: ".rs",
+            }
 
-          # CUDA backend
-          - { backend: "cuda", example: "ArrayTest", extension: ".cu" }
-          - { backend: "cuda", example: "SimpleShader", extension: ".cu" }
-          - { backend: "cuda", example: "PerlinNoise", extension: ".cu" }
-          - { backend: "cuda", example: "ComplexShader", extension: ".cu" }
+          # Compute category
+          - {
+              category: "compute",
+              example: "ParticleSimulation",
+              backend: "metal",
+              extension: ".metal",
+            }
+          - {
+              category: "compute",
+              example: "ParticleSimulation",
+              backend: "directx",
+              extension: ".hlsl",
+            }
+          - {
+              category: "compute",
+              example: "ParticleSimulation",
+              backend: "opengl",
+              extension: ".glsl",
+            }
+          - {
+              category: "compute",
+              example: "ParticleSimulation",
+              backend: "vulkan",
+              extension: ".spirv",
+            }
 
-          # HIP backend
-          - { backend: "hip", example: "ArrayTest", extension: ".hip" }
-          - { backend: "hip", example: "SimpleShader", extension: ".hip" }
-          - { backend: "hip", example: "PerlinNoise", extension: ".hip" }
-          - { backend: "hip", example: "ComplexShader", extension: ".hip" }
-
-          # Slang backend is excluded as it's still experimental
-          # and not fully implemented
+          # GPU Computing category
+          - {
+              category: "gpu_computing",
+              example: "MatrixMultiplication",
+              backend: "cuda",
+              extension: ".cu",
+            }
+          - {
+              category: "gpu_computing",
+              example: "MatrixMultiplication",
+              backend: "hip",
+              extension: ".hip",
+            }
+          - {
+              category: "gpu_computing",
+              example: "MatrixMultiplication",
+              backend: "mojo",
+              extension: ".mojo",
+            }
 
     steps:
       - uses: actions/checkout@v4
@@ -155,9 +354,129 @@ jobs:
           pip install -e .
         shell: bash
 
-      - name: Run ${{ matrix.combination.example }} on ${{ matrix.combination.backend }} backend
+      - name: Create output directory
         run: |
-          mkdir -p output
-          python -c "import crosstl; crosstl.translate('${{ matrix.combination.example }}.cgl', backend='${{ matrix.combination.backend }}', save_shader='output/${{ matrix.combination.example }}${{ matrix.combination.extension }}')"
+          mkdir -p output/${{ matrix.combination.category }}
+        shell: bash
+
+      - name: Test ${{ matrix.combination.category }}/${{ matrix.combination.example }} → ${{ matrix.combination.backend }}
+        run: |
+          python -c "import crosstl; crosstl.translate('${{ matrix.combination.category }}/${{ matrix.combination.example }}.cgl', backend='${{ matrix.combination.backend }}', save_shader='output/${{ matrix.combination.category }}/${{ matrix.combination.example }}${{ matrix.combination.extension }}')"
         shell: bash
         continue-on-error: true
+
+  ir-capabilities-test:
+    name: Advanced IR Capabilities Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Test Type System Features
+        run: |
+          cd examples
+          echo "Testing type system capabilities..."
+          python -c "
+          import crosstl
+          # Test generic types (Rust)
+          try:
+              crosstl.translate('advanced/GenericPatternMatching.cgl', backend='rust', save_shader='output/ir_test_generics.rs')
+              print('✅ Generic types → Rust')
+          except Exception as e:
+              print(f'❌ Generic types → Rust: {e}')
+
+          # Test pattern matching (Rust)
+          try:
+              crosstl.translate('advanced/GenericPatternMatching.cgl', backend='mojo', save_shader='output/ir_test_patterns.mojo')
+              print('✅ Pattern matching → Mojo')
+          except Exception as e:
+              print(f'❌ Pattern matching → Mojo: {e}')
+          "
+
+      - name: Test GPU Computing Features
+        run: |
+          cd examples
+          echo "Testing GPU computing capabilities..."
+          python -c "
+          import crosstl
+          # Test CUDA kernels
+          try:
+              crosstl.translate('gpu_computing/MatrixMultiplication.cgl', backend='cuda', save_shader='output/ir_test_cuda.cu')
+              print('✅ GPU kernels → CUDA')
+          except Exception as e:
+              print(f'❌ GPU kernels → CUDA: {e}')
+              
+          # Test HIP kernels
+          try:
+              crosstl.translate('gpu_computing/MatrixMultiplication.cgl', backend='hip', save_shader='output/ir_test_hip.hip')
+              print('✅ GPU kernels → HIP')
+          except Exception as e:
+              print(f'❌ GPU kernels → HIP: {e}')
+          "
+
+      - name: Test Compute Shaders
+        run: |
+          cd examples
+          echo "Testing compute shader capabilities..."
+          python -c "
+          import crosstl
+          backends = ['metal', 'directx', 'opengl', 'vulkan']
+          for backend in backends:
+              try:
+                  ext = {'metal': '.metal', 'directx': '.hlsl', 'opengl': '.glsl', 'vulkan': '.spirv'}[backend]
+                  crosstl.translate('compute/ParticleSimulation.cgl', backend=backend, save_shader=f'output/ir_test_compute_{backend}{ext}')
+                  print(f'✅ Compute shaders → {backend}')
+              except Exception as e:
+                  print(f'❌ Compute shaders → {backend}: {e}')
+          "
+
+      - name: Test Cross-Platform Features
+        run: |
+          cd examples
+          echo "Testing cross-platform capabilities..."
+          python -c "
+          import crosstl
+          backends = ['metal', 'directx', 'opengl', 'vulkan', 'rust']
+          for backend in backends:
+              try:
+                  ext = {'metal': '.metal', 'directx': '.hlsl', 'opengl': '.glsl', 'vulkan': '.spirv', 'rust': '.rs'}[backend]
+                  crosstl.translate('cross_platform/UniversalPBRShader.cgl', backend=backend, save_shader=f'output/ir_test_pbr_{backend}{ext}')
+                  print(f'✅ Cross-platform PBR → {backend}')
+              except Exception as e:
+                  print(f'❌ Cross-platform PBR → {backend}: {e}')
+          "
+
+      - name: Test Complex Language Features
+        run: |
+          cd examples
+          echo "Testing complex language features..."
+          python -c "
+          import crosstl
+          features = [
+              ('Complex control flow', 'graphics/ComplexShader.cgl', ['metal', 'directx', 'opengl', 'rust']),
+              ('Advanced arrays', 'advanced/ArrayTest.cgl', ['metal', 'directx', 'opengl', 'rust', 'cuda', 'hip']),
+              ('Particle systems', 'compute/ParticleSimulation.cgl', ['metal', 'directx', 'opengl']),
+              ('Matrix operations', 'gpu_computing/MatrixMultiplication.cgl', ['cuda', 'hip'])
+          ]
+
+          for feature_name, example, backends in features:
+              print(f'Testing {feature_name}:')
+              for backend in backends:
+                  try:
+                      ext = {'metal': '.metal', 'directx': '.hlsl', 'opengl': '.glsl', 'vulkan': '.spirv', 'rust': '.rs', 'cuda': '.cu', 'hip': '.hip', 'mojo': '.mojo'}[backend]
+                      output_name = f'output/ir_feature_{feature_name.replace(" ", "_").lower()}_{backend}{ext}'
+                      crosstl.translate(example, backend=backend, save_shader=output_name)
+                      print(f'  ✅ {backend}')
+                  except Exception as e:
+                      print(f'  ❌ {backend}: {str(e)[:50]}...')
+          "

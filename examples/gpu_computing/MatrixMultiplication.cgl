@@ -1,0 +1,364 @@
+shader MatrixMultiplication {
+    // Matrix multiplication with shared memory optimization
+    // Demonstrates CUDA/HIP kernel patterns
+    
+    // Type definitions for different matrix sizes
+    struct Matrix32 {
+        float data[32][32];
+    }
+    
+    struct Matrix64 {
+        float data[64][64];
+    }
+    
+    struct Matrix128 {
+        float data[128][128];
+    }
+    
+    struct MatrixDimensions {
+        int rows_A;
+        int cols_A;
+        int rows_B;
+        int cols_B;
+        int rows_C;
+        int cols_C;
+    }
+    
+    struct KernelParams {
+        int block_size;
+        int grid_size_x;
+        int grid_size_y;
+        float alpha;
+        float beta;
+    }
+    
+    // Constants
+    const int TILE_SIZE = 16;
+    const int MAX_SHARED_MEMORY = 1024;
+    const int WARP_SIZE = 32;
+    
+    // Matrix utilities
+    float getMatrixElement(buffer float* matrix, int row, int col, int stride) {
+        return matrix[row * stride + col];
+    }
+    
+    void setMatrixElement(buffer float* matrix, int row, int col, int stride, float value) {
+        matrix[row * stride + col] = value;
+    }
+    
+    // Advanced tiled matrix multiplication kernel
+    compute matmul_tiled {
+        layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
+        
+        uniform MatrixDimensions dims;
+        uniform KernelParams params;
+        
+        buffer float* matrix_A;
+        buffer float* matrix_B;
+        buffer float* matrix_C;
+        
+        // Shared memory tiles for optimization
+        shared float tile_A[TILE_SIZE][TILE_SIZE];
+        shared float tile_B[TILE_SIZE][TILE_SIZE];
+        
+        void main() {
+            // Thread and block indices
+            int tx = int(gl_LocalInvocationID.x);
+            int ty = int(gl_LocalInvocationID.y);
+            int bx = int(gl_WorkGroupID.x);
+            int by = int(gl_WorkGroupID.y);
+            
+            // Global thread indices
+            int row = by * TILE_SIZE + ty;
+            int col = bx * TILE_SIZE + tx;
+            
+            float result = 0.0;
+            
+            // Number of tiles needed
+            int num_tiles = (dims.cols_A + TILE_SIZE - 1) / TILE_SIZE;
+            
+            // Iterate through tiles
+            for (int tile = 0; tile < num_tiles; tile++) {
+                // Load tile from matrix A
+                int a_row = row;
+                int a_col = tile * TILE_SIZE + tx;
+                
+                if (a_row < dims.rows_A && a_col < dims.cols_A) {
+                    tile_A[ty][tx] = getMatrixElement(matrix_A, a_row, a_col, dims.cols_A);
+                } else {
+                    tile_A[ty][tx] = 0.0;
+                }
+                
+                // Load tile from matrix B
+                int b_row = tile * TILE_SIZE + ty;
+                int b_col = col;
+                
+                if (b_row < dims.rows_B && b_col < dims.cols_B) {
+                    tile_B[ty][tx] = getMatrixElement(matrix_B, b_row, b_col, dims.cols_B);
+                } else {
+                    tile_B[ty][tx] = 0.0;
+                }
+                
+                // Synchronize to ensure all threads have loaded their data
+                barrier();
+                
+                // Perform tile multiplication
+                for (int k = 0; k < TILE_SIZE; k++) {
+                    result += tile_A[ty][k] * tile_B[k][tx];
+                }
+                
+                // Synchronize before loading next tile
+                barrier();
+            }
+            
+            // Write result to global memory
+            if (row < dims.rows_C && col < dims.cols_C) {
+                float existing_value = getMatrixElement(matrix_C, row, col, dims.cols_C);
+                float final_result = params.alpha * result + params.beta * existing_value;
+                setMatrixElement(matrix_C, row, col, dims.cols_C, final_result);
+            }
+        }
+    }
+    
+    // Optimized kernel for square matrices
+    compute matmul_square {
+        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        
+        uniform int matrix_size;
+        uniform float alpha;
+        uniform float beta;
+        
+        buffer float* A;
+        buffer float* B;
+        buffer float* C;
+        
+        shared float shared_A[16][16];
+        shared float shared_B[16][16];
+        
+        void main() {
+            int tx = int(gl_LocalInvocationID.x);
+            int ty = int(gl_LocalInvocationID.y);
+            int bx = int(gl_WorkGroupID.x);
+            int by = int(gl_WorkGroupID.y);
+            
+            int row = by * 16 + ty;
+            int col = bx * 16 + tx;
+            
+            float sum = 0.0;
+            
+            // Process tiles
+            for (int tile = 0; tile < (matrix_size + 15) / 16; tile++) {
+                // Collaborative loading with bounds checking
+                int a_col = tile * 16 + tx;
+                int b_row = tile * 16 + ty;
+                
+                shared_A[ty][tx] = (row < matrix_size && a_col < matrix_size) ? 
+                    A[row * matrix_size + a_col] : 0.0;
+                
+                shared_B[ty][tx] = (b_row < matrix_size && col < matrix_size) ? 
+                    B[b_row * matrix_size + col] : 0.0;
+                
+                barrier();
+                
+                // Compute partial dot product
+                for (int k = 0; k < 16; k++) {
+                    sum += shared_A[ty][k] * shared_B[k][tx];
+                }
+                
+                barrier();
+            }
+            
+            // Write result
+            if (row < matrix_size && col < matrix_size) {
+                C[row * matrix_size + col] = alpha * sum + beta * C[row * matrix_size + col];
+            }
+        }
+    }
+    
+    // Vectorized matrix multiplication for better memory bandwidth
+    compute matmul_vectorized {
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+        
+        uniform MatrixDimensions dims;
+        uniform KernelParams params;
+        
+        buffer vec4* matrix_A_vec;
+        buffer vec4* matrix_B_vec;
+        buffer vec4* matrix_C_vec;
+        
+        shared vec4 shared_A_vec[8][8];
+        shared vec4 shared_B_vec[8][8];
+        
+        void main() {
+            int tx = int(gl_LocalInvocationID.x);
+            int ty = int(gl_LocalInvocationID.y);
+            int bx = int(gl_WorkGroupID.x);
+            int by = int(gl_WorkGroupID.y);
+            
+            // Each thread processes 4 elements
+            int row = by * 8 + ty;
+            int col = bx * 8 + tx;
+            
+            vec4 result = vec4(0.0);
+            
+            // Process in vector tiles
+            for (int tile = 0; tile < (dims.cols_A + 31) / 32; tile++) {
+                // Load vectorized tiles
+                int a_col_vec = tile * 8 + tx;
+                int b_row_vec = tile * 8 + ty;
+                
+                if (row < dims.rows_A / 4 && a_col_vec < dims.cols_A / 4) {
+                    shared_A_vec[ty][tx] = matrix_A_vec[row * (dims.cols_A / 4) + a_col_vec];
+                } else {
+                    shared_A_vec[ty][tx] = vec4(0.0);
+                }
+                
+                if (b_row_vec < dims.rows_B / 4 && col < dims.cols_B / 4) {
+                    shared_B_vec[ty][tx] = matrix_B_vec[b_row_vec * (dims.cols_B / 4) + col];
+                } else {
+                    shared_B_vec[ty][tx] = vec4(0.0);
+                }
+                
+                barrier();
+                
+                // Vectorized computation
+                for (int k = 0; k < 8; k++) {
+                    result += shared_A_vec[ty][k] * shared_B_vec[k][tx];
+                }
+                
+                barrier();
+            }
+            
+            // Write vectorized result
+            if (row < dims.rows_C / 4 && col < dims.cols_C / 4) {
+                vec4 existing = matrix_C_vec[row * (dims.cols_C / 4) + col];
+                matrix_C_vec[row * (dims.cols_C / 4) + col] = params.alpha * result + params.beta * existing;
+            }
+        }
+    }
+    
+    // Batched matrix multiplication for multiple matrices
+    compute matmul_batched {
+        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        
+        uniform int batch_size;
+        uniform int matrix_size;
+        uniform float alpha;
+        uniform float beta;
+        
+        buffer float* batch_A;
+        buffer float* batch_B;
+        buffer float* batch_C;
+        
+        shared float tile_A[16][16];
+        shared float tile_B[16][16];
+        
+        void main() {
+            int tx = int(gl_LocalInvocationID.x);
+            int ty = int(gl_LocalInvocationID.y);
+            int bx = int(gl_WorkGroupID.x);
+            int by = int(gl_WorkGroupID.y);
+            int bz = int(gl_WorkGroupID.z);
+            
+            // Each workgroup processes one matrix in the batch
+            int batch_id = bz;
+            if (batch_id >= batch_size) return;
+            
+            int matrix_offset = batch_id * matrix_size * matrix_size;
+            
+            int row = by * 16 + ty;
+            int col = bx * 16 + tx;
+            
+            float result = 0.0;
+            
+            // Process tiles for this batch
+            for (int tile = 0; tile < (matrix_size + 15) / 16; tile++) {
+                // Load tiles from batch matrices
+                int a_col = tile * 16 + tx;
+                int b_row = tile * 16 + ty;
+                
+                if (row < matrix_size && a_col < matrix_size) {
+                    tile_A[ty][tx] = batch_A[matrix_offset + row * matrix_size + a_col];
+                } else {
+                    tile_A[ty][tx] = 0.0;
+                }
+                
+                if (b_row < matrix_size && col < matrix_size) {
+                    tile_B[ty][tx] = batch_B[matrix_offset + b_row * matrix_size + col];
+                } else {
+                    tile_B[ty][tx] = 0.0;
+                }
+                
+                barrier();
+                
+                // Compute tile multiplication
+                for (int k = 0; k < 16; k++) {
+                    result += tile_A[ty][k] * tile_B[k][tx];
+                }
+                
+                barrier();
+            }
+            
+            // Write result for this batch
+            if (row < matrix_size && col < matrix_size) {
+                int c_index = matrix_offset + row * matrix_size + col;
+                batch_C[c_index] = alpha * result + beta * batch_C[c_index];
+            }
+        }
+    }
+    
+    // Warp-level optimized kernel using shuffle operations
+    compute matmul_warp_optimized {
+        layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+        
+        uniform int matrix_size;
+        uniform float alpha;
+        uniform float beta;
+        
+        buffer float* A;
+        buffer float* B;
+        buffer float* C;
+        
+        void main() {
+            int warp_id = int(gl_LocalInvocationID.x);
+            int global_id = int(gl_GlobalInvocationID.x);
+            
+            // Each warp processes multiple elements
+            int elements_per_warp = matrix_size * matrix_size / (int(gl_NumWorkGroups.x) * 32);
+            
+            for (int elem = 0; elem < elements_per_warp; elem++) {
+                int linear_id = global_id + elem * int(gl_NumWorkGroups.x) * 32;
+                
+                if (linear_id >= matrix_size * matrix_size) break;
+                
+                int row = linear_id / matrix_size;
+                int col = linear_id % matrix_size;
+                
+                float result = 0.0;
+                
+                // Compute dot product with warp-level optimizations
+                for (int k = 0; k < matrix_size; k += WARP_SIZE) {
+                    float a_val = (k + warp_id < matrix_size) ? A[row * matrix_size + k + warp_id] : 0.0;
+                    float b_val = (k + warp_id < matrix_size) ? B[(k + warp_id) * matrix_size + col] : 0.0;
+                    
+                    // Warp shuffle to compute partial sums
+                    float partial_sum = a_val * b_val;
+                    
+                    // Reduce within warp
+                    for (int offset = 16; offset > 0; offset /= 2) {
+                        partial_sum += __shfl_down_sync(0xFFFFFFFF, partial_sum, offset);
+                    }
+                    
+                    if (warp_id == 0) {
+                        result += partial_sum;
+                    }
+                }
+                
+                // Only first thread in warp writes result
+                if (warp_id == 0) {
+                    C[linear_id] = alpha * result + beta * C[linear_id];
+                }
+            }
+        }
+    }
+} 
