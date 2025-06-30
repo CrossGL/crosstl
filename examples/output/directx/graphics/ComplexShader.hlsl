@@ -73,10 +73,6 @@ struct GlobalUniforms
     int frameCount;
     float noiseValues[];
 };
-float PI;
-float EPSILON;
-int MAX_ITERATIONS;
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) UP_VECTOR;
 float distributionGGX(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) N,
                       VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) H,
                       float roughness)

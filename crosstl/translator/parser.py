@@ -804,6 +804,16 @@ class Parser:
                 "LOGICAL_OR",
                 "BITWISE_AND",
                 "BITWISE_OR",
+                "ASSIGN_ADD",
+                "ASSIGN_SUB",
+                "ASSIGN_MUL",
+                "ASSIGN_DIV",
+                "ASSIGN_MOD",
+                "ASSIGN_XOR",
+                "ASSIGN_OR",
+                "ASSIGN_AND",
+                "ASSIGN_SHIFT_LEFT",
+                "ASSIGN_SHIFT_RIGHT",
             ]:
                 return False
 
@@ -1073,6 +1083,8 @@ class Parser:
             return self.parse_while_statement()
         elif self.current_token[0] == "MATCH":
             return self.parse_match_statement()
+        elif self.current_token[0] == "SWITCH":
+            return self.parse_switch_statement()
         elif self.current_token[0] == "RETURN":
             return self.parse_return_statement()
         elif self.current_token[0] == "LET":
@@ -1278,8 +1290,8 @@ class Parser:
 
     def parse_pattern(self):
         """Parse pattern expressions."""
-        if self.current_token[0] == "UNDERSCORE":
-            self.eat("UNDERSCORE")
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "_":
+            self.eat("IDENTIFIER")
             return WildcardPatternNode()
         elif self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
@@ -1469,7 +1481,14 @@ class Parser:
 
     def parse_unary_expression(self):
         """Parse unary expressions."""
-        if self.current_token[0] in ["NOT", "MINUS", "PLUS", "BITWISE_NOT"]:
+        if self.current_token[0] in [
+            "NOT",
+            "MINUS",
+            "PLUS",
+            "BITWISE_NOT",
+            "INCREMENT",
+            "DECREMENT",
+        ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             operand = self.parse_unary_expression()
@@ -1651,21 +1670,40 @@ class Parser:
     def is_function_declaration(self):
         """Check if current position is a function declaration."""
         saved_pos = self.pos
+        saved_token = self.current_token
+
         try:
+            # Skip qualifiers like async, unsafe, etc.
+            while self.current_token[0] in ["ASYNC", "UNSAFE", "GLOBAL", "KERNEL"]:
+                self.eat(self.current_token[0])
+
+            # Skip function keyword if present
+            if self.current_token[0] == "FUNCTION":
+                self.eat("FUNCTION")
+
             # Look for type identifier ( pattern
             if self.is_type_token():
                 self.advance_over_type()
                 if self.current_token[0] == "IDENTIFIER":
                     self.eat("IDENTIFIER")
+                    # Skip generic parameters if present
+                    if self.current_token[0] == "LESS_THAN":
+                        depth = 1
+                        self.eat("LESS_THAN")
+                        while depth > 0 and self.current_token[0] != "EOF":
+                            if self.current_token[0] == "LESS_THAN":
+                                depth += 1
+                            elif self.current_token[0] == "GREATER_THAN":
+                                depth -= 1
+                            self.eat(self.current_token[0])
+
                     if self.current_token[0] == "LPAREN":
                         return True
         except:
             pass
         finally:
             self.pos = saved_pos
-            self.current_token = (
-                self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
-            )
+            self.current_token = saved_token
 
         return False
 
@@ -1790,17 +1828,32 @@ class Parser:
         if self.current_token[0] == "STRUCT":
             return self.parse_struct()
 
-        # Handle function declarations
-        if self.is_function_declaration():
-            return self.parse_function()
+        # Handle constant declarations
+        if self.current_token[0] == "CONST":
+            return self.parse_constant()
 
         # Handle shader stage blocks
         if self.current_token[0] in ["VERTEX", "FRAGMENT", "COMPUTE", "GEOMETRY"]:
             return self.parse_shader_stage_block()
 
-        # Handle variable declarations
+        # PRIORITY: Check for function declarations first (before variable declarations)
+        # This prevents functions from being misidentified as variables
+        if self.is_function_declaration():
+            return self.parse_function()
+
+        # Handle variable declarations (lower priority than functions)
         if self.is_variable_declaration():
             return self.parse_variable_declaration()
+
+        # If we can't identify it, try to parse as function declaration anyway
+        # This handles edge cases where is_function_declaration fails
+        if self.is_type_token():
+            try:
+                return self.parse_function()
+            except:
+                # If function parsing fails, skip the token
+                self.skip_unknown_token()
+                return None
 
         # Skip unknown tokens for robustness
         self.skip_unknown_token()
@@ -1919,3 +1972,57 @@ class Parser:
         return StructNode(
             name=name, members=methods, attributes=[], generic_params=generic_params
         )
+
+    def parse_switch_statement(self):
+        """Parse switch statements."""
+        self.eat("SWITCH")
+        self.eat("LPAREN")
+        expression = self.parse_expression()
+        self.eat("RPAREN")
+
+        self.eat("LBRACE")
+        cases = []
+
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "CASE":
+                case = self.parse_case()
+                cases.append(case)
+            elif self.current_token[0] == "DEFAULT":
+                case = self.parse_default_case()
+                cases.append(case)
+            else:
+                # Skip unknown tokens in switch body
+                self.skip_unknown_token()
+
+        self.eat("RBRACE")
+
+        return SwitchNode(expression=expression, cases=cases)
+
+    def parse_case(self):
+        """Parse case statements."""
+        self.eat("CASE")
+        value = self.parse_expression()
+        self.eat("COLON")
+
+        # Parse statements until we hit another case, default, or end of switch
+        statements = []
+        while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+            stmt = self.parse_statement()
+            statements.append(stmt)
+
+        return CaseNode(value=value, statements=statements)
+
+    def parse_default_case(self):
+        """Parse default case in switch statements."""
+        self.eat("DEFAULT")
+        self.eat("COLON")
+
+        # Parse statements until we hit another case or end of switch
+        statements = []
+        while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+            stmt = self.parse_statement()
+            statements.append(stmt)
+
+        return CaseNode(
+            value=None, statements=statements
+        )  # None indicates default case

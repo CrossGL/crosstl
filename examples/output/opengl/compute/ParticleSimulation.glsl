@@ -34,12 +34,6 @@ struct AtomicCounters {
   int active_count;
   int spawn_count;
 };
-layout(std140, binding = 0) int MAX_PARTICLES;
-layout(std140, binding = 1) int WORKGROUP_SIZE;
-layout(std140, binding = 2) float PI;
-layout(std140, binding = 3)
-    VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) GRAVITY_VECTOR;
 float random(VectorType(element_type = PrimitiveType(name = float,
                                                      size_bits = None),
                         size = 2) st) {

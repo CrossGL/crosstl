@@ -105,11 +105,9 @@ pub struct GlobalUniforms {
       : vecNone,
 }
 
-static PI : f32 = Default::default();
-static EPSILON : f32 = Default::default();
-static MAX_ITERATIONS : i32 = Default::default();
-static UP_VECTOR : Vec3<f32> = Default::default();
-pub fn distributionGGX(N : Vec3<f32>, H : Vec3<f32>, roughness : f32) -> f32 {
+// Constant Buffers
+pub fn
+distributionGGX(N : Vec3<f32>, H : Vec3<f32>, roughness : f32) -> f32 {
   let mut a : f32 = (roughness * roughness);
   let mut a2 : f32 = (a * a);
   let mut NdotH : f32 = max(dot(N, H), 0.0);

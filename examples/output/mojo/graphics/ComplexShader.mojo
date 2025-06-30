@@ -77,10 +77,6 @@ struct GlobalUniforms:
     var frameCount: Int32
     var noiseValues: vecNone
 
-var PI: Float32
-var EPSILON: Float32
-var MAX_ITERATIONS: Int32
-var UP_VECTOR: VectorType(element_type=PrimitiveType(name=float, size_bits=None), size=3)
 fn distributionGGX(N: SIMD[DType.float32, 3], H: SIMD[DType.float32, 3], roughness: Float32) -> Float32:
     var a: Float32 = (roughness * roughness)
     var a2: Float32 = (a * a)

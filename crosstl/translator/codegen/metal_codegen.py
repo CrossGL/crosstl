@@ -229,21 +229,41 @@ class MetalCodeGen:
         for i, node in enumerate(global_vars):
             # Handle both old and new AST variable structures
             if hasattr(node, "var_type"):
-                if hasattr(node.var_type, "name"):
-                    vtype = node.var_type.name
+                if hasattr(node.var_type, "name") or hasattr(
+                    node.var_type, "element_type"
+                ):
+                    # Check if it's an ArrayType and handle specially for global variables
+                    if hasattr(node.var_type, "element_type"):  # ArrayType
+                        base_type = self.convert_type_node_to_string(
+                            node.var_type.element_type
+                        )
+                        array_size = (
+                            self.generate_expression(node.var_type.size)
+                            if node.var_type.size
+                            else ""
+                        )
+                        vtype = base_type
+                        array_suffix = f"[{array_size}]" if array_size else "[]"
+                    else:
+                        # Use the proper type conversion for TypeNode objects
+                        vtype = self.convert_type_node_to_string(node.var_type)
+                        array_suffix = ""
                 else:
                     vtype = str(node.var_type)
+                    array_suffix = ""
             elif hasattr(node, "vtype"):
                 vtype = node.vtype
+                array_suffix = ""
             else:
                 vtype = "float"
+                array_suffix = ""
 
             if vtype in ["sampler2D", "samplerCube"]:
                 self.texture_variables.append((node, i))
             elif vtype in ["sampler"]:
                 self.sampler_variables.append((node, i))
             else:
-                code += f"{self.map_type(vtype)} {node.name};\n"
+                code += f"{self.map_type(vtype)} {node.name}{array_suffix};\n"
 
         # Generate cbuffers - handle both old and new AST
         cbuffers = getattr(ast, "cbuffers", [])

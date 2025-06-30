@@ -213,7 +213,6 @@ TOKENS = OrderedDict(
         ("GREATER_THAN", r">"),
         # Special Characters
         ("AT", r"@"),
-        ("UNDERSCORE", r"_"),
         ("AMPERSAND", r"&"),
         # Identifier (must be last)
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z_0-9]*"),

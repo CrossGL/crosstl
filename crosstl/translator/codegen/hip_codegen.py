@@ -584,6 +584,41 @@ class HipCodeGen:
                 self.visit(stmt)
         return ""
 
+    def visit_BreakNode(self, node) -> str:
+        """Visit break statement node"""
+        self.add_line("break;")
+        return ""
+
+    def visit_ContinueNode(self, node) -> str:
+        """Visit continue statement node"""
+        self.add_line("continue;")
+        return ""
+
+    def visit_EnumNode(self, node) -> str:
+        """Visit enum declaration node"""
+        self.add_line(f"enum {node.name}")
+        self.add_line("{")
+        self.indent_level += 1
+
+        if hasattr(node, "variants") and node.variants:
+            for i, variant in enumerate(node.variants):
+                if hasattr(variant, "value") and variant.value:
+                    value = self.visit(variant.value)
+                    if i == len(node.variants) - 1:
+                        self.add_line(f"{variant.name} = {value}")
+                    else:
+                        self.add_line(f"{variant.name} = {value},")
+                else:
+                    if i == len(node.variants) - 1:
+                        self.add_line(f"{variant.name}")
+                    else:
+                        self.add_line(f"{variant.name},")
+
+        self.indent_level -= 1
+        self.add_line("};")
+        self.add_line()
+        return ""
+
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         if hasattr(type_node, "name"):

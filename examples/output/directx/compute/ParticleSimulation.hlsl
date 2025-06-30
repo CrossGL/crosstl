@@ -38,10 +38,6 @@ struct AtomicCounters
     int active_count;
     int spawn_count;
 };
-int MAX_PARTICLES;
-int WORKGROUP_SIZE;
-float PI;
-VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 3) GRAVITY_VECTOR;
 float random(VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 2) st)
 {
     return fract((sin(dot(st.xy, float2(12.9898, 78.233))) * 43758.5453123));
