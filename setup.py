@@ -19,7 +19,7 @@ setup(
     version="0.0.1.3",
     author="CrossGL team",
     author_email="nripesh@crossgl.net",
-    description="CrossTL: Revolutionizing Shader Development",
+    description="CrossTL: Universal Programming Language and Translator",
     long_description=open("README.md", "r", -1, "UTF8").read(),
     long_description_content_type="text/markdown",
     url="https://crossgl.net/",
