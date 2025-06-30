@@ -89,7 +89,7 @@ class GLSLCodeGen:
     def generate(self, ast):
         code = "\n"
         code += "#version 450 core\n"
-        
+
         # Generate structs - handle both old and new AST
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -102,7 +102,7 @@ class GLSLCodeGen:
                             member_type = str(member.member_type)
                         else:
                             member_type = getattr(member, "vtype", "float")
-                        
+
                         # Handle semantic
                         semantic = None
                         if hasattr(member, "semantic"):
@@ -112,7 +112,7 @@ class GLSLCodeGen:
                                 if hasattr(attr, "name"):
                                     semantic = attr.name
                                     break
-                        
+
                         code += f"{self.map_semantic(semantic)} in {member_type} {member.name};\n"
                 elif node.name == "VSOutput":
                     members = getattr(node, "members", [])
@@ -137,7 +137,7 @@ class GLSLCodeGen:
                             member_type = str(member.member_type)
                         else:
                             member_type = getattr(member, "vtype", "float")
-                        
+
                         # Handle semantic
                         semantic = None
                         if hasattr(member, "semantic"):
@@ -147,7 +147,7 @@ class GLSLCodeGen:
                                 if hasattr(attr, "name"):
                                     semantic = attr.name
                                     break
-                        
+
                         code += f"{self.map_semantic(semantic)} out {member_type} {member.name};\n"
                 else:
                     code += self.generate_struct(node)
@@ -165,8 +165,10 @@ class GLSLCodeGen:
                 vtype = node.vtype
             else:
                 vtype = "float"
-            code += f"layout(std140, binding = {i}) {self.map_type(vtype)} {node.name};\n"
-        
+            code += (
+                f"layout(std140, binding = {i}) {self.map_type(vtype)} {node.name};\n"
+            )
+
         # Generate cbuffers - handle both old and new AST
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
@@ -181,7 +183,7 @@ class GLSLCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
-            
+
             if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
@@ -198,9 +200,13 @@ class GLSLCodeGen:
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = str(stage_type).split('.')[-1].lower()  # Extract stage name from enum
+                    stage_name = (
+                        str(stage_type).split(".")[-1].lower()
+                    )  # Extract stage name from enum
                     code += f"// {stage_name.title()} Shader\n"
-                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                    code += self.generate_function(
+                        stage.entry_point, shader_type=stage_name
+                    )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
                         code += self.generate_function(func)
@@ -216,12 +222,16 @@ class GLSLCodeGen:
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += f"    {self.map_type(element_type)} {member.name}[];\n"
+                            code += (
+                                f"    {self.map_type(element_type)} {member.name}[];\n"
+                            )
                     else:
                         if hasattr(member, "member_type"):
                             member_type = str(member.member_type)
@@ -229,16 +239,22 @@ class GLSLCodeGen:
                             member_type = getattr(member, "vtype", "float")
                         code += f"    {self.map_type(member_type)} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode handling
+            elif hasattr(node, "name") and hasattr(
+                node, "members"
+            ):  # CbufferNode handling
                 code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += f"    {self.map_type(element_type)} {member.name}[];\n"
+                            code += (
+                                f"    {self.map_type(element_type)} {member.name}[];\n"
+                            )
                     else:
                         if hasattr(member, "member_type"):
                             member_type = str(member.member_type)
@@ -251,7 +267,7 @@ class GLSLCodeGen:
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
         code += "  " * indent
-        
+
         # Handle parameters - support both old and new AST
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
@@ -267,7 +283,7 @@ class GLSLCodeGen:
                 param_type = self.map_type(p.vtype)
             else:
                 param_type = "float"
-            
+
             # Handle semantic
             semantic = None
             if hasattr(p, "semantic"):
@@ -277,9 +293,9 @@ class GLSLCodeGen:
                     if hasattr(attr, "name"):
                         semantic = attr.name
                         break
-            
+
             params.append(f"{param_type} {p.name} {self.map_semantic(semantic)}")
-        
+
         params_str = ", ".join(params)
 
         if shader_type == "vertex":
@@ -297,7 +313,7 @@ class GLSLCodeGen:
                     return_type = self.map_type(str(func.return_type))
             else:
                 return_type = "void"
-            
+
             code += f"{return_type} {func.name}({params_str}) {{\n"
 
         # Handle function body - support both old and new AST
@@ -310,7 +326,7 @@ class GLSLCodeGen:
             # Old AST structure
             for stmt in body:
                 code += self.generate_statement(stmt, 1)
-        
+
         code += "}\n\n"
         return code
 
@@ -327,7 +343,7 @@ class GLSLCodeGen:
                 var_type = stmt.vtype
             else:
                 var_type = "float"
-            
+
             return f"{indent_str}{self.map_type(var_type)} {stmt.name};\n"
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
@@ -344,7 +360,9 @@ class GLSLCodeGen:
                 return f"{indent_str}return {values};\n"
             else:
                 return f"{indent_str}return {self.generate_expression(stmt.value)};\n"
-        elif hasattr(stmt, '__class__') and 'ExpressionStatementNode' in str(type(stmt)):
+        elif hasattr(stmt, "__class__") and "ExpressionStatementNode" in str(
+            type(stmt)
+        ):
             # Handle ExpressionStatementNode
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
@@ -419,31 +437,35 @@ class GLSLCodeGen:
             if isinstance(expr, bool):
                 return "true" if expr else "false"
             return str(expr)
-        elif hasattr(expr, '__class__') and 'VariableNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "VariableNode" in str(type(expr)):
             if hasattr(expr, "name"):
                 return expr.name
             else:
                 return str(expr)
-        elif hasattr(expr, '__class__') and 'IdentifierNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
             return expr.name
-        elif hasattr(expr, '__class__') and 'LiteralNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             return str(expr.value)
-        elif hasattr(expr, '__class__') and 'BinaryOpNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             op = self.map_operator(expr.op)
             return f"({left} {op} {right})"
-        elif hasattr(expr, '__class__') and 'AssignmentNode' in str(type(expr)):
-            left = self.generate_expression(expr.target if hasattr(expr, 'target') else expr.left)
-            right = self.generate_expression(expr.value if hasattr(expr, 'value') else expr.right)
-            op = expr.operator if hasattr(expr, 'operator') else expr.op
+        elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
+            left = self.generate_expression(
+                expr.target if hasattr(expr, "target") else expr.left
+            )
+            right = self.generate_expression(
+                expr.value if hasattr(expr, "value") else expr.right
+            )
+            op = expr.operator if hasattr(expr, "operator") else expr.op
             op = self.map_operator(op)
             return f"{left} {op} {right}"
-        elif hasattr(expr, '__class__') and 'UnaryOpNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
             return f"({op}{operand})"
-        elif hasattr(expr, '__class__') and 'ArrayAccessNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
                 array = self.generate_expression(expr.array)
@@ -451,14 +473,24 @@ class GLSLCodeGen:
                 return f"{array}[{index}]"
             else:
                 return str(expr)
-        elif hasattr(expr, '__class__') and 'FunctionCallNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
             # Map function names to GLSL equivalents
             func_name = self.function_map.get(expr.name, expr.name)
 
             # Handle vector constructors
             if expr.name in [
-                "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4",
-                "uvec2", "uvec3", "uvec4", "bvec2", "bvec3", "bvec4",
+                "vec2",
+                "vec3",
+                "vec4",
+                "ivec2",
+                "ivec3",
+                "ivec4",
+                "uvec2",
+                "uvec3",
+                "uvec4",
+                "bvec2",
+                "bvec3",
+                "bvec4",
             ]:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{expr.name}({args})"
@@ -471,10 +503,10 @@ class GLSLCodeGen:
             # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             return f"{func_name}({args})"
-        elif hasattr(expr, '__class__') and 'MemberAccessNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
-        elif hasattr(expr, '__class__') and 'TernaryOpNode' in str(type(expr)):
+        elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
             condition = self.generate_expression(expr.condition)
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)
@@ -486,13 +518,13 @@ class GLSLCodeGen:
         """Map types to GLSL equivalents, handling both strings and TypeNode objects."""
         if vtype is None:
             return "float"
-        
+
         # Handle TypeNode objects
-        if hasattr(vtype, 'name') or hasattr(vtype, 'element_type'):
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
-        
+
         # Handle array types
         if "[" in vtype_str and "]" in vtype_str:
             base_type, size = parse_array_type(vtype_str)
@@ -551,19 +583,19 @@ class GLSLCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         # Handle different TypeNode types
-        if hasattr(type_node, 'name'):
+        if hasattr(type_node, "name"):
             # PrimitiveType
             return type_node.name
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             # Check if it's VectorType vs ArrayType
-            if hasattr(type_node, 'rows'):
+            if hasattr(type_node, "rows"):
                 # MatrixType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.rows == type_node.cols:
                     return f"mat{type_node.rows}"
                 else:
                     return f"mat{type_node.cols}x{type_node.rows}"
-            elif str(type(type_node)).find('ArrayType') != -1:
+            elif str(type(type_node)).find("ArrayType") != -1:
                 # ArrayType - handle C-style arrays
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
@@ -579,7 +611,7 @@ class GLSLCodeGen:
                 # VectorType - map to proper GLSL vector types
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
-                
+
                 # Map to GLSL vector types
                 if element_type == "float":
                     return f"vec{size}"
@@ -597,9 +629,9 @@ class GLSLCodeGen:
 
     def expression_to_string(self, expr):
         """Convert an expression node to a string representation."""
-        if hasattr(expr, 'value'):
+        if hasattr(expr, "value"):
             return str(expr.value)
-        elif hasattr(expr, 'name'):
+        elif hasattr(expr, "name"):
             return str(expr.name)
         else:
             return self.generate_expression(expr)
@@ -607,13 +639,26 @@ class GLSLCodeGen:
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
         semantic_attrs = [
-            "position", "color", "texcoord", "normal", "tangent", "binormal",
-            "POSITION", "COLOR", "TEXCOORD", "NORMAL", "TANGENT", "BINORMAL",
-            "TEXCOORD0", "TEXCOORD1", "TEXCOORD2", "TEXCOORD3"
+            "position",
+            "color",
+            "texcoord",
+            "normal",
+            "tangent",
+            "binormal",
+            "POSITION",
+            "COLOR",
+            "TEXCOORD",
+            "NORMAL",
+            "TANGENT",
+            "BINORMAL",
+            "TEXCOORD0",
+            "TEXCOORD1",
+            "TEXCOORD2",
+            "TEXCOORD3",
         ]
-        
+
         for attr in attributes:
-            if hasattr(attr, 'name') and attr.name in semantic_attrs:
+            if hasattr(attr, "name") and attr.name in semantic_attrs:
                 return attr.name
         return None
 
@@ -631,12 +676,14 @@ class GLSLCodeGen:
 
     def generate_struct(self, node):
         code = f"struct {node.name} {{\n"
-        
+
         # Generate struct members - handle both old and new AST
         members = getattr(node, "members", [])
         for member in members:
             if isinstance(member, ArrayNode):
-                element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                element_type = getattr(
+                    member, "element_type", getattr(member, "vtype", "float")
+                )
                 if member.size:
                     code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                 else:
@@ -645,33 +692,39 @@ class GLSLCodeGen:
                 # Handle both old and new AST member structures
                 if hasattr(member, "member_type"):
                     # New AST structure - check if it's an ArrayType
-                    if str(type(member.member_type)).find('ArrayType') != -1:
+                    if str(type(member.member_type)).find("ArrayType") != -1:
                         # Handle array types with C-style syntax for struct members
-                        element_type = self.convert_type_node_to_string(member.member_type.element_type)
+                        element_type = self.convert_type_node_to_string(
+                            member.member_type.element_type
+                        )
                         element_type = self.map_type(element_type)
                         if member.member_type.size is not None:
-                            size_str = self.expression_to_string(member.member_type.size)
+                            size_str = self.expression_to_string(
+                                member.member_type.size
+                            )
                             code += f"    {element_type} {member.name}[{size_str}];\n"
                         else:
                             code += f"    {element_type} {member.name}[];\n"
                     else:
                         # Regular type
-                        member_type_str = self.convert_type_node_to_string(member.member_type)
+                        member_type_str = self.convert_type_node_to_string(
+                            member.member_type
+                        )
                         member_type = self.map_type(member_type_str)
                         code += f"    {member_type} {member.name};\n"
                 elif hasattr(member, "vtype"):
-                    # Old AST structure  
+                    # Old AST structure
                     member_type = self.map_type(member.vtype)
                     code += f"    {member_type} {member.name};\n"
                 else:
                     code += f"    float {member.name};\n"
-        
+
         code += "};\n"
         return code
 
     def generate_expression_statement(self, stmt):
         """Generate code for expression statements."""
-        if hasattr(stmt, 'expression'):
+        if hasattr(stmt, "expression"):
             expr = self.generate_expression(stmt.expression)
             return expr
         else:

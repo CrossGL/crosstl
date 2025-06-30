@@ -268,7 +268,7 @@ class HipCodeGen:
         if body:
             self.add_line("{")
             self.indent_level += 1
-            
+
             if hasattr(body, "statements"):
                 # New AST BlockNode structure
                 for stmt in body.statements:
@@ -280,7 +280,7 @@ class HipCodeGen:
             else:
                 # Single statement
                 self.visit(body)
-                
+
             self.indent_level -= 1
             self.add_line("}")
         else:
@@ -306,9 +306,9 @@ class HipCodeGen:
                 param_type = self.map_type(param.vtype)
             else:
                 param_type = "int"
-            
+
             param_name = getattr(param, "name", "param")
-            
+
         return f"{param_type} {param_name}"
 
     def visit_StructNode(self, node: StructNode) -> str:
@@ -333,7 +333,7 @@ class HipCodeGen:
                 member_type = self.map_type(str(member.var_type))
             else:
                 member_type = "float"
-            
+
             self.add_line(f"{member_type} {member.name};")
 
         self.indent_level -= 1

@@ -137,20 +137,24 @@ class CudaCodeGen:
         # Generate parameters - support both old and new AST structures
         params = []
         param_list = getattr(node, "parameters", getattr(node, "params", []))
-        
+
         for param in param_list:
             if hasattr(param, "param_type"):
                 # New AST structure
                 if hasattr(param.param_type, "name"):
-                    param_type = self.convert_crossgl_type_to_cuda(param.param_type.name)
+                    param_type = self.convert_crossgl_type_to_cuda(
+                        param.param_type.name
+                    )
                 else:
-                    param_type = self.convert_crossgl_type_to_cuda(str(param.param_type))
+                    param_type = self.convert_crossgl_type_to_cuda(
+                        str(param.param_type)
+                    )
             elif hasattr(param, "vtype"):
                 # Old AST structure
                 param_type = self.convert_crossgl_type_to_cuda(param.vtype)
             else:
                 param_type = "void"
-            
+
             params.append(f"{param_type} {param.name}")
 
         param_str = ", ".join(params)
@@ -191,15 +195,19 @@ class CudaCodeGen:
             if hasattr(member, "member_type"):
                 # New AST structure
                 if hasattr(member.member_type, "name"):
-                    member_type = self.convert_crossgl_type_to_cuda(member.member_type.name)
+                    member_type = self.convert_crossgl_type_to_cuda(
+                        member.member_type.name
+                    )
                 else:
-                    member_type = self.convert_crossgl_type_to_cuda(str(member.member_type))
+                    member_type = self.convert_crossgl_type_to_cuda(
+                        str(member.member_type)
+                    )
             elif hasattr(member, "vtype"):
                 # Old AST structure
                 member_type = self.convert_crossgl_type_to_cuda(member.vtype)
             else:
                 member_type = "float"
-            
+
             self.emit(f"{member_type} {member.name};")
 
         self.indent_level -= 1
@@ -209,7 +217,7 @@ class CudaCodeGen:
         """Visit variable declaration"""
         # Handle both declaration and usage cases
         var_type = None
-        
+
         # New AST structure
         if hasattr(node, "var_type"):
             if hasattr(node.var_type, "name"):
@@ -279,13 +287,13 @@ class CudaCodeGen:
             func_name = self.visit(node.function)
         else:
             func_name = getattr(node, "name", "unknown")
-        
+
         args = []
         if hasattr(node, "arguments"):
             args = [self.visit(arg) for arg in node.arguments]
         elif hasattr(node, "args"):
             args = [self.visit(arg) for arg in node.args]
-        
+
         args_str = ", ".join(args)
 
         # Convert built-in functions
@@ -306,12 +314,12 @@ class CudaCodeGen:
             array = self.visit(node.array_expr)
         else:
             array = self.visit(node.array)
-        
+
         if hasattr(node, "index_expr"):
             index = self.visit(node.index_expr)
         else:
             index = self.visit(node.index)
-        
+
         return f"{array}[{index}]"
 
     def visit_IfNode(self, node):
@@ -320,7 +328,7 @@ class CudaCodeGen:
         self.emit(f"if ({condition}) {{")
 
         self.indent_level += 1
-        
+
         # Handle then branch
         if hasattr(node, "then_branch"):
             if hasattr(node.then_branch, "statements"):
@@ -331,20 +339,20 @@ class CudaCodeGen:
         elif hasattr(node, "if_body"):
             for stmt in node.if_body:
                 self.visit(stmt)
-                
+
         self.indent_level -= 1
 
         # Handle else branch
         if hasattr(node, "else_branch") and node.else_branch:
             self.emit("} else {")
             self.indent_level += 1
-            
+
             if hasattr(node.else_branch, "statements"):
                 for stmt in node.else_branch.statements:
                     self.visit(stmt)
             else:
                 self.visit(node.else_branch)
-                
+
             self.indent_level -= 1
         elif hasattr(node, "else_body") and node.else_body:
             self.emit("} else {")
@@ -363,11 +371,11 @@ class CudaCodeGen:
                 init_str = self.visit(node.init.expression)
             else:
                 init_str = self.visit(node.init)
-        
+
         condition_str = ""
         if node.condition:
             condition_str = self.visit(node.condition)
-        
+
         update_str = ""
         if node.update:
             update_str = self.visit(node.update)
@@ -375,7 +383,7 @@ class CudaCodeGen:
         self.emit(f"for ({init_str}; {condition_str}; {update_str}) {{")
 
         self.indent_level += 1
-        
+
         # Handle body
         if hasattr(node, "body"):
             if hasattr(node.body, "statements"):
@@ -383,7 +391,7 @@ class CudaCodeGen:
                     self.visit(stmt)
             else:
                 self.visit(node.body)
-        
+
         self.indent_level -= 1
         self.emit("}")
 

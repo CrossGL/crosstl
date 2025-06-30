@@ -40,12 +40,12 @@ class SlangCodeGen:
         else:
             # Handle new AST structure
             result = ""
-            
+
             # Generate structs - handle both old and new AST
             structs = getattr(ast, "structs", [])
             for struct in structs:
                 result += self.generate_struct(struct) + "\n\n"
-            
+
             # Generate global variables - handle both old and new AST
             global_vars = getattr(ast, "global_variables", [])
             for node in global_vars:
@@ -60,12 +60,14 @@ class SlangCodeGen:
                 else:
                     vtype = "float"
                 result += f"{self.convert_type(vtype)} {node.name};\n"
-            
+
             # Generate cbuffers - handle both old and new AST
             cbuffers = getattr(ast, "cbuffers", [])
             for node in cbuffers:
                 if isinstance(node, StructNode):
-                    result += "cbuffer " + self.generate_struct_definition(node) + "\n\n"
+                    result += (
+                        "cbuffer " + self.generate_struct_definition(node) + "\n\n"
+                    )
                 elif hasattr(node, "name") and hasattr(node, "members"):
                     result += f"cbuffer {node.name} {{\n"
                     for member in node.members:
@@ -74,9 +76,11 @@ class SlangCodeGen:
                             member_type = str(member.member_type)
                         else:
                             member_type = getattr(member, "vtype", "float")
-                        result += f"    {self.convert_type(member_type)} {member.name};\n"
+                        result += (
+                            f"    {self.convert_type(member_type)} {member.name};\n"
+                        )
                     result += "};\n\n"
-            
+
             # Generate functions - handle both old and new AST
             functions = getattr(ast, "functions", [])
             for function in functions:
@@ -85,7 +89,7 @@ class SlangCodeGen:
                     qualifier = function.qualifiers[0] if function.qualifiers else None
                 else:
                     qualifier = getattr(function, "qualifier", None)
-                
+
                 if qualifier == "vertex":
                     result += "// Vertex Shader\n"
                     result += self.generate_function(function) + "\n\n"
@@ -94,18 +98,20 @@ class SlangCodeGen:
                     result += self.generate_function(function) + "\n\n"
                 else:
                     result += self.generate_function(function) + "\n\n"
-            
+
             # Handle shader stages (new AST structure)
             if hasattr(ast, "stages") and ast.stages:
                 for stage_type, stage in ast.stages.items():
                     if hasattr(stage, "entry_point"):
-                        stage_name = str(stage_type).split('.')[-1].lower()  # Extract stage name from enum
+                        stage_name = (
+                            str(stage_type).split(".")[-1].lower()
+                        )  # Extract stage name from enum
                         result += f"// {stage_name.title()} Shader\n"
                         result += self.generate_function(stage.entry_point) + "\n\n"
                     if hasattr(stage, "local_functions"):
                         for func in stage.local_functions:
                             result += self.generate_function(func) + "\n\n"
-            
+
             return result
 
     def generate_shader(self, node):
@@ -124,7 +130,7 @@ class SlangCodeGen:
                 qualifier = function.qualifiers[0] if function.qualifiers else None
             else:
                 qualifier = getattr(function, "qualifier", None)
-            
+
             if qualifier == "vertex":
                 result += "// Vertex Shader\n"
                 result += self.generate_function(function) + "\n\n"
@@ -155,17 +161,22 @@ class SlangCodeGen:
                 member_type = self.convert_type(member.vtype)
             else:
                 member_type = "float"
-            
+
             # Handle semantic - get from attributes in new AST
             semantic = None
             if hasattr(member, "semantic"):
                 semantic = member.semantic
             elif hasattr(member, "attributes"):
                 for attr in member.attributes:
-                    if hasattr(attr, "name") and attr.name in ["position", "color", "texcoord", "normal"]:
+                    if hasattr(attr, "name") and attr.name in [
+                        "position",
+                        "color",
+                        "texcoord",
+                        "normal",
+                    ]:
                         semantic = attr.name
                         break
-            
+
             semantic_str = f" : {semantic}" if semantic else ""
             result += f"{self.indent()}{member_type} {member.name}{semantic_str};\n"
 
@@ -175,7 +186,7 @@ class SlangCodeGen:
 
     def generate_struct_definition(self, node):
         result = f"{node.name}\n{{\n"
-        
+
         # Generate struct members - handle both old and new AST
         members = getattr(node, "members", [])
         for member in members:
@@ -185,7 +196,7 @@ class SlangCodeGen:
             else:
                 member_type = self.convert_type(getattr(member, "vtype", "float"))
             result += f"    {member_type} {member.name};\n"
-        
+
         result += "};"
         return result
 
@@ -198,7 +209,7 @@ class SlangCodeGen:
                 ret_type = self.convert_type(str(node.return_type))
         else:
             ret_type = "void"
-        
+
         # Handle semantic
         semantic = None
         if hasattr(node, "semantic"):
@@ -208,7 +219,7 @@ class SlangCodeGen:
                 if hasattr(attr, "name"):
                     semantic = attr.name
                     break
-        
+
         semantic_str = f" : {semantic}" if semantic else ""
 
         # Handle parameters - support both old and new AST

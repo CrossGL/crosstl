@@ -144,7 +144,7 @@ class RustCodeGen:
                 code += f"static {node.name}: {self.map_type(var_type)} = Default::default();\n"
 
         # Generate cbuffers/constants as structs
-        cbuffers = getattr(ast, 'cbuffers', None) or getattr(ast, 'constants', [])
+        cbuffers = getattr(ast, "cbuffers", None) or getattr(ast, "constants", [])
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -157,7 +157,7 @@ class RustCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
-            
+
             if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
@@ -174,9 +174,11 @@ class RustCodeGen:
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = str(stage_type).split('.')[-1].lower()
+                    stage_name = str(stage_type).split(".")[-1].lower()
                     code += f"// {stage_name.title()} Shader\n"
-                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                    code += self.generate_function(
+                        stage.entry_point, shader_type=stage_name
+                    )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
                         code += self.generate_function(func)
@@ -191,7 +193,9 @@ class RustCodeGen:
         members = getattr(node, "members", [])
         for member in members:
             if isinstance(member, ArrayNode):
-                element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                element_type = getattr(
+                    member, "element_type", getattr(member, "vtype", "float")
+                )
                 if member.size:
                     code += f"    pub {member.name}: [{self.map_type_to_rust(element_type)}; {member.size}],\n"
                 else:
@@ -202,22 +206,20 @@ class RustCodeGen:
                     # New AST structure
                     member_type = self.convert_type_node_to_string(member.member_type)
                 elif hasattr(member, "vtype"):
-                    # Old AST structure  
+                    # Old AST structure
                     member_type = member.vtype
                 else:
                     member_type = "float"
-                
+
                 # Handle semantic - get from attributes in new AST
                 semantic = None
                 if hasattr(member, "semantic"):
                     semantic = member.semantic
                 elif hasattr(member, "attributes"):
                     semantic = self.extract_semantic_from_attributes(member.attributes)
-                
+
                 semantic_comment = (
-                    f"  // {self.map_semantic(semantic)}"
-                    if semantic
-                    else ""
+                    f"  // {self.map_semantic(semantic)}" if semantic else ""
                 )
                 code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
 
@@ -227,14 +229,14 @@ class RustCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         # Handle different TypeNode types
-        if hasattr(type_node, 'name'):
+        if hasattr(type_node, "name"):
             # PrimitiveType
             return type_node.name
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             # VectorType - map to proper Rust vector types
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = type_node.size
-            
+
             # Map to Rust vector types
             if element_type == "float":
                 return f"vec{size}"  # This will be mapped to Vec{size}<f32> later
@@ -244,7 +246,7 @@ class RustCodeGen:
                 return f"uvec{size}"  # This will be mapped to Vec{size}<u32> later
             else:
                 return f"{element_type}{size}"
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'rows'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             # MatrixType
             element_type = self.convert_type_node_to_string(type_node.element_type)
             return f"mat{type_node.rows}x{type_node.cols}"  # Will be mapped later
@@ -255,28 +257,41 @@ class RustCodeGen:
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
         semantic_attrs = [
-            "position", "color", "texcoord", "normal", "tangent", "binormal",
-            "POSITION", "COLOR", "TEXCOORD", "NORMAL", "TANGENT", "BINORMAL",
-            "TEXCOORD0", "TEXCOORD1", "TEXCOORD2", "TEXCOORD3"
+            "position",
+            "color",
+            "texcoord",
+            "normal",
+            "tangent",
+            "binormal",
+            "POSITION",
+            "COLOR",
+            "TEXCOORD",
+            "NORMAL",
+            "TANGENT",
+            "BINORMAL",
+            "TEXCOORD0",
+            "TEXCOORD1",
+            "TEXCOORD2",
+            "TEXCOORD3",
         ]
-        
+
         for attr in attributes:
-            if hasattr(attr, 'name') and attr.name in semantic_attrs:
+            if hasattr(attr, "name") and attr.name in semantic_attrs:
                 return attr.name
         return None
 
     def map_type_to_rust(self, type_str):
         """Enhanced type mapping for Rust."""
         # Handle vector types first
-        if type_str.startswith('float') and len(type_str) > 5:
+        if type_str.startswith("float") and len(type_str) > 5:
             size = type_str[5:]
             if size.isdigit():
                 return f"Vec{size}<f32>"
-        elif type_str.startswith('int') and len(type_str) > 3:
+        elif type_str.startswith("int") and len(type_str) > 3:
             size = type_str[3:]
             if size.isdigit():
                 return f"Vec{size}<i32>"
-                
+
         # Standard type mapping
         type_map = {
             "void": "()",
@@ -305,7 +320,7 @@ class RustCodeGen:
 
     def generate_cbuffers(self, ast):
         code = ""
-        cbuffers = getattr(ast, 'cbuffers', None) or getattr(ast, 'constants', [])
+        cbuffers = getattr(ast, "cbuffers", None) or getattr(ast, "constants", [])
         for node in cbuffers:
             if isinstance(node, StructNode):
                 code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
@@ -353,7 +368,7 @@ class RustCodeGen:
                 param_type = p.vtype
             else:
                 param_type = "float"
-            
+
             params.append(f"{p.name}: {self.map_type(param_type)}")
 
         params_str = ", ".join(params) if params else ""

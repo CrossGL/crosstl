@@ -70,7 +70,7 @@ class HLSLCodeGen:
 
     def generate(self, ast):
         code = "\n"
-        
+
         # Generate structs - handle both old and new AST
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -79,12 +79,16 @@ class HLSLCodeGen:
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in HLSL
-                            code += f"    {self.map_type(element_type)}[] {member.name};\n"
+                            code += (
+                                f"    {self.map_type(element_type)}[] {member.name};\n"
+                            )
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
@@ -98,17 +102,22 @@ class HLSLCodeGen:
                             member_type = self.map_type(member.vtype)
                         else:
                             member_type = "float"
-                        
+
                         # Handle semantic - get from attributes in new AST
                         semantic = None
                         if hasattr(member, "semantic"):
                             semantic = member.semantic
                         elif hasattr(member, "attributes"):
                             for attr in member.attributes:
-                                if hasattr(attr, "name") and attr.name in ["position", "color", "texcoord", "normal"]:
+                                if hasattr(attr, "name") and attr.name in [
+                                    "position",
+                                    "color",
+                                    "texcoord",
+                                    "normal",
+                                ]:
                                     semantic = attr.name
                                     break
-                        
+
                         code += f"    {member_type} {member.name}{self.map_semantic(semantic)};\n"
                 code += "};\n"
 
@@ -125,7 +134,7 @@ class HLSLCodeGen:
                 vtype = node.vtype
             else:
                 vtype = "float"
-            
+
             if vtype in ["sampler2D", "samplerCube"]:
                 code += "// Texture Samplers\n"
                 code += f"{self.map_type(vtype)} {node.name} :register(t{i});\n"
@@ -149,7 +158,7 @@ class HLSLCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
-            
+
             if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
@@ -166,9 +175,13 @@ class HLSLCodeGen:
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = str(stage_type).split('.')[-1].lower()  # Extract stage name from enum
+                    stage_name = (
+                        str(stage_type).split(".")[-1].lower()
+                    )  # Extract stage name from enum
                     code += f"// {stage_name.title()} Shader\n"
-                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                    code += self.generate_function(
+                        stage.entry_point, shader_type=stage_name
+                    )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
                         code += self.generate_function(func)
@@ -184,36 +197,50 @@ class HLSLCodeGen:
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in cbuffers usually not supported, so we'll make it fixed size
-                            code += f"    {self.map_type(element_type)} {member.name}[1];\n"
+                            code += (
+                                f"    {self.map_type(element_type)} {member.name}[1];\n"
+                            )
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(str(member.member_type))
                         else:
-                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                            member_type = self.map_type(
+                                getattr(member, "vtype", "float")
+                            )
                         code += f"    {member_type} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, "name") and hasattr(node, "members"):  # Generic cbuffer handling
+            elif hasattr(node, "name") and hasattr(
+                node, "members"
+            ):  # Generic cbuffer handling
                 code += f"cbuffer {node.name} : register(b{i}) {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in cbuffers usually not supported
-                            code += f"    {self.map_type(element_type)} {member.name}[1];\n"
+                            code += (
+                                f"    {self.map_type(element_type)} {member.name}[1];\n"
+                            )
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(str(member.member_type))
                         else:
-                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                            member_type = self.map_type(
+                                getattr(member, "vtype", "float")
+                            )
                         code += f"    {member_type} {member.name};\n"
                 code += "};\n"
         return code
@@ -221,7 +248,7 @@ class HLSLCodeGen:
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
         code += "  " * indent
-        
+
         # Handle parameters - support both old and new AST
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
@@ -237,7 +264,7 @@ class HLSLCodeGen:
                 param_type = self.map_type(p.vtype)
             else:
                 param_type = "float"
-            
+
             # Handle semantic
             semantic = None
             if hasattr(p, "semantic"):
@@ -247,9 +274,9 @@ class HLSLCodeGen:
                     if hasattr(attr, "name"):
                         semantic = attr.name
                         break
-            
+
             params.append(f"{param_type} {p.name} {self.map_semantic(semantic)}")
-        
+
         params_str = ", ".join(params)
         shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
 
@@ -284,7 +311,7 @@ class HLSLCodeGen:
             # Old AST structure
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
-        
+
         code += "  " * indent + "}\n\n"
         return code
 

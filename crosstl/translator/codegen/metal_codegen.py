@@ -153,7 +153,7 @@ class MetalCodeGen:
         code += "#include <metal_stdlib>\n"
         code += "using namespace metal;\n"
         code += "\n"
-        
+
         # Generate structs - handle both old and new AST
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -163,7 +163,9 @@ class MetalCodeGen:
                 for member in members:
                     if isinstance(member, ArrayNode):
                         # Handle array types in structs
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
@@ -172,30 +174,50 @@ class MetalCodeGen:
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
-                            # New AST structure
-                            if hasattr(member.member_type, "name"):
-                                member_type = self.map_type(member.member_type.name)
+                            # New AST structure - check if it's an ArrayType
+                            if str(type(member.member_type)).find("ArrayType") != -1:
+                                # Handle array types with C-style syntax for struct members
+                                element_type = self.convert_type_node_to_string(
+                                    member.member_type.element_type
+                                )
+                                element_type = self.map_type(element_type)
+                                if member.member_type.size is not None:
+                                    size_str = self.expression_to_string(
+                                        member.member_type.size
+                                    )
+                                    member_type = f"{element_type}[{size_str}]"
+                                else:
+                                    member_type = f"array<{element_type}>"
                             else:
-                                member_type = self.map_type(str(member.member_type))
+                                # Regular type
+                                member_type_str = self.convert_type_node_to_string(
+                                    member.member_type
+                                )
+                                member_type = self.map_type(member_type_str)
                         elif hasattr(member, "vtype"):
                             # Old AST structure
                             member_type = self.map_type(member.vtype)
                         else:
                             member_type = "float"
-                        
+
                         # Handle semantic - get from attributes in new AST
                         semantic = None
                         if hasattr(member, "semantic"):
                             semantic = member.semantic
                         elif hasattr(member, "attributes"):
                             for attr in member.attributes:
-                                if hasattr(attr, "name") and attr.name in ["position", "color", "texcoord", "normal"]:
+                                if hasattr(attr, "name") and attr.name in [
+                                    "position",
+                                    "color",
+                                    "texcoord",
+                                    "normal",
+                                ]:
                                     semantic = attr.name
                                     break
-                        
+
                         code += f"    {member_type} {member.name} {self.map_semantic(semantic)};\n"
                 code += "};\n"
-        
+
         # Generate global variables - handle both old and new AST
         global_vars = getattr(ast, "global_variables", [])
         for i, node in enumerate(global_vars):
@@ -209,14 +231,14 @@ class MetalCodeGen:
                 vtype = node.vtype
             else:
                 vtype = "float"
-            
+
             if vtype in ["sampler2D", "samplerCube"]:
                 self.texture_variables.append((node, i))
             elif vtype in ["sampler"]:
                 self.sampler_variables.append((node, i))
             else:
                 code += f"{self.map_type(vtype)} {node.name};\n"
-        
+
         # Generate cbuffers - handle both old and new AST
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
@@ -231,7 +253,7 @@ class MetalCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
-            
+
             if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
@@ -248,9 +270,13 @@ class MetalCodeGen:
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = str(stage_type).split('.')[-1].lower()  # Extract stage name from enum
+                    stage_name = (
+                        str(stage_type).split(".")[-1].lower()
+                    )  # Extract stage name from enum
                     code += f"// {stage_name.title()} Shader\n"
-                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                    code += self.generate_function(
+                        stage.entry_point, shader_type=stage_name
+                    )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
                         code += self.generate_function(func)
@@ -266,7 +292,9 @@ class MetalCodeGen:
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
@@ -277,14 +305,20 @@ class MetalCodeGen:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(str(member.member_type))
                         else:
-                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                            member_type = self.map_type(
+                                getattr(member, "vtype", "float")
+                            )
                         code += f"    {member_type} {member.name};\n"
                 code += "};\n"
-            elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode handling
+            elif hasattr(node, "name") and hasattr(
+                node, "members"
+            ):  # CbufferNode handling
                 code += f"{node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
                         else:
@@ -295,10 +329,12 @@ class MetalCodeGen:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(str(member.member_type))
                         else:
-                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                            member_type = self.map_type(
+                                getattr(member, "vtype", "float")
+                            )
                         code += f"    {member_type} {member.name};\n"
                 code += "};\n"
-        
+
         for i, node in enumerate(cbuffers):
             if isinstance(node, StructNode) or hasattr(node, "name"):
                 code += f"constant {node.name} &{node.name} [[buffer({i})]];\n"
@@ -307,7 +343,7 @@ class MetalCodeGen:
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
         code += "  " * indent
-        
+
         # Handle parameters - support both old and new AST
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
@@ -323,9 +359,9 @@ class MetalCodeGen:
                 param_type = self.map_type(p.vtype)
             else:
                 param_type = "float"
-            
+
             params.append(f"{param_type} {p.name} [[stage_in]]")
-        
+
         params_str = ", ".join(params)
 
         # Handle return type - support both old and new AST
@@ -342,7 +378,9 @@ class MetalCodeGen:
         elif shader_type == "fragment":
             if self.texture_variables:
                 for texture_variable, i in self.texture_variables:
-                    params_str += f" , texture2d<float> {texture_variable.name} [[texture({i})]]"
+                    params_str += (
+                        f" , texture2d<float> {texture_variable.name} [[texture({i})]]"
+                    )
             if self.sampler_variables:
                 for sampler_variable, i in self.sampler_variables:
                     params_str += f" , sampler {sampler_variable.name} [[sampler({i})]]"
@@ -371,14 +409,24 @@ class MetalCodeGen:
             # Old AST structure
             for stmt in body:
                 code += self.generate_statement(stmt, 1)
-        
+
         code += "}\n\n"
         return code
 
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
-            return f"{indent_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
+            # Handle both old and new AST variable structures
+            if hasattr(stmt, "var_type"):
+                # New AST structure
+                var_type = self.convert_type_node_to_string(stmt.var_type)
+            elif hasattr(stmt, "vtype"):
+                # Old AST structure
+                var_type = stmt.vtype
+            else:
+                var_type = "float"
+
+            return f"{indent_str}{self.map_type(var_type)} {stmt.name};\n"
         elif isinstance(stmt, ArrayNode):
             # Improved array node handling
             element_type = self.map_type(stmt.element_type)
@@ -396,14 +444,34 @@ class MetalCodeGen:
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
         elif isinstance(stmt, ReturnNode):
-            code = ""
-            for i, return_stmt in enumerate(stmt.value):
-                code += f"{self.generate_expression(return_stmt)}"
-                if i < len(stmt.value) - 1:
-                    code += ", "
-            return f"{indent_str}return {code};\n"
+            if isinstance(stmt.value, list):
+                # Multiple return values
+                code = ""
+                for i, return_stmt in enumerate(stmt.value):
+                    code += f"{self.generate_expression(return_stmt)}"
+                    if i < len(stmt.value) - 1:
+                        code += ", "
+                return f"{indent_str}return {code};\n"
+            else:
+                # Single return value
+                return f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+        elif hasattr(stmt, "__class__") and "ExpressionStatementNode" in str(
+            type(stmt)
+        ):
+            # Handle ExpressionStatementNode
+            expr_code = self.generate_expression_statement(stmt)
+            return f"{indent_str}{expr_code};\n"
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
+    def generate_expression_statement(self, stmt):
+        """Generate code for expression statements."""
+        if hasattr(stmt, "expression"):
+            expr = self.generate_expression(stmt.expression)
+            return expr
+        else:
+            # Fallback for direct expression
+            return self.generate_expression(stmt)
 
     def generate_assignment(self, node):
         lhs = self.generate_expression(node.left)
@@ -545,19 +613,19 @@ class MetalCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         # Handle different TypeNode types
-        if hasattr(type_node, 'name'):
+        if hasattr(type_node, "name"):
             # PrimitiveType or NamedType
             return type_node.name
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             # Check if it's VectorType vs ArrayType
-            if hasattr(type_node, 'rows'):
+            if hasattr(type_node, "rows"):
                 # MatrixType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.rows == type_node.cols:
                     return f"float{type_node.rows}x{type_node.rows}"
                 else:
                     return f"float{type_node.cols}x{type_node.rows}"
-            elif str(type(type_node)).find('ArrayType') != -1:
+            elif str(type(type_node)).find("ArrayType") != -1:
                 # ArrayType - handle C-style arrays
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
@@ -573,7 +641,7 @@ class MetalCodeGen:
                 # VectorType - map to proper Metal vector types
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
-                
+
                 # Map to Metal vector types
                 if element_type == "float":
                     return f"float{size}"
@@ -591,9 +659,9 @@ class MetalCodeGen:
 
     def expression_to_string(self, expr):
         """Convert an expression node to a string representation."""
-        if hasattr(expr, 'value'):
+        if hasattr(expr, "value"):
             return str(expr.value)
-        elif hasattr(expr, 'name'):
+        elif hasattr(expr, "name"):
             return str(expr.name)
         else:
             return self.generate_expression(expr)
@@ -602,13 +670,13 @@ class MetalCodeGen:
         """Map types to Metal equivalents, handling both strings and TypeNode objects."""
         if vtype is None:
             return "float"
-        
+
         # Handle TypeNode objects
-        if hasattr(vtype, 'name') or hasattr(vtype, 'element_type'):
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
-        
+
         # Handle array types
         if "[" in vtype_str and "]" in vtype_str:
             base_type, size = parse_array_type(vtype_str)

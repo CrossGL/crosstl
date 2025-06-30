@@ -157,7 +157,7 @@ class MojoCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
-            
+
             if qualifier == "vertex":
                 code += "# Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
@@ -174,9 +174,13 @@ class MojoCodeGen:
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = str(stage_type).split('.')[-1].lower()  # Extract stage name from enum
+                    stage_name = (
+                        str(stage_type).split(".")[-1].lower()
+                    )  # Extract stage name from enum
                     code += f"# {stage_name.title()} Shader\n"
-                    code += self.generate_function(stage.entry_point, shader_type=stage_name)
+                    code += self.generate_function(
+                        stage.entry_point, shader_type=stage_name
+                    )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
                         code += self.generate_function(func)
@@ -186,14 +190,14 @@ class MojoCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         # Handle different TypeNode types
-        if hasattr(type_node, 'name'):
+        if hasattr(type_node, "name"):
             # PrimitiveType
             return type_node.name
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'size'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             # VectorType - map to proper Mojo vector types
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = type_node.size
-            
+
             # Map to Mojo vector types
             if element_type == "float":
                 return f"vec{size}"  # This will be mapped to SIMD[DType.float32, {size}] later
@@ -203,7 +207,7 @@ class MojoCodeGen:
                 return f"uvec{size}"  # This will be mapped to SIMD[DType.uint32, {size}] later
             else:
                 return f"{element_type}{size}"
-        elif hasattr(type_node, 'element_type') and hasattr(type_node, 'rows'):
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             # MatrixType
             element_type = self.convert_type_node_to_string(type_node.element_type)
             return f"mat{type_node.rows}x{type_node.cols}"  # Will be mapped later
@@ -214,13 +218,26 @@ class MojoCodeGen:
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
         semantic_attrs = [
-            "position", "color", "texcoord", "normal", "tangent", "binormal",
-            "POSITION", "COLOR", "TEXCOORD", "NORMAL", "TANGENT", "BINORMAL",
-            "TEXCOORD0", "TEXCOORD1", "TEXCOORD2", "TEXCOORD3"
+            "position",
+            "color",
+            "texcoord",
+            "normal",
+            "tangent",
+            "binormal",
+            "POSITION",
+            "COLOR",
+            "TEXCOORD",
+            "NORMAL",
+            "TANGENT",
+            "BINORMAL",
+            "TEXCOORD0",
+            "TEXCOORD1",
+            "TEXCOORD2",
+            "TEXCOORD3",
         ]
-        
+
         for attr in attributes:
-            if hasattr(attr, 'name') and attr.name in semantic_attrs:
+            if hasattr(attr, "name") and attr.name in semantic_attrs:
                 return attr.name
         return None
 
@@ -231,7 +248,9 @@ class MojoCodeGen:
         members = getattr(node, "members", [])
         for member in members:
             if isinstance(member, ArrayNode):
-                element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                element_type = getattr(
+                    member, "element_type", getattr(member, "vtype", "float")
+                )
                 if member.size:
                     code += f"    var {member.name}: StaticTuple[{self.map_type(element_type)}, {member.size}]\n"
                 else:
@@ -246,18 +265,16 @@ class MojoCodeGen:
                     member_type = member.vtype
                 else:
                     member_type = "float"
-                
+
                 # Handle semantic - get from attributes in new AST
                 semantic = None
                 if hasattr(member, "semantic"):
                     semantic = member.semantic
                 elif hasattr(member, "attributes"):
                     semantic = self.extract_semantic_from_attributes(member.attributes)
-                
+
                 semantic_comment = (
-                    f"  # {self.map_semantic(semantic)}"
-                    if semantic
-                    else ""
+                    f"  # {self.map_semantic(semantic)}" if semantic else ""
                 )
                 code += f"    var {member.name}: {self.map_type(member_type)}{semantic_comment}\n"
 
@@ -273,7 +290,9 @@ class MojoCodeGen:
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    var {member.name}: StaticTuple[{self.map_type(element_type)}, {member.size}]\n"
                         else:
@@ -283,14 +302,18 @@ class MojoCodeGen:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(str(member.member_type))
                         else:
-                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                            member_type = self.map_type(
+                                getattr(member, "vtype", "float")
+                            )
                         code += f"    var {member.name}: {member_type}\n"
                 code += "\n"
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
                 code += f"@value\nstruct {node.name}:\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
-                        element_type = getattr(member, "element_type", getattr(member, "vtype", "float"))
+                        element_type = getattr(
+                            member, "element_type", getattr(member, "vtype", "float")
+                        )
                         if member.size:
                             code += f"    var {member.name}: StaticTuple[{self.map_type(element_type)}, {member.size}]\n"
                         else:
@@ -300,7 +323,9 @@ class MojoCodeGen:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(str(member.member_type))
                         else:
-                            member_type = self.map_type(getattr(member, "vtype", "float"))
+                            member_type = self.map_type(
+                                getattr(member, "vtype", "float")
+                            )
                         code += f"    var {member.name}: {member_type}\n"
                 code += "\n"
         return code
@@ -321,21 +346,19 @@ class MojoCodeGen:
                 param_type = p.vtype
             else:
                 param_type = "float"
-            
+
             # Handle semantic
             semantic = None
             if hasattr(p, "semantic"):
                 semantic = p.semantic
             elif hasattr(p, "attributes"):
                 semantic = self.extract_semantic_from_attributes(p.attributes)
-            
-            param_semantic = (
-                f"  # {self.map_semantic(semantic)}" if semantic else ""
-            )
+
+            param_semantic = f"  # {self.map_semantic(semantic)}" if semantic else ""
             params.append(f"{p.name}: {self.map_type(param_type)}{param_semantic}")
 
         params_str = ", ".join(params) if params else ""
-        
+
         # Handle return type - support both old and new AST
         if hasattr(func, "return_type"):
             return_type = self.convert_type_node_to_string(func.return_type)
@@ -570,7 +593,7 @@ class MojoCodeGen:
 
     def map_type(self, vtype):
         if vtype:
-            # Handle array types first  
+            # Handle array types first
             if "[" in str(vtype) and "]" in str(vtype):
                 base_type, size = parse_array_type(str(vtype))
                 base_mapped = self.type_mapping.get(base_type, base_type)
