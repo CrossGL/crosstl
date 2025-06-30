@@ -40,6 +40,12 @@ def main():
                 save_shader="output/ComplexShader.cu",
             )
 
+            hip_code = crosstl.translate(
+                "ComplexShader.cgl",
+                backend="hip",
+                save_shader="output/ComplexShader.hip",
+            )
+
             print("Complex shader translation successful!")
         except Exception as e:
             print(f"Warning: Complex shader translation failed: {e}")
@@ -76,6 +82,12 @@ def main():
                 save_shader="output/PerlinNoise.cu",
             )
 
+            hip_code = crosstl.translate(
+                "PerlinNoise.cgl",
+                backend="hip",
+                save_shader="output/PerlinNoise.hip",
+            )
+
             print("Perlin noise shader translation successful!")
         except Exception as e:
             print(f"Warning: Perlin noise shader translation failed: {e}")
@@ -104,6 +116,10 @@ def main():
 
             cuda_code = crosstl.translate(
                 "ArrayTest.cgl", backend="cuda", save_shader="output/ArrayTest.cu"
+            )
+
+            hip_code = crosstl.translate(
+                "ArrayTest.cgl", backend="hip", save_shader="output/ArrayTest.hip"
             )
 
             print("Array test shader translation successful!")
@@ -135,6 +151,12 @@ def main():
             "SimpleShader.cgl",
             backend="cuda",
             save_shader="output/SimpleShader.cu",
+        )
+
+        hip_code = crosstl.translate(
+            "SimpleShader.cgl",
+            backend="hip",
+            save_shader="output/SimpleShader.hip",
         )
 
         print("Simple shader translation successful!")
