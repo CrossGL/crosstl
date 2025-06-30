@@ -41,6 +41,7 @@ from .ast import (
     WhileNode,
     WildcardPatternNode,
     create_legacy_shader_node,
+    TernaryOpNode,
 )
 from .lexer import Lexer
 import logging
@@ -738,6 +739,8 @@ class Parser:
             return self.parse_match_statement()
         elif self.current_token[0] == "RETURN":
             return self.parse_return_statement()
+        elif self.current_token[0] == "LET":
+            return self.parse_let_declaration()
         elif self.current_token[0] == "BREAK":
             self.eat("BREAK")
             self.eat("SEMICOLON")
@@ -756,16 +759,65 @@ class Parser:
             self.eat("SEMICOLON")
             return ExpressionStatementNode(expr)
 
+    def parse_let_declaration(self):
+        """Parse Rust-style let declarations: let name = expression;"""
+        self.eat("LET")
+        
+        # Handle mutable declarations (let mut)
+        is_mutable = False
+        if self.current_token[0] == "MUT":
+            is_mutable = True
+            self.eat("MUT")
+        
+        # Variable name
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        
+        # Optional type annotation: let name: type = expr;
+        var_type = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            var_type = self.parse_type()
+        
+        # Assignment (required for let declarations)
+        self.eat("EQUALS")
+        initial_value = self.parse_expression()
+        self.eat("SEMICOLON")
+        
+        # Create VariableNode with let-specific attributes
+        var_node = VariableNode(
+            name=name,
+            var_type=var_type,
+            initial_value=initial_value
+        )
+        
+        # Add mutable flag if needed (for Rust compatibility)
+        if is_mutable:
+            var_node.qualifiers = getattr(var_node, 'qualifiers', []) + ['mut']
+        
+        # Add let flag to distinguish from regular variable declarations
+        var_node.is_let_declaration = True
+        
+        return var_node
+
     def parse_if_statement(self):
-        """Parse if statements."""
+        """Parse if statements with proper else-if chain handling."""
         self.eat("IF")
+        self.eat("LPAREN")
         condition = self.parse_expression()
+        self.eat("RPAREN")
         then_branch = self.parse_statement()
 
         else_branch = None
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
-            else_branch = self.parse_statement()
+            # Check for else-if chain
+            if self.current_token[0] == "IF":
+                # Recursively parse the next if statement as part of the else-if chain
+                else_branch = self.parse_if_statement()
+            else:
+                # Regular else clause
+                else_branch = self.parse_statement()
 
         return IfNode(
             condition=condition, then_branch=then_branch, else_branch=else_branch
@@ -875,7 +927,7 @@ class Parser:
 
     def parse_assignment_expression(self):
         """Parse assignment expressions."""
-        left = self.parse_logical_or_expression()
+        left = self.parse_ternary_expression()
 
         if self.current_token[0] in [
             "EQUALS",
@@ -896,6 +948,19 @@ class Parser:
             return AssignmentNode(left, right, op)
 
         return left
+
+    def parse_ternary_expression(self):
+        """Parse ternary conditional expressions (condition ? true_expr : false_expr)."""
+        condition = self.parse_logical_or_expression()
+
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            true_expr = self.parse_expression()
+            self.eat("COLON")
+            false_expr = self.parse_ternary_expression()
+            return TernaryOpNode(condition, true_expr, false_expr)
+
+        return condition
 
     def parse_logical_or_expression(self):
         """Parse logical OR expressions."""
@@ -1226,8 +1291,8 @@ class Parser:
 
     def is_variable_declaration(self):
         """Check if current position is a variable declaration."""
-        # First check for explicit qualifiers
-        if self.current_token[0] in ["CONST", "STATIC", "MUT"]:
+        # First check for explicit qualifiers including LET
+        if self.current_token[0] in ["CONST", "STATIC", "MUT", "LET"]:
             return True
 
         # For identifiers, we need to look ahead to distinguish variable declarations

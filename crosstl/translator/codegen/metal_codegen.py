@@ -518,7 +518,7 @@ class MetalCodeGen:
         code = f"{indent_str}if ({condition}) {{\n"
 
         # Generate if body - handle BlockNode structure
-        if_body = node.if_body
+        if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
         if hasattr(if_body, "statements"):
             # New AST BlockNode structure
             for stmt in if_body.statements:
@@ -530,34 +530,66 @@ class MetalCodeGen:
 
         code += f"{indent_str}}}"
 
-        # Generate else if conditions
-        if hasattr(node, "else_if_conditions") and node.else_if_conditions:
-            for else_if_condition, else_if_body in zip(
-                node.else_if_conditions, node.else_if_bodies
-            ):
-                code += f" else if ({self.generate_expression(else_if_condition)}) {{\n"
-                # Handle BlockNode for else if body
-                if hasattr(else_if_body, "statements"):
-                    for stmt in else_if_body.statements:
+        # Handle else branch - check if it's another if statement (else-if chain)
+        else_branch = getattr(node, "else_branch", None)
+        if else_branch:
+            # Check if else branch is another IfNode (else-if chain)
+            if hasattr(else_branch, '__class__') and 'If' in str(else_branch.__class__):
+                # Generate else if by recursively generating the nested if with else if prefix
+                elif_condition = self.generate_expression(
+                    else_branch.condition if hasattr(else_branch, "condition") else else_branch.if_condition
+                )
+                code += f" else if ({elif_condition}) {{\n"
+                
+                # Generate elif body
+                elif_body = getattr(else_branch, "then_branch", getattr(else_branch, "if_body", None))
+                if hasattr(elif_body, "statements"):
+                    for stmt in elif_body.statements:
                         code += self.generate_statement(stmt, indent + 1)
-                elif isinstance(else_if_body, list):
-                    for stmt in else_if_body:
+                elif isinstance(elif_body, list):
+                    for stmt in elif_body:
                         code += self.generate_statement(stmt, indent + 1)
+                
                 code += f"{indent_str}}}"
-
-        # Generate else body
-        if hasattr(node, "else_body") and node.else_body:
-            code += " else {\n"
-            else_body = node.else_body
-            if hasattr(else_body, "statements"):
-                # New AST BlockNode structure
-                for stmt in else_body.statements:
-                    code += self.generate_statement(stmt, indent + 1)
-            elif isinstance(else_body, list):
-                # Old AST structure
-                for stmt in else_body:
-                    code += self.generate_statement(stmt, indent + 1)
-            code += f"{indent_str}}}"
+                
+                # Recursively handle any remaining else-if chain
+                nested_else = getattr(else_branch, "else_branch", None)
+                if nested_else:
+                    if hasattr(nested_else, '__class__') and 'If' in str(nested_else.__class__):
+                        # Another else if - recursively handle
+                        remaining_code = self.generate_if(nested_else, indent)
+                        # Remove the "if" prefix and replace with "else if"
+                        remaining_lines = remaining_code.split('\n')
+                        if remaining_lines[0].strip().startswith('if ('):
+                            remaining_lines[0] = remaining_lines[0].replace('if (', ' else if (', 1)
+                        code += '\n'.join(remaining_lines[1:])  # Skip first line as we already handled it
+                    else:
+                        # Final else clause
+                        code += " else {\n"
+                        if hasattr(nested_else, "statements"):
+                            for stmt in nested_else.statements:
+                                code += self.generate_statement(stmt, indent + 1)
+                        elif isinstance(nested_else, list):
+                            for stmt in nested_else:
+                                code += self.generate_statement(stmt, indent + 1)
+                        else:
+                            code += self.generate_statement(nested_else, indent + 1)
+                        code += f"{indent_str}}}"
+            else:
+                # Regular else clause
+                code += " else {\n"
+                if hasattr(else_branch, "statements"):
+                    # New AST BlockNode structure
+                    for stmt in else_branch.statements:
+                        code += self.generate_statement(stmt, indent + 1)
+                elif isinstance(else_branch, list):
+                    # Old AST structure
+                    for stmt in else_branch:
+                        code += self.generate_statement(stmt, indent + 1)
+                else:
+                    # Single statement
+                    code += self.generate_statement(else_branch, indent + 1)
+                code += f"{indent_str}}}"
 
         code += "\n"
         return code
@@ -569,11 +601,9 @@ class MetalCodeGen:
             :-1
         ]  # Remove trailing semicolon
 
-        condition = self.generate_statement(node.condition, 0).strip()[
-            :-1
-        ]  # Remove trailing semicolon
+        condition = self.generate_expression(node.condition)
 
-        update = self.generate_statement(node.update, 0).strip()[:-1]
+        update = self.generate_expression(node.update)
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
 
@@ -594,7 +624,9 @@ class MetalCodeGen:
         return code
 
     def generate_expression(self, expr):
-        if isinstance(expr, str):
+        if expr is None:
+            return ""
+        elif isinstance(expr, str):
             return expr
         elif isinstance(expr, int) or isinstance(expr, float):
             return str(expr)
@@ -724,8 +756,8 @@ class MetalCodeGen:
                     if isinstance(type_node.size, int):
                         return f"{element_type}[{type_node.size}]"
                     else:
-                        # Size is an expression node
-                        size_str = self.expression_to_string(type_node.size)
+                        # Size is an expression node - prevent infinite recursion
+                        size_str = self.safe_expression_to_string(type_node.size)
                         return f"{element_type}[{size_str}]"
                 else:
                     return f"{element_type}[]"
@@ -749,14 +781,23 @@ class MetalCodeGen:
             # Fallback
             return str(type_node)
 
-    def expression_to_string(self, expr):
-        """Convert an expression node to a string representation."""
+    def safe_expression_to_string(self, expr):
+        """Convert an expression node to a string representation safely (avoid infinite recursion)."""
         if hasattr(expr, "value"):
             return str(expr.value)
         elif hasattr(expr, "name"):
             return str(expr.name)
+        elif isinstance(expr, int) or isinstance(expr, float):
+            return str(expr)
+        elif isinstance(expr, str):
+            return expr
         else:
-            return self.generate_expression(expr)
+            # Fallback - avoid calling generate_expression to prevent infinite recursion
+            return str(expr)
+
+    def expression_to_string(self, expr):
+        """Convert an expression node to a string representation."""
+        return self.safe_expression_to_string(expr)
 
     def map_type(self, vtype):
         """Map types to Metal equivalents, handling both strings and TypeNode objects."""

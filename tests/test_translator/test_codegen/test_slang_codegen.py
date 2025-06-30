@@ -8,7 +8,7 @@ from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 def tokenize_code(code: str) -> List:
     """Helper function to tokenize code."""
     lexer = Lexer(code)
-    return lexer.tokens
+    return lexer.get_tokens()
 
 
 def parse_code(tokens: List):
