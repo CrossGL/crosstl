@@ -362,4 +362,4 @@ class TestHipCodeGen:
 
         # Check for HIP includes
         assert "#include <hip/hip_runtime.h>" in hip_code
-        assert "#include <hip/hip_runtime_api.h>" in hip_code 
+        assert "#include <hip/hip_runtime_api.h>" in hip_code
