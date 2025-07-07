@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "CrossTL: Universal Programming Language & Translator"
+authors:
+  - family-names: "Niketan"
+    given-names: "Nripesh"
+    affiliation: "CrossGL"
+    orcid: "https://orcid.org/0009-0008-2066-1937"
+  - family-names: "Shrivastava"
+    given-names: "Vaatsalya"
+    affiliation: "CrossGL"
+version: "1.0.0"
+date-released: "2025-07-07"
+doi: "10.5281/zenodo.XXXXXX"  # Will be filled after Zenodo creates DOI
+url: "https://github.com/CrossGL/crosstl"
+repository-code: "https://github.com/CrossGL/crosstl"
+license: Apache-2.0
+keywords:
+  - "programming languages"
+  - "code translation"
+  - "cross-platform development"
+  - "GPU computing"
+  - "compiler"
+abstract: "CrossTL is a revolutionary universal programming language translator built around CrossGL - a powerful intermediate representation language that serves as the bridge between diverse programming languages, platforms, and computing paradigms."

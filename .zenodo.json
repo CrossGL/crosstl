@@ -1,0 +1,47 @@
+{
+    "title": "CrossTL: Universal Programming Language & Translator",
+    "description": "A revolutionary universal programming language translator built around CrossGL - a powerful intermediate representation language for cross-platform development. Supports bidirectional translation between 9 programming languages including Metal, DirectX, OpenGL, Vulkan, Rust, Mojo, CUDA, HIP, and Slang.",
+    "creators": [
+        {
+            "name": "Nripesh Niketan",
+            "affiliation": "CrossGL",
+            "orcid": "0009-0008-2066-1937"
+        },
+        {
+            "name": "Vaatsalya Shrivastava",
+            "affiliation": "CrossGL"
+        }
+    ],
+    "keywords": [
+        "programming languages",
+        "code translation", 
+        "cross-platform development",
+        "GPU computing",
+        "graphics programming",
+        "shader languages",
+        "compiler",
+        "intermediate representation",
+        "universal translator"
+    ],
+    "license": "Apache-2.0",
+    "upload_type": "software",
+    "version": "1.0.0",
+    "language": "eng",
+    "related_identifiers": [
+        {
+            "scheme": "url",
+            "identifier": "https://crossgl.net/",
+            "relation": "isDocumentedBy"
+        },
+        {
+            "scheme": "url", 
+            "identifier": "https://crossgl.github.io/crossgl-docs/",
+            "relation": "isDocumentedBy"
+        }
+    ],
+    "communities": [
+        {"identifier": "programming-languages"},
+        {"identifier": "gpu-computing"},
+        {"identifier": "compiler-research"}
+    ]
+}
