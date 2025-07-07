@@ -11,7 +11,7 @@ authors:
     affiliation: "CrossGL"
 version: "1.0.0"
 date-released: "2025-07-07"
-doi: "10.5281/zenodo.XXXXXX"  # Will be filled after Zenodo creates DOI
+doi: "10.5281/zenodo.15826974"
 url: "https://github.com/CrossGL/crosstl"
 repository-code: "https://github.com/CrossGL/crosstl"
 license: Apache-2.0
