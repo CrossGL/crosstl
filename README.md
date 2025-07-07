@@ -44,6 +44,9 @@
     <a href="https://discord.com/invite/uyRQKXhcyW">
         <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://img.shields.io/discord/1240998239206113330?color=blue&label=%20&logo=discord&logoColor=white">
     </a>
+    <a href="https://doi.org/10.5281/zenodo.15826974">
+        <img class="dark-light" style="padding-right: 4px; padding-bottom: 4px;" src="https://zenodo.org/badge/DOI/10.5281/zenodo.15826974.svg">
+    </a>
 </div>
 <br clear="all" />
 
@@ -580,7 +583,7 @@ Find out more in our [Contributing Guide](CONTRIBUTING.md)
 
 ## License
 
-CrossTL is open-source and licensed under the [MIT License](https://github.com/CrossGL/crosstl/blob/main/LICENSE).
+CrossTL is open-source and licensed under the [Apache License 2.0](https://github.com/CrossGL/crosstl/blob/main/LICENSE).
 
 ---
 
