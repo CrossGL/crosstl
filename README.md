@@ -10,7 +10,7 @@
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/web_icon.png">
     </a>
     <img class="dark-light" width="5%" >
-    <a href="https://crossgl.github.io/crossgl-docs/language.html">
+    <a href="https://crossgl.github.io/crossgl-docs/pages/graphica/language">
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/docs.png">
     </a>
     <img class="dark-light" width="5%" >
@@ -18,7 +18,7 @@
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/written.png">
     </a>
     <img class="dark-light" width="5%" >
-    <a href="https://crossgl.github.io/crossgl-docs/design.html">
+    <a href="https://crossgl.github.io/crossgl-docs/pages/graphica/design">
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/strategic-plan.png">
     </a>
 </div>
@@ -555,7 +555,7 @@ CrossGL provides comprehensive programming language features:
 - **Workgroup operations** for GPU synchronization
 - **Memory barriers** for consistency
 
-For comprehensive language documentation, visit our [Language Reference](https://crossgl.github.io/crossgl-docs/language.html).
+For comprehensive language documentation, visit our [Language Reference](https://crossgl.github.io/crossgl-docs/pages/graphica/language/).
 
 # Contributing
 
