@@ -1,6 +1,6 @@
 """CUDA AST Node definitions"""
 
-from ..base_ast import ASTNode, BaseShaderNode
+from ..base_ast import *
 
 
 class CudaShaderNode(BaseShaderNode):
@@ -75,199 +75,80 @@ CudaUnaryOpNode = BaseUnaryOpNode
 CudaFunctionCallNode = BaseFunctionCallNode
 
 
-class AtomicOperationNode(FunctionCallNode):
+class CudaAtomicOperationNode(BaseAtomicOperationNode):
     """Node representing a CUDA atomic operation"""
 
-    def __init__(self, operation, args):
-        super().__init__(operation, args)
-        self.operation = operation  # atomicAdd, atomicSub, etc.
+    def __repr__(self):
+        return f"CudaAtomicOperationNode(operation={self.operation}, args={len(self.args)})"
+
+
+class CudaSyncNode(BaseSyncNode):
+    """Node representing CUDA synchronization operations"""
 
     def __repr__(self):
-        return f"AtomicOperationNode(operation={self.operation}, args={self.args})"
+        return f"CudaSyncNode(sync_type={self.sync_type}, args={len(self.args)})"
 
 
-class SyncNode(ASTNode):
-    """Node representing synchronization operations"""
-
-    def __init__(self, sync_type, args=None):
-        self.sync_type = sync_type  # __syncthreads, __syncwarp
-        self.args = args or []
-
-    def __repr__(self):
-        return f"SyncNode(sync_type={self.sync_type}, args={self.args})"
+# Use base classes for common access patterns
+CudaMemberAccessNode = BaseMemberAccessNode
+CudaArrayAccessNode = BaseArrayAccessNode
 
 
-class MemberAccessNode(ASTNode):
-    """Node representing member access (dot or arrow operator)"""
-
-    def __init__(self, object, member, is_pointer=False):
-        self.object = object
-        self.member = member
-        self.is_pointer = is_pointer  # True for ->, False for .
-
-    def __repr__(self):
-        op = "->" if self.is_pointer else "."
-        return f"MemberAccessNode(object={self.object}, member={self.member}, operator={op})"
+# Use base classes for control flow
+CudaIfNode = BaseIfNode
+CudaForNode = BaseForNode
+CudaWhileNode = BaseWhileNode
 
 
-class ArrayAccessNode(ASTNode):
-    """Node representing array access"""
+class CudaDoWhileNode(ASTNode):
+    """Node representing a CUDA do-while loop"""
 
-    def __init__(self, array, index):
-        self.array = array
-        self.index = index
-
-    def __repr__(self):
-        return f"ArrayAccessNode(array={self.array}, index={self.index})"
-
-
-class IfNode(ASTNode):
-    """Node representing an if statement"""
-
-    def __init__(self, condition, if_body, else_body=None):
+    def __init__(self, body, condition, **kwargs):
+        super().__init__(NodeType.WHILE, **kwargs)  # Reuse WHILE type
+        self.body = body if isinstance(body, list) else [body] if body else []
         self.condition = condition
-        self.if_body = if_body
-        self.else_body = else_body
+        
+        for stmt in self.body:
+            if stmt:
+                self.add_child(stmt)
+        if condition:
+            self.add_child(condition)
 
     def __repr__(self):
-        return f"IfNode(condition={self.condition}, if_body={self.if_body}, else_body={self.else_body})"
+        return f"CudaDoWhileNode(body={len(self.body)}, condition={self.condition})"
 
 
-class ForNode(ASTNode):
-    """Node representing a for loop"""
-
-    def __init__(self, init, condition, update, body):
-        self.init = init
-        self.condition = condition
-        self.update = update
-        self.body = body
-
-    def __repr__(self):
-        return f"ForNode(init={self.init}, condition={self.condition}, update={self.update}, body={self.body})"
+# Use base classes for common control flow
+CudaSwitchNode = BaseSwitchNode
+CudaCaseNode = BaseCaseNode
+CudaReturnNode = BaseReturnNode
+CudaBreakNode = BaseBreakNode
+CudaContinueNode = BaseContinueNode
 
 
-class WhileNode(ASTNode):
-    """Node representing a while loop"""
-
-    def __init__(self, condition, body):
-        self.condition = condition
-        self.body = body
-
-    def __repr__(self):
-        return f"WhileNode(condition={self.condition}, body={self.body})"
+# Use base classes for common constructs
+CudaVectorConstructorNode = BaseVectorConstructorNode
+CudaTernaryOpNode = BaseTernaryOpNode
 
 
-class DoWhileNode(ASTNode):
-    """Node representing a do-while loop"""
+class CudaCastNode(ASTNode):
+    """Node representing a CUDA type cast"""
 
-    def __init__(self, body, condition):
-        self.body = body
-        self.condition = condition
-
-    def __repr__(self):
-        return f"DoWhileNode(body={self.body}, condition={self.condition})"
-
-
-class SwitchNode(ASTNode):
-    """Node representing a switch statement"""
-
-    def __init__(self, expression, cases, default_case=None):
-        self.expression = expression
-        self.cases = cases
-        self.default_case = default_case
-
-    def __repr__(self):
-        return f"SwitchNode(expression={self.expression}, cases={self.cases}, default_case={self.default_case})"
-
-
-class CaseNode(ASTNode):
-    """Node representing a case in a switch statement"""
-
-    def __init__(self, value, body):
-        self.value = value
-        self.body = body
-
-    def __repr__(self):
-        return f"CaseNode(value={self.value}, body={self.body})"
-
-
-class ReturnNode(ASTNode):
-    """Node representing a return statement"""
-
-    def __init__(self, value=None):
-        self.value = value
-
-    def __repr__(self):
-        return f"ReturnNode(value={self.value})"
-
-
-class BreakNode(ASTNode):
-    """Node representing a break statement"""
-
-    def __repr__(self):
-        return "BreakNode()"
-
-
-class ContinueNode(ASTNode):
-    """Node representing a continue statement"""
-
-    def __repr__(self):
-        return "ContinueNode()"
-
-
-class VectorConstructorNode(ASTNode):
-    """Node representing CUDA vector constructor (make_float4, etc.)"""
-
-    def __init__(self, vector_type, args):
-        self.vector_type = vector_type
-        self.args = args
-
-    def __repr__(self):
-        return (
-            f"VectorConstructorNode(vector_type={self.vector_type}, args={self.args})"
-        )
-
-
-class TernaryOpNode(ASTNode):
-    """Node representing a ternary conditional operator"""
-
-    def __init__(self, condition, true_expr, false_expr):
-        self.condition = condition
-        self.true_expr = true_expr
-        self.false_expr = false_expr
-
-    def __repr__(self):
-        return f"TernaryOpNode(condition={self.condition}, true_expr={self.true_expr}, false_expr={self.false_expr})"
-
-
-class CastNode(ASTNode):
-    """Node representing a type cast"""
-
-    def __init__(self, target_type, expression):
+    def __init__(self, target_type, expression, **kwargs):
+        super().__init__(NodeType.CAST, **kwargs)
         self.target_type = target_type
         self.expression = expression
+        self.add_child(expression)
 
     def __repr__(self):
-        return f"CastNode(target_type={self.target_type}, expression={self.expression})"
+        return f"CudaCastNode(target_type={self.target_type}, expression={self.expression})"
 
 
-class PreprocessorNode(ASTNode):
-    """Node representing preprocessor directives"""
+# Use base classes for common constructs
+CudaPreprocessorNode = BasePreprocessorNode
 
-    def __init__(self, directive, content):
-        self.directive = directive  # include, define, etc.
-        self.content = content
-
-    def __repr__(self):
-        return f"PreprocessorNode(directive={self.directive}, content={self.content})"
-
-
-class CudaBuiltinNode(ASTNode):
+class CudaBuiltinNode(BaseBuiltinVariableNode):
     """Node representing CUDA built-in variables (threadIdx, blockIdx, etc.)"""
-
-    def __init__(self, builtin_name, component=None):
-        self.builtin_name = builtin_name  # threadIdx, blockIdx, etc.
-        self.component = component  # x, y, z component
 
     def __repr__(self):
         if self.component:
@@ -275,35 +156,62 @@ class CudaBuiltinNode(ASTNode):
         return f"CudaBuiltinNode(builtin_name={self.builtin_name})"
 
 
-class TextureAccessNode(ASTNode):
-    """Node representing texture memory access"""
-
-    def __init__(self, texture_name, coordinates):
-        self.texture_name = texture_name
-        self.coordinates = coordinates
+class CudaTextureAccessNode(BaseTextureAccessNode):
+    """Node representing CUDA texture memory access"""
 
     def __repr__(self):
-        return f"TextureAccessNode(texture_name={self.texture_name}, coordinates={self.coordinates})"
+        return f"CudaTextureAccessNode(texture_name={self.texture_name}, coordinates={self.coordinates})"
 
 
-class SharedMemoryNode(VariableNode):
-    """Node representing shared memory variable declaration"""
+class CudaSharedMemoryNode(CudaVariableNode):
+    """Node representing CUDA shared memory variable declaration"""
 
-    def __init__(self, vtype, name, size=None):
-        super().__init__(vtype, name, qualifiers=["__shared__"])
+    def __init__(self, vtype, name, size=None, **kwargs):
+        super().__init__(vtype, name, qualifiers=["__shared__"], **kwargs)
         self.size = size  # For dynamic shared memory
 
     def __repr__(self):
-        return (
-            f"SharedMemoryNode(vtype={self.vtype}, name={self.name}, size={self.size})"
-        )
+        return f"CudaSharedMemoryNode(vtype={self.vtype}, name={self.name}, size={self.size})"
 
 
-class ConstantMemoryNode(VariableNode):
-    """Node representing constant memory variable declaration"""
+class CudaConstantMemoryNode(CudaVariableNode):
+    """Node representing CUDA constant memory variable declaration"""
 
-    def __init__(self, vtype, name, value=None):
-        super().__init__(vtype, name, value, qualifiers=["__constant__"])
+    def __init__(self, vtype, name, value=None, **kwargs):
+        super().__init__(vtype, name, value, qualifiers=["__constant__"], **kwargs)
 
     def __repr__(self):
-        return f"ConstantMemoryNode(vtype={self.vtype}, name={self.name}, value={self.value})"
+        return f"CudaConstantMemoryNode(vtype={self.vtype}, name={self.name}, value={self.value})"
+
+
+# Backward compatibility aliases
+ShaderNode = CudaShaderNode
+FunctionNode = CudaFunctionNode
+KernelNode = CudaKernelNode
+KernelLaunchNode = CudaKernelLaunchNode
+StructNode = CudaStructNode
+VariableNode = CudaVariableNode
+AssignmentNode = CudaAssignmentNode
+BinaryOpNode = CudaBinaryOpNode
+UnaryOpNode = CudaUnaryOpNode
+FunctionCallNode = CudaFunctionCallNode
+AtomicOperationNode = CudaAtomicOperationNode
+SyncNode = CudaSyncNode
+MemberAccessNode = CudaMemberAccessNode
+ArrayAccessNode = CudaArrayAccessNode
+IfNode = CudaIfNode
+ForNode = CudaForNode
+WhileNode = CudaWhileNode
+DoWhileNode = CudaDoWhileNode
+SwitchNode = CudaSwitchNode
+CaseNode = CudaCaseNode
+ReturnNode = CudaReturnNode
+BreakNode = CudaBreakNode
+ContinueNode = CudaContinueNode
+VectorConstructorNode = CudaVectorConstructorNode
+TernaryOpNode = CudaTernaryOpNode
+CastNode = CudaCastNode
+PreprocessorNode = CudaPreprocessorNode
+TextureAccessNode = CudaTextureAccessNode
+SharedMemoryNode = CudaSharedMemoryNode
+ConstantMemoryNode = CudaConstantMemoryNode
