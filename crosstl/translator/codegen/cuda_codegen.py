@@ -420,12 +420,14 @@ class CudaCodeGen:
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
-        type_mapping = {
-            # Basic types
-            "void": "void",
-            "bool": "bool",
+        from ...utils.type_mappings import get_type_mapping
+        type_mapping = get_type_mapping("cuda")
+        
+        # Additional CUDA-specific mappings
+        cuda_specific = {
+            # CUDA type mappings
             "i8": "char",
-            "u8": "unsigned char",
+            "u8": "unsigned char", 
             "i16": "short",
             "u16": "unsigned short",
             "i32": "int",
@@ -434,9 +436,6 @@ class CudaCodeGen:
             "u64": "unsigned long long",
             "f32": "float",
             "f64": "double",
-            "int": "int",
-            "float": "float",
-            "double": "double",
             # Vector types (with generics)
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
@@ -450,21 +449,10 @@ class CudaCodeGen:
             "vec2<u32>": "uint2",
             "vec3<u32>": "uint3",
             "vec4<u32>": "uint4",
-            # Vector types (without generics - for compatibility)
-            "vec2": "float2",
-            "vec3": "float3",
-            "vec4": "float4",
-            "ivec2": "int2",
-            "ivec3": "int3",
-            "ivec4": "int4",
-            "uvec2": "uint2",
-            "uvec3": "uint3",
-            "uvec4": "uint4",
-            # Matrix types
-            "mat2": "float2x2",
-            "mat3": "float3x3",
-            "mat4": "float4x4",
         }
+        
+        # Merge mappings
+        type_mapping.update(cuda_specific)
 
         # Handle arrays
         if crossgl_type.startswith("array<") and crossgl_type.endswith(">"):
@@ -490,20 +478,11 @@ class CudaCodeGen:
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
-        function_mapping = {
-            # Math functions
-            "sqrt": "sqrtf",
-            "pow": "powf",
-            "sin": "sinf",
-            "cos": "cosf",
-            "tan": "tanf",
-            "log": "logf",
-            "exp": "expf",
-            "abs": "fabsf",
-            "min": "fminf",
-            "max": "fmaxf",
-            "floor": "floorf",
-            "ceil": "ceilf",
+        from ...utils.type_mappings import get_function_mapping
+        function_mapping = get_function_mapping("cuda")
+        
+        # Additional CUDA-specific functions
+        cuda_specific = {
             # Vector constructors
             "vec2<f32>": "make_float2",
             "vec3<f32>": "make_float3",
@@ -511,17 +490,11 @@ class CudaCodeGen:
             "vec2<i32>": "make_int2",
             "vec3<i32>": "make_int3",
             "vec4<i32>": "make_int4",
-            # Atomic operations
-            "atomicAdd": "atomicAdd",
-            "atomicSub": "atomicSub",
-            "atomicMax": "atomicMax",
-            "atomicMin": "atomicMin",
-            "atomicExchange": "atomicExch",
-            "atomicCompareExchange": "atomicCAS",
             # Synchronization
             "workgroupBarrier": "__syncthreads",
         }
-
+        
+        function_mapping.update(cuda_specific)
         return function_mapping.get(func_name, func_name)
 
     def visit_cbuffer(self, cbuffer):
