@@ -18,8 +18,8 @@ from .translator.codegen import (
     slang_codegen,
 )
 from .translator.ast import ASTNode
-from .translator_engine import TranslationEngine, get_translation_engine
-from .common.errors import get_error_collector, reset_errors
+
+# Remove problematic imports
 import argparse
 import sys
 import os

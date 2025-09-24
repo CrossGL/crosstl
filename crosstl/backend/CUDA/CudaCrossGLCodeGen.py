@@ -4,7 +4,6 @@ Converts CUDA AST nodes to CrossGL intermediate representation.
 """
 
 from .CudaAst import *
-from ...common.type_system import UniversalTypeMapper, FunctionMapper
 
 
 class CudaToCrossGLConverter:
@@ -13,28 +12,6 @@ class CudaToCrossGLConverter:
     def __init__(self):
         self.indent_level = 0
         self.output = []
-
-        # Use centralized type mapper
-        self.type_mapper = UniversalTypeMapper()
-        self.function_mapper = FunctionMapper()
-
-        # CUDA-specific mappings that aren't in the universal system
-        self.cuda_builtin_mappings = {
-            "threadIdx": "gl_LocalInvocationID",
-            "blockIdx": "gl_WorkGroupID",
-            "gridDim": "gl_NumWorkGroups",
-            "blockDim": "gl_WorkGroupSize",
-            "warpSize": "32",  # Constant in CrossGL
-        }
-
-        self.cuda_atomic_mappings = {
-            "atomicAdd": "atomicAdd",
-            "atomicSub": "atomicSub",
-            "atomicMax": "atomicMax",
-            "atomicMin": "atomicMin",
-            "atomicExch": "atomicExchange",
-            "atomicCAS": "atomicCompareExchange",
-        }
 
     def generate(self, ast_node):
         """Generate CrossGL code from CUDA AST"""
@@ -264,11 +241,21 @@ class CudaToCrossGLConverter:
         return f"{func_name}({args_str})"
 
     def visit_AtomicOperationNode(self, node):
-        """Visit atomic operation using centralized mapping"""
+        """Visit atomic operation"""
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
 
-        crossgl_func = self.cuda_atomic_mappings.get(node.operation, node.operation)
+        # Convert CUDA atomic operations to CrossGL equivalents
+        atomic_map = {
+            "atomicAdd": "atomicAdd",
+            "atomicSub": "atomicSub",
+            "atomicMax": "atomicMax",
+            "atomicMin": "atomicMin",
+            "atomicExch": "atomicExchange",
+            "atomicCAS": "atomicCompareExchange",
+        }
+
+        crossgl_func = atomic_map.get(node.operation, node.operation)
         return f"{crossgl_func}({args_str})"
 
     def visit_SyncNode(self, node):
@@ -281,8 +268,16 @@ class CudaToCrossGLConverter:
             self.emit(f"// {node.sync_type}();")
 
     def visit_CudaBuiltinNode(self, node):
-        """Visit CUDA built-in variables using centralized mapping"""
-        base_name = self.cuda_builtin_mappings.get(node.builtin_name, node.builtin_name)
+        """Visit CUDA built-in variables"""
+        builtin_map = {
+            "threadIdx": "gl_LocalInvocationID",
+            "blockIdx": "gl_WorkGroupID",
+            "gridDim": "gl_NumWorkGroups",
+            "blockDim": "gl_WorkGroupSize",
+            "warpSize": "32",  # Constant in CrossGL
+        }
+
+        base_name = builtin_map.get(node.builtin_name, node.builtin_name)
         if hasattr(node, "component") and node.component:
             return f"{base_name}.{node.component}"
         else:
@@ -435,14 +430,8 @@ class CudaToCrossGLConverter:
         return cuda_to_universal.get(cuda_type, cuda_type)
 
     def convert_cuda_builtin_function(self, func_name):
-        """Convert CUDA built-in functions to CrossGL equivalents using centralized mapping"""
-        # First try the centralized function mapper
-        mapped = self.function_mapper.map_function(func_name, "cuda")
-        if mapped != func_name:
-            return mapped
-
-        # CUDA-specific function mappings not in universal system
-        cuda_specific_functions = {
+        """Convert CUDA built-in functions to CrossGL equivalents"""
+        function_mapping = {
             # CUDA precision variants
             "sqrtf": "sqrt",
             "powf": "pow",
@@ -471,4 +460,4 @@ class CudaToCrossGLConverter:
             "make_double4": "dvec4",
         }
 
-        return cuda_specific_functions.get(func_name, func_name)
+        return function_mapping.get(func_name, func_name)
