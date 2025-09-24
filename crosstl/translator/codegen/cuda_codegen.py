@@ -421,13 +421,14 @@ class CudaCodeGen:
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
         from ...utils.type_mappings import get_type_mapping
+
         type_mapping = get_type_mapping("cuda")
-        
+
         # Additional CUDA-specific mappings
         cuda_specific = {
             # CUDA type mappings
             "i8": "char",
-            "u8": "unsigned char", 
+            "u8": "unsigned char",
             "i16": "short",
             "u16": "unsigned short",
             "i32": "int",
@@ -450,7 +451,7 @@ class CudaCodeGen:
             "vec3<u32>": "uint3",
             "vec4<u32>": "uint4",
         }
-        
+
         # Merge mappings
         type_mapping.update(cuda_specific)
 
@@ -479,8 +480,9 @@ class CudaCodeGen:
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
         from ...utils.type_mappings import get_function_mapping
+
         function_mapping = get_function_mapping("cuda")
-        
+
         # Additional CUDA-specific functions
         cuda_specific = {
             # Vector constructors
@@ -493,7 +495,7 @@ class CudaCodeGen:
             # Synchronization
             "workgroupBarrier": "__syncthreads",
         }
-        
+
         function_mapping.update(cuda_specific)
         return function_mapping.get(func_name, func_name)
 

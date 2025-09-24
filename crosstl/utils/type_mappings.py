@@ -9,10 +9,9 @@ UNIVERSAL_TYPE_MAPPINGS = {
     "void": "void",
     "bool": "bool",
     "int": "int",
-    "uint": "uint", 
+    "uint": "uint",
     "float": "float",
     "double": "double",
-    
     # Vector types
     "vec2": "vec2",
     "vec3": "vec3",
@@ -24,9 +23,8 @@ UNIVERSAL_TYPE_MAPPINGS = {
     "uvec3": "uvec3",
     "uvec4": "uvec4",
     "bvec2": "bvec2",
-    "bvec3": "bvec3", 
+    "bvec3": "bvec3",
     "bvec4": "bvec4",
-    
     # Matrix types
     "mat2": "mat2",
     "mat3": "mat3",
@@ -34,7 +32,6 @@ UNIVERSAL_TYPE_MAPPINGS = {
     "mat2x2": "mat2x2",
     "mat3x3": "mat3x3",
     "mat4x4": "mat4x4",
-    
     # Texture types
     "sampler2D": "sampler2D",
     "samplerCube": "samplerCube",
@@ -46,7 +43,7 @@ BACKEND_TYPE_MAPPINGS = {
     "cuda": {
         # CUDA-specific mappings
         "vec2": "float2",
-        "vec3": "float3", 
+        "vec3": "float3",
         "vec4": "float4",
         "ivec2": "int2",
         "ivec3": "int3",
@@ -60,12 +57,11 @@ BACKEND_TYPE_MAPPINGS = {
         "sampler2D": "texture<float4, 2>",
         "samplerCube": "textureCube<float4>",
     },
-    
     "metal": {
         # Metal-specific mappings
         "vec2": "float2",
         "vec3": "float3",
-        "vec4": "float4", 
+        "vec4": "float4",
         "ivec2": "int2",
         "ivec3": "int3",
         "ivec4": "int4",
@@ -78,13 +74,12 @@ BACKEND_TYPE_MAPPINGS = {
         "sampler2D": "texture2d<float>",
         "samplerCube": "texturecube<float>",
     },
-    
     "directx": {
         # DirectX/HLSL-specific mappings
         "vec2": "float2",
         "vec3": "float3",
         "vec4": "float4",
-        "ivec2": "int2", 
+        "ivec2": "int2",
         "ivec3": "int3",
         "ivec4": "int4",
         "uvec2": "uint2",
@@ -96,17 +91,14 @@ BACKEND_TYPE_MAPPINGS = {
         "sampler2D": "Texture2D",
         "samplerCube": "TextureCube",
     },
-    
     "opengl": {
         # OpenGL/GLSL uses CrossGL types mostly as-is
         # No overrides needed for most types
     },
-    
     "vulkan": {
         # Vulkan/SPIR-V uses GLSL-like types
         # No overrides needed for most types
     },
-    
     "rust": {
         # Rust-specific mappings
         "void": "()",
@@ -125,10 +117,9 @@ BACKEND_TYPE_MAPPINGS = {
         "uvec3": "Vec3<u32>",
         "uvec4": "Vec4<u32>",
         "mat2": "Mat2<f32>",
-        "mat3": "Mat3<f32>", 
+        "mat3": "Mat3<f32>",
         "mat4": "Mat4<f32>",
     },
-    
     "mojo": {
         # Mojo-specific mappings
         "void": "None",
@@ -147,14 +138,13 @@ BACKEND_TYPE_MAPPINGS = {
         "mat3": "Matrix[DType.float32, 3, 3]",
         "mat4": "Matrix[DType.float32, 4, 4]",
     },
-    
     "hip": {
         # HIP uses CUDA-like types
         "vec2": "float2",
         "vec3": "float3",
         "vec4": "float4",
         "ivec2": "int2",
-        "ivec3": "int3", 
+        "ivec3": "int3",
         "ivec4": "int4",
         "uvec2": "uint2",
         "uvec3": "uint3",
@@ -163,7 +153,6 @@ BACKEND_TYPE_MAPPINGS = {
         "mat3": "float3x3",
         "mat4": "float4x4",
     },
-    
     "slang": {
         # Slang uses DirectX-like types
         "vec2": "float2",
@@ -180,18 +169,18 @@ BACKEND_TYPE_MAPPINGS = {
         "mat4": "float4x4",
         "sampler2D": "Texture2D",
         "samplerCube": "TextureCube",
-    }
+    },
 }
 
 
 def get_type_mapping(backend: str) -> dict:
     """Get comprehensive type mapping for a backend."""
     mapping = UNIVERSAL_TYPE_MAPPINGS.copy()
-    
+
     # Apply backend-specific overrides
     backend_overrides = BACKEND_TYPE_MAPPINGS.get(backend.lower(), {})
     mapping.update(backend_overrides)
-    
+
     return mapping
 
 
@@ -205,7 +194,7 @@ def map_type(type_name: str, backend: str) -> str:
 UNIVERSAL_FUNCTION_MAPPINGS = {
     # Math functions
     "sqrt": "sqrt",
-    "pow": "pow", 
+    "pow": "pow",
     "sin": "sin",
     "cos": "cos",
     "tan": "tan",
@@ -214,7 +203,6 @@ UNIVERSAL_FUNCTION_MAPPINGS = {
     "max": "max",
     "floor": "floor",
     "ceil": "ceil",
-    
     # Vector functions
     "dot": "dot",
     "cross": "cross",
@@ -222,7 +210,6 @@ UNIVERSAL_FUNCTION_MAPPINGS = {
     "normalize": "normalize",
     "distance": "distance",
     "reflect": "reflect",
-    
     # Atomic operations
     "atomicAdd": "atomicAdd",
     "atomicSub": "atomicSub",
@@ -249,48 +236,43 @@ BACKEND_FUNCTION_MAPPINGS = {
         "atomicExchange": "atomicExch",
         "atomicCompareExchange": "atomicCAS",
     },
-    
     "metal": {
         # Metal uses standard names mostly
         "texture": "sample",
     },
-    
     "directx": {
         # DirectX specific function mappings
         "fract": "frac",
         "mix": "lerp",
     },
-    
     "opengl": {
         # OpenGL specific
         "frac": "fract",
         "lerp": "mix",
     },
-    
     "rust": {
         # Rust specific
         "log": "ln",  # Natural log
     },
-    
     "mojo": {
         # Mojo specific
         "sqrt": "math.sqrt",
-        "pow": "math.pow", 
+        "pow": "math.pow",
         "sin": "math.sin",
         "cos": "math.cos",
         "abs": "math.abs",
-    }
+    },
 }
 
 
 def get_function_mapping(backend: str) -> dict:
     """Get comprehensive function mapping for a backend."""
     mapping = UNIVERSAL_FUNCTION_MAPPINGS.copy()
-    
+
     # Apply backend-specific overrides
     backend_overrides = BACKEND_FUNCTION_MAPPINGS.get(backend.lower(), {})
     mapping.update(backend_overrides)
-    
+
     return mapping
 
 
