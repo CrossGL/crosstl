@@ -5,7 +5,29 @@ This module provides common code generation patterns to reduce duplication.
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Union
-from .base_ast import ASTNode, BaseArrayAccessNode, BaseAssignmentNode, BaseBinaryOpNode, BaseBreakNode, BaseCaseNode, BaseContinueNode, BaseForNode, BaseFunctionCallNode, BaseFunctionNode, BaseIfNode, BaseMemberAccessNode, BaseReturnNode, BaseShaderNode, BaseStructNode, BaseSwitchNode, BaseTernaryOpNode, BaseUnaryOpNode, BaseVariableNode, BaseWhileNode, NodeType
+from .base_ast import (
+    ASTNode,
+    BaseArrayAccessNode,
+    BaseAssignmentNode,
+    BaseBinaryOpNode,
+    BaseBreakNode,
+    BaseCaseNode,
+    BaseContinueNode,
+    BaseForNode,
+    BaseFunctionCallNode,
+    BaseFunctionNode,
+    BaseIfNode,
+    BaseMemberAccessNode,
+    BaseReturnNode,
+    BaseShaderNode,
+    BaseStructNode,
+    BaseSwitchNode,
+    BaseTernaryOpNode,
+    BaseUnaryOpNode,
+    BaseVariableNode,
+    BaseWhileNode,
+    NodeType,
+)
 
 
 class TypeMapping:

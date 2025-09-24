@@ -1,6 +1,6 @@
 """CUDA AST Node definitions"""
 
-from ..base_ast import *
+from ..base_ast import ASTNode, BaseArrayAccessNode, BaseAssignmentNode, BaseAtomicOperationNode, BaseBinaryOpNode, BaseBreakNode, BaseBuiltinVariableNode, BaseCaseNode, BaseContinueNode, BaseForNode, BaseFunctionCallNode, BaseFunctionNode, BaseIfNode, BaseKernelLaunchNode, BaseKernelNode, BaseMemberAccessNode, BasePreprocessorNode, BaseReturnNode, BaseShaderNode, BaseStructNode, BaseSwitchNode, BaseSyncNode, BaseTernaryOpNode, BaseTextureAccessNode, BaseUnaryOpNode, BaseVariableNode, BaseVectorConstructorNode, BaseWhileNode, NodeType
 
 
 class CudaShaderNode(BaseShaderNode):
@@ -13,11 +13,11 @@ class CudaShaderNode(BaseShaderNode):
         structs=None,
         global_variables=None,
         kernels=None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(includes, structs, functions, global_variables, **kwargs)
         self.kernels = kernels or []
-        
+
         for kernel in self.kernels:
             self.add_child(kernel)
 
@@ -29,9 +29,18 @@ class CudaFunctionNode(BaseFunctionNode):
     """Node representing a CUDA function declaration"""
 
     def __init__(
-        self, return_type, name, params, body, qualifiers=None, attributes=None, **kwargs
+        self,
+        return_type,
+        name,
+        params,
+        body,
+        qualifiers=None,
+        attributes=None,
+        **kwargs,
     ):
-        super().__init__(return_type, name, params, body, qualifiers, attributes, **kwargs)
+        super().__init__(
+            return_type, name, params, body, qualifiers, attributes, **kwargs
+        )
 
     def __repr__(self):
         return f"CudaFunctionNode(return_type={self.return_type}, name={self.name}, params={len(self.params)}, qualifiers={self.qualifiers})"
@@ -70,7 +79,7 @@ class CudaVariableNode(BaseVariableNode):
 
 # Use base classes directly for common operations
 CudaAssignmentNode = BaseAssignmentNode
-CudaBinaryOpNode = BaseBinaryOpNode  
+CudaBinaryOpNode = BaseBinaryOpNode
 CudaUnaryOpNode = BaseUnaryOpNode
 CudaFunctionCallNode = BaseFunctionCallNode
 
@@ -107,7 +116,7 @@ class CudaDoWhileNode(ASTNode):
         super().__init__(NodeType.WHILE, **kwargs)  # Reuse WHILE type
         self.body = body if isinstance(body, list) else [body] if body else []
         self.condition = condition
-        
+
         for stmt in self.body:
             if stmt:
                 self.add_child(stmt)
@@ -146,6 +155,7 @@ class CudaCastNode(ASTNode):
 
 # Use base classes for common constructs
 CudaPreprocessorNode = BasePreprocessorNode
+
 
 class CudaBuiltinNode(BaseBuiltinVariableNode):
     """Node representing CUDA built-in variables (threadIdx, blockIdx, etc.)"""
