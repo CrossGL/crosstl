@@ -1,11 +1,9 @@
 """CUDA AST Node definitions"""
 
-
-class ASTNode:
-    """Base class for all AST nodes"""
+from ..base_ast import *
 
 
-class ShaderNode(ASTNode):
+class CudaShaderNode(BaseShaderNode):
     """Root node representing a complete CUDA program"""
 
     def __init__(
