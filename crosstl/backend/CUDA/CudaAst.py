@@ -13,130 +13,66 @@ class CudaShaderNode(BaseShaderNode):
         structs=None,
         global_variables=None,
         kernels=None,
+        **kwargs
     ):
-        self.includes = includes or []
-        self.functions = functions or []
-        self.structs = structs or []
-        self.global_variables = global_variables or []
+        super().__init__(includes, structs, functions, global_variables, **kwargs)
         self.kernels = kernels or []
+        
+        for kernel in self.kernels:
+            self.add_child(kernel)
 
     def __repr__(self):
-        return f"ShaderNode(includes={self.includes}, functions={self.functions}, structs={self.structs}, global_variables={self.global_variables}, kernels={self.kernels})"
+        return f"CudaShaderNode(includes={len(self.includes)}, functions={len(self.functions)}, structs={len(self.structs)}, global_variables={len(self.global_variables)}, kernels={len(self.kernels)})"
 
 
-class FunctionNode(ASTNode):
-    """Node representing a function declaration"""
+class CudaFunctionNode(BaseFunctionNode):
+    """Node representing a CUDA function declaration"""
 
     def __init__(
-        self, return_type, name, params, body, qualifiers=None, attributes=None
+        self, return_type, name, params, body, qualifiers=None, attributes=None, **kwargs
     ):
-        self.return_type = return_type
-        self.name = name
-        self.params = params
-        self.body = body
-        self.qualifiers = qualifiers or []  # __global__, __device__, __host__
-        self.attributes = attributes or []
+        super().__init__(return_type, name, params, body, qualifiers, attributes, **kwargs)
 
     def __repr__(self):
-        return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, qualifiers={self.qualifiers})"
+        return f"CudaFunctionNode(return_type={self.return_type}, name={self.name}, params={len(self.params)}, qualifiers={self.qualifiers})"
 
 
-class KernelNode(FunctionNode):
+class CudaKernelNode(BaseKernelNode):
     """Node representing a CUDA kernel function (marked with __global__)"""
 
-    def __init__(self, return_type, name, params, body, attributes=None):
-        super().__init__(return_type, name, params, body, ["__global__"], attributes)
+    def __init__(self, return_type, name, params, body, attributes=None, **kwargs):
+        super().__init__(return_type, name, params, body, attributes, **kwargs)
 
     def __repr__(self):
-        return f"KernelNode(name={self.name}, params={self.params}, body={self.body})"
+        return f"CudaKernelNode(name={self.name}, params={len(self.params)})"
 
 
-class KernelLaunchNode(ASTNode):
-    """Node representing a kernel launch: kernel<<<blocks, threads>>>(args)"""
-
-    def __init__(
-        self, kernel_name, blocks, threads, shared_mem=None, stream=None, args=None
-    ):
-        self.kernel_name = kernel_name
-        self.blocks = blocks
-        self.threads = threads
-        self.shared_mem = shared_mem  # Optional shared memory size
-        self.stream = stream  # Optional stream
-        self.args = args or []
+class CudaKernelLaunchNode(BaseKernelLaunchNode):
+    """Node representing a CUDA kernel launch: kernel<<<blocks, threads>>>(args)"""
 
     def __repr__(self):
-        return f"KernelLaunchNode(kernel_name={self.kernel_name}, blocks={self.blocks}, threads={self.threads}, args={self.args})"
+        return f"CudaKernelLaunchNode(kernel_name={self.kernel_name}, blocks={self.blocks}, threads={self.threads}, args={len(self.args)})"
 
 
-class StructNode(ASTNode):
-    """Node representing a struct declaration"""
-
-    def __init__(self, name, members, attributes=None):
-        self.name = name
-        self.members = members
-        self.attributes = attributes or []
+class CudaStructNode(BaseStructNode):
+    """Node representing a CUDA struct declaration"""
 
     def __repr__(self):
-        return f"StructNode(name={self.name}, members={self.members})"
+        return f"CudaStructNode(name={self.name}, members={len(self.members)})"
 
 
-class VariableNode(ASTNode):
-    """Node representing a variable declaration"""
-
-    def __init__(self, vtype, name, value=None, qualifiers=None):
-        self.vtype = vtype
-        self.name = name
-        self.value = value
-        self.qualifiers = qualifiers or []  # __shared__, __constant__, etc.
+class CudaVariableNode(BaseVariableNode):
+    """Node representing a CUDA variable declaration"""
 
     def __repr__(self):
-        return f"VariableNode(vtype={self.vtype}, name={self.name}, value={self.value}, qualifiers={self.qualifiers})"
+        return f"CudaVariableNode(vtype={self.vtype}, name={self.name}, qualifiers={self.qualifiers})"
 
 
-class AssignmentNode(ASTNode):
-    """Node representing an assignment operation"""
-
-    def __init__(self, left, right, operator="="):
-        self.left = left
-        self.right = right
-        self.operator = operator
-
-    def __repr__(self):
-        return f"AssignmentNode(left={self.left}, operator={self.operator}, right={self.right})"
-
-
-class BinaryOpNode(ASTNode):
-    """Node representing a binary operation"""
-
-    def __init__(self, left, op, right):
-        self.left = left
-        self.op = op
-        self.right = right
-
-    def __repr__(self):
-        return f"BinaryOpNode(left={self.left}, op={self.op}, right={self.right})"
-
-
-class UnaryOpNode(ASTNode):
-    """Node representing a unary operation"""
-
-    def __init__(self, op, operand):
-        self.op = op
-        self.operand = operand
-
-    def __repr__(self):
-        return f"UnaryOpNode(op={self.op}, operand={self.operand})"
-
-
-class FunctionCallNode(ASTNode):
-    """Node representing a function call"""
-
-    def __init__(self, name, args):
-        self.name = name
-        self.args = args
-
-    def __repr__(self):
-        return f"FunctionCallNode(name={self.name}, args={self.args})"
+# Use base classes directly for common operations
+CudaAssignmentNode = BaseAssignmentNode
+CudaBinaryOpNode = BaseBinaryOpNode  
+CudaUnaryOpNode = BaseUnaryOpNode
+CudaFunctionCallNode = BaseFunctionCallNode
 
 
 class AtomicOperationNode(FunctionCallNode):
