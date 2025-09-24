@@ -1,6 +1,36 @@
 """CUDA AST Node definitions"""
 
-from ..base_ast import ASTNode, BaseArrayAccessNode, BaseAssignmentNode, BaseAtomicOperationNode, BaseBinaryOpNode, BaseBreakNode, BaseBuiltinVariableNode, BaseCaseNode, BaseContinueNode, BaseForNode, BaseFunctionCallNode, BaseFunctionNode, BaseIfNode, BaseKernelLaunchNode, BaseKernelNode, BaseMemberAccessNode, BasePreprocessorNode, BaseReturnNode, BaseShaderNode, BaseStructNode, BaseSwitchNode, BaseSyncNode, BaseTernaryOpNode, BaseTextureAccessNode, BaseUnaryOpNode, BaseVariableNode, BaseVectorConstructorNode, BaseWhileNode, NodeType
+from ..base_ast import (
+    ASTNode,
+    BaseArrayAccessNode,
+    BaseAssignmentNode,
+    BaseAtomicOperationNode,
+    BaseBinaryOpNode,
+    BaseBreakNode,
+    BaseBuiltinVariableNode,
+    BaseCaseNode,
+    BaseContinueNode,
+    BaseForNode,
+    BaseFunctionCallNode,
+    BaseFunctionNode,
+    BaseIfNode,
+    BaseKernelLaunchNode,
+    BaseKernelNode,
+    BaseMemberAccessNode,
+    BasePreprocessorNode,
+    BaseReturnNode,
+    BaseShaderNode,
+    BaseStructNode,
+    BaseSwitchNode,
+    BaseSyncNode,
+    BaseTernaryOpNode,
+    BaseTextureAccessNode,
+    BaseUnaryOpNode,
+    BaseVariableNode,
+    BaseVectorConstructorNode,
+    BaseWhileNode,
+    NodeType,
+)
 
 
 class CudaShaderNode(BaseShaderNode):
