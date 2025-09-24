@@ -437,13 +437,13 @@ class TokenType(Enum):
 
 class CudaLexer:
     """Enhanced CUDA lexer with improved error handling and organization."""
-    
+
     def __init__(self, code: str):
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
         self.reserved_keywords = KEYWORDS
-        
+
         # Enhanced tracking
         self.line = 1
         self.column = 1
@@ -459,7 +459,7 @@ class CudaLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                char = self.code[pos] if pos < len(self.code) else 'EOF'
+                char = self.code[pos] if pos < len(self.code) else "EOF"
                 raise SyntaxError(
                     f"Illegal character '{char}' at line {self.line}, column {self.column} (position {pos})"
                 )
@@ -487,11 +487,11 @@ class CudaLexer:
             if match:
                 return match.end(0), token_type, match.group(0)
         return None
-    
+
     def _update_position(self, text: str):
         """Update line and column tracking"""
         for char in text:
-            if char == '\n':
+            if char == "\n":
                 self.line += 1
                 self.column = 1
             else:
@@ -505,7 +505,7 @@ class CudaLexer:
                 return cls(f.read())
         except IOError as e:
             raise IOError(f"Could not read CUDA file '{filepath}': {e}")
-    
+
     def get_position_info(self) -> str:
         """Get current position information for error reporting"""
         return f"line {self.line}, column {self.column}"

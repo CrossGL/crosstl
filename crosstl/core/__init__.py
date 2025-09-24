@@ -9,9 +9,9 @@ from .type_system import TypeSystem
 from .errors import ErrorCollector, TranslationError
 
 __all__ = [
-    'TranslationEngine',
-    'CrossGLIR', 
-    'TypeSystem',
-    'ErrorCollector',
-    'TranslationError'
+    "TranslationEngine",
+    "CrossGLIR",
+    "TypeSystem",
+    "ErrorCollector",
+    "TranslationError",
 ]
