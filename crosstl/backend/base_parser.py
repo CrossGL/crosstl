@@ -6,7 +6,30 @@ This module provides common parser functionality to reduce code duplication.
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any, Union
 from .base_lexer import Token, TokenType
-from .base_ast import BaseArrayAccessNode, BaseAssignmentNode, BaseAttributeNode, BaseBinaryOpNode, BaseBreakNode, BaseContinueNode, BaseForNode, BaseFunctionCallNode, BaseFunctionNode, BaseIfNode, BaseMemberAccessNode, BaseParameterNode, BasePreprocessorNode, BaseReturnNode, BaseShaderNode, BaseStructNode, BaseTernaryOpNode, BaseUnaryOpNode, BaseVariableNode, BaseWhileNode, ExpressionNode, StatementNode
+from .base_ast import (
+    BaseArrayAccessNode,
+    BaseAssignmentNode,
+    BaseAttributeNode,
+    BaseBinaryOpNode,
+    BaseBreakNode,
+    BaseContinueNode,
+    BaseForNode,
+    BaseFunctionCallNode,
+    BaseFunctionNode,
+    BaseIfNode,
+    BaseMemberAccessNode,
+    BaseParameterNode,
+    BasePreprocessorNode,
+    BaseReturnNode,
+    BaseShaderNode,
+    BaseStructNode,
+    BaseTernaryOpNode,
+    BaseUnaryOpNode,
+    BaseVariableNode,
+    BaseWhileNode,
+    ExpressionNode,
+    StatementNode,
+)
 
 
 class ParseError(Exception):

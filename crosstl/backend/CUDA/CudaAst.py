@@ -1,6 +1,6 @@
 """CUDA AST Node definitions"""
 
-from ..base_ast import *
+from ..base_ast import ASTNode, BaseShaderNode
 
 
 class CudaShaderNode(BaseShaderNode):
