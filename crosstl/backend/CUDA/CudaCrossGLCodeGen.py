@@ -1,10 +1,13 @@
-"""CUDA to CrossGL Code Generator"""
+"""
+CUDA to CrossGL Code Generator.
+Converts CUDA AST nodes to CrossGL intermediate representation.
+"""
 
 from .CudaAst import *
 
 
 class CudaToCrossGLConverter:
-    """Converts CUDA AST to CrossGL format"""
+    """Converts CUDA AST to CrossGL format using centralized type system"""
 
     def __init__(self):
         self.indent_level = 0
@@ -275,7 +278,7 @@ class CudaToCrossGLConverter:
         }
 
         base_name = builtin_map.get(node.builtin_name, node.builtin_name)
-        if node.component:
+        if hasattr(node, "component") and node.component:
             return f"{base_name}.{node.component}"
         else:
             return base_name
@@ -370,8 +373,30 @@ class CudaToCrossGLConverter:
         self.emit("continue;")
 
     def convert_cuda_type_to_crossgl(self, cuda_type):
-        """Convert CUDA types to CrossGL equivalents"""
-        type_mapping = {
+        """Convert CUDA types to CrossGL equivalents using centralized mapping"""
+        if not cuda_type:
+            return "void"
+
+        # Handle pointers
+        if "*" in cuda_type:
+            base_type = cuda_type.replace("*", "").strip()
+            mapped_base = self._map_cuda_type_to_universal(base_type)
+            return f"ptr<{mapped_base}>"
+
+        # Handle arrays
+        if "[" in cuda_type and "]" in cuda_type:
+            parts = cuda_type.split("[")
+            base_type = parts[0].strip()
+            size = parts[1].split("]")[0]
+            mapped_base = self._map_cuda_type_to_universal(base_type)
+            return f"array<{mapped_base}, {size}>"
+
+        return self._map_cuda_type_to_universal(cuda_type)
+
+    def _map_cuda_type_to_universal(self, cuda_type):
+        """Map CUDA-specific types to universal CrossGL types"""
+        # CUDA-specific type mappings
+        cuda_to_universal = {
             # Basic types
             "void": "void",
             "bool": "bool",
@@ -386,41 +411,28 @@ class CudaToCrossGLConverter:
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
-            # CUDA vector types
-            "float2": "vec2<f32>",
-            "float3": "vec3<f32>",
-            "float4": "vec4<f32>",
-            "double2": "vec2<f64>",
-            "double3": "vec3<f64>",
-            "double4": "vec4<f64>",
-            "int2": "vec2<i32>",
-            "int3": "vec3<i32>",
-            "int4": "vec4<i32>",
-            "uint2": "vec2<u32>",
-            "uint3": "vec3<u32>",
-            "uint4": "vec4<u32>",
+            "half": "f16",
+            # CUDA vector types to universal
+            "float2": "vec2",
+            "float3": "vec3",
+            "float4": "vec4",
+            "double2": "dvec2",
+            "double3": "dvec3",
+            "double4": "dvec4",
+            "int2": "ivec2",
+            "int3": "ivec3",
+            "int4": "ivec4",
+            "uint2": "uvec2",
+            "uint3": "uvec3",
+            "uint4": "uvec4",
         }
 
-        # Handle pointers
-        if "*" in cuda_type:
-            base_type = cuda_type.replace("*", "").strip()
-            mapped_base = type_mapping.get(base_type, base_type)
-            return f"ptr<{mapped_base}>"
-
-        # Handle arrays
-        if "[" in cuda_type and "]" in cuda_type:
-            parts = cuda_type.split("[")
-            base_type = parts[0].strip()
-            size = parts[1].split("]")[0]
-            mapped_base = type_mapping.get(base_type, base_type)
-            return f"array<{mapped_base}, {size}>"
-
-        return type_mapping.get(cuda_type, cuda_type)
+        return cuda_to_universal.get(cuda_type, cuda_type)
 
     def convert_cuda_builtin_function(self, func_name):
         """Convert CUDA built-in functions to CrossGL equivalents"""
         function_mapping = {
-            # Math functions
+            # CUDA precision variants
             "sqrtf": "sqrt",
             "powf": "pow",
             "sinf": "sin",
@@ -433,26 +445,19 @@ class CudaToCrossGLConverter:
             "fmaxf": "max",
             "floorf": "floor",
             "ceilf": "ceil",
-            # Double precision variants
-            "sqrt": "sqrt",
-            "pow": "pow",
-            "sin": "sin",
-            "cos": "cos",
-            "tan": "tan",
-            "log": "log",
-            "exp": "exp",
-            "fabs": "abs",
-            "fmin": "min",
-            "fmax": "max",
-            "floor": "floor",
-            "ceil": "ceil",
-            # Vector functions
-            "make_float2": "vec2<f32>",
-            "make_float3": "vec3<f32>",
-            "make_float4": "vec4<f32>",
-            "make_int2": "vec2<i32>",
-            "make_int3": "vec3<i32>",
-            "make_int4": "vec4<i32>",
+            # CUDA vector constructors
+            "make_float2": "vec2",
+            "make_float3": "vec3",
+            "make_float4": "vec4",
+            "make_int2": "ivec2",
+            "make_int3": "ivec3",
+            "make_int4": "ivec4",
+            "make_uint2": "uvec2",
+            "make_uint3": "uvec3",
+            "make_uint4": "uvec4",
+            "make_double2": "dvec2",
+            "make_double3": "dvec3",
+            "make_double4": "dvec4",
         }
 
         return function_mapping.get(func_name, func_name)

@@ -169,11 +169,10 @@ class MemberAccessNode(ASTNode):
     def __init__(self, object, member, is_pointer=False):
         self.object = object
         self.member = member
-        self.is_pointer = is_pointer  # True for ->, False for .
+        self.is_pointer = is_pointer
 
     def __repr__(self):
-        op = "->" if self.is_pointer else "."
-        return f"MemberAccessNode(object={self.object}, member={self.member}, operator={op})"
+        return f"MemberAccessNode(object={self.object}, member={self.member}, is_pointer={self.is_pointer})"
 
 
 class ArrayAccessNode(ASTNode):
