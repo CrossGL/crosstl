@@ -1,5 +1,11 @@
+"""
+CUDA Lexer for tokenizing CUDA source code.
+Provides comprehensive CUDA language support including execution configuration,
+built-in variables, and CUDA-specific syntax.
+"""
+
 import re
-from typing import Iterator, Tuple, List
+from typing import Iterator, Tuple, List, Optional
 from enum import Enum, auto
 
 # Skip tokens that don't need processing
@@ -430,11 +436,18 @@ class TokenType(Enum):
 
 
 class CudaLexer:
+    """Enhanced CUDA lexer with improved error handling and organization."""
+    
     def __init__(self, code: str):
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
         self.reserved_keywords = KEYWORDS
+        
+        # Enhanced tracking
+        self.line = 1
+        self.column = 1
+        self.current_pos = 0
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Tokenize the input code and return list of tokens"""
@@ -446,10 +459,14 @@ class CudaLexer:
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
+                char = self.code[pos] if pos < len(self.code) else 'EOF'
                 raise SyntaxError(
-                    f"Illegal character '{self.code[pos]}' at position {pos}"
+                    f"Illegal character '{char}' at line {self.line}, column {self.column} (position {pos})"
                 )
             new_pos, token_type, text = token
+
+            # Update position tracking
+            self._update_position(text)
 
             # Check if identifier is a reserved keyword
             if token_type == "IDENTIFIER" and text in self.reserved_keywords:
@@ -463,19 +480,35 @@ class CudaLexer:
 
         yield ("EOF", "")
 
-    def _next_token(self, pos: int) -> Tuple[int, str, str]:
+    def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
         """Find the next token starting at the given position"""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
                 return match.end(0), token_type, match.group(0)
         return None
+    
+    def _update_position(self, text: str):
+        """Update line and column tracking"""
+        for char in text:
+            if char == '\n':
+                self.line += 1
+                self.column = 1
+            else:
+                self.column += 1
 
     @classmethod
     def from_file(cls, filepath: str) -> "CudaLexer":
         """Create a lexer instance from a file"""
-        with open(filepath, "r") as f:
-            return cls(f.read())
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return cls(f.read())
+        except IOError as e:
+            raise IOError(f"Could not read CUDA file '{filepath}': {e}")
+    
+    def get_position_info(self) -> str:
+        """Get current position information for error reporting"""
+        return f"line {self.line}, column {self.column}"
 
 
 # Compatibility wrapper

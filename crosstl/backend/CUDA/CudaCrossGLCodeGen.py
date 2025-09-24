@@ -1,14 +1,40 @@
-"""CUDA to CrossGL Code Generator"""
+"""
+CUDA to CrossGL Code Generator.
+Converts CUDA AST nodes to CrossGL intermediate representation.
+"""
 
 from .CudaAst import *
+from ...common.type_system import UniversalTypeMapper, FunctionMapper
 
 
 class CudaToCrossGLConverter:
-    """Converts CUDA AST to CrossGL format"""
+    """Converts CUDA AST to CrossGL format using centralized type system"""
 
     def __init__(self):
         self.indent_level = 0
         self.output = []
+        
+        # Use centralized type mapper
+        self.type_mapper = UniversalTypeMapper()
+        self.function_mapper = FunctionMapper()
+        
+        # CUDA-specific mappings that aren't in the universal system
+        self.cuda_builtin_mappings = {
+            "threadIdx": "gl_LocalInvocationID",
+            "blockIdx": "gl_WorkGroupID",
+            "gridDim": "gl_NumWorkGroups", 
+            "blockDim": "gl_WorkGroupSize",
+            "warpSize": "32",  # Constant in CrossGL
+        }
+        
+        self.cuda_atomic_mappings = {
+            "atomicAdd": "atomicAdd",
+            "atomicSub": "atomicSub",
+            "atomicMax": "atomicMax", 
+            "atomicMin": "atomicMin",
+            "atomicExch": "atomicExchange",
+            "atomicCAS": "atomicCompareExchange",
+        }
 
     def generate(self, ast_node):
         """Generate CrossGL code from CUDA AST"""
@@ -238,21 +264,11 @@ class CudaToCrossGLConverter:
         return f"{func_name}({args_str})"
 
     def visit_AtomicOperationNode(self, node):
-        """Visit atomic operation"""
+        """Visit atomic operation using centralized mapping"""
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
 
-        # Convert CUDA atomic operations to CrossGL equivalents
-        atomic_map = {
-            "atomicAdd": "atomicAdd",
-            "atomicSub": "atomicSub",
-            "atomicMax": "atomicMax",
-            "atomicMin": "atomicMin",
-            "atomicExch": "atomicExchange",
-            "atomicCAS": "atomicCompareExchange",
-        }
-
-        crossgl_func = atomic_map.get(node.operation, node.operation)
+        crossgl_func = self.cuda_atomic_mappings.get(node.operation, node.operation)
         return f"{crossgl_func}({args_str})"
 
     def visit_SyncNode(self, node):
@@ -265,17 +281,9 @@ class CudaToCrossGLConverter:
             self.emit(f"// {node.sync_type}();")
 
     def visit_CudaBuiltinNode(self, node):
-        """Visit CUDA built-in variables"""
-        builtin_map = {
-            "threadIdx": "gl_LocalInvocationID",
-            "blockIdx": "gl_WorkGroupID",
-            "gridDim": "gl_NumWorkGroups",
-            "blockDim": "gl_WorkGroupSize",
-            "warpSize": "32",  # Constant in CrossGL
-        }
-
-        base_name = builtin_map.get(node.builtin_name, node.builtin_name)
-        if node.component:
+        """Visit CUDA built-in variables using centralized mapping"""
+        base_name = self.cuda_builtin_mappings.get(node.builtin_name, node.builtin_name)
+        if hasattr(node, 'component') and node.component:
             return f"{base_name}.{node.component}"
         else:
             return base_name
@@ -370,41 +378,14 @@ class CudaToCrossGLConverter:
         self.emit("continue;")
 
     def convert_cuda_type_to_crossgl(self, cuda_type):
-        """Convert CUDA types to CrossGL equivalents"""
-        type_mapping = {
-            # Basic types
-            "void": "void",
-            "bool": "bool",
-            "char": "i8",
-            "unsigned char": "u8",
-            "short": "i16",
-            "unsigned short": "u16",
-            "int": "i32",
-            "unsigned int": "u32",
-            "long": "i64",
-            "unsigned long": "u64",
-            "float": "f32",
-            "double": "f64",
-            "size_t": "u32",
-            # CUDA vector types
-            "float2": "vec2<f32>",
-            "float3": "vec3<f32>",
-            "float4": "vec4<f32>",
-            "double2": "vec2<f64>",
-            "double3": "vec3<f64>",
-            "double4": "vec4<f64>",
-            "int2": "vec2<i32>",
-            "int3": "vec3<i32>",
-            "int4": "vec4<i32>",
-            "uint2": "vec2<u32>",
-            "uint3": "vec3<u32>",
-            "uint4": "vec4<u32>",
-        }
-
+        """Convert CUDA types to CrossGL equivalents using centralized mapping"""
+        if not cuda_type:
+            return "void"
+            
         # Handle pointers
         if "*" in cuda_type:
             base_type = cuda_type.replace("*", "").strip()
-            mapped_base = type_mapping.get(base_type, base_type)
+            mapped_base = self._map_cuda_type_to_universal(base_type)
             return f"ptr<{mapped_base}>"
 
         # Handle arrays
@@ -412,17 +393,60 @@ class CudaToCrossGLConverter:
             parts = cuda_type.split("[")
             base_type = parts[0].strip()
             size = parts[1].split("]")[0]
-            mapped_base = type_mapping.get(base_type, base_type)
+            mapped_base = self._map_cuda_type_to_universal(base_type)
             return f"array<{mapped_base}, {size}>"
 
-        return type_mapping.get(cuda_type, cuda_type)
+        return self._map_cuda_type_to_universal(cuda_type)
+    
+    def _map_cuda_type_to_universal(self, cuda_type):
+        """Map CUDA-specific types to universal CrossGL types"""
+        # CUDA-specific type mappings
+        cuda_to_universal = {
+            # Basic types
+            "void": "void",
+            "bool": "bool", 
+            "char": "int8",
+            "unsigned char": "uint8",
+            "short": "int16",
+            "unsigned short": "uint16",
+            "int": "int32",
+            "unsigned int": "uint32",
+            "long": "int64", 
+            "unsigned long": "uint64",
+            "float": "float32",
+            "double": "float64",
+            "size_t": "uint32",
+            "half": "float16",
+            
+            # CUDA vector types to universal
+            "float2": "vec2",
+            "float3": "vec3",
+            "float4": "vec4",
+            "double2": "dvec2",
+            "double3": "dvec3", 
+            "double4": "dvec4",
+            "int2": "ivec2",
+            "int3": "ivec3",
+            "int4": "ivec4",
+            "uint2": "uvec2",
+            "uint3": "uvec3",
+            "uint4": "uvec4",
+        }
+        
+        return cuda_to_universal.get(cuda_type, cuda_type)
 
     def convert_cuda_builtin_function(self, func_name):
-        """Convert CUDA built-in functions to CrossGL equivalents"""
-        function_mapping = {
-            # Math functions
+        """Convert CUDA built-in functions to CrossGL equivalents using centralized mapping"""
+        # First try the centralized function mapper
+        mapped = self.function_mapper.map_function(func_name, "cuda")
+        if mapped != func_name:
+            return mapped
+            
+        # CUDA-specific function mappings not in universal system
+        cuda_specific_functions = {
+            # CUDA precision variants
             "sqrtf": "sqrt",
-            "powf": "pow",
+            "powf": "pow", 
             "sinf": "sin",
             "cosf": "cos",
             "tanf": "tan",
@@ -431,28 +455,22 @@ class CudaToCrossGLConverter:
             "fabsf": "abs",
             "fminf": "min",
             "fmaxf": "max",
-            "floorf": "floor",
+            "floorf": "floor", 
             "ceilf": "ceil",
-            # Double precision variants
-            "sqrt": "sqrt",
-            "pow": "pow",
-            "sin": "sin",
-            "cos": "cos",
-            "tan": "tan",
-            "log": "log",
-            "exp": "exp",
-            "fabs": "abs",
-            "fmin": "min",
-            "fmax": "max",
-            "floor": "floor",
-            "ceil": "ceil",
-            # Vector functions
-            "make_float2": "vec2<f32>",
-            "make_float3": "vec3<f32>",
-            "make_float4": "vec4<f32>",
-            "make_int2": "vec2<i32>",
-            "make_int3": "vec3<i32>",
-            "make_int4": "vec4<i32>",
+            
+            # CUDA vector constructors
+            "make_float2": "vec2",
+            "make_float3": "vec3",
+            "make_float4": "vec4",
+            "make_int2": "ivec2",
+            "make_int3": "ivec3", 
+            "make_int4": "ivec4",
+            "make_uint2": "uvec2",
+            "make_uint3": "uvec3",
+            "make_uint4": "uvec4",
+            "make_double2": "dvec2",
+            "make_double3": "dvec3",
+            "make_double4": "dvec4",
         }
 
-        return function_mapping.get(func_name, func_name)
+        return cuda_specific_functions.get(func_name, func_name)
