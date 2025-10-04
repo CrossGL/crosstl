@@ -18,32 +18,20 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 class HLSLCodeGen:
     def __init__(self):
-        self.type_mapping = {
-            "void": "void",
-            "vec2": "float2",
-            "vec3": "float3",
-            "vec4": "float4",
-            "mat2": "float2x2",
-            "mat3": "float3x3",
-            "mat4": "float4x4",
-            "int": "int",
-            "ivec2": "int2",
-            "ivec3": "int3",
-            "ivec4": "int4",
-            "uint": "uint",
-            "uvec2": "uint2",
-            "uvec3": "uint3",
-            "uvec4": "uint4",
-            "bool": "bool",
+        # Use centralized type mapping
+        from ...utils.type_mappings import get_type_mapping
+
+        self.type_mapping = get_type_mapping("directx")
+
+        # Add DirectX-specific type mappings
+        directx_specific = {
             "bvec2": "bool2",
             "bvec3": "bool3",
             "bvec4": "bool4",
-            "float": "float",
-            "double": "double",
-            "sampler2D": "Texture2D",
-            "samplerCube": "TextureCube",
             "sampler": "SamplerState",
         }
+
+        self.type_mapping.update(directx_specific)
 
         self.semantic_map = {
             "gl_VertexID": "SV_VertexID",

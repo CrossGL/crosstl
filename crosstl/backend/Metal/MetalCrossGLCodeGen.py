@@ -268,32 +268,34 @@ class MetalToCrossGLConverter:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def map_type(self, metal_type):
-        if metal_type:
-            # Special case for generic types not explicitly defined in the map
-            if (
-                "<" in metal_type
-                and ">" in metal_type
-                and metal_type not in self.type_map
-            ):
-                base_type, inner_type = metal_type.split("<", 1)
-                inner_type = inner_type.rstrip(">")
-                if base_type == "texture2d":
-                    if inner_type in ["float", "half"]:
-                        return "sampler2D"
-                    elif inner_type == "int":
-                        return "isampler2D"
-                    elif inner_type == "uint":
-                        return "usampler2D"
-                elif base_type == "texturecube":
-                    if inner_type in ["float", "half"]:
-                        return "samplerCube"
-                    elif inner_type == "int":
-                        return "isamplerCube"
-                    elif inner_type == "uint":
-                        return "usamplerCube"
+        if not metal_type:
+            return metal_type
 
-            return self.type_map.get(metal_type, metal_type)
-        return metal_type
+        # Use centralized type mapping
+        from ...utils.type_mappings import map_type
+
+        mapped = map_type(metal_type, "crossgl")
+
+        # Handle Metal-specific generic texture types
+        if "<" in metal_type and ">" in metal_type and metal_type not in self.type_map:
+            base_type, inner_type = metal_type.split("<", 1)
+            inner_type = inner_type.rstrip(">")
+            if base_type == "texture2d":
+                if inner_type in ["float", "half"]:
+                    return "sampler2D"
+                elif inner_type == "int":
+                    return "isampler2D"
+                elif inner_type == "uint":
+                    return "usampler2D"
+            elif base_type == "texturecube":
+                if inner_type in ["float", "half"]:
+                    return "samplerCube"
+                elif inner_type == "int":
+                    return "isamplerCube"
+                elif inner_type == "uint":
+                    return "usamplerCube"
+
+        return self.type_map.get(metal_type, mapped)
 
     def map_semantic(self, semantic):
         if semantic:

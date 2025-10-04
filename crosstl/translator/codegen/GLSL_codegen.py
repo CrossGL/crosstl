@@ -64,27 +64,10 @@ class GLSLCodeGen:
             "gl_NumWorkGroups": "gl_NumWorkGroups",
         }
 
-        # Define type mapping for OpenGL (GLSL)
-        self.type_mapping = {
-            # Most types are the same in CrossGL and GLSL
-            "vec2": "vec2",
-            "vec3": "vec3",
-            "vec4": "vec4",
-            "ivec2": "ivec2",
-            "ivec3": "ivec3",
-            "ivec4": "ivec4",
-            "mat2": "mat2",
-            "mat3": "mat3",
-            "mat4": "mat4",
-            "float": "float",
-            "int": "int",
-            "uint": "uint",
-            "bool": "bool",
-            "double": "double",
-            "void": "void",
-            "sampler2D": "sampler2D",
-            "samplerCube": "samplerCube",
-        }
+        # Use centralized type mapping (OpenGL uses CrossGL types mostly as-is)
+        from ...utils.type_mappings import get_type_mapping
+
+        self.type_mapping = get_type_mapping("opengl")
 
         # Function mapping for GLSL
         self.function_map = {

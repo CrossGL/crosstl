@@ -25,32 +25,19 @@ class HipCodeGen:
         self.current_function = None
         self.variable_counter = 0
 
-        # CrossGL to HIP type mapping
-        self.type_map = {
-            # Basic types
-            "int": "int",
-            "float": "float",
-            "double": "double",
-            "bool": "bool",
-            "void": "void",
+        # Use centralized type mapping
+        from ...utils.type_mappings import get_type_mapping
+
+        self.type_map = get_type_mapping("hip")
+
+        # Add HIP-specific type mappings
+        hip_specific = {
             "uint": "unsigned int",
-            # Vector types
-            "vec2": "float2",
-            "vec3": "float3",
-            "vec4": "float4",
-            "ivec2": "int2",
-            "ivec3": "int3",
-            "ivec4": "int4",
-            "uvec2": "uint2",
-            "uvec3": "uint3",
-            "uvec4": "uint4",
+            # Double precision vectors
             "dvec2": "double2",
             "dvec3": "double3",
             "dvec4": "double4",
             # Matrix types
-            "mat2": "float2x2",
-            "mat3": "float3x3",
-            "mat4": "float4x4",
             "dmat2": "double2x2",
             "dmat3": "double3x3",
             "dmat4": "double4x4",
@@ -62,9 +49,16 @@ class HipCodeGen:
             "buffer": "hipDeviceptr_t",
         }
 
-        # CrossGL to HIP function mapping
-        self.function_map = {
-            # Math functions
+        self.type_map.update(hip_specific)
+
+        # Use centralized function mapping
+        from ...utils.type_mappings import get_function_mapping
+
+        self.function_map = get_function_mapping("hip")
+
+        # Add HIP-specific function mappings
+        hip_specific = {
+            # Math functions with 'f' suffix
             "sin": "sinf",
             "cos": "cosf",
             "tan": "tanf",
@@ -120,6 +114,8 @@ class HipCodeGen:
             "textureLod": "tex2DLod",
             "textureGrad": "tex2DGrad",
         }
+
+        self.function_map.update(hip_specific)
 
         # Built-in variable mappings
         self.builtin_map = {

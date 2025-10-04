@@ -22,41 +22,30 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 class MojoCodeGen:
     def __init__(self):
         self.current_shader = None
-        self.type_mapping = {
-            # Scalar Types
-            "void": "None",
-            "int": "Int32",
+
+        # Use centralized type mapping
+        from ...utils.type_mappings import get_type_mapping
+
+        self.type_mapping = get_type_mapping("mojo")
+
+        # Add Mojo-specific type mappings
+        mojo_specific = {
             "short": "Int16",
             "long": "Int64",
-            "uint": "UInt32",
             "ushort": "UInt16",
             "ulong": "UInt64",
-            "float": "Float32",
-            "double": "Float64",
             "half": "Float16",
-            "bool": "Bool",
             # Vector Types
-            "vec2": "SIMD[DType.float32, 2]",
-            "vec3": "SIMD[DType.float32, 3]",
-            "vec4": "SIMD[DType.float32, 4]",
-            "ivec2": "SIMD[DType.int32, 2]",
-            "ivec3": "SIMD[DType.int32, 3]",
-            "ivec4": "SIMD[DType.int32, 4]",
-            "uvec2": "SIMD[DType.uint32, 2]",
-            "uvec3": "SIMD[DType.uint32, 3]",
-            "uvec4": "SIMD[DType.uint32, 4]",
             "bvec2": "SIMD[DType.bool, 2]",
             "bvec3": "SIMD[DType.bool, 3]",
             "bvec4": "SIMD[DType.bool, 4]",
-            # Matrix Types
-            "mat2": "Matrix[DType.float32, 2, 2]",
-            "mat3": "Matrix[DType.float32, 3, 3]",
-            "mat4": "Matrix[DType.float32, 4, 4]",
             # Texture Types (Mojo equivalents)
             "sampler2D": "Texture2D",
             "samplerCube": "TextureCube",
             "sampler": "Sampler",
         }
+
+        self.type_mapping.update(mojo_specific)
 
         self.semantic_map = {
             # Vertex attributes

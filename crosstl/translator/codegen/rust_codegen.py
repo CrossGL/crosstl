@@ -22,41 +22,30 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 class RustCodeGen:
     def __init__(self):
         self.current_shader = None
-        self.type_mapping = {
-            # Scalar Types
-            "void": "()",
-            "int": "i32",
+
+        # Use centralized type mapping
+        from ...utils.type_mappings import get_type_mapping
+
+        self.type_mapping = get_type_mapping("rust")
+
+        # Add Rust-specific type mappings
+        rust_specific = {
             "short": "i16",
             "long": "i64",
-            "uint": "u32",
             "ushort": "u16",
             "ulong": "u64",
-            "float": "f32",
-            "double": "f64",
             "half": "f16",
-            "bool": "bool",
             # Vector Types (using GPU-style vector types)
-            "vec2": "Vec2<f32>",
-            "vec3": "Vec3<f32>",
-            "vec4": "Vec4<f32>",
-            "ivec2": "Vec2<i32>",
-            "ivec3": "Vec3<i32>",
-            "ivec4": "Vec4<i32>",
-            "uvec2": "Vec2<u32>",
-            "uvec3": "Vec3<u32>",
-            "uvec4": "Vec4<u32>",
             "bvec2": "Vec2<bool>",
             "bvec3": "Vec3<bool>",
             "bvec4": "Vec4<bool>",
-            # Matrix Types
-            "mat2": "Mat2<f32>",
-            "mat3": "Mat3<f32>",
-            "mat4": "Mat4<f32>",
             # Texture Types
             "sampler2D": "Texture2D<f32>",
             "samplerCube": "TextureCube<f32>",
             "sampler": "Sampler",
         }
+
+        self.type_mapping.update(rust_specific)
 
         self.semantic_map = {
             # Vertex attributes

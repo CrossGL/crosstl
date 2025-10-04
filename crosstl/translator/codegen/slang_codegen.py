@@ -347,15 +347,7 @@ class SlangCodeGen:
         return result
 
     def convert_type(self, type_name):
-        # Map CrossGL types to Slang types
-        type_map = {
-            "vec2": "float2",
-            "vec3": "float3",
-            "vec4": "float4",
-            "float": "float",
-            "int": "int",
-            "bool": "bool",
-            "void": "void",
-        }
+        # Use centralized type mapping
+        from ...utils.type_mappings import map_type
 
-        return type_map.get(type_name, type_name)
+        return map_type(type_name, "slang")

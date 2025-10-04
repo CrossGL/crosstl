@@ -41,28 +41,25 @@ class MetalCodeGen:
         self.char_mapper = CharTypeMapper()
         self.texture_variables = []
         self.sampler_variables = []
-        self.type_mapping = {
+
+        # Use centralized type mapping
+        from ...utils.type_mappings import get_type_mapping
+
+        self.type_mapping = get_type_mapping("metal")
+
+        # Add Metal-specific type mappings
+        metal_specific = {
             # Scalar Types
-            "void": "void",
             "short": "int",
             "signed short": "int",
             "unsigned short": "uint",
-            "int": "int",
             "signed int": "int",
             "unsigned int": "uint",
             "long": "int64_t",
             "signed long": "int64_t",
             "unsigned long": "uint64_t",
-            "float": "float",
             "half": "half",
-            "bool": "bool",
-            # Vector Types
-            "vec2": "float2",
-            "vec3": "float3",
-            "vec4": "float4",
-            "ivec2": "int2",
-            "ivec3": "int3",
-            "ivec4": "int4",
+            # Additional vector types
             "short2": "int2",
             "short3": "int3",
             "short4": "int4",
@@ -75,31 +72,22 @@ class MetalCodeGen:
             "uint2": "uint2",
             "uint3": "uint3",
             "uint4": "uint4",
-            "uvec2": "uint2",
-            "uvec3": "uint3",
-            "uvec4": "uint4",
             "float2": "float2",
             "float3": "float3",
             "float4": "float4",
             "half2": "half2",
             "half3": "half3",
             "half4": "half4",
-            "bvec2": "bool2",
-            "bvec3": "bool3",
-            "bvec4": "bool4",
             "bool2": "bool2",
             "bool3": "bool3",
             "bool4": "bool4",
-            "sampler2D": "texture2d<float>",
-            "samplerCube": "texturecube<float>",
             # Matrix Types
-            "mat2": "float2x2",
-            "mat3": "float3x3",
-            "mat4": "float4x4",
             "half2x2": "half2x2",
             "half3x3": "half3x3",
             "half4x4": "half4x4",
         }
+
+        self.type_mapping.update(metal_specific)
 
         self.semantic_map = {
             # Vertex inputs
