@@ -57,30 +57,7 @@ def translate(
         ValueError: If the file type or backend is unsupported
         IOError: If the file cannot be read
     """
-    # Clear any previous errors
-    reset_errors()
-
-    # Try modern translation engine first
-    try:
-        engine = get_translation_engine()
-        result = engine.translate_file(file_path, backend, save_shader, format_output)
-
-        if result is not None:
-            return result
-
-        # Check for errors and report them
-        error_collector = get_error_collector()
-        if error_collector.has_errors():
-            # Print errors but continue with legacy fallback
-            print("Warning: Modern translation failed, falling back to legacy system")
-            error_collector.print_errors()
-            error_collector.clear_errors()
-
-    except Exception as e:
-        print(f"Warning: Modern translation engine failed: {e}")
-        print("Falling back to legacy translation system")
-
-    # Legacy translation system (unchanged for compatibility)
+    # Translation system
     backend = backend.lower()
 
     with open(file_path, "r") as file:
