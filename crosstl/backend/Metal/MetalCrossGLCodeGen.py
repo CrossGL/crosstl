@@ -8,48 +8,113 @@ class MetalToCrossGLConverter:
         self.type_map = {
             # Scalar Types
             "void": "void",
-            "int": "short",
-            "uint": "unsigned short",
-            "int64_t": "long",
-            "uint64_t": "unsigned long",
-            "float": "float",
-            "half": "half",
             "bool": "bool",
-            # Vector Types
+            "char": "int8",
+            "uchar": "uint8",
+            "short": "int16",
+            "ushort": "uint16",
+            "int": "int",
+            "uint": "uint",
+            "long": "int64",
+            "ulong": "uint64",
+            "int64_t": "int64",
+            "uint64_t": "uint64",
+            "float": "float",
+            "half": "float16",
+            "double": "double",
+            "size_t": "uint64",
+            "ptrdiff_t": "int64",
+            # Vector Types - float
             "float2": "vec2",
             "float3": "vec3",
             "float4": "vec4",
-            "int2": "short2",
-            "int3": "short3",
-            "int4": "short4",
-            "uint2": "ushort2",
-            "uint3": "ushort3",
-            "uint4": "ushort4",
+            # Vector Types - half
+            "half2": "f16vec2",
+            "half3": "f16vec3",
+            "half4": "f16vec4",
+            # Vector Types - int
+            "int2": "ivec2",
+            "int3": "ivec3",
+            "int4": "ivec4",
+            # Vector Types - uint
+            "uint2": "uvec2",
+            "uint3": "uvec3",
+            "uint4": "uvec4",
+            # Vector Types - short
+            "short2": "i16vec2",
+            "short3": "i16vec3",
+            "short4": "i16vec4",
+            # Vector Types - ushort
+            "ushort2": "u16vec2",
+            "ushort3": "u16vec3",
+            "ushort4": "u16vec4",
+            # Vector Types - char
+            "char2": "i8vec2",
+            "char3": "i8vec3",
+            "char4": "i8vec4",
+            # Vector Types - uchar
+            "uchar2": "u8vec2",
+            "uchar3": "u8vec3",
+            "uchar4": "u8vec4",
+            # Vector Types - bool
             "bool2": "bvec2",
             "bool3": "bvec3",
             "bool4": "bvec4",
+            # Matrix Types - float
+            "float2x2": "mat2",
+            "float2x3": "mat2x3",
+            "float2x4": "mat2x4",
+            "float3x2": "mat3x2",
+            "float3x3": "mat3",
+            "float3x4": "mat3x4",
+            "float4x2": "mat4x2",
+            "float4x3": "mat4x3",
+            "float4x4": "mat4",
+            # Matrix Types - half
+            "half2x2": "f16mat2",
+            "half2x3": "f16mat2x3",
+            "half2x4": "f16mat2x4",
+            "half3x2": "f16mat3x2",
+            "half3x3": "f16mat3",
+            "half3x4": "f16mat3x4",
+            "half4x2": "f16mat4x2",
+            "half4x3": "f16mat4x3",
+            "half4x4": "f16mat4",
             # Texture Types
+            "texture1d": "sampler1D",
+            "texture1d<float>": "sampler1D",
+            "texture1d<half>": "sampler1D",
+            "texture1d<int>": "isampler1D",
+            "texture1d<uint>": "usampler1D",
             "texture2d": "sampler2D",
             "texture2d<float>": "sampler2D",
             "texture2d<half>": "sampler2D",
             "texture2d<int>": "isampler2D",
             "texture2d<uint>": "usampler2D",
+            "texture3d": "sampler3D",
+            "texture3d<float>": "sampler3D",
+            "texture3d<half>": "sampler3D",
+            "texture3d<int>": "isampler3D",
+            "texture3d<uint>": "usampler3D",
             "texturecube": "samplerCube",
             "texturecube<float>": "samplerCube",
             "texturecube<half>": "samplerCube",
             "texturecube<int>": "isamplerCube",
             "texturecube<uint>": "usamplerCube",
             "TextureCube": "samplerCube",
-            # Matrix Types
-            "float2x2": "mat2",
-            "float3x3": "mat3",
-            "float4x4": "mat4",
-            "half2x2": "half2x2",
-            "half3x3": "half3x3",
-            "half4x4": "half4x4",
+            "texture2d_array": "sampler2DArray",
+            "texture2d_array<float>": "sampler2DArray",
+            "texture2d_array<half>": "sampler2DArray",
+            "texture2d_array<int>": "isampler2DArray",
+            "texture2d_array<uint>": "usampler2DArray",
+            "depth2d": "sampler2DShadow",
+            "depth2d<float>": "sampler2DShadow",
+            # Sampler type
+            "sampler": "sampler",
         }
 
         self.map_semantics = {
+            # Vertex attributes
             "attribute(0)": "Position",
             "attribute(1)": "Normal",
             "attribute(2)": "Tangent",
@@ -59,6 +124,9 @@ class MetalToCrossGLConverter:
             "attribute(6)": "TexCoord1",
             "attribute(7)": "TexCoord2",
             "attribute(8)": "TexCoord3",
+            "attribute(9)": "Color",
+            "attribute(10)": "Color0",
+            "attribute(11)": "Color1",
             "vertex_id": "gl_VertexID",
             "instance_id": "gl_InstanceID",
             "base_vertex": "gl_BaseVertex",
@@ -78,36 +146,49 @@ class MetalToCrossGLConverter:
         }
 
     def generate(self, ast):
-
         code = "shader main {\n"
         # Generate custom functions
-        code += " \n"
+        code += "\n"
         self.constant_struct_name = []
-        for constant in ast.constant:
+
+        # Get constants - support both 'constant' and 'constants' attributes
+        constants = getattr(ast, "constant", []) or getattr(ast, "constants", []) or []
+        for constant in constants:
             if isinstance(constant, ConstantBufferNode):
                 self.process_constant_struct(ast)
-        for struct_node in ast.struct:
-            if isinstance(struct_node, StructNode):
 
+        # Get structs - support both 'struct' and 'structs' attributes
+        structs = getattr(ast, "structs", []) or getattr(ast, "struct", []) or []
+        for struct_node in structs:
+            if isinstance(struct_node, StructNode):
                 if struct_node.name in self.constant_struct_name:
-                    code += f"    // cbuffers\n"
+                    code += "    // cbuffers\n"
                     code += f"    cbuffer {struct_node.name} {{\n"
                 else:
-                    code += f"    // Structs\n"
+                    code += "    // Structs\n"
                     code += f"    struct {struct_node.name} {{\n"
                 for member in struct_node.members:
-                    code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.attributes)};\n"
+                    semantic = self.map_semantic(getattr(member, "attributes", None))
+                    code += f"        {self.map_type(member.vtype)} {member.name} {semantic};\n"
                 code += "    }\n\n"
 
-        for f in ast.functions:
-            if f.qualifier == "vertex":
+        # Get functions
+        functions = getattr(ast, "functions", []) or []
+        for f in functions:
+            qualifier = getattr(f, "qualifier", None)
+            if qualifier == "vertex":
                 code += "    // Vertex Shader\n"
                 code += "    vertex {\n"
                 code += self.generate_function(f)
                 code += "    }\n\n"
-            elif f.qualifier == "fragment":
+            elif qualifier == "fragment":
                 code += "    // Fragment Shader\n"
                 code += "    fragment {\n"
+                code += self.generate_function(f)
+                code += "    }\n\n"
+            elif qualifier == "kernel":
+                code += "    // Compute Shader\n"
+                code += "    compute {\n"
                 code += self.generate_function(f)
                 code += "    }\n\n"
             else:
@@ -117,13 +198,15 @@ class MetalToCrossGLConverter:
         return code
 
     def process_constant_struct(self, node):
-        for constant in node.constant:
+        constants = (
+            getattr(node, "constant", []) or getattr(node, "constants", []) or []
+        )
+        structs = getattr(node, "structs", []) or getattr(node, "struct", []) or []
+        for constant in constants:
             if isinstance(constant, ConstantBufferNode):
                 # Iterate over all structs and append the ones matching the constant name
                 self.constant_struct_name.extend(
-                    struct.name
-                    for struct in node.struct
-                    if struct.name == constant.name
+                    struct.name for struct in structs if struct.name == constant.name
                 )
 
     def generate_function(self, func, indent=2):

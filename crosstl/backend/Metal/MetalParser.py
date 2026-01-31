@@ -39,8 +39,8 @@ class MetalParser:
     def parse_shader(self):
         functions = []
         preprocessors = []
-        struct = []
-        constant = []
+        structs = []
+        constants = []
 
         while self.current_token[0] != "EOF":
             if (
@@ -50,9 +50,9 @@ class MetalParser:
             elif self.current_token[0] == "USING":
                 self.parse_using_statement()
             elif self.current_token[0] == "STRUCT":
-                struct.append(self.parse_struct())
+                structs.append(self.parse_struct())
             elif self.current_token[0] == "CONSTANT":
-                constant.append(self.parse_constant_buffer())
+                constants.append(self.parse_constant_buffer())
             elif self.current_token[0] in [
                 "VERTEX",
                 "FRAGMENT",
@@ -70,7 +70,14 @@ class MetalParser:
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
-        return ShaderNode(preprocessors, struct, constant, functions)
+        # Create ShaderNode with proper keyword arguments for compatibility
+        return ShaderNode(
+            includes=preprocessors,
+            functions=functions,
+            structs=structs,
+            global_variables=[],
+            constant=constants,
+        )
 
     def parse_preprocessor_directive(self):
         self.eat("PREPROCESSOR")
@@ -162,7 +169,16 @@ class MetalParser:
 
         body = self.parse_block()
 
-        return FunctionNode(qualifier, return_type, name, params, body, attributes)
+        # Create FunctionNode with proper argument order matching common_ast
+        return FunctionNode(
+            return_type=return_type,
+            name=name,
+            params=params,
+            body=body,
+            qualifiers=[qualifier] if qualifier else [],
+            attributes=attributes,
+            qualifier=qualifier,  # Also store as single qualifier for backward compatibility
+        )
 
     def parse_parameters(self):
         params = []

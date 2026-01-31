@@ -6,81 +6,171 @@ from .DirectxLexer import *
 class HLSLToCrossGLConverter:
     def __init__(self):
         self.type_map = {
+            # Scalar Types
             "void": "void",
+            "bool": "bool",
+            "int": "int",
+            "uint": "uint",
+            "dword": "uint",
+            "float": "float",
+            "half": "float16",
+            "double": "double",
+            "min16float": "float16",
+            "min10float": "float16",
+            "min16int": "int16",
+            "min12int": "int16",
+            "min16uint": "uint16",
+            "int64_t": "int64",
+            "uint64_t": "uint64",
+            # Vector Types - float
             "float2": "vec2",
             "float3": "vec3",
             "float4": "vec4",
-            "float2x2": "mat2",
-            "float3x3": "mat3",
-            "float4x4": "mat4",
-            "int": "int",
-            "int2": "ivec2",
-            "int3": "ivec3",
-            "int4": "ivec4",
-            "uint": "uint",
-            "uint2": "uvec2",
-            "uint3": "uvec3",
-            "uint4": "uvec4",
-            "bool": "bool",
-            "bool2": "bvec2",
-            "bool3": "bvec3",
-            "bool4": "bvec4",
-            "float": "float",
-            "double": "double",
-            "half": "float16_t",
+            # Vector Types - half
             "half2": "f16vec2",
             "half3": "f16vec3",
             "half4": "f16vec4",
+            # Vector Types - double
             "double2": "dvec2",
             "double3": "dvec3",
             "double4": "dvec4",
+            # Vector Types - int
+            "int2": "ivec2",
+            "int3": "ivec3",
+            "int4": "ivec4",
+            # Vector Types - uint
+            "uint2": "uvec2",
+            "uint3": "uvec3",
+            "uint4": "uvec4",
+            # Vector Types - bool
+            "bool2": "bvec2",
+            "bool3": "bvec3",
+            "bool4": "bvec4",
+            # Matrix Types - float
+            "float2x2": "mat2",
+            "float2x3": "mat2x3",
+            "float2x4": "mat2x4",
+            "float3x2": "mat3x2",
+            "float3x3": "mat3",
+            "float3x4": "mat3x4",
+            "float4x2": "mat4x2",
+            "float4x3": "mat4x3",
+            "float4x4": "mat4",
+            # Matrix Types - half
+            "half2x2": "f16mat2",
+            "half2x3": "f16mat2x3",
+            "half2x4": "f16mat2x4",
+            "half3x2": "f16mat3x2",
+            "half3x3": "f16mat3",
+            "half3x4": "f16mat3x4",
+            "half4x2": "f16mat4x2",
+            "half4x3": "f16mat4x3",
+            "half4x4": "f16mat4",
+            # Matrix Types - double
+            "double2x2": "dmat2",
+            "double2x3": "dmat2x3",
+            "double2x4": "dmat2x4",
+            "double3x2": "dmat3x2",
+            "double3x3": "dmat3",
+            "double3x4": "dmat3x4",
+            "double4x2": "dmat4x2",
+            "double4x3": "dmat4x3",
+            "double4x4": "dmat4",
+            # Texture Types
+            "Texture1D": "sampler1D",
             "Texture2D": "sampler2D",
+            "Texture3D": "sampler3D",
             "TextureCube": "samplerCube",
-            "int64_t": "int64_t",
-            "uint64_t": "uint64_t",
+            "Texture2DArray": "sampler2DArray",
+            "TextureCubeArray": "samplerCubeArray",
+            "Texture2DMS": "sampler2DMS",
+            # RW Texture Types (for compute shaders)
+            "RWTexture1D": "image1D",
+            "RWTexture2D": "image2D",
+            "RWTexture3D": "image3D",
+            # Buffer Types
+            "Buffer": "samplerBuffer",
+            "RWBuffer": "imageBuffer",
+            "StructuredBuffer": "buffer",
+            "RWStructuredBuffer": "buffer",
+            "ByteAddressBuffer": "buffer",
+            "RWByteAddressBuffer": "buffer",
+            # Sampler Types
+            "SamplerState": "sampler",
+            "SamplerComparisonState": "samplerShadow",
         }
         self.semantic_map = {
-            # Vertex inputs instance
-            "FRONT_FACE": "gl_IsFrontFace",
-            "PRIMITIVE_ID": "gl_PrimitiveID",
-            "INSTANCE_ID": "InstanceID",
-            "VERTEX_ID": "VertexID",
-            "SV_InstanceID": "gl_InstanceID",
+            # System-value semantics - Vertex inputs
             "SV_VertexID": "gl_VertexID",
-            # Vertex outputs
+            "SV_InstanceID": "gl_InstanceID",
+            "SV_PrimitiveID": "gl_PrimitiveID",
+            # System-value semantics - Vertex outputs
             "SV_POSITION": "gl_Position",
-            # Fragment inputs
+            "SV_Position": "gl_Position",
+            "SV_ClipDistance": "gl_ClipDistance",
+            "SV_CullDistance": "gl_CullDistance",
+            # System-value semantics - Fragment inputs
+            "SV_IsFrontFace": "gl_FrontFacing",
+            "SV_SampleIndex": "gl_SampleID",
+            "SV_Coverage": "gl_SampleMask",
+            # System-value semantics - Fragment outputs
             "SV_TARGET": "gl_FragColor",
-            "SV_TARGET0": "gl_FragColor0",
-            "SV_TARGET1": "gl_FragColor1",
-            "SV_TARGET2": "gl_FragColor2",
-            "SV_TARGET3": "gl_FragColor3",
-            "SV_TARGET4": "gl_FragColor4",
-            "SV_TARGET5": "gl_FragColor5",
-            "SV_TARGET6": "gl_FragColor6",
-            "SV_TARGET7": "gl_FragColor7",
+            "SV_Target": "gl_FragColor",
+            "SV_TARGET0": "gl_FragData[0]",
+            "SV_Target0": "gl_FragData[0]",
+            "SV_TARGET1": "gl_FragData[1]",
+            "SV_Target1": "gl_FragData[1]",
+            "SV_TARGET2": "gl_FragData[2]",
+            "SV_Target2": "gl_FragData[2]",
+            "SV_TARGET3": "gl_FragData[3]",
+            "SV_Target3": "gl_FragData[3]",
+            "SV_TARGET4": "gl_FragData[4]",
+            "SV_Target4": "gl_FragData[4]",
+            "SV_TARGET5": "gl_FragData[5]",
+            "SV_Target5": "gl_FragData[5]",
+            "SV_TARGET6": "gl_FragData[6]",
+            "SV_Target6": "gl_FragData[6]",
+            "SV_TARGET7": "gl_FragData[7]",
+            "SV_Target7": "gl_FragData[7]",
             "SV_DEPTH": "gl_FragDepth",
-            "SV_DEPTH0": "gl_FragDepth0",
-            "SV_DEPTH1": "gl_FragDepth1",
-            "SV_DEPTH2": "gl_FragDepth2",
-            "SV_DEPTH3": "gl_FragDepth3",
-            "SV_DEPTH4": "gl_FragDepth4",
-            "SV_DEPTH5": "gl_FragDepth5",
-            "SV_DEPTH6": "gl_FragDepth6",
-            "SV_DEPTH7": "gl_FragDepth7",
-            # Additional mappings
+            "SV_Depth": "gl_FragDepth",
+            "SV_DepthGreaterEqual": "gl_FragDepth",
+            "SV_DepthLessEqual": "gl_FragDepth",
+            # System-value semantics - Compute shader
+            "SV_GroupID": "gl_WorkGroupID",
+            "SV_GroupThreadID": "gl_LocalInvocationID",
+            "SV_DispatchThreadID": "gl_GlobalInvocationID",
+            "SV_GroupIndex": "gl_LocalInvocationIndex",
+            # Legacy semantics
+            "FRONT_FACE": "gl_FrontFacing",
+            "PRIMITIVE_ID": "gl_PrimitiveID",
+            "INSTANCE_ID": "gl_InstanceID",
+            "VERTEX_ID": "gl_VertexID",
+            # User-defined semantics
             "POSITION": "Position",
+            "POSITION0": "Position",
             "NORMAL": "Normal",
+            "NORMAL0": "Normal",
             "TANGENT": "Tangent",
+            "TANGENT0": "Tangent",
             "BINORMAL": "Binormal",
+            "BINORMAL0": "Binormal",
             "TEXCOORD": "TexCoord",
             "TEXCOORD0": "TexCoord0",
             "TEXCOORD1": "TexCoord1",
             "TEXCOORD2": "TexCoord2",
             "TEXCOORD3": "TexCoord3",
-            "SV_IsFrontFace": "gl_IsFrontFace",
-            "SV_PrimitiveID": "gl_PrimitiveID",
-            "SV_PointCoord": "gl_PointCoord",
+            "TEXCOORD4": "TexCoord4",
+            "TEXCOORD5": "TexCoord5",
+            "TEXCOORD6": "TexCoord6",
+            "TEXCOORD7": "TexCoord7",
+            "COLOR": "Color",
+            "COLOR0": "Color0",
+            "COLOR1": "Color1",
+            "BLENDWEIGHT": "BlendWeight",
+            "BLENDINDICES": "BlendIndices",
+            "PSIZE": "PointSize",
+            "FOG": "Fog",
         }
         self.bitwise_op_map = {
             "&": "bitAnd",
@@ -337,9 +427,13 @@ class HLSLToCrossGLConverter:
             return ""
 
     def generate_switch_statement(self, node, indent=1, is_main=False):
+        # Support both 'condition' and 'expression' attributes for compatibility
+        expression = getattr(node, "expression", None) or getattr(
+            node, "condition", None
+        )
         code = (
             "    " * indent
-            + f"switch ({self.generate_expression(node.condition, is_main)}) {{\n"
+            + f"switch ({self.generate_expression(expression, is_main)}) {{\n"
         )
 
         for case in node.cases:
@@ -347,12 +441,20 @@ class HLSLToCrossGLConverter:
                 "    " * (indent + 1)
                 + f"case {self.generate_expression(case.value, is_main)}:\n"
             )
-            code += self.generate_function_body(case.body, indent + 2, is_main)
+            # Support both 'body' and 'statements' attributes
+            case_body = getattr(case, "body", None) or getattr(case, "statements", [])
+            code += self.generate_function_body(case_body, indent + 2, is_main)
             code += "    " * (indent + 2) + "break;\n"
 
-        if node.default_body:
+        # Support multiple attribute names for default case
+        default_body = (
+            getattr(node, "default_body", None)
+            or getattr(node, "default_case", None)
+            or getattr(node, "default", None)
+        )
+        if default_body:
             code += "    " * (indent + 1) + "default:\n"
-            code += self.generate_function_body(node.default_body, indent + 2, is_main)
+            code += self.generate_function_body(default_body, indent + 2, is_main)
             code += "    " * (indent + 2) + "break;\n"
 
         code += "    " * indent + "}\n"

@@ -30,7 +30,6 @@ class HLSLParser:
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
-        print(f"Initializing parser with {len(tokens)} tokens")
 
     def parse(self):
         structs = []
@@ -226,11 +225,13 @@ class HLSLParser:
 
             self.eat("SEMICOLON")
 
-            members.append(VariableNode(member_type, member_name, member_semantic))
+            members.append(
+                VariableNode(member_type, member_name, semantic=member_semantic)
+            )
 
         self.eat("RBRACE")
 
-        # Check for variable declarations
+        # Check for variable declarations after struct
         variables = []
         if self.current_token[0] == "IDENTIFIER":
             variables.append(self.current_token[1])
@@ -241,9 +242,16 @@ class HLSLParser:
                 variables.append(self.current_token[1])
                 self.eat("IDENTIFIER")
 
+        # Eat semicolon if present
+        if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
-        return StructNode(name, members, variables, semantic)
+        # Create StructNode with proper arguments
+        # Store variables and semantic as attributes for backward compatibility
+        struct_node = StructNode(name, members)
+        struct_node.variables = variables
+        struct_node.semantic = semantic
+        return struct_node
 
     def parse_cbuffer(self):
         self.eat("CBUFFER")
@@ -281,9 +289,13 @@ class HLSLParser:
             members.append(VariableNode(member_type, member_name))
 
         self.eat("RBRACE")
-        self.eat("SEMICOLON")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
-        return StructNode(name, members)
+        # Create StructNode for cbuffer (cbuffers are essentially structs)
+        cbuffer_node = StructNode(name, members)
+        cbuffer_node.is_cbuffer = True
+        return cbuffer_node
 
     def parse_function(self, return_type, name):
         params = self.parse_parameters()
@@ -309,7 +321,17 @@ class HLSLParser:
         body = self.parse_block()
         self.eat("RBRACE")
 
-        return FunctionNode(return_type, name, params, body, qualifier, semantic)
+        # Create FunctionNode with proper argument order matching common_ast
+        return FunctionNode(
+            return_type=return_type,
+            name=name,
+            params=params,
+            body=body,
+            qualifiers=[qualifier] if qualifier else [],
+            attributes=[],
+            qualifier=qualifier,  # Store as single qualifier for backward compatibility
+            semantic=semantic,
+        )
 
     def parse_parameters(self):
         self.eat("LPAREN")
@@ -587,7 +609,8 @@ class HLSLParser:
         self.eat("RPAREN")
         self.eat("SEMICOLON")
 
-        return DoWhileNode(condition, body)
+        # DoWhileNode expects (body, condition) per common_ast
+        return DoWhileNode(body, condition)
 
     def parse_switch_statement(self):
         self.eat("SWITCH")
