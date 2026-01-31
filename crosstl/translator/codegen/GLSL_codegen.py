@@ -1,3 +1,23 @@
+"""
+OpenGL GLSL Code Generator Module.
+
+This module provides code generation for OpenGL GLSL (OpenGL Shading Language)
+from CrossGL Abstract Syntax Trees. It handles the translation of shader programs
+to OpenGL-compatible GLSL code.
+
+The generator supports:
+    - Type mapping from CrossGL to GLSL types
+    - Shader stage translation (vertex, fragment, compute, etc.)
+    - Built-in variable mapping (gl_Position, gl_FragCoord, etc.)
+    - Texture sampling operations
+    - Compute shader workgroup handling
+
+Example:
+    >>> from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+    >>> codegen = GLSLCodeGen()
+    >>> glsl_code = codegen.generate(ast)
+"""
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -22,6 +42,16 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 
 class GLSLCodeGen:
+    """
+    Code generator for OpenGL GLSL.
+
+    Translates CrossGL AST nodes to GLSL shader code, handling type mappings,
+    shader stages, and OpenGL-specific constructs.
+
+    Attributes:
+        semantic_map: Dictionary mapping semantic names to GLSL built-ins.
+    """
+
     def __init__(self):
         """Initialize the code generator."""
         self.semantic_map = {

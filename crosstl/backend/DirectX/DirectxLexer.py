@@ -1,3 +1,23 @@
+"""
+DirectX/HLSL Lexer Module.
+
+This module provides lexical analysis (tokenization) for Microsoft HLSL
+(High-Level Shading Language) used in DirectX. It converts HLSL source code
+into a stream of tokens that can be processed by the HLSL parser.
+
+The lexer supports:
+    - All HLSL keywords and types
+    - Texture and sampler types
+    - Buffer and resource types
+    - Shader model-specific features
+    - Preprocessor directives
+
+Example:
+    >>> from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+    >>> lexer = HLSLLexer(hlsl_code)
+    >>> tokens = lexer.tokens
+"""
+
 import os
 import re
 from typing import Iterator, Tuple, List, Optional
@@ -5,10 +25,10 @@ from enum import Enum, auto
 
 from .preprocessor import HLSLPreprocessor
 
-# using sets for faster lookup
+#: Set of token types to skip during parsing.
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
-# Token definitions - order matters! More specific patterns should come first
+#: Token definitions - order matters! More specific patterns should come first.
 TOKENS = tuple(
     [
         # Comments (must come first to avoid partial matches)

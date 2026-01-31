@@ -1,3 +1,27 @@
+"""
+Code Generation Module.
+
+This module provides code generators for translating CrossGL AST to various
+target shader languages. It includes the backend registry system and individual
+code generator implementations.
+
+Supported backends:
+    - CUDA: NVIDIA CUDA code generation
+    - DirectX/HLSL: Microsoft HLSL code generation
+    - OpenGL/GLSL: OpenGL GLSL code generation
+    - HIP: AMD HIP code generation
+    - Metal: Apple Metal Shading Language code generation
+    - Mojo: Mojo code generation
+    - Rust: Rust GPU code generation
+    - Vulkan/SPIR-V: Vulkan SPIR-V assembly code generation
+    - Slang: Slang shading language code generation (optional)
+
+Example:
+    >>> from crosstl.translator.codegen import get_codegen
+    >>> metal_gen = get_codegen("metal")
+    >>> metal_code = metal_gen.generate(ast)
+"""
+
 from .registry import (
     BackendSpec,
     register_backend,

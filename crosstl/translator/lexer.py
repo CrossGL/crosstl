@@ -1,6 +1,28 @@
+"""
+CrossGL Lexer Module.
+
+This module provides lexical analysis (tokenization) for the CrossGL shader language.
+It converts source code into a stream of tokens that can be processed by the parser.
+
+The lexer supports:
+    - Comments (single-line and multi-line)
+    - Preprocessor directives
+    - Keywords (control flow, types, shader stages, etc.)
+    - Operators (arithmetic, logical, bitwise, etc.)
+    - Literals (numbers, strings, characters)
+    - Identifiers
+
+Example:
+    >>> from crosstl.translator.lexer import Lexer
+    >>> lexer = Lexer("fn main() { return; }")
+    >>> tokens = lexer.get_tokens()
+"""
+
 import re
 from collections import OrderedDict
 
+#: Ordered dictionary of token patterns.
+#: Order matters - more specific patterns should come before general ones.
 TOKENS = OrderedDict(
     [
         # Comments
@@ -223,6 +245,8 @@ TOKENS = OrderedDict(
     ]
 )
 
+#: Dictionary mapping keyword strings to token types.
+#: Used by the lexer to distinguish keywords from identifiers.
 KEYWORDS = {
     # Core Language
     "shader": "SHADER",
@@ -381,16 +405,39 @@ class Lexer:
     """
     Production-ready lexer for CrossGL Universal IR.
 
+    The lexer converts CrossGL source code into a stream of tokens that can be
+    processed by the parser. It uses regular expressions for efficient tokenization
+    and includes token caching for improved performance.
+
     Supports comprehensive tokenization for all language features including:
+
     - Modern type systems (generics, traits, etc.)
     - Async/await patterns
     - Pattern matching
     - GPU programming constructs
     - Memory safety keywords
     - Complete operator set
+
+    Attributes:
+        code (str): The source code to tokenize.
+        tokens (list): List of tokenized (token_type, text) tuples.
+        token_cache (dict): Cache for token tuples to improve performance.
+        regex_cache (re.Pattern): Compiled regex pattern for tokenization.
+
+    Example:
+        >>> lexer = Lexer("shader main { vertex { fn main() {} } }")
+        >>> tokens = lexer.get_tokens()
+        >>> for token_type, text in tokens[:3]:
+        ...     print(f"{token_type}: {text}")
     """
 
     def __init__(self, code):
+        """
+        Initialize the lexer with source code.
+
+        Args:
+            code (str): The CrossGL source code to tokenize.
+        """
         self.code = code
         self.tokens = []
         self.token_cache = {}
@@ -398,21 +445,44 @@ class Lexer:
         self.tokenize()
 
     def _compile_patterns(self):
-        """Compile optimized regex with named groups for all tokens."""
+        """
+        Compile optimized regex with named groups for all tokens.
+
+        Returns:
+            re.Pattern: Compiled regex pattern combining all token patterns.
+        """
         combined_pattern = "|".join(
             f"(?P<{name}>{pattern})" for name, pattern in TOKENS.items()
         )
         return re.compile(combined_pattern)
 
     def _get_cached_token(self, text, token_type):
-        """Return cached token tuple for performance."""
+        """
+        Return cached token tuple for performance.
+
+        Args:
+            text (str): The token text.
+            token_type (str): The token type identifier.
+
+        Returns:
+            tuple: A (token_type, text) tuple.
+        """
         cache_key = (text, token_type)
         if cache_key not in self.token_cache:
             self.token_cache[cache_key] = (token_type, text)
         return self.token_cache[cache_key]
 
     def tokenize(self):
-        """Tokenize the input code with comprehensive error handling."""
+        """
+        Tokenize the input code with comprehensive error handling.
+
+        Processes the source code and populates the tokens list with
+        (token_type, text) tuples. Whitespace tokens are skipped.
+
+        Raises:
+            SyntaxError: If an illegal character is encountered, with detailed
+                error information including line number, column, and context.
+        """
         pos = 0
         length = len(self.code)
 
@@ -456,10 +526,19 @@ class Lexer:
         self.tokens.append(self._get_cached_token(None, "EOF"))
 
     def get_tokens(self):
-        """Return the list of tokens."""
+        """
+        Return the list of tokens.
+
+        Returns:
+            list: List of (token_type, text) tuples representing the tokenized code.
+        """
         return self.tokens
 
     def debug_print(self):
-        """Print tokens for debugging purposes."""
+        """
+        Print tokens for debugging purposes.
+
+        Outputs each token with its index, type, and text to stdout.
+        """
         for i, (token_type, text) in enumerate(self.tokens):
             print(f"{i:3d}: {token_type:20s} '{text}'")

@@ -1,4 +1,23 @@
-"""CUDA Code Generator"""
+"""
+CUDA Code Generator Module.
+
+This module provides code generation for NVIDIA CUDA from CrossGL Abstract
+Syntax Trees. It handles the translation of shader/kernel programs to CUDA code
+suitable for GPU computing.
+
+The generator supports:
+    - Type mapping from CrossGL to CUDA types
+    - Kernel function generation with __global__ qualifier
+    - Device function generation with __device__ qualifier
+    - Thread indexing (threadIdx, blockIdx, blockDim)
+    - Shared memory declarations
+    - Synchronization primitives
+
+Example:
+    >>> from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
+    >>> codegen = CudaCodeGen()
+    >>> cuda_code = codegen.generate(ast)
+"""
 
 from ..ast import (
     AssignmentNode,
@@ -24,7 +43,15 @@ from ..ast import (
 
 
 class CudaCodeGen:
-    """Generates CUDA code from CrossGL AST"""
+    """
+    Code generator for NVIDIA CUDA.
+
+    Translates CrossGL AST nodes to CUDA code, handling type mappings,
+    kernel functions, and CUDA-specific constructs.
+
+    Attributes:
+        indent_level: Current indentation level for code formatting.
+    """
 
     def __init__(self):
         self.indent_level = 0

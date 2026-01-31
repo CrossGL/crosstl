@@ -1,0 +1,4 @@
+# Documentation build dependencies
+sphinx>=7.0.0
+sphinx-rtd-theme>=2.0.0
+breathe>=4.35.0

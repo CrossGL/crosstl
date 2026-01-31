@@ -1,3 +1,21 @@
+"""
+Mojo Code Generator Module.
+
+This module provides code generation for Mojo from CrossGL Abstract Syntax Trees.
+Mojo is a high-performance programming language designed for AI and systems programming.
+
+The generator supports:
+    - Type mapping from CrossGL to Mojo types
+    - Struct generation with Mojo syntax
+    - Function generation with proper Mojo decorators
+    - Control flow structures
+
+Example:
+    >>> from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
+    >>> codegen = MojoCodeGen()
+    >>> mojo_code = codegen.generate(ast)
+"""
+
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
@@ -20,6 +38,17 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 
 class MojoCodeGen:
+    """
+    Code generator for Mojo.
+
+    Translates CrossGL AST nodes to Mojo code, handling type mappings
+    and Mojo-specific syntax.
+
+    Attributes:
+        current_shader: The current shader stage being processed.
+        type_mapping: Dictionary mapping CrossGL types to Mojo types.
+    """
+
     def __init__(self):
         self.current_shader = None
         self.type_mapping = {

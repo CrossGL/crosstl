@@ -1,3 +1,22 @@
+"""
+Rust GPU Code Generator Module.
+
+This module provides code generation for Rust GPU shaders from CrossGL Abstract
+Syntax Trees. It generates Rust code compatible with rust-gpu for GPU programming.
+
+The generator supports:
+    - Type mapping from CrossGL to Rust types
+    - Struct generation with Rust derive macros
+    - Function generation with proper attributes
+    - Control flow structures
+    - Vector and matrix operations
+
+Example:
+    >>> from crosstl.translator.codegen.rust_codegen import RustCodeGen
+    >>> codegen = RustCodeGen()
+    >>> rust_code = codegen.generate(ast)
+"""
+
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
@@ -20,6 +39,17 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 
 class RustCodeGen:
+    """
+    Code generator for Rust GPU.
+
+    Translates CrossGL AST nodes to Rust code, handling type mappings
+    and Rust-specific syntax for GPU programming.
+
+    Attributes:
+        current_shader: The current shader stage being processed.
+        type_mapping: Dictionary mapping CrossGL types to Rust types.
+    """
+
     def __init__(self):
         self.current_shader = None
         self.type_mapping = {
