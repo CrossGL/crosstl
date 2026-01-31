@@ -1,20 +1,46 @@
+"""
+OpenGL GLSL Lexer Module.
+
+This module provides lexical analysis (tokenization) for OpenGL GLSL (OpenGL
+Shading Language). It converts GLSL source code into a stream of tokens that
+can be processed by the GLSL parser.
+
+The lexer supports:
+    - All GLSL keywords and types
+    - Layout qualifiers
+    - Precision qualifiers
+    - Uniform, varying, and in/out declarations
+    - Texture sampler types
+    - Vector and matrix types
+
+Example:
+    >>> from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
+    >>> lexer = GLSLLexer(glsl_code)
+    >>> tokens = lexer.tokens
+"""
+
 import re
 from typing import Iterator, Tuple, List, Optional, Dict
 
 from .preprocessor import GLSLPreprocessor
 
-# Tokens to skip entirely
+#: Set of token types to skip during parsing.
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
+#: Pattern for hexadecimal numbers.
 HEX_NUMBER = r"0[xX][0-9a-fA-F]+"
+#: Pattern for decimal floating-point numbers.
 DECIMAL_FLOAT = r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
+#: Pattern for exponential notation.
 DECIMAL_EXP = r"\d+[eE][+-]?\d+"
+#: Pattern for decimal integers.
 DECIMAL_INT = r"\d+"
+#: Combined pattern for all numeric literals.
 NUMBER_PATTERN = (
     rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})(?:[uU])?"
 )
 
-# Order matters: longer tokens first
+#: Token definitions - order matters: longer tokens first.
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"//[^\n]*"),

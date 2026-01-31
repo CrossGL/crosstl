@@ -1,10 +1,30 @@
+"""
+Metal Shading Language Lexer Module.
+
+This module provides lexical analysis (tokenization) for Apple Metal Shading Language.
+It converts Metal source code into a stream of tokens that can be processed by
+the Metal parser.
+
+The lexer supports:
+    - All Metal keywords and types
+    - Metal attributes ([[...]])
+    - Address space qualifiers (device, constant, threadgroup)
+    - Texture and sampler types
+    - Vector and matrix types
+
+Example:
+    >>> from crosstl.backend.Metal.MetalLexer import MetalLexer
+    >>> lexer = MetalLexer(metal_code)
+    >>> tokens = lexer.tokens
+"""
+
 import re
 from typing import Iterator, Tuple, List, Optional
 
-# using sets for faster lookup
+#: Set of token types to skip during parsing.
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
-# Token definitions - order matters! More specific patterns should come first
+#: Token definitions - order matters! More specific patterns should come first.
 TOKENS = tuple(
     [
         # Comments (must come first to avoid partial matches)
