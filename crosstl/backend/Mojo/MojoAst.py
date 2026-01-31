@@ -1,6 +1,56 @@
 """Mojo AST Node definitions"""
 
-from ..common_ast import ASTNode, VariableNode
+from ..common_ast import (
+    ASTNode,
+    ArrayAccessNode,
+    AssignmentNode,
+    AttributeNode,
+    BinaryOpNode,
+    BreakNode,
+    CastNode,
+    ConstantBufferNode,
+    ContinueNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    SwitchNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+    WhileNode,
+)
+
+# Keep common AST imports used for re-exports (autoflake-safe).
+_COMMON_NODES = (
+    ArrayAccessNode,
+    AssignmentNode,
+    AttributeNode,
+    BinaryOpNode,
+    BreakNode,
+    CastNode,
+    ConstantBufferNode,
+    ContinueNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    SwitchNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+    WhileNode,
+)
 
 # Mojo-specific nodes
 

@@ -1,6 +1,48 @@
 """SPIR-V/Vulkan AST Node definitions"""
 
-from ..common_ast import ASTNode
+from ..common_ast import (
+    ASTNode,
+    AssignmentNode,
+    BinaryOpNode,
+    BreakNode,
+    CaseNode,
+    DoWhileNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    SwitchNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    WhileNode,
+)
+
+# Keep common AST imports used for re-exports (autoflake-safe).
+_COMMON_NODES = (
+    AssignmentNode,
+    BinaryOpNode,
+    BreakNode,
+    CaseNode,
+    DoWhileNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    SwitchNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    WhileNode,
+)
 
 # SPIR-V/Vulkan-specific nodes
 

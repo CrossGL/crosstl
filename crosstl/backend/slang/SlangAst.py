@@ -1,6 +1,40 @@
 """Slang AST Node definitions"""
 
-from ..common_ast import ASTNode
+from ..common_ast import (
+    ASTNode,
+    AssignmentNode,
+    BinaryOpNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+)
+
+# Keep common AST imports used for re-exports (autoflake-safe).
+_COMMON_NODES = (
+    AssignmentNode,
+    BinaryOpNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+)
 
 # Slang-specific nodes
 

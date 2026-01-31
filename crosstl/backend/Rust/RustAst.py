@@ -1,6 +1,44 @@
 """Rust AST Node definitions"""
 
-from ..common_ast import ASTNode
+from ..common_ast import (
+    ASTNode,
+    ArrayAccessNode,
+    AssignmentNode,
+    AttributeNode,
+    BinaryOpNode,
+    BreakNode,
+    CastNode,
+    ContinueNode,
+    FunctionCallNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+    WhileNode,
+)
+
+# Keep common AST imports used for re-exports (autoflake-safe).
+_COMMON_NODES = (
+    ArrayAccessNode,
+    AssignmentNode,
+    AttributeNode,
+    BinaryOpNode,
+    BreakNode,
+    CastNode,
+    ContinueNode,
+    FunctionCallNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+    WhileNode,
+)
 
 
 class ShaderNode(ASTNode):
