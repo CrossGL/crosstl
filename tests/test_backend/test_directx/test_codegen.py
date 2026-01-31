@@ -9,9 +9,7 @@ from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
-
-VERTEX_PIXEL_HLSL = textwrap.dedent(
-    """
+VERTEX_PIXEL_HLSL = textwrap.dedent("""
     cbuffer CameraBuffer : register(b0) {
         float4x4 viewProj;
         float3 eyePos;
@@ -63,22 +61,18 @@ VERTEX_PIXEL_HLSL = textwrap.dedent(
         output.color = Lighting(input.normal, input.uv);
         return output;
     }
-    """
-).strip()
+    """).strip()
 
-COMPUTE_HLSL = textwrap.dedent(
-    """
+COMPUTE_HLSL = textwrap.dedent("""
     RWTexture2D<float4> outputTex : register(u0);
 
     [numthreads(8, 8, 1)]
     void CSMain(uint3 dtid : SV_DispatchThreadID) {
         outputTex[dtid.xy] = float4(1.0, 0.0, 0.0, 1.0);
     }
-    """
-).strip()
+    """).strip()
 
-CONSTANTS_HLSL = textwrap.dedent(
-    """
+CONSTANTS_HLSL = textwrap.dedent("""
     cbuffer Globals : register(b0) {
         float4 baseColor;
         int lightCount;
@@ -100,11 +94,9 @@ CONSTANTS_HLSL = textwrap.dedent(
         output.color = baseColor * factor;
         return output;
     }
-    """
-).strip()
+    """).strip()
 
-CONTROL_FLOW_SHADER_HLSL = textwrap.dedent(
-    """
+CONTROL_FLOW_SHADER_HLSL = textwrap.dedent("""
     int ControlFlow(int a, int b) {
         int sum = 0;
         for (int i = 0; i < 4; ++i) {
@@ -159,11 +151,9 @@ CONTROL_FLOW_SHADER_HLSL = textwrap.dedent(
         output.color = float4(fv, fv, fv, 1.0);
         return output;
     }
-    """
-).strip()
+    """).strip()
 
-GEOMETRY_HLSL = textwrap.dedent(
-    """
+GEOMETRY_HLSL = textwrap.dedent("""
     struct GSInput {
         float4 pos : SV_Position;
     };
@@ -177,11 +167,9 @@ GEOMETRY_HLSL = textwrap.dedent(
         outVert.pos = input[0].pos;
         triStream.Append(outVert);
     }
-    """
-).strip()
+    """).strip()
 
-TESSELLATION_HLSL = textwrap.dedent(
-    """
+TESSELLATION_HLSL = textwrap.dedent("""
     struct HSInput {
         float4 pos : SV_Position;
     };
@@ -208,11 +196,9 @@ TESSELLATION_HLSL = textwrap.dedent(
     float4 DSMain(HSConstData data, const OutputPatch<HSOutput, 3> patch, float3 uvw : SV_DomainLocation) : SV_Position {
         return patch[0].pos;
     }
-    """
-).strip()
+    """).strip()
 
-MESH_TASK_HLSL = textwrap.dedent(
-    """
+MESH_TASK_HLSL = textwrap.dedent("""
     [shader(\"amplification\")]
     void ASMain() {
         DispatchMesh(1, 1, 1);
@@ -222,32 +208,26 @@ MESH_TASK_HLSL = textwrap.dedent(
     void MSMain() {
         SetMeshOutputCounts(1, 1);
     }
-    """
-).strip()
+    """).strip()
 
-RAYTRACING_HLSL = textwrap.dedent(
-    """
+RAYTRACING_HLSL = textwrap.dedent("""
     RaytracingAccelerationStructure accel : register(t0, space1);
 
     [shader(\"raygeneration\")]
     void RayGen() {
         TraceRay(accel, 0, 0xFF, 0, 1, 0, float3(0.0, 0.0, 0.0), 0.0, float3(0.0, 0.0, 1.0), 100.0, 0);
     }
-    """
-).strip()
+    """).strip()
 
-TEXTURE_SAMPLE_HLSL = textwrap.dedent(
-    """
+TEXTURE_SAMPLE_HLSL = textwrap.dedent("""
     Texture2D tex : register(t0);
     SamplerState samp : register(s0);
     float4 PSMain(float2 uv : TEXCOORD0) : SV_Target0 {
         return tex.Sample(samp, uv);
     }
-    """
-).strip()
+    """).strip()
 
-REGISTER_BINDINGS_HLSL = textwrap.dedent(
-    """
+REGISTER_BINDINGS_HLSL = textwrap.dedent("""
     cbuffer FrameData : register(b0, space1) {
         float4x4 viewProj : packoffset(c0);
     };
@@ -256,19 +236,15 @@ REGISTER_BINDINGS_HLSL = textwrap.dedent(
     float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
         return tex0.Sample(samp0, uv);
     }
-    """
-).strip()
+    """).strip()
 
-NUMTHREADS_HLSL = textwrap.dedent(
-    """
+NUMTHREADS_HLSL = textwrap.dedent("""
     [numthreads(8, 8, 1)]
     void CSMain(uint3 dtid : SV_DispatchThreadID) {
     }
-    """
-).strip()
+    """).strip()
 
-ENUM_TYPEDEF_HLSL = textwrap.dedent(
-    """
+ENUM_TYPEDEF_HLSL = textwrap.dedent("""
     enum BlendMode {
         BlendOpaque = 0,
         BlendAdd = 1,
@@ -277,11 +253,9 @@ ENUM_TYPEDEF_HLSL = textwrap.dedent(
     Color main(Color input) : SV_Target0 {
         return input;
     }
-    """
-).strip()
+    """).strip()
 
-ATTRIBUTE_HLSL = textwrap.dedent(
-    """
+ATTRIBUTE_HLSL = textwrap.dedent("""
     struct HSInput { float4 pos : SV_Position; };
     struct HSOutput { float4 pos : SV_Position; };
     [domain(\"tri\")]
@@ -298,11 +272,9 @@ ATTRIBUTE_HLSL = textwrap.dedent(
     float4 PSMain(float4 pos : SV_Position) : SV_Target0 {
         return pos;
     }
-    """
-).strip()
+    """).strip()
 
-EXTRA_ATTRIBUTES_HLSL = textwrap.dedent(
-    """
+EXTRA_ATTRIBUTES_HLSL = textwrap.dedent("""
     [unroll]
     [loop]
     [branch]
@@ -312,55 +284,43 @@ EXTRA_ATTRIBUTES_HLSL = textwrap.dedent(
     [fastopt]
     [allow_uav_condition]
     void AttrMain() { }
-    """
-).strip()
+    """).strip()
 
-INTERLOCKED_HLSL = textwrap.dedent(
-    """
+INTERLOCKED_HLSL = textwrap.dedent("""
     RWStructuredBuffer<int> buffer : register(u0);
     void main() {
         int original;
         InterlockedAdd(buffer[0], 1, original);
     }
-    """
-).strip()
+    """).strip()
 
-BUFFER_OPS_HLSL = textwrap.dedent(
-    """
+BUFFER_OPS_HLSL = textwrap.dedent("""
     StructuredBuffer<int> buffer : register(t0);
     void main() {
         int v = buffer.Load(0);
     }
-    """
-).strip()
+    """).strip()
 
-WAVE_OPS_HLSL = textwrap.dedent(
-    """
+WAVE_OPS_HLSL = textwrap.dedent("""
     uint main(uint value) : SV_Target0 {
         return WaveActiveSum(value);
     }
-    """
-).strip()
+    """).strip()
 
-RESOURCE_ARRAYS_HLSL = textwrap.dedent(
-    """
+RESOURCE_ARRAYS_HLSL = textwrap.dedent("""
     Texture2D textures[4] : register(t0, space1);
     SamplerState samplers[4] : register(s0, space1);
     float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
         return textures[0].Sample(samplers[0], uv);
     }
-    """
-).strip()
+    """).strip()
 
-RW_TEXTURE_ARRAY_HLSL = textwrap.dedent(
-    """
+RW_TEXTURE_ARRAY_HLSL = textwrap.dedent("""
     RWTexture1DArray rwTex[2] : register(u0);
     void main() { }
-    """
-).strip()
+    """).strip()
 
-RAY_STAGES_HLSL = textwrap.dedent(
-    """
+RAY_STAGES_HLSL = textwrap.dedent("""
     [shader(\"intersection\")]
     void IsMain() { }
     [shader(\"closesthit\")]
@@ -371,11 +331,9 @@ RAY_STAGES_HLSL = textwrap.dedent(
     void MsMain() { }
     [shader(\"callable\")]
     void ClMain() { }
-    """
-).strip()
+    """).strip()
 
-TEXTURE_METHODS_HLSL = textwrap.dedent(
-    """
+TEXTURE_METHODS_HLSL = textwrap.dedent("""
     Texture2D tex : register(t0);
     SamplerState samp : register(s0);
     float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
@@ -384,20 +342,16 @@ TEXTURE_METHODS_HLSL = textwrap.dedent(
         float4 c = tex.Gather(samp, uv);
         return a + b + c;
     }
-    """
-).strip()
+    """).strip()
 
-MS_TEXTURE_HLSL = textwrap.dedent(
-    """
+MS_TEXTURE_HLSL = textwrap.dedent("""
     Texture2DMS<float4> texMs : register(t0);
     float4 main() : SV_Target0 {
         return texMs.Load(int2(0, 0), 0);
     }
-    """
-).strip()
+    """).strip()
 
-MATH_INTRINSICS_HLSL = textwrap.dedent(
-    """
+MATH_INTRINSICS_HLSL = textwrap.dedent("""
     float4 main(float4 a : TEXCOORD0, float4 b : TEXCOORD1) : SV_Target0 {
         float d = dot(a.xyz, b.xyz);
         float3 n = normalize(a.xyz);
@@ -406,11 +360,9 @@ MATH_INTRINSICS_HLSL = textwrap.dedent(
         float4 s = saturate(l);
         return float4(d, n.x, m.x, l.x);
     }
-    """
-).strip()
+    """).strip()
 
-DIMENSIONS_HLSL = textwrap.dedent(
-    """
+DIMENSIONS_HLSL = textwrap.dedent("""
     Texture2D tex : register(t0);
     StructuredBuffer<int> buf : register(t1);
     void main() {
@@ -420,16 +372,13 @@ DIMENSIONS_HLSL = textwrap.dedent(
         uint len;
         buf.GetDimensions(len);
     }
-    """
-).strip()
+    """).strip()
 
-PAREN_HLSL = textwrap.dedent(
-    """
+PAREN_HLSL = textwrap.dedent("""
     float main(float a : TEXCOORD0, float b : TEXCOORD1, float c : TEXCOORD2) : SV_Target0 {
         return saturate((a - b) / c);
     }
-    """
-).strip()
+    """).strip()
 
 
 def generate_crossgl(code: str) -> str:

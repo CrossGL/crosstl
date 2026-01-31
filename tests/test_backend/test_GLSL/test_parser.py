@@ -31,8 +31,7 @@ def parse_fails(code: str, shader_type: str = "vertex"):
 
 
 def test_parse_vertex_shader_with_layout_and_io():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         layout(location = 0) in vec3 position;
         layout(location = 1) in vec2 uv;
@@ -43,14 +42,12 @@ def test_parse_vertex_shader_with_layout_and_io():
             vUV = uv;
             gl_Position = uMVP * vec4(position, 1.0);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_fragment_shader_with_discard():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         layout(location = 0) in vec2 vUV;
         layout(location = 0) out vec4 fragColor;
@@ -63,14 +60,12 @@ def test_parse_fragment_shader_with_discard():
             }
             fragColor = color;
         }
-        """
-    )
+        """)
     parse_ok(code, "fragment")
 
 
 def test_parse_structs_and_arrays():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         struct Light {
             vec3 position;
@@ -87,14 +82,12 @@ def test_parse_structs_and_arrays():
             vColor = color;
             gl_Position = vec4(1.0);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_control_flow_constructs():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         layout(location = 0) in vec3 position;
 
@@ -131,14 +124,12 @@ def test_parse_control_flow_constructs():
 
             gl_Position = vec4(position, 1.0);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_ternary_and_bitwise_expressions():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         void main() {
             int a = 3;
@@ -149,14 +140,12 @@ def test_parse_ternary_and_bitwise_expressions():
             bool f = (a != b) && (a <= b || b >= a);
             gl_Position = vec4(float(c + d + e));
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_matrix_vector_operations():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         void main() {
             mat4 m = mat4(1.0);
@@ -165,14 +154,12 @@ def test_parse_matrix_vector_operations():
             vec3 n = normalize(v.xyz);
             gl_Position = r + vec4(n, 0.0);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_precision_qualifiers():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 300 es
         precision highp float;
         precision mediump sampler2D;
@@ -184,14 +171,12 @@ def test_parse_precision_qualifiers():
             mediump vec4 color = texture(uTexture, vUV);
             fragColor = color;
         }
-        """
-    )
+        """)
     parse_ok(code, "fragment")
 
 
 def test_parse_preprocessor_directives():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         #define USE_LIGHTING 1
         #if USE_LIGHTING
@@ -202,14 +187,12 @@ def test_parse_preprocessor_directives():
             float value = FACTOR;
             gl_Position = vec4(value);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_function_overloads():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         float compute(vec3 n, vec3 l) {
             return max(dot(n, l), 0.0);
@@ -223,14 +206,12 @@ def test_parse_function_overloads():
             float v = compute(vec3(0.0), vec3(1.0), 0.5);
             gl_Position = vec4(v);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_interface_blocks_and_uniform_block():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         layout(std140, binding = 0) uniform Globals {
             mat4 mvp;
@@ -250,39 +231,33 @@ def test_parse_interface_blocks_and_uniform_block():
             vout.color = vec4(vin.position, 1.0);
             gl_Position = mvp * vec4(vin.position, 1.0);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 
 def test_parse_compute_layout_qualifier():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 430 core
         layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         void main() {
             // No-op
         }
-        """
-    )
+        """)
     parse_ok(code, "compute")
 
 
 def test_parse_subroutine_declaration():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         subroutine vec4 ShadeFunc(vec3 n);
         subroutine uniform ShadeFunc shade;
         void main() { }
-        """
-    )
+        """)
     parse_ok(code, "fragment")
 
 
 def test_parse_swizzle_and_constructors():
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         #version 450 core
         void main() {
             vec4 v = vec4(1.0, 2.0, 3.0, 4.0);
@@ -291,8 +266,7 @@ def test_parse_swizzle_and_constructors():
             mat3 m = mat3(1.0);
             float arr[] = float[](1.0, 2.0, 3.0);
         }
-        """
-    )
+        """)
     parse_ok(code, "vertex")
 
 

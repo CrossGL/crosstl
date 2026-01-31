@@ -1,6 +1,6 @@
 """Slang AST Node definitions"""
 
-from ..common_ast import *
+from ..common_ast import ASTNode
 
 # Slang-specific nodes
 

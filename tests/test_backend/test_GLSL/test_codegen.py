@@ -9,9 +9,7 @@ from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
-
-VERTEX_GLSL = textwrap.dedent(
-    """
+VERTEX_GLSL = textwrap.dedent("""
     #version 450 core
     layout(location = 0) in vec3 position;
     layout(location = 1) in vec2 uv;
@@ -22,11 +20,9 @@ VERTEX_GLSL = textwrap.dedent(
         vUV = uv;
         gl_Position = uMVP * vec4(position, 1.0);
     }
-    """
-).strip()
+    """).strip()
 
-FRAGMENT_GLSL = textwrap.dedent(
-    """
+FRAGMENT_GLSL = textwrap.dedent("""
     #version 450 core
     layout(location = 0) in vec2 vUV;
     layout(location = 0) out vec4 fragColor;
@@ -39,11 +35,9 @@ FRAGMENT_GLSL = textwrap.dedent(
         }
         fragColor = color;
     }
-    """
-).strip()
+    """).strip()
 
-CONTROL_FLOW_GLSL = textwrap.dedent(
-    """
+CONTROL_FLOW_GLSL = textwrap.dedent("""
     #version 450 core
     layout(location = 0) in vec3 position;
 
@@ -74,11 +68,9 @@ CONTROL_FLOW_GLSL = textwrap.dedent(
 
         gl_Position = vec4(position, 1.0);
     }
-    """
-).strip()
+    """).strip()
 
-STRUCT_ARRAY_GLSL = textwrap.dedent(
-    """
+STRUCT_ARRAY_GLSL = textwrap.dedent("""
     #version 450 core
     struct Light {
         vec3 position;
@@ -94,11 +86,9 @@ STRUCT_ARRAY_GLSL = textwrap.dedent(
         vColor = color;
         gl_Position = vec4(1.0);
     }
-    """
-).strip()
+    """).strip()
 
-INTERFACE_BLOCK_GLSL = textwrap.dedent(
-    """
+INTERFACE_BLOCK_GLSL = textwrap.dedent("""
     #version 450 core
     layout(std140, binding = 0) uniform Globals {
         mat4 mvp;
@@ -118,10 +108,8 @@ INTERFACE_BLOCK_GLSL = textwrap.dedent(
         vout.color = vec4(vin.position, 1.0);
         gl_Position = mvp * vec4(vin.position, 1.0);
     }
-    """
-).strip()
-COMPUTE_GLSL = textwrap.dedent(
-    """
+    """).strip()
+COMPUTE_GLSL = textwrap.dedent("""
     #version 430
     layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
     layout(binding = 0, rgba8) uniform writeonly image2D outImage;
@@ -130,8 +118,7 @@ COMPUTE_GLSL = textwrap.dedent(
         ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
         imageStore(outImage, coord, vec4(1.0, 0.0, 0.0, 1.0));
     }
-    """
-).strip()
+    """).strip()
 
 
 def generate_crossgl(code: str, shader_type: str = "vertex") -> str:

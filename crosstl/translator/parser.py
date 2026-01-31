@@ -1693,7 +1693,10 @@ class Parser:
                         left = MeshOpNode(left.name, arguments)
                     else:
                         left = FunctionCallNode(left, arguments)
-                elif isinstance(left, MemberAccessNode) and left.member in RAYQUERY_METHODS:
+                elif (
+                    isinstance(left, MemberAccessNode)
+                    and left.member in RAYQUERY_METHODS
+                ):
                     left = RayQueryOpNode(left.member, left.object, arguments)
                 else:
                     left = FunctionCallNode(left, arguments)

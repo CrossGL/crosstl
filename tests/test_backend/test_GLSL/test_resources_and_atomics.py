@@ -6,7 +6,6 @@ from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
-
 RESOURCE_GLSL = """
 #version 450 core
 layout(binding = 0, rgba8) uniform image2D outputImage;

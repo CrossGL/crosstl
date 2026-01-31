@@ -1,6 +1,6 @@
 """SPIR-V/Vulkan AST Node definitions"""
 
-from ..common_ast import *
+from ..common_ast import ASTNode
 
 # SPIR-V/Vulkan-specific nodes
 

@@ -323,7 +323,10 @@ class MetalParser:
                         break
                 idx += 1
 
-        while idx < len(self.tokens) and self.tokens[idx][0] in ["MULTIPLY", "BITWISE_AND"]:
+        while idx < len(self.tokens) and self.tokens[idx][0] in [
+            "MULTIPLY",
+            "BITWISE_AND",
+        ]:
             idx += 1
 
         if idx >= len(self.tokens) or self.tokens[idx][0] != "IDENTIFIER":
@@ -719,7 +722,13 @@ class MetalParser:
         if self.current_token[0] in TYPE_TOKENS:
             if self.current_token[0] == "IDENTIFIER":
                 next_tok = self.peek(1)[0]
-                if next_tok in ["IDENTIFIER", "SCOPE", "LESS_THAN", "MULTIPLY", "BITWISE_AND"]:
+                if next_tok in [
+                    "IDENTIFIER",
+                    "SCOPE",
+                    "LESS_THAN",
+                    "MULTIPLY",
+                    "BITWISE_AND",
+                ]:
                     return True
                 return self.current_token[1] in self.known_types
             return True
@@ -822,7 +831,9 @@ class MetalParser:
             self.eat("ELSE")
             else_body = self.parse_block()
 
-        return IfNode(if_chain=if_chain, else_if_chain=else_if_chain, else_body=else_body)
+        return IfNode(
+            if_chain=if_chain, else_if_chain=else_if_chain, else_body=else_body
+        )
 
     def parse_for_statement(self):
         self.eat("FOR")
@@ -1081,7 +1092,10 @@ class MetalParser:
                         break
                 idx += 1
         # Pointer/reference
-        while idx < len(self.tokens) and self.tokens[idx][0] in ["MULTIPLY", "BITWISE_AND"]:
+        while idx < len(self.tokens) and self.tokens[idx][0] in [
+            "MULTIPLY",
+            "BITWISE_AND",
+        ]:
             idx += 1
         return idx < len(self.tokens) and self.tokens[idx][0] == "RPAREN"
 
@@ -1093,7 +1107,12 @@ class MetalParser:
                 continue
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
-                if self.current_token[0] not in ["IDENTIFIER", "READ", "WRITE", "READ_WRITE"]:
+                if self.current_token[0] not in [
+                    "IDENTIFIER",
+                    "READ",
+                    "WRITE",
+                    "READ_WRITE",
+                ]:
                     raise SyntaxError(
                         f"Expected identifier after dot, got {self.current_token[0]}"
                     )
@@ -1131,7 +1150,19 @@ class MetalParser:
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
-        if self.current_token[0] in ["VECTOR", "MATRIX", "SIMD_MATRIX", "PACKED_VECTOR", "SIMD_VECTOR", "FLOAT", "HALF", "DOUBLE", "INT", "UINT", "BOOL"]:
+        if self.current_token[0] in [
+            "VECTOR",
+            "MATRIX",
+            "SIMD_MATRIX",
+            "PACKED_VECTOR",
+            "SIMD_VECTOR",
+            "FLOAT",
+            "HALF",
+            "DOUBLE",
+            "INT",
+            "UINT",
+            "BOOL",
+        ]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.current_token[0] == "LPAREN":
@@ -1152,7 +1183,10 @@ class MetalParser:
             self.eat("IDENTIFIER")
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
-            if self.current_token[0] not in TYPE_TOKENS and self.current_token[0] != "METAL":
+            if (
+                self.current_token[0] not in TYPE_TOKENS
+                and self.current_token[0] != "METAL"
+            ):
                 raise SyntaxError(
                     f"Expected identifier after '::', got {self.current_token[0]}"
                 )

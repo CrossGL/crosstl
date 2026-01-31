@@ -160,7 +160,9 @@ def test_preprocessor_and_precision_parsing():
     ast = parse_code(tokens)
     assert isinstance(ast, ShaderNode)
     directives = [
-        pp for pp in getattr(ast, "preprocessors", []) if isinstance(pp, PreprocessorNode)
+        pp
+        for pp in getattr(ast, "preprocessors", [])
+        if isinstance(pp, PreprocessorNode)
     ]
     names = {pp.directive for pp in directives}
     assert "version" in names

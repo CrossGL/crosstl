@@ -1,7 +1,13 @@
 from .DirectxAst import *
 from .DirectxParser import *
 from .DirectxLexer import *
-from ..common_ast import ArrayAccessNode, BreakNode, CastNode, ContinueNode, TextureSampleNode
+from ..common_ast import (
+    ArrayAccessNode,
+    BreakNode,
+    CastNode,
+    ContinueNode,
+    TextureSampleNode,
+)
 
 
 class HLSLToCrossGLConverter:
@@ -432,7 +438,9 @@ class HLSLToCrossGLConverter:
         )
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
-        code += f"{self.map_type(func.return_type)} {func.name}({params}){semantic} {{\n"
+        code += (
+            f"{self.map_type(func.return_type)} {func.name}({params}){semantic} {{\n"
+        )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    " * indent + "}\n\n"
         return code
@@ -517,7 +525,9 @@ class HLSLToCrossGLConverter:
             else ""
         )
         update = (
-            self.generate_expression(node.update, is_main) if node.update is not None else ""
+            self.generate_expression(node.update, is_main)
+            if node.update is not None
+            else ""
         )
 
         code = f"for ({init}; {condition}; {update}) {{\n"
@@ -606,7 +616,9 @@ class HLSLToCrossGLConverter:
                     return f"{self.texture_method_map['Load']}({obj}, {args})"
                 if member == "GetDimensions":
                     if len(expr.args) <= 1:
-                        return f"{self.buffer_method_map['GetDimensions']}({obj}, {args})"
+                        return (
+                            f"{self.buffer_method_map['GetDimensions']}({obj}, {args})"
+                        )
                     return f"{self.texture_method_map['GetDimensions']}({obj}, {args})"
                 if member in self.texture_method_map:
                     return f"{self.texture_method_map[member]}({obj}, {args})"

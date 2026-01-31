@@ -16,7 +16,6 @@ from .mojo_codegen import MojoCodeGen
 from .rust_codegen import RustCodeGen
 from .SPIRV_codegen import VulkanSPIRVCodeGen
 
-
 register_backend(
     BackendSpec(
         name="cuda",

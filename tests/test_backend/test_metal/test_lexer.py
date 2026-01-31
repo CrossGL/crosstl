@@ -12,6 +12,7 @@ def tokenize_code(code: str) -> List:
 def token_values(tokens: List) -> List[str]:
     """Return token values as strings for flexible assertions."""
     values = []
+
     def split_top_level(text: str) -> List[str]:
         parts = []
         buf = ""
@@ -332,7 +333,11 @@ def test_tokenizes_raytracing_types():
     values = token_values(tokenize_code(code))
     assert_contains(
         values,
-        ["acceleration_structure", "intersection_function_table", "visible_function_table"],
+        [
+            "acceleration_structure",
+            "intersection_function_table",
+            "visible_function_table",
+        ],
     )
 
 

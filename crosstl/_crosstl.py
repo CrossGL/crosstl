@@ -65,9 +65,7 @@ def translate(
     else:
         if normalized_backend in ["cgl", "crossgl"]:
             if not source_spec.reverse_codegen_factory:
-                raise ValueError(
-                    f"Reverse translation not supported for: {file_path}"
-                )
+                raise ValueError(f"Reverse translation not supported for: {file_path}")
             codegen = source_spec.reverse_codegen_factory()
             generated_code = codegen.generate(ast)
         else:

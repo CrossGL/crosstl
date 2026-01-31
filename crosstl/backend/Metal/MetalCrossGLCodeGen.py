@@ -276,7 +276,9 @@ class MetalToCrossGLConverter:
             code += "    // Typedefs\n"
             for alias in typedefs:
                 if isinstance(alias, TypeAliasNode):
-                    code += f"    typedef {self.map_type(alias.alias_type)} {alias.name};\n"
+                    code += (
+                        f"    typedef {self.map_type(alias.alias_type)} {alias.name};\n"
+                    )
             code += "\n"
 
         if enums:
@@ -315,7 +317,9 @@ class MetalToCrossGLConverter:
                     code += f"        {decl};\n"
                 code += "    }\n\n"
 
-        globals_list = getattr(ast, "global_variables", []) or getattr(ast, "global_vars", [])
+        globals_list = getattr(ast, "global_variables", []) or getattr(
+            ast, "global_vars", []
+        )
         if globals_list:
             code += "    // Globals\n"
             for glob in globals_list:
@@ -402,10 +406,12 @@ class MetalToCrossGLConverter:
                     parts.append(f"alignas({self.generate_expression(item, False)})")
             alignas_prefix = " ".join(parts) + " "
         type_str = f"{self.map_type(var.vtype)}{self.format_array_suffix(var)}"
-        const_str = (
-            "const " if hasattr(var, "is_const") and var.is_const else ""
+        const_str = "const " if hasattr(var, "is_const") and var.is_const else ""
+        semantic = (
+            self.map_semantic(getattr(var, "attributes", None))
+            if include_semantic
+            else ""
         )
-        semantic = self.map_semantic(getattr(var, "attributes", None)) if include_semantic else ""
         parts = [alignas_prefix + const_str + type_str, var.name]
         if semantic:
             parts.append(semantic)
@@ -414,7 +420,9 @@ class MetalToCrossGLConverter:
     def generate_function(self, func, indent=2):
         code = ""
         code += "    " * indent
-        params = ", ".join(self.format_decl(p, include_semantic=True) for p in func.params)
+        params = ", ".join(
+            self.format_decl(p, include_semantic=True) for p in func.params
+        )
         fn_semantic = self.map_semantic(func.attributes)
         suffix = f" {fn_semantic}" if fn_semantic else ""
         code += f"{self.map_type(func.return_type)} {func.name}({params}){suffix} {{\n"
@@ -436,7 +444,9 @@ class MetalToCrossGLConverter:
                     if stmt.value is None:
                         code += "return;\n"
                     else:
-                        code += f"return {self.generate_expression(stmt.value, is_main)};\n"
+                        code += (
+                            f"return {self.generate_expression(stmt.value, is_main)};\n"
+                        )
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
             elif isinstance(stmt, ForNode):
@@ -449,7 +459,11 @@ class MetalToCrossGLConverter:
                 code += self.generate_if_statement(stmt, indent, is_main)
             elif isinstance(stmt, SwitchNode):
                 code += self.generate_switch_statement(stmt, indent, is_main)
-            elif isinstance(stmt, FunctionCallNode) or isinstance(stmt, MethodCallNode) or isinstance(stmt, CallNode):
+            elif (
+                isinstance(stmt, FunctionCallNode)
+                or isinstance(stmt, MethodCallNode)
+                or isinstance(stmt, CallNode)
+            ):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, PostfixOpNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"

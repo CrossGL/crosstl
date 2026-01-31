@@ -25,7 +25,6 @@ from .OpenglAst import (
     DiscardNode,
 )
 
-
 TYPE_TOKENS = {
     "VOID",
     "BOOL",
@@ -236,7 +235,11 @@ class GLSLParser:
                 layouts.append({"layout": layout, "qualifiers": qualifiers})
                 continue
 
-            if qualifiers and self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "SEMICOLON":
+            if (
+                qualifiers
+                and self.current_token[0] == "IDENTIFIER"
+                and self.peek(1)[0] == "SEMICOLON"
+            ):
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
                 self.eat("SEMICOLON")
@@ -246,12 +249,10 @@ class GLSLParser:
                 continue
 
             if self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "LBRACE":
-                struct_node, block_vars = self.parse_interface_block(
-                    qualifiers, layout
-                )
+                struct_node, block_vars = self.parse_interface_block(qualifiers, layout)
                 structs.append(struct_node)
                 for var in block_vars:
-                    lowered = {q.lower() for q in (var.qualifiers or [])}
+                    lowered = {q.lower() for q in var.qualifiers or []}
                     if "uniform" in lowered:
                         uniforms.append(var)
                     elif "in" in lowered or "out" in lowered or "inout" in lowered:
@@ -267,10 +268,16 @@ class GLSLParser:
                     global_variables.append(var)
                 continue
 
-            if self.current_token[0] in TYPE_TOKENS or self.current_token[0] == "IDENTIFIER":
+            if (
+                self.current_token[0] in TYPE_TOKENS
+                or self.current_token[0] == "IDENTIFIER"
+            ):
                 type_name = self.parse_type()
 
-                if self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "LPAREN":
+                if (
+                    self.current_token[0] == "IDENTIFIER"
+                    and self.peek(1)[0] == "LPAREN"
+                ):
                     function = self.parse_function(type_name)
                     functions.append(function)
                     continue
@@ -280,7 +287,7 @@ class GLSLParser:
                 )
 
                 for var in declarations:
-                    lowered = {q.lower() for q in (var.qualifiers or [])}
+                    lowered = {q.lower() for q in var.qualifiers or []}
                     if "uniform" in lowered:
                         uniforms.append(var)
                     elif "const" in lowered:
@@ -362,9 +369,7 @@ class GLSLParser:
             value = self.current_token[1]
             self.eat("IDENTIFIER")
             return value
-        raise SyntaxError(
-            f"Expected layout qualifier value, got {self.current_token}"
-        )
+        raise SyntaxError(f"Expected layout qualifier value, got {self.current_token}")
 
     def parse_qualifiers(self):
         qualifiers = []
@@ -437,7 +442,7 @@ class GLSLParser:
                 layout=layout,
             )
 
-            lowered = {q.lower() for q in (qualifiers or [])}
+            lowered = {q.lower() for q in qualifiers or []}
             if "in" in lowered:
                 var.io_type = "IN"
             if "out" in lowered:
@@ -581,7 +586,9 @@ class GLSLParser:
             )
         else:
             for member in members:
-                member.qualifiers = list(member.qualifiers or []) + list(qualifiers or [])
+                member.qualifiers = list(member.qualifiers or []) + list(
+                    qualifiers or []
+                )
                 member.layout = layout
                 block_vars.append(member)
 
@@ -689,7 +696,10 @@ class GLSLParser:
             return DiscardNode()
 
         # Variable declaration
-        if self.current_token[0] in QUALIFIER_TOKENS or self.current_token[0] in TYPE_TOKENS:
+        if (
+            self.current_token[0] in QUALIFIER_TOKENS
+            or self.current_token[0] in TYPE_TOKENS
+        ):
             qualifiers = self.parse_qualifiers()
             type_name = self.parse_type()
             return self.parse_variable_declarations(type_name, qualifiers=qualifiers)
@@ -753,7 +763,10 @@ class GLSLParser:
 
         init = None
         if self.current_token[0] != "SEMICOLON":
-            if self.current_token[0] in QUALIFIER_TOKENS or self.current_token[0] in TYPE_TOKENS:
+            if (
+                self.current_token[0] in QUALIFIER_TOKENS
+                or self.current_token[0] in TYPE_TOKENS
+            ):
                 qualifiers = self.parse_qualifiers()
                 type_name = self.parse_type()
                 init_decls = self.parse_variable_declarations(
@@ -1068,7 +1081,10 @@ class GLSLParser:
             value = self.current_token[1]
             self.advance()
             return value
-        if self.current_token[0] in TYPE_TOKENS or self.current_token[0] == "IDENTIFIER":
+        if (
+            self.current_token[0] in TYPE_TOKENS
+            or self.current_token[0] == "IDENTIFIER"
+        ):
             name = self.current_token[1]
             self.advance()
             return VariableNode("", name)

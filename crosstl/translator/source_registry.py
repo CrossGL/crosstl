@@ -101,9 +101,7 @@ class SourceRegistry:
         ext = path_or_ext
         if path_or_ext:
             looks_like_path = os.path.basename(path_or_ext) != path_or_ext
-            looks_like_filename = (
-                not path_or_ext.startswith(".") and "." in path_or_ext
-            )
+            looks_like_filename = not path_or_ext.startswith(".") and "." in path_or_ext
             if looks_like_path or looks_like_filename:
                 _, ext = os.path.splitext(path_or_ext)
         ext_key = _normalize_extension(ext or "")

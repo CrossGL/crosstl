@@ -5,9 +5,7 @@ import pytest
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
-
-VERTEX_PIXEL_HLSL = textwrap.dedent(
-    """
+VERTEX_PIXEL_HLSL = textwrap.dedent("""
     cbuffer CameraBuffer : register(b0) {
         float4x4 viewProj;
         float3 eyePos;
@@ -59,11 +57,9 @@ VERTEX_PIXEL_HLSL = textwrap.dedent(
         output.color = Lighting(input.normal, input.uv);
         return output;
     }
-    """
-).strip()
+    """).strip()
 
-CONTROL_FLOW_HLSL = textwrap.dedent(
-    """
+CONTROL_FLOW_HLSL = textwrap.dedent("""
     int ControlFlow(int a, int b) {
         int sum = 0;
         for (int i = 0; i < 4; ++i) {
@@ -102,11 +98,9 @@ CONTROL_FLOW_HLSL = textwrap.dedent(
         int ternaryVal = (a > b) ? a : b;
         return sum + ternaryVal;
     }
-    """
-).strip()
+    """).strip()
 
-ARRAYS_HLSL = textwrap.dedent(
-    """
+ARRAYS_HLSL = textwrap.dedent("""
     float4 colors[4];
     float3 grid[2][3];
 
@@ -121,11 +115,9 @@ ARRAYS_HLSL = textwrap.dedent(
     float useGrid() {
         return grid[1][2].x;
     }
-    """
-).strip()
+    """).strip()
 
-RESOURCES_HLSL = textwrap.dedent(
-    """
+RESOURCES_HLSL = textwrap.dedent("""
     Texture2D<float4> tex1 : register(t1);
     SamplerComparisonState sampComp : register(s1);
     RWTexture2D<float4> outputTex : register(u0);
@@ -137,11 +129,9 @@ RESOURCES_HLSL = textwrap.dedent(
         outData[0] = value;
         return value;
     }
-    """
-).strip()
+    """).strip()
 
-OVERLOADS_HLSL = textwrap.dedent(
-    """
+OVERLOADS_HLSL = textwrap.dedent("""
     float4 Blend(float4 a, float4 b) {
         return a + b;
     }
@@ -153,22 +143,18 @@ OVERLOADS_HLSL = textwrap.dedent(
     float4 UseBlend(float4 a, float4 b) {
         return Blend(a, b, 0.5);
     }
-    """
-).strip()
+    """).strip()
 
-COMPUTE_HLSL = textwrap.dedent(
-    """
+COMPUTE_HLSL = textwrap.dedent("""
     RWTexture2D<float4> outputTex : register(u0);
 
     [numthreads(8, 8, 1)]
     void CSMain(uint3 dtid : SV_DispatchThreadID) {
         outputTex[dtid.xy] = float4(1.0, 0.0, 0.0, 1.0);
     }
-    """
-).strip()
+    """).strip()
 
-PREPROCESSOR_HLSL = textwrap.dedent(
-    """
+PREPROCESSOR_HLSL = textwrap.dedent("""
     #define USE_LIGHTING 1
     #if USE_LIGHTING
     float3 Lighting(float3 n) { return n; }
@@ -177,8 +163,7 @@ PREPROCESSOR_HLSL = textwrap.dedent(
     float4 main() : SV_Target0 {
         return float4(1.0, 1.0, 1.0, 1.0);
     }
-    """
-).strip()
+    """).strip()
 
 
 def tokenize_code(code: str):

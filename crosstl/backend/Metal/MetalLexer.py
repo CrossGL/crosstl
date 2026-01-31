@@ -57,7 +57,10 @@ TOKENS = tuple(
         ("MATRIX", r"\b(float|half|double)[2-4]x[2-4]\b"),
         ("SIMD_MATRIX", r"\bsimd_float[2-4]x[2-4]\b"),
         # Vector types
-        ("VECTOR", r"\b(float|half|double|int|uint|short|ushort|char|uchar|bool)[2-4]\b"),
+        (
+            "VECTOR",
+            r"\b(float|half|double|int|uint|short|ushort|char|uchar|bool)[2-4]\b",
+        ),
         ("PACKED_VECTOR", r"\bpacked_(float|half|int|uint)[2-4]\b"),
         ("SIMD_VECTOR", r"\bsimd_(float|int|uint)[2-4]\b"),
         # Scalar types

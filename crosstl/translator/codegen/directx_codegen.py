@@ -370,11 +370,13 @@ class HLSLCodeGen:
 
         if effective_shader_type in shader_map:
             code += f"// {effective_shader_type.capitalize()} Shader\n"
-            code += f"{return_type} {shader_map[effective_shader_type]}({params_str}) {{\n"
+            code += (
+                f"{return_type} {shader_map[effective_shader_type]}({params_str}) {{\n"
+            )
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
             if shader_attr:
-                code += f"[shader(\"{shader_attr}\")]\n"
+                code += f'[shader("{shader_attr}")]\n'
             code += f"{return_type} {func.name}({params_str}) {{\n"
 
         # Handle function body - support both old and new AST

@@ -34,7 +34,7 @@ def test_variadic_stringize_and_paste():
     """
     output = HLSLPreprocessor().preprocess(code)
     assert "foobar" in output
-    assert "\"hello world\"" in output
+    assert '"hello world"' in output
     assert "printf" in output and "42" in output
 
 

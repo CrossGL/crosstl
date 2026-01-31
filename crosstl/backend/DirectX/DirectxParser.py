@@ -34,7 +34,6 @@ from ..common_ast import (
     TextureSampleNode,
 )
 
-
 TYPE_TOKENS = {
     "FLOAT",
     "HALF",
@@ -259,7 +258,10 @@ class HLSLParser:
         while self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
             if self.current_token[0] != "IDENTIFIER":
-                while self.current_token[0] != "RBRACKET" and self.current_token[0] != "EOF":
+                while (
+                    self.current_token[0] != "RBRACKET"
+                    and self.current_token[0] != "EOF"
+                ):
                     self.eat(self.current_token[0])
                 self.eat("RBRACKET")
                 continue
@@ -276,7 +278,9 @@ class HLSLParser:
                         args.append(self.parse_expression())
                 self.eat("RPAREN")
 
-            while self.current_token[0] != "RBRACKET" and self.current_token[0] != "EOF":
+            while (
+                self.current_token[0] != "RBRACKET" and self.current_token[0] != "EOF"
+            ):
                 self.eat(self.current_token[0])
             self.eat("RBRACKET")
             attributes.append(AttributeNode(name, args))
@@ -307,7 +311,9 @@ class HLSLParser:
     def parse_generic_arguments(self):
         args = []
         self.eat("LESS_THAN")
-        while self.current_token[0] != "GREATER_THAN" and self.current_token[0] != "EOF":
+        while (
+            self.current_token[0] != "GREATER_THAN" and self.current_token[0] != "EOF"
+        ):
             if self.is_type_token(self.current_token[0]):
                 args.append(self.parse_type())
             else:
@@ -501,6 +507,7 @@ class HLSLParser:
         cbuffer_node.register = register
         cbuffer_node.packoffset = packoffset
         return cbuffer_node
+
     def parse_function(self, return_type, name, qualifiers, attributes):
         params = self.parse_parameters()
 
@@ -601,7 +608,9 @@ class HLSLParser:
                     self.current_token[0] == "IDENTIFIER"
                     and self.current_token[1] in primitive_qualifiers
                 ):
-                    attributes.append(AttributeNode("primitive", [self.current_token[1]]))
+                    attributes.append(
+                        AttributeNode("primitive", [self.current_token[1]])
+                    )
                     self.eat("IDENTIFIER")
                 if not self.is_type_token(self.current_token[0]):
                     raise SyntaxError(
@@ -933,6 +942,7 @@ class HLSLParser:
                 body.append(stmt)
 
         return CaseNode(value, body)
+
     def parse_expression(self):
         return self.parse_assignment_expression()
 
@@ -1121,7 +1131,11 @@ class HLSLParser:
 
                 if isinstance(expr, MemberAccessNode) and isinstance(expr.member, str):
                     if expr.member in ["Sample", "SampleLevel"] and len(args) >= 2:
-                        lod = args[2] if expr.member == "SampleLevel" and len(args) > 2 else None
+                        lod = (
+                            args[2]
+                            if expr.member == "SampleLevel" and len(args) > 2
+                            else None
+                        )
                         expr = TextureSampleNode(expr.object, args[0], args[1], lod)
                         continue
                 expr = FunctionCallNode(expr, args)

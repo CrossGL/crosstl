@@ -6,7 +6,6 @@ from crosstl.translator import parse
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from crosstl.translator.plugin_loader import discover_backend_plugins
 
-
 SMOKE_SHADER = """
 shader main {
     struct VSInput {

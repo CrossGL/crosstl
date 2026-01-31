@@ -14,9 +14,7 @@ _DISCOVERED = {"done": False}
 
 
 def _backend_root() -> str:
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "backend")
-    )
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 
 def _backend_dirs() -> Iterable[str]:
@@ -26,8 +24,7 @@ def _backend_dirs() -> Iterable[str]:
     return [
         name
         for name in os.listdir(backend_root)
-        if os.path.isdir(os.path.join(backend_root, name))
-        and not name.startswith(".")
+        if os.path.isdir(os.path.join(backend_root, name)) and not name.startswith(".")
     ]
 
 

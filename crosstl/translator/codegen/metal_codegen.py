@@ -452,9 +452,7 @@ class MetalCodeGen:
             code += f"kernel {return_type} kernel_{func.name}({params_str}) {{\n"
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
-            code += (
-                f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
-            )
+            code += f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
         elif shader_type in [
             "ray_intersection",
             "ray_any_hit",
@@ -480,9 +478,7 @@ class MetalCodeGen:
                 "callable": "callable",
             }
             stage_keyword = rt_stage_map.get(shader_type, shader_type)
-            code += (
-                f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
-            )
+            code += f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
         else:
             # Handle semantic - get from attributes in new AST
             semantic = None

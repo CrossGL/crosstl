@@ -7,7 +7,6 @@ from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
-
 GEOMETRY_GLSL = """
 #version 450 core
 layout(triangles) in;

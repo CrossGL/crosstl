@@ -10,7 +10,9 @@ HEX_NUMBER = r"0[xX][0-9a-fA-F]+"
 DECIMAL_FLOAT = r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
 DECIMAL_EXP = r"\d+[eE][+-]?\d+"
 DECIMAL_INT = r"\d+"
-NUMBER_PATTERN = rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})(?:[uU])?"
+NUMBER_PATTERN = (
+    rf"(?:{HEX_NUMBER}|{DECIMAL_FLOAT}|{DECIMAL_EXP}|{DECIMAL_INT})(?:[uU])?"
+)
 
 # Order matters: longer tokens first
 TOKENS = tuple(

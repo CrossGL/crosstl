@@ -249,7 +249,9 @@ class GLSLToCrossGLConverter:
         )
 
     def format_layout(self, layout_entry):
-        layout = layout_entry.get("layout", {}) if isinstance(layout_entry, dict) else {}
+        layout = (
+            layout_entry.get("layout", {}) if isinstance(layout_entry, dict) else {}
+        )
         qualifiers = (
             layout_entry.get("qualifiers", []) if isinstance(layout_entry, dict) else []
         )
@@ -360,9 +362,7 @@ class GLSLToCrossGLConverter:
             "tessellation_control",
             "tessellation_evaluation",
         ):
-            result += (
-                self.indent_str + f"struct {self.stage_struct_name()}Input {{\n"
-            )
+            result += self.indent_str + f"struct {self.stage_struct_name()}Input {{\n"
             self.increase_indent()
             for input_var in self.inputs:
                 var_type = self.convert_type(input_var.vtype)
@@ -381,9 +381,7 @@ class GLSLToCrossGLConverter:
             "tessellation_control",
             "tessellation_evaluation",
         ):
-            result += (
-                self.indent_str + f"struct {self.stage_struct_name()}Output {{\n"
-            )
+            result += self.indent_str + f"struct {self.stage_struct_name()}Output {{\n"
             self.increase_indent()
             for output_var in self.outputs:
                 var_type = self.convert_type(output_var.vtype)
@@ -431,16 +429,16 @@ class GLSLToCrossGLConverter:
 
         # Generate global constants
         for const_var in getattr(node, "constant", []) or []:
-            result += self.indent_str + self.generate_variable_declaration(const_var) + ";\n"
+            result += (
+                self.indent_str + self.generate_variable_declaration(const_var) + ";\n"
+            )
         if getattr(node, "constant", []):
             result += "\n"
 
         # Generate global variables
         for global_var in getattr(node, "global_variables", []) or []:
             result += (
-                self.indent_str
-                + self.generate_variable_declaration(global_var)
-                + ";\n"
+                self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
             )
         if getattr(node, "global_variables", []):
             result += "\n"
@@ -524,9 +522,7 @@ class GLSLToCrossGLConverter:
             if self.shader_type == "fragment" and not any(
                 isinstance(stmt, ReturnNode) for stmt in main_function.body
             ):
-                output_name = (
-                    self.outputs[0].name if self.outputs else "gl_FragColor"
-                )
+                output_name = self.outputs[0].name if self.outputs else "gl_FragColor"
                 result += self.indent() + f"return {output_name};\n"
 
             self.decrease_indent()
@@ -738,7 +734,9 @@ class GLSLToCrossGLConverter:
         init = self.generate_statement(node.init).rstrip(";") if node.init else ""
         condition = self.generate_expression(node.condition) if node.condition else ""
         update_node = getattr(node, "update", None) or getattr(node, "iteration", None)
-        iteration = self.generate_statement(update_node).rstrip(";") if update_node else ""
+        iteration = (
+            self.generate_statement(update_node).rstrip(";") if update_node else ""
+        )
 
         result = f"for ({init}; {condition}; {iteration}) {{\n"
         self.increase_indent()
@@ -823,18 +821,14 @@ class GLSLToCrossGLConverter:
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
-            ) and any(
-                var.name == node.name for var in self.inputs
-            ):
+            ) and any(var.name == node.name for var in self.inputs):
                 return f"input.{node.name}"
             if self.shader_type in (
                 "vertex",
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
-            ) and any(
-                var.name == node.name for var in self.outputs
-            ):
+            ) and any(var.name == node.name for var in self.outputs):
                 return f"output.{node.name}"
             return node.name
         elif isinstance(node, BinaryOpNode):
@@ -950,18 +944,14 @@ class GLSLToCrossGLConverter:
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
-            ) and any(
-                var.name == node.object.name for var in self.inputs
-            ):
+            ) and any(var.name == node.object.name for var in self.inputs):
                 object_name = f"input.{node.object.name}"
             elif self.shader_type in (
                 "vertex",
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
-            ) and any(
-                var.name == node.object.name for var in self.outputs
-            ):
+            ) and any(var.name == node.object.name for var in self.outputs):
                 object_name = f"output.{node.object.name}"
             else:
                 object_name = node.object.name
@@ -1005,8 +995,12 @@ class GLSLToCrossGLConverter:
         """
         var_type = self.convert_type(node.vtype)
         var_name = node.name
-        qualifiers = {str(q).lower() for q in (getattr(node, "qualifiers", None) or [])}
-        prefix = "const " if getattr(node, "is_const", False) or "const" in qualifiers else ""
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
+        prefix = (
+            "const "
+            if getattr(node, "is_const", False) or "const" in qualifiers
+            else ""
+        )
         array_suffix = ""
         if node.array_size is not None:
             array_size = self.generate_expression(node.array_size)

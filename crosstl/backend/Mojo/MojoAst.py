@@ -1,6 +1,6 @@
 """Mojo AST Node definitions"""
 
-from ..common_ast import *
+from ..common_ast import ASTNode, VariableNode
 
 # Mojo-specific nodes
 

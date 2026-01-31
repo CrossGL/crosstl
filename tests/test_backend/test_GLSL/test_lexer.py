@@ -97,21 +97,21 @@ def test_whitespace_only_input():
         "attribute",
         "varying",
         "inout",
-    "flat",
-    "smooth",
-    "noperspective",
-    "centroid",
-    "sample",
-    "patch",
-    "invariant",
-    "precise",
-    "coherent",
-    "volatile",
-    "restrict",
-    "readonly",
-    "writeonly",
-    "shared",
-    "buffer",
+        "flat",
+        "smooth",
+        "noperspective",
+        "centroid",
+        "sample",
+        "patch",
+        "invariant",
+        "precise",
+        "coherent",
+        "volatile",
+        "restrict",
+        "readonly",
+        "writeonly",
+        "shared",
+        "buffer",
     ],
 )
 def test_keywords_are_reserved(keyword):
@@ -169,7 +169,9 @@ def test_builtin_types_are_reserved(dtype):
     assert first_token_type(dtype) != identifier_token_type()
 
 
-@pytest.mark.parametrize("literal", ["0", "42", "0xFF", "1.0", ".5", "1.", "1e-3", "2E+4"])
+@pytest.mark.parametrize(
+    "literal", ["0", "42", "0xFF", "1.0", ".5", "1.", "1e-3", "2E+4"]
+)
 def test_numeric_literals_tokenize(literal):
     tokens = strip_ignored(normalize_tokens(tokenize_code(f"float x = {literal};")))
     assert_contains_value(tokens, literal)
@@ -253,8 +255,7 @@ def test_preprocessor_version_directive_tokens():
     assert_contains_value(tokens, "450")
     assert_contains_value(tokens, "core")
     assert any(
-        token_value == "#"
-        or token_type in {"HASH", "PP_HASH", "PREPROCESSOR"}
+        token_value == "#" or token_type in {"HASH", "PP_HASH", "PREPROCESSOR"}
         for token_type, token_value in tokens
     )
 

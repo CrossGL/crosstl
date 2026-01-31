@@ -30,7 +30,9 @@ class HLSLPreprocessor:
 
         if defines:
             for name, value in defines.items():
-                self.macros[name] = Macro(name=name, params=None, replacement=str(value))
+                self.macros[name] = Macro(
+                    name=name, params=None, replacement=str(value)
+                )
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         logical_lines = self._split_logical_lines(code)
@@ -53,9 +55,7 @@ class HLSLPreprocessor:
             logical_lines.append(buffer)
         return logical_lines
 
-    def _process_lines(
-        self, lines: List[str], file_path: Optional[str]
-    ) -> List[str]:
+    def _process_lines(self, lines: List[str], file_path: Optional[str]) -> List[str]:
         output: List[str] = []
         conditional_stack: List[Dict[str, bool]] = []
         current_line = 1
@@ -98,7 +98,9 @@ class HLSLPreprocessor:
                     if not conditional_stack:
                         raise SyntaxError("#else without #if")
                     frame = conditional_stack[-1]
-                    frame["active"] = frame["parent_active"] and not frame["branch_taken"]
+                    frame["active"] = (
+                        frame["parent_active"] and not frame["branch_taken"]
+                    )
                     frame["branch_taken"] = True
                 elif directive == "endif":
                     if not conditional_stack:
@@ -151,7 +153,9 @@ class HLSLPreprocessor:
         if directive == "ifndef":
             name = rest.strip()
             return name not in self.macros
-        return bool(self._evaluate_expression(self._expand_macros(rest, line_num, True)))
+        return bool(
+            self._evaluate_expression(self._expand_macros(rest, line_num, True))
+        )
 
     def _evaluate_expression(self, expr: str) -> int:
         tokenizer = _ExpressionTokenizer(expr)
@@ -217,7 +221,7 @@ class HLSLPreprocessor:
         target = match.group(2)
 
         search_paths: List[str] = []
-        if delimiter == "\"" and file_path:
+        if delimiter == '"' and file_path:
             search_paths.append(os.path.dirname(file_path))
         search_paths.extend(self.include_paths)
 
@@ -405,8 +409,8 @@ class HLSLPreprocessor:
 
     def _stringize(self, value: str) -> str:
         collapsed = re.sub(r"\s+", " ", value.strip())
-        escaped = collapsed.replace("\\", "\\\\").replace("\"", "\\\"")
-        return f"\"{escaped}\""
+        escaped = collapsed.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
 
     def _tokenize_replacement(self, text: str) -> List[Tuple[str, str]]:
         tokens: List[Tuple[str, str]] = []
@@ -477,13 +481,17 @@ class _ExpressionTokenizer:
         self.pos += 1
         if ch.isdigit():
             start = self.pos - 1
-            while self.pos < len(self.expr) and (self.expr[self.pos].isalnum() or self.expr[self.pos] in "xX"):
+            while self.pos < len(self.expr) and (
+                self.expr[self.pos].isalnum() or self.expr[self.pos] in "xX"
+            ):
                 self.pos += 1
-            text = self.expr[start:self.pos]
+            text = self.expr[start : self.pos]
             return "NUMBER", self._parse_number(text)
         if ch.isalpha() or ch == "_":
             start = self.pos - 1
-            while self.pos < len(self.expr) and (self.expr[self.pos].isalnum() or self.expr[self.pos] == "_"):
+            while self.pos < len(self.expr) and (
+                self.expr[self.pos].isalnum() or self.expr[self.pos] == "_"
+            ):
                 self.pos += 1
             return "NUMBER", 0
         return ch, None

@@ -1,6 +1,6 @@
 """Rust AST Node definitions"""
 
-from ..common_ast import *
+from ..common_ast import ASTNode
 
 
 class ShaderNode(ASTNode):
@@ -54,7 +54,14 @@ class FunctionNode(ASTNode):
     """Node representing a Rust function."""
 
     def __init__(
-        self, return_type, name, params, body, attributes=None, visibility=None, generics=None
+        self,
+        return_type,
+        name,
+        params,
+        body,
+        attributes=None,
+        visibility=None,
+        generics=None,
     ):
         self.return_type = return_type
         self.name = name
@@ -69,6 +76,7 @@ class FunctionNode(ASTNode):
             f"FunctionNode(name={self.name}, return_type={self.return_type}, "
             f"params={len(self.params)}, visibility={self.visibility})"
         )
+
 
 # Rust-specific nodes
 
