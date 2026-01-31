@@ -16,12 +16,42 @@ class ShaderNode(ASTNode):
         structs=None,
         global_variables=None,
         kernels=None,
+        *args,  # Accept extra positional args
+        **kwargs  # Accept extra keyword args for compatibility
     ):
         self.includes = includes or []
         self.functions = functions or []
         self.structs = structs or []
         self.global_variables = global_variables or []
         self.kernels = kernels or []
+        
+        # Initialize common backend-specific attributes with defaults
+        self.uniforms = kwargs.get('uniforms', [])
+        self.in_out = kwargs.get('in_out', [])
+        self.constant = kwargs.get('constant', [])
+        self.io_variables = kwargs.get('io_variables', [])
+        self.processors = kwargs.get('processors', [])
+        self.cbuffers = kwargs.get('cbuffers', [])
+        self.imports = kwargs.get('imports', [])
+        self.exports = kwargs.get('exports', [])
+        self.typedefs = kwargs.get('typedefs', [])
+        self.extensions = kwargs.get('extensions', [])
+        self.global_vars = kwargs.get('global_vars', self.global_variables)  # Alias
+        
+        # Support different backend signatures
+        if args:
+            # Handle positional arguments from different backends
+            if len(args) >= 1:
+                self.uniforms = args[0]
+            if len(args) >= 2:
+                self.in_out = args[1]
+            if len(args) >= 3:
+                self.constant = args[2]
+        
+        # Store any extra kwargs as attributes
+        for key, value in kwargs.items():
+            if not hasattr(self, key):
+                setattr(self, key, value)
 
     def __repr__(self):
         return f"ShaderNode(includes={self.includes}, functions={self.functions}, structs={self.structs}, global_variables={self.global_variables}, kernels={self.kernels})"
@@ -31,7 +61,7 @@ class FunctionNode(ASTNode):
     """Node representing a function declaration"""
 
     def __init__(
-        self, return_type, name, params, body, qualifiers=None, attributes=None
+        self, return_type, name, params, body, qualifiers=None, attributes=None, *args, **kwargs
     ):
         self.return_type = return_type
         self.name = name
@@ -39,6 +69,16 @@ class FunctionNode(ASTNode):
         self.body = body
         self.qualifiers = qualifiers or []
         self.attributes = attributes or []
+        self.generics = kwargs.get('generics', [])  # For generic/template functions
+        
+        # Support additional arguments from different backends
+        if args:
+            if len(args) >= 1:
+                self.qualifier = args[0]  # Some backends use singular
+        
+        for key, value in kwargs.items():
+            if not hasattr(self, key):
+                setattr(self, key, value)
 
     def __repr__(self):
         return f"FunctionNode(return_type={self.return_type}, name={self.name}, params={self.params}, body={self.body}, qualifiers={self.qualifiers})"
@@ -59,13 +99,19 @@ class StructNode(ASTNode):
 class VariableNode(ASTNode):
     """Node representing a variable declaration"""
 
-    def __init__(self, vtype, name, value=None, qualifiers=None, attributes=None, is_const=False):
+    def __init__(self, vtype, name, value=None, qualifiers=None, attributes=None, is_const=False, **kwargs):
         self.vtype = vtype
         self.name = name
         self.value = value
         self.qualifiers = qualifiers or []
         self.attributes = attributes or []
         self.is_const = is_const
+        self.semantic = kwargs.get('semantic', None)  # Common in shader languages
+        
+        # Support additional parameters from different backends
+        for key, val in kwargs.items():
+            if not hasattr(self, key):
+                setattr(self, key, val)
 
     def __repr__(self):
         return f"VariableNode(vtype={self.vtype}, name={self.name}, value={self.value}, qualifiers={self.qualifiers})"
@@ -240,18 +286,28 @@ class ReturnNode(ASTNode):
         return f"ReturnNode(value={self.value})"
 
 
-class BreakNode(ASTNode):
-    """Node representing a break statement"""
-
-    def __repr__(self):
-        return "BreakNode()"
-
-
 class ContinueNode(ASTNode):
     """Node representing a continue statement"""
 
+    def __init__(self, *args, **kwargs):
+        # Accept any arguments for compatibility
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
     def __repr__(self):
         return "ContinueNode()"
+
+
+class BreakNode(ASTNode):
+    """Node representing a break statement"""
+
+    def __init__(self, *args, **kwargs):
+        # Accept any arguments for compatibility
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def __repr__(self):
+        return "BreakNode()"
 
 
 class VectorConstructorNode(ASTNode):

@@ -22,9 +22,14 @@ class ImplNode(ASTNode):
 class TraitNode(ASTNode):
     """Node representing a trait definition"""
 
-    def __init__(self, name, methods):
+    def __init__(self, name, methods, *args, **kwargs):
         self.name = name
         self.methods = methods
+        
+        # Handle additional arguments for compatibility
+        for key, value in kwargs.items():
+            if not hasattr(self, key):
+                setattr(self, key, value)
 
     def __repr__(self):
         return f"TraitNode(name={self.name}, methods={len(self.methods)})"

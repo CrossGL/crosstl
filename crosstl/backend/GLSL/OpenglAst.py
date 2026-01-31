@@ -5,6 +5,17 @@ from ..common_ast import *
 
 # GLSL-specific nodes
 
+class LayoutNode(ASTNode):
+    """Node representing layout qualifiers"""
+
+    def __init__(self, qualifiers, declaration=None):
+        self.qualifiers = qualifiers
+        self.declaration = declaration
+
+    def __repr__(self):
+        return f"LayoutNode(qualifiers={self.qualifiers}, declaration={self.declaration})"
+
+
 class UniformNode(ASTNode):
     """Node representing a uniform variable"""
 
