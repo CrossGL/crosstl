@@ -300,8 +300,17 @@ class SlangCodeGen:
             right = self.generate_expression(node.right)
             return f"{left} {node.op} {right}"
         elif isinstance(node, FunctionCallNode):
+            func_expr = getattr(node, "function", None)
+            if func_expr is None:
+                func_expr = node.name
+            if hasattr(func_expr, "name"):
+                callee = func_expr.name
+            elif isinstance(func_expr, str):
+                callee = func_expr
+            else:
+                callee = self.generate_expression(func_expr)
             args = ", ".join([self.generate_expression(arg) for arg in node.args])
-            return f"{node.name}({args})"
+            return f"{callee}({args})"
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand)
             return f"{node.op}{operand}"

@@ -1,9 +1,29 @@
 """HIP AST Node definitions"""
 
-from ..common_ast import *
-
+from ..common_ast import (
+    ASTNode,
+    ArrayAccessNode,
+    AssignmentNode,
+    BinaryOpNode,
+    BreakNode,
+    ContinueNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    PreprocessorNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    SyncNode,
+    UnaryOpNode,
+    VariableNode,
+    WhileNode,
+)
 
 # HIP-specific nodes (very similar to CUDA)
+
 
 class KernelNode(FunctionNode):
     """Node representing a HIP kernel function (marked with __global__)"""
@@ -75,7 +95,9 @@ class SharedMemoryNode(VariableNode):
         self.size = size
 
     def __repr__(self):
-        return f"SharedMemoryNode(vtype={self.vtype}, name={self.name}, size={self.size})"
+        return (
+            f"SharedMemoryNode(vtype={self.vtype}, name={self.name}, size={self.size})"
+        )
 
 
 class ConstantMemoryNode(VariableNode):
@@ -108,4 +130,3 @@ class HipDevicePropertyNode(ASTNode):
 
     def __repr__(self):
         return f"HipDevicePropertyNode(property_name={self.property_name}, device_id={self.device_id})"
-

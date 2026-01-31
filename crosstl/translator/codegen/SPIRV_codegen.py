@@ -1275,20 +1275,29 @@ class VulkanSPIRVCodeGen:
 
         # Function calls
         elif isinstance(expr, FunctionCallNode):
+            callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+            callee_name = None
+            if hasattr(callee_expr, "name"):
+                callee_name = callee_expr.name
+            elif isinstance(callee_expr, str):
+                callee_name = callee_expr
+
             # Evaluate arguments
             args = []
             has_errors = False
             for arg in expr.args:
                 arg_value = self.process_expression(arg)
                 if arg_value is None:
-                    self.emit(f"; WARNING: Failed to evaluate argument for {expr.name}")
+                    self.emit(
+                        f"; WARNING: Failed to evaluate argument for {callee_name or callee_expr}"
+                    )
                     has_errors = True
                     # Create a default argument
                     float_type = self.register_primitive_type("float")
                     arg_value = self.register_constant(0.0, float_type)
                 args.append(arg_value)
 
-            if has_errors and expr.name == "vec2":
+            if has_errors and callee_name == "vec2":
                 # Special handling for vec2 constructor with errors
                 float_type = self.register_primitive_type("float")
                 vector_type = self.register_vector_type(float_type, 2)
@@ -1304,7 +1313,13 @@ class VulkanSPIRVCodeGen:
                 )
                 return SpirvId(id_value, vector_type.type)
 
-            return self.call_function(expr.name, args)
+            if callee_name is None:
+                # Non-identifier callee (e.g., function table call) not supported in SPIR-V path
+                self.emit("; WARNING: Unsupported callee expression in SPIR-V backend")
+                float_type = self.register_primitive_type("float")
+                return self.register_constant(0.0, float_type)
+
+            return self.call_function(callee_name, args)
 
         # Member access
         elif isinstance(expr, MemberAccessNode):

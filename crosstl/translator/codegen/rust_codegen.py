@@ -697,9 +697,16 @@ class RustCodeGen:
             return f"{array}[{index}]"
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             # Handle FunctionCallNode
-            func_name = getattr(expr, "function", getattr(expr, "name", "unknown"))
-            if hasattr(func_name, "name"):
-                func_name = func_name.name
+            func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
+            func_name = None
+            if hasattr(func_expr, "name"):
+                func_name = func_expr.name
+                callee = func_name
+            elif isinstance(func_expr, str):
+                func_name = func_expr
+                callee = func_expr
+            else:
+                callee = self.generate_expression(func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
             # Map function names to Rust equivalents
@@ -732,7 +739,7 @@ class RustCodeGen:
 
             # Handle standard function calls
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
-            return f"{func_name}({args_str})"
+            return f"{callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             # Handle MemberAccessNode
             obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))

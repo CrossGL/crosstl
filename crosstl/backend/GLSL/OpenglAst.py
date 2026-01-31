@@ -1,19 +1,47 @@
 """OpenGL/GLSL AST Node definitions"""
 
-from ..common_ast import *
-
+# pylint: disable=unused-import
+from crosstl.backend.common_ast import (
+    ASTNode,
+    ShaderNode,
+    VariableNode,
+    AssignmentNode,
+    FunctionNode,
+    ArrayAccessNode,
+    BinaryOpNode,
+    UnaryOpNode,
+    ReturnNode,
+    FunctionCallNode,
+    IfNode,
+    ForNode,
+    WhileNode,
+    DoWhileNode,
+    VectorConstructorNode,
+    MemberAccessNode,
+    TernaryOpNode,
+    StructNode,
+    SwitchNode,
+    CaseNode,
+    PostfixOpNode,
+    BreakNode,
+    ContinueNode,
+    DiscardNode,
+)
 
 # GLSL-specific nodes
+
 
 class LayoutNode(ASTNode):
     """Node representing layout qualifiers"""
 
-    def __init__(self, qualifiers, declaration=None):
-        self.qualifiers = qualifiers
+    def __init__(self, qualifiers=None, declaration=None):
+        self.qualifiers = qualifiers or {}
         self.declaration = declaration
 
     def __repr__(self):
-        return f"LayoutNode(qualifiers={self.qualifiers}, declaration={self.declaration})"
+        return (
+            f"LayoutNode(qualifiers={self.qualifiers}, declaration={self.declaration})"
+        )
 
 
 class UniformNode(ASTNode):

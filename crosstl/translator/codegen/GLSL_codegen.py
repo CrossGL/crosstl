@@ -7,11 +7,16 @@ from ..ast import (
     FunctionCallNode,
     IfNode,
     MemberAccessNode,
+    MeshOpNode,
+    PreprocessorNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     StructNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
@@ -97,10 +102,30 @@ class GLSLCodeGen:
             "tex2Dlod": "textureLod",
             "tex2Dbias": "texture",
             "tex2Dgrad": "textureGrad",
+            "tex2Doffset": "textureOffset",
             "texCUBE": "texture",
             "texCUBElod": "textureLod",
             "texCUBEbias": "texture",
             "texCUBEgrad": "textureGrad",
+            "textureOffset": "textureOffset",
+            "textureProj": "textureProj",
+            "textureGatherOffset": "textureGatherOffset",
+            "textureGatherOffsets": "textureGatherOffsets",
+            "textureQueryLevels": "textureQueryLevels",
+            "textureQueryLod": "textureQueryLod",
+            "texelFetch": "texelFetch",
+            "imageAtomicAdd": "imageAtomicAdd",
+            "imageAtomicMin": "imageAtomicMin",
+            "imageAtomicMax": "imageAtomicMax",
+            "imageAtomicAnd": "imageAtomicAnd",
+            "imageAtomicOr": "imageAtomicOr",
+            "imageAtomicXor": "imageAtomicXor",
+            "imageAtomicExchange": "imageAtomicExchange",
+            "imageAtomicCompSwap": "imageAtomicCompSwap",
+            "atomicCounterIncrement": "atomicCounterIncrement",
+            "atomicCounterDecrement": "atomicCounterDecrement",
+            "atomicCounter": "atomicCounter",
+            "atomicCounterAdd": "atomicCounterAdd",
             "mul": "*",  # Matrix multiplication
             "ddx": "dFdx",
             "ddy": "dFdy",
@@ -145,7 +170,30 @@ class GLSLCodeGen:
 
     def generate(self, ast):
         code = "\n"
-        code += "#version 450 core\n"
+        preprocessors = getattr(ast, "preprocessors", []) or []
+        version_line = None
+        extra_lines = []
+        for directive in preprocessors:
+            if isinstance(directive, PreprocessorNode):
+                if directive.directive == "precision":
+                    line = (
+                        f"precision {directive.content};"
+                        if directive.content
+                        else "precision;"
+                    )
+                else:
+                    line = f"#{directive.directive} {directive.content}".strip()
+            else:
+                line = str(directive).strip()
+            if line.startswith("#version") and version_line is None:
+                version_line = line
+            elif line:
+                extra_lines.append(line)
+        if version_line is None:
+            version_line = "#version 450 core"
+        code += f"{version_line}\n"
+        if extra_lines:
+            code += "\n".join(extra_lines) + "\n"
 
         # Generate structs - handle both old and new AST
         structs = getattr(ast, "structs", [])
@@ -384,12 +432,27 @@ class GLSLCodeGen:
 
         params_str = ", ".join(params)
 
-        if shader_type == "vertex":
-            code += f"void main(){{\n"
-        elif shader_type == "fragment":
-            code += f"void main() {{\n"
-        elif shader_type == "compute":
-            code += f"void main() {{\n"
+        stage_entry_types = {
+            "vertex",
+            "fragment",
+            "compute",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+            "task",
+            "amplification",
+            "object",
+            "ray_generation",
+            "ray_intersection",
+            "ray_closest_hit",
+            "ray_any_hit",
+            "ray_miss",
+            "ray_callable",
+        }
+
+        if shader_type in stage_entry_types:
+            code += "void main() {\n"
         else:
             # Handle return type - support both old and new AST
             if hasattr(func, "return_type"):
@@ -584,6 +647,19 @@ class GLSLCodeGen:
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
             return f"({op}{operand})"
+        elif isinstance(expr, WaveOpNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{expr.operation}({args})"
+        elif isinstance(expr, RayTracingOpNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{expr.operation}({args})"
+        elif isinstance(expr, MeshOpNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{expr.operation}({args})"
+        elif isinstance(expr, RayQueryOpNode):
+            query = self.generate_expression(expr.query_expr)
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{query}.{expr.operation}({args})"
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
@@ -594,10 +670,20 @@ class GLSLCodeGen:
                 return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
             # Map function names to GLSL equivalents
-            func_name = self.function_map.get(expr.name, expr.name)
+            func_expr = getattr(expr, "function", getattr(expr, "name", expr))
+            func_name = None
+            if hasattr(func_expr, "name"):
+                func_name = func_expr.name
+                callee = func_name
+            elif isinstance(func_expr, str):
+                func_name = func_expr
+                callee = func_expr
+            else:
+                callee = self.generate_expression(func_expr)
+            func_name = self.function_map.get(func_name, func_name)
 
             # Handle vector constructors
-            if expr.name in [
+            if func_name in [
                 "vec2",
                 "vec3",
                 "vec4",
@@ -612,16 +698,16 @@ class GLSLCodeGen:
                 "bvec4",
             ]:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"{expr.name}({args})"
+                return f"{func_name}({args})"
 
             # Handle matrix constructors
-            if expr.name in ["mat2", "mat3", "mat4"]:
+            if func_name in ["mat2", "mat3", "mat4"]:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"{expr.name}({args})"
+                return f"{func_name}({args})"
 
             # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            return f"{func_name}({args})"
+            return f"{callee}({args})"
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"

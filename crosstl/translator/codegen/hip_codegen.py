@@ -494,7 +494,16 @@ class HipCodeGen:
 
     def visit_FunctionCallNode(self, node) -> str:
         """Visit function call node"""
-        func_name = node.name
+        func_expr = getattr(node, "function", node.name)
+        func_name = None
+        if hasattr(func_expr, "name"):
+            func_name = func_expr.name
+            callee = func_name
+        elif isinstance(func_expr, str):
+            func_name = func_expr
+            callee = func_expr
+        else:
+            callee = self.visit(func_expr)
         args = [self.visit(arg) for arg in node.args]
 
         # Map function name
@@ -514,7 +523,8 @@ class HipCodeGen:
             return "__threadfence()"
 
         args_str = ", ".join(args)
-        return f"{mapped_name}({args_str})"
+        target = mapped_name if mapped_name is not None else callee
+        return f"{target}({args_str})"
 
     def visit_str(self, node) -> str:
         """Visit string node"""

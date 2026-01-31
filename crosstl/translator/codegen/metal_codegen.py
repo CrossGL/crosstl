@@ -7,11 +7,16 @@ from ..ast import (
     FunctionCallNode,
     IfNode,
     MemberAccessNode,
+    MeshOpNode,
+    PreprocessorNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     StructNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
@@ -146,11 +151,28 @@ class MetalCodeGen:
             "gl_LocalInvocationIndex": "thread_index_in_threadgroup",
             "gl_WorkGroupSize": "threadgroup_size",
             "gl_NumWorkGroups": "threads_per_grid",
+            # Ray tracing / payload semantics
+            "payload": "payload",
+            "hit_attribute": "hit_attribute",
+            "callable_data": "callable_data",
+            "shader_record": "shader_record",
         }
 
     def generate(self, ast):
         code = "\n"
-        code += "#include <metal_stdlib>\n"
+        preprocessors = getattr(ast, "preprocessors", []) or []
+        pre_lines = []
+        for directive in preprocessors:
+            if isinstance(directive, PreprocessorNode):
+                line = f"#{directive.directive} {directive.content}".strip()
+            else:
+                line = str(directive).strip()
+            if line:
+                pre_lines.append(line)
+        if pre_lines:
+            code += "\n".join(pre_lines) + "\n"
+        if not any("metal_stdlib" in line for line in pre_lines):
+            code += "#include <metal_stdlib>\n"
         code += "using namespace metal;\n"
         code += "\n"
 
@@ -426,8 +448,41 @@ class MetalCodeGen:
                 for sampler_variable, i in self.sampler_variables:
                     params_str += f" , sampler {sampler_variable.name} [[sampler({i})]]"
             code += f"fragment {return_type} fragment_{func.name}({params_str}) {{\n"
-        elif shader_type == "compute":
+        elif shader_type in ["compute", "ray_generation"]:
             code += f"kernel {return_type} kernel_{func.name}({params_str}) {{\n"
+        elif shader_type in ["mesh", "object", "task", "amplification"]:
+            stage_keyword = "mesh" if shader_type == "mesh" else "object"
+            code += (
+                f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
+            )
+        elif shader_type in [
+            "ray_intersection",
+            "ray_any_hit",
+            "ray_closest_hit",
+            "ray_miss",
+            "ray_callable",
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+        ]:
+            rt_stage_map = {
+                "ray_intersection": "intersection",
+                "ray_any_hit": "anyhit",
+                "ray_closest_hit": "closesthit",
+                "ray_miss": "miss",
+                "ray_callable": "callable",
+                "intersection": "intersection",
+                "anyhit": "anyhit",
+                "closesthit": "closesthit",
+                "miss": "miss",
+                "callable": "callable",
+            }
+            stage_keyword = rt_stage_map.get(shader_type, shader_type)
+            code += (
+                f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
+            )
         else:
             # Handle semantic - get from attributes in new AST
             semantic = None
@@ -680,20 +735,38 @@ class MetalCodeGen:
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
+        elif isinstance(expr, WaveOpNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{expr.operation}({args})"
+        elif isinstance(expr, RayTracingOpNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{expr.operation}({args})"
+        elif isinstance(expr, MeshOpNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{expr.operation}({args})"
+        elif isinstance(expr, RayQueryOpNode):
+            query = self.generate_expression(expr.query_expr)
+            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            return f"{query}.{expr.operation}({args})"
         elif isinstance(expr, ArrayAccessNode):
             # Handle array access
             array = self.generate_expression(expr.array)
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         elif isinstance(expr, FunctionCallNode):
-            # Extract function name properly (might be IdentifierNode)
-            func_name = expr.name
-            if hasattr(func_name, "name"):
-                # It's an IdentifierNode, extract the name
-                func_name = func_name.name
-            elif not isinstance(func_name, str):
-                # Convert to string if it's some other type
-                func_name = str(func_name)
+            # Resolve callee expression (can be Identifier/Member/Array access)
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = expr.name
+            func_name = None
+            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
+                func_name = func_expr.name
+                callee = func_name
+            elif isinstance(func_expr, str):
+                func_name = func_expr
+                callee = func_expr
+            else:
+                callee = self.generate_expression(func_expr)
 
             # Special handling for texture sampling
             if func_name == "texture":
@@ -745,7 +818,7 @@ class MetalCodeGen:
             else:
                 # Standard function call
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"{func_name}({args})"
+                return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"

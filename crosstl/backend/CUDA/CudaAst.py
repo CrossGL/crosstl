@@ -1,9 +1,34 @@
 """CUDA AST Node definitions"""
 
-from ..common_ast import *
-
+from ..common_ast import (
+    ASTNode,
+    ArrayAccessNode,
+    AssignmentNode,
+    BinaryOpNode,
+    BreakNode,
+    CaseNode,
+    CastNode,
+    ContinueNode,
+    DoWhileNode,
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    PreprocessorNode,
+    ReturnNode,
+    ShaderNode,
+    StructNode,
+    SwitchNode,
+    SyncNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    WhileNode,
+)
 
 # CUDA-specific nodes
+
 
 class KernelNode(FunctionNode):
     """Node representing a CUDA kernel function (marked with __global__)"""

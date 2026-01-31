@@ -233,6 +233,62 @@ def test_else_statement():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_geometry_stage_entrypoint():
+    code = """
+    shader geom {
+        geometry {
+            void main() { }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "void main()" in generated
+
+
+def test_glsl_texture_and_atomic_builtins():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                sampler2D tex;
+                image2D img;
+                atomic_uint counter;
+                vec4 g = textureGatherOffset(tex, vec2(0.5), ivec2(1));
+                uint v = imageAtomicAdd(img, ivec2(0, 0), 1);
+                uint c = atomicCounterIncrement(counter);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "textureGatherOffset" in generated
+    assert "imageAtomicAdd" in generated
+    assert "atomicCounterIncrement" in generated
+
+
+def test_glsl_wave_and_mesh_intrinsics():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                uint v;
+                uint sum = WaveActiveSum(v);
+                SetMeshOutputCounts(64, 32);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "WaveActiveSum" in generated
+    assert "SetMeshOutputCounts" in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {

@@ -159,6 +159,10 @@ class ShaderStage(Enum):
     VERTEX = "vertex"
     FRAGMENT = "fragment"
     GEOMETRY = "geometry"
+    TASK = "task"
+    AMPLIFICATION = "amplification"
+    OBJECT = "object"
+    MESH = "mesh"
     TESSELLATION_CONTROL = "tessellation_control"
     TESSELLATION_EVALUATION = "tessellation_evaluation"
     COMPUTE = "compute"
@@ -192,6 +196,7 @@ class ShaderNode(ASTNode):
         global_variables: List["VariableNode"] = None,
         constants: List["ConstantNode"] = None,
         imports: List["ImportNode"] = None,
+        preprocessors: List["PreprocessorNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -203,6 +208,7 @@ class ShaderNode(ASTNode):
         self.global_variables = global_variables or []
         self.constants = constants or []
         self.imports = imports or []
+        self.preprocessors = preprocessors or []
 
     def __repr__(self):
         return f"ShaderNode(name={self.name}, execution_model={self.execution_model})"
@@ -246,6 +252,18 @@ class ImportNode(ASTNode):
 
     def __repr__(self):
         return f"ImportNode(path={self.path}, alias={self.alias}, items={self.items})"
+
+
+class PreprocessorNode(ASTNode):
+    """Preprocessor directives (e.g. #version, #include)."""
+
+    def __init__(self, directive: str, content: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self.directive = directive
+        self.content = content
+
+    def __repr__(self):
+        return f"PreprocessorNode(directive={self.directive}, content={self.content})"
 
 
 # ============================================================================
@@ -1031,6 +1049,27 @@ class TextureNode(ExpressionNode):
         )
 
 
+class TextureOpNode(ExpressionNode):
+    """Extended texture operations (Sample, Load, Gather, etc.)."""
+
+    def __init__(
+        self,
+        operation: str,
+        texture_expr: ExpressionNode,
+        arguments: List[ExpressionNode],
+        sampler_expr: Optional[ExpressionNode] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.operation = operation
+        self.texture_expr = texture_expr
+        self.sampler_expr = sampler_expr
+        self.arguments = arguments
+
+    def __repr__(self):
+        return f"TextureOpNode(operation={self.operation}, texture={self.texture_expr})"
+
+
 class AtomicOpNode(ExpressionNode):
     """Atomic operations for GPU computing."""
 
@@ -1148,6 +1187,80 @@ class SamplerNode(ASTNode):
 
     def __repr__(self):
         return f"SamplerNode(name={self.name})"
+
+
+class BufferOpNode(ExpressionNode):
+    """Buffer operations like Load/Store/Append/Consume."""
+
+    def __init__(
+        self,
+        operation: str,
+        buffer_expr: ExpressionNode,
+        arguments: List[ExpressionNode],
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.operation = operation
+        self.buffer_expr = buffer_expr
+        self.arguments = arguments
+
+    def __repr__(self):
+        return f"BufferOpNode(operation={self.operation}, buffer={self.buffer_expr})"
+
+
+class WaveOpNode(ExpressionNode):
+    """Wave/subgroup operations."""
+
+    def __init__(self, operation: str, arguments: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.operation = operation
+        self.arguments = arguments
+
+    def __repr__(self):
+        return f"WaveOpNode(operation={self.operation})"
+
+
+class RayTracingOpNode(ExpressionNode):
+    """Raytracing intrinsics like TraceRay, ReportHit, etc."""
+
+    def __init__(self, operation: str, arguments: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.operation = operation
+        self.arguments = arguments
+
+    def __repr__(self):
+        return f"RayTracingOpNode(operation={self.operation})"
+
+
+class RayQueryOpNode(ExpressionNode):
+    """RayQuery method calls."""
+
+    def __init__(
+        self,
+        operation: str,
+        query_expr: ExpressionNode,
+        arguments: List[ExpressionNode],
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.operation = operation
+        self.query_expr = query_expr
+        self.arguments = arguments
+
+    def __repr__(self):
+        return f"RayQueryOpNode(operation={self.operation}, query={self.query_expr})"
+
+
+class MeshOpNode(ExpressionNode):
+    """Mesh/task shader intrinsics (SetMeshOutputCounts, DispatchMesh)."""
+
+    def __init__(self, operation: str, arguments: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.operation = operation
+        self.arguments = arguments
+
+    def __repr__(self):
+        return f"MeshOpNode(operation={self.operation})"
 
 
 # ============================================================================

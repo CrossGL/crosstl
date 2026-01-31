@@ -620,13 +620,19 @@ class MojoCodeGen:
                 return str(expr)
         elif isinstance(expr, FunctionCallNode):
             # Extract function name properly (might be IdentifierNode)
-            func_name = expr.name
-            if hasattr(func_name, "name"):
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = expr.name
+            func_name = None
+            if hasattr(func_expr, "name"):
                 # It's an IdentifierNode, extract the name
-                func_name = func_name.name
-            elif not isinstance(func_name, str):
-                # Convert to string if it's some other type
-                func_name = str(func_name)
+                func_name = func_expr.name
+                callee = func_name
+            elif isinstance(func_expr, str):
+                func_name = func_expr
+                callee = func_expr
+            else:
+                callee = self.generate_expression(func_expr)
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -649,7 +655,7 @@ class MojoCodeGen:
 
             # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            return f"{func_name}({args})"
+            return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"

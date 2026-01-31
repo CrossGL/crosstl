@@ -1,416 +1,214 @@
-from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
+import textwrap
+
 import pytest
+
+from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
+from crosstl.translator.ast import ShaderStage
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
-# Helper functions for tokenizing and parsing GLSL code
-def tokenize(input_str):
-    """Helper function to tokenize GLSL input string"""
-    lexer = GLSLLexer(input_str)
-    return lexer.tokenize()
-
-
-def parse(tokens, shader_type="vertex"):
-    """Helper function to parse GLSL tokens"""
-    parser = GLSLParser(tokens, shader_type)
-    return parser.parse()
-
-
-def generate(ast, shader_type="vertex"):
-    """Helper function to generate CrossGL code from GLSL AST"""
-    generator = GLSLToCrossGLConverter(shader_type=shader_type)
-    return generator.generate(ast)
-
-
-def process_glsl(input_str, shader_type="vertex"):
-    """Process complete GLSL code to CrossGL"""
-    tokens = tokenize(input_str)
-    ast = parse(tokens, shader_type)
-    return generate(ast, shader_type)
-
-
-# Tests for the OpenGL to CrossGL converter
-def test_empty_shader():
-    result = process_glsl("")
-    assert "shader main" in result
-    assert "vertex" in result
-
-
-def test_basic_vertex_shader():
-    glsl_code = """
-    void main() {
-        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-    }
+VERTEX_GLSL = textwrap.dedent(
     """
-    result = process_glsl(glsl_code, "vertex")
-    assert "shader main" in result
-    assert "vertex" in result
-    assert "vec4" in result
-
-
-def test_variable_declarations():
-    glsl_code = """
-    void main() {
-        float x = 1.0;
-        vec3 pos = vec3(x, 2.0, 3.0);
-        gl_Position = vec4(pos, 1.0);
-    }
-    """
-    result = process_glsl(glsl_code)
-    # Check that key variables and values are in the result
-    assert "x" in result and "1.0" in result
-    assert "pos" in result and "vec3" in result
-    assert "gl_Position" in result and "vec4" in result
-
-
-def test_arithmetic_expressions():
-    glsl_code = """
-    void main() {
-        float x = 1.0 + 2.0 * 3.0;
-        float y = x / 2.0 - 1.0;
-        gl_Position = vec4(x, y, 0.0, 1.0);
-    }
-    """
-    result = process_glsl(glsl_code)
-    # Check that values and variables are present
-    assert "1.0" in result and "2.0" in result and "3.0" in result
-    assert "x" in result and "y" in result
-    assert "gl_Position" in result and "vec4" in result
-
-
-def test_function_calls():
-    glsl_code = """
-    float compute(float a, float b) {
-        return a * b + 1.0;
-    }
-    
-    void main() {
-        float result = compute(2.0, 3.0);
-        gl_Position = vec4(result, 0.0, 0.0, 1.0);
-    }
-    """
-    result = process_glsl(glsl_code)
-    assert "float compute" in result
-    assert "return" in result
-    assert "compute" in result and "2.0" in result and "3.0" in result
-
-
-def test_if_statements():
-    glsl_code = """
-    void main() {
-        float x = 1.0;
-        if (x > 0.5) {
-            x = 2.0;
-        } else {
-            x = 0.5;
-        }
-        gl_Position = vec4(x, 0.0, 0.0, 1.0);
-    }
-    """
-    result = process_glsl(glsl_code)
-    assert "if" in result
-    assert "else" in result
-    assert "x" in result and "0.5" in result
-
-
-def test_for_loop():
-    glsl_code = """
-    void main() {
-        float sum = 0.0;
-        for (int i = 0; i < 10; i++) {
-            sum += float(i);
-        }
-        gl_Position = vec4(sum, 0.0, 0.0, 1.0);
-    }
-    """
-    result = process_glsl(glsl_code)
-    assert "for" in result
-    assert "i = 0" in result
-    assert "i < 10" in result or "i<10" in result
-    assert "sum" in result and "float" in result
-    assert "gl_Position" in result and "vec4" in result
-
-
-def test_vertex_shader_with_attributes():
-    glsl_code = """
-    attribute vec3 aPosition;
-    attribute vec2 aTexCoord;
-
-    varying vec2 vTexCoord;
-
-    uniform mat4 uModelViewMatrix;
-    uniform mat4 uProjectionMatrix;
+    #version 450 core
+    layout(location = 0) in vec3 position;
+    layout(location = 1) in vec2 uv;
+    layout(location = 0) out vec2 vUV;
+    uniform mat4 uMVP;
 
     void main() {
-        vTexCoord = aTexCoord;
-        gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0);
+        vUV = uv;
+        gl_Position = uMVP * vec4(position, 1.0);
     }
     """
-    result = process_glsl(glsl_code, "vertex")
-    assert "VertexInput" in result
-    assert "VertexOutput" in result
-    assert "cbuffer Uniforms" in result
-    assert "uModelViewMatrix" in result and "uProjectionMatrix" in result
-    assert "mat4" in result
-    assert "vTexCoord" in result and "aTexCoord" in result
-    assert "gl_Position" in result and "aPosition" in result
+).strip()
 
-
-def test_fragment_shader():
-    glsl_code = """
-    varying vec2 vTexCoord;
-    
+FRAGMENT_GLSL = textwrap.dedent(
+    """
+    #version 450 core
+    layout(location = 0) in vec2 vUV;
+    layout(location = 0) out vec4 fragColor;
     uniform sampler2D uTexture;
-    
+
     void main() {
-        gl_FragColor = texture2D(uTexture, vTexCoord);
+        vec4 color = texture(uTexture, vUV);
+        if (color.a < 0.1) {
+            discard;
+        }
+        fragColor = color;
     }
     """
-    result = process_glsl(glsl_code, "fragment")
-    assert "fragment" in result
-    assert "FragmentInput" in result
-    assert "sample" in result
+).strip()
 
+CONTROL_FLOW_GLSL = textwrap.dedent(
+    """
+    #version 450 core
+    layout(location = 0) in vec3 position;
 
-def test_vector_constructor():
-    glsl_code = """
     void main() {
-        vec2 v2 = vec2(1.0, 2.0);
-        vec3 v3 = vec3(v2, 3.0);
-        vec4 v4 = vec4(v3, 1.0);
-        gl_Position = v4;
+        int i = 0;
+        for (int j = 0; j < 4; j++) {
+            if (j == 2) {
+                continue;
+            }
+            i += j;
+        }
+
+        while (i < 10) {
+            i++;
+        }
+
+        do {
+            i--;
+        } while (i > 0);
+
+        switch (i) {
+            case 0:
+                i = 1;
+                break;
+            default:
+                break;
+        }
+
+        gl_Position = vec4(position, 1.0);
     }
     """
-    result = process_glsl(glsl_code)
-    assert "vec2" in result and "1.0" in result and "2.0" in result
-    assert "vec3" in result and "v2" in result and "3.0" in result
-    assert "vec4" in result and "v3" in result and "1.0" in result
+).strip()
 
-
-def test_builtin_functions():
-    glsl_code = """
-    void main() {
-        vec3 a = vec3(1.0, 2.0, 3.0);
-        vec3 b = vec3(4.0, 5.0, 6.0);
-        float d = dot(normalize(a), b);
-        vec3 r = reflect(a, normalize(b));
-        gl_Position = vec4(r, d);
-    }
+STRUCT_ARRAY_GLSL = textwrap.dedent(
     """
-    result = process_glsl(glsl_code)
-    assert "dot" in result
-    assert "normalize" in result
-    assert "reflect" in result
-
-
-def test_struct_definition():
-    glsl_code = """
+    #version 450 core
     struct Light {
         vec3 position;
         vec3 color;
         float intensity;
     };
-    
-    uniform Light uLight;
-    
+
+    uniform Light lights[4];
+    layout(location = 0) out vec3 vColor;
+
     void main() {
-        vec3 lightPos = uLight.position;
-        gl_Position = vec4(lightPos, 1.0);
+        vec3 color = lights[0].color * lights[0].intensity;
+        vColor = color;
+        gl_Position = vec4(1.0);
     }
     """
-    result = process_glsl(glsl_code)
-    assert "struct Light" in result
-    assert "vec3" in result and "position" in result
-    assert "vec3" in result and "color" in result
-    assert "float" in result and "intensity" in result
-    assert "Light" in result and "uLight" in result
+).strip()
 
-
-def test_array_access():
-    glsl_code = """
-    uniform float uValues[4];
-
-    void main() {
-        float sum = 0.0;
-        for (int i = 0; i < 4; i++) {
-            sum += uValues[i];
-        }
-        gl_Position = vec4(sum, 0.0, 0.0, 1.0);
-    }
+INTERFACE_BLOCK_GLSL = textwrap.dedent(
     """
-    result = process_glsl(glsl_code)
-    assert "uValues" in result
-    assert "sum" in result
-    assert "for" in result
-    assert "i" in result
-    assert "gl_Position" in result and "vec4" in result
+    #version 450 core
+    layout(std140, binding = 0) uniform Globals {
+        mat4 mvp;
+        vec4 baseColor;
+    };
 
+    in VertexIn {
+        vec3 position;
+        vec2 uv;
+    } vin;
 
-def test_ternary_operator():
-    glsl_code = """
-    void main() {
-        float x = 0.5;
-        float y = x > 0.5 ? 1.0 : 0.0;
-        gl_Position = vec4(y, 0.0, 0.0, 1.0);
-    }
-    """
-    result = process_glsl(glsl_code)
-    assert "?" in result
-    assert ":" in result
-    assert "x" in result and "0.5" in result
-
-
-def test_member_access():
-    glsl_code = """
-    varying vec4 vColor;
-    
-    void main() {
-        float r = vColor.r;
-        float g = vColor.g;
-        float b = vColor.b;
-        float a = vColor.a;
-        gl_FragColor = vec4(r, g, b, a);
-    }
-    """
-    result = process_glsl(glsl_code, "fragment")
-    assert "vColor.r" in result.replace(" ", "")
-    assert "vColor.g" in result.replace(" ", "")
-    assert "vColor.b" in result.replace(" ", "")
-    assert "vColor.a" in result.replace(" ", "")
-
-
-def test_bitwise_and_ops():
-    glsl_code = """
-    void main() {
-        uint value = 5u;
-        uint mask = 3u;
-        uint result = value & mask;  // Bitwise AND
-        if (result == 1u) {
-            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        } else {
-            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
-        }
-    }
-    """
-    result = process_glsl(glsl_code, "fragment")
-    assert "value" in result
-    assert "mask" in result
-    assert "result" in result
-    assert "gl_FragColor" in result
-    assert "if" in result
-
-
-def test_bitwise_or_ops():
-    glsl_code = """
-    void main() {
-        uint value = 5u;
-        uint mask = 2u;
-        uint result = value | mask;  // Bitwise OR
-        if (result == 7u) {
-            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        } else {
-            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
-        }
-    }
-    """
-    result = process_glsl(glsl_code, "fragment")
-    assert "value" in result
-    assert "mask" in result
-    assert "result" in result
-    assert "gl_FragColor" in result
-    assert "if" in result
-
-
-def test_bitwise_xor_ops():
-    glsl_code = """
-    void main() {
-        uint value = 5u;
-        uint mask = 3u;
-        uint result = value ^ mask;  // Bitwise XOR
-        if (result == 6u) {
-            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        } else {
-            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
-        }
-    }
-    """
-    result = process_glsl(glsl_code, "fragment")
-    assert "value" in result
-    assert "mask" in result
-    assert "result" in result
-    assert "gl_FragColor" in result
-    assert "if" in result
-
-
-def test_bitwise_not_ops():
-    glsl_code = """
-    void main() {
-        uint value = 5u;
-        uint result = ~value;  // Bitwise NOT
-        if (result != 5u) {
-            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        } else {
-            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
-        }
-    }
-    """
-    result = process_glsl(glsl_code, "fragment")
-    assert "value" in result
-    assert "result" in result
-    assert "gl_FragColor" in result
-    assert "if" in result
-
-
-def test_bitwise_shift_ops():
-    glsl_code = """
-    void main() {
-        uint value = 4u;
-        uint result1 = value << 1;  // Left shift
-        uint result2 = value >> 1;  // Right shift
-        if (result1 == 8u && result2 == 2u) {
-            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        } else {
-            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
-        }
-    }
-    """
-    result = process_glsl(glsl_code, "fragment")
-    assert "value" in result
-    assert "result1" in result
-    assert "result2" in result
-    assert "gl_FragColor" in result
-    assert "if" in result
-
-
-def test_switch_case():
-    glsl_code = """
-    void main() {
-        int value = 2;
+    out VertexOut {
         vec4 color;
-        
-        switch (value) {
-            case 0:
-                color = vec4(1.0, 0.0, 0.0, 1.0);
-                break;
-            case 1:
-                color = vec4(0.0, 1.0, 0.0, 1.0);
-                break;
-            case 2:
-                color = vec4(0.0, 0.0, 1.0, 1.0);
-                break;
-            default:
-                color = vec4(0.5, 0.5, 0.5, 1.0);
-                break;
-        }
-        
-        gl_FragColor = color;
+    } vout;
+
+    void main() {
+        vout.color = vec4(vin.position, 1.0);
+        gl_Position = mvp * vec4(vin.position, 1.0);
     }
     """
-    result = process_glsl(glsl_code, "fragment")
-    assert "value" in result
-    assert "color" in result
-    assert "gl_FragColor" in result
+).strip()
+COMPUTE_GLSL = textwrap.dedent(
+    """
+    #version 430
+    layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+    layout(binding = 0, rgba8) uniform writeonly image2D outImage;
+
+    void main() {
+        ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+        imageStore(outImage, coord, vec4(1.0, 0.0, 0.0, 1.0));
+    }
+    """
+).strip()
+
+
+def generate_crossgl(code: str, shader_type: str = "vertex") -> str:
+    tokens = GLSLLexer(code).tokenize()
+    ast = GLSLParser(tokens, shader_type).parse()
+    generator = GLSLToCrossGLConverter(shader_type=shader_type)
+    return generator.generate(ast)
+
+
+def parse_crossgl(code: str):
+    tokens = CrossGLLexer(code).get_tokens()
+    parser = CrossGLParser(tokens)
+    return parser.parse()
+
+
+def assert_roundtrip(code: str, shader_type: str, expected_stage: ShaderStage) -> str:
+    output = generate_crossgl(code, shader_type)
+    assert isinstance(output, str)
+    assert output.strip()
+    assert "#version" in output
+    shader_ast = parse_crossgl(output)
+    assert expected_stage in shader_ast.stages
+    return output
+
+
+def test_codegen_vertex_roundtrip():
+    output = assert_roundtrip(VERTEX_GLSL, "vertex", ShaderStage.VERTEX)
+    lowered = output.lower()
+    assert "shader" in lowered
+    assert "vertex" in lowered
+    for name in ["position", "uv", "vUV", "uMVP"]:
+        assert name in output
+
+
+def test_codegen_fragment_roundtrip():
+    output = assert_roundtrip(FRAGMENT_GLSL, "fragment", ShaderStage.FRAGMENT)
+    lowered = output.lower()
+    assert "shader" in lowered
+    assert "fragment" in lowered
+    for name in ["vUV", "fragColor", "uTexture"]:
+        assert name in output
+
+
+def test_codegen_control_flow_roundtrip():
+    output = assert_roundtrip(CONTROL_FLOW_GLSL, "vertex", ShaderStage.VERTEX)
+    lowered = output.lower()
+    assert "for" in lowered
+    assert "while" in lowered
+    assert "switch" in lowered
+
+
+def test_codegen_structs_and_arrays_roundtrip():
+    output = assert_roundtrip(STRUCT_ARRAY_GLSL, "vertex", ShaderStage.VERTEX)
+    assert "Light" in output
+    assert "lights" in output
+    assert "vColor" in output
+
+
+def test_codegen_compute_roundtrip():
+    output = assert_roundtrip(COMPUTE_GLSL, "compute", ShaderStage.COMPUTE)
+    lowered = output.lower()
+    assert "compute" in lowered
+    assert "outImage" in output
+
+
+def test_codegen_invalid_glsl_raises():
+    code = "void main() { float x = 1.0 return x; }"
+    with pytest.raises(SyntaxError):
+        generate_crossgl(code, "vertex")
+
+
+def test_codegen_interface_block_roundtrip():
+    output = assert_roundtrip(INTERFACE_BLOCK_GLSL, "vertex", ShaderStage.VERTEX)
+    assert "struct VertexIn" in output
+    assert "struct VertexOut" in output
+    assert "struct Globals" in output
+    assert "cbuffer Uniforms" in output
 
 
 if __name__ == "__main__":

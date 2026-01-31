@@ -3,15 +3,85 @@
 from ..common_ast import *
 
 
+class ShaderNode(ASTNode):
+    """Root node representing a Rust module/program."""
+
+    def __init__(
+        self,
+        structs=None,
+        functions=None,
+        global_variables=None,
+        impl_blocks=None,
+        use_statements=None,
+        traits=None,
+    ):
+        self.structs = structs or []
+        self.functions = functions or []
+        self.global_variables = global_variables or []
+        self.impl_blocks = impl_blocks or []
+        self.use_statements = use_statements or []
+        self.traits = traits or []
+
+    def __repr__(self):
+        return (
+            "ShaderNode("
+            f"structs={len(self.structs)}, "
+            f"functions={len(self.functions)}, "
+            f"globals={len(self.global_variables)}, "
+            f"impl_blocks={len(self.impl_blocks)}, "
+            f"use_statements={len(self.use_statements)})"
+        )
+
+
+class StructNode(ASTNode):
+    """Node representing a Rust struct with visibility and attributes."""
+
+    def __init__(self, name, members, attributes=None, visibility=None, generics=None):
+        self.name = name
+        self.members = members
+        self.attributes = attributes or []
+        self.visibility = visibility
+        self.generics = generics or []
+
+    def __repr__(self):
+        return (
+            f"StructNode(name={self.name}, members={len(self.members)}, "
+            f"visibility={self.visibility})"
+        )
+
+
+class FunctionNode(ASTNode):
+    """Node representing a Rust function."""
+
+    def __init__(
+        self, return_type, name, params, body, attributes=None, visibility=None, generics=None
+    ):
+        self.return_type = return_type
+        self.name = name
+        self.params = params
+        self.body = body
+        self.attributes = attributes or []
+        self.visibility = visibility
+        self.generics = generics or []
+
+    def __repr__(self):
+        return (
+            f"FunctionNode(name={self.name}, return_type={self.return_type}, "
+            f"params={len(self.params)}, visibility={self.visibility})"
+        )
+
 # Rust-specific nodes
+
 
 class ImplNode(ASTNode):
     """Node representing an impl block"""
 
-    def __init__(self, struct_name, methods, trait_name=None):
+    def __init__(self, struct_name, methods, trait_name=None, generics=None):
         self.struct_name = struct_name
         self.methods = methods
+        self.functions = methods
         self.trait_name = trait_name  # For trait implementations
+        self.generics = generics or []
 
     def __repr__(self):
         if self.trait_name:
@@ -25,7 +95,7 @@ class TraitNode(ASTNode):
     def __init__(self, name, methods, *args, **kwargs):
         self.name = name
         self.methods = methods
-        
+
         # Handle additional arguments for compatibility
         for key, value in kwargs.items():
             if not hasattr(self, key):
@@ -42,6 +112,7 @@ class LetNode(ASTNode):
         self.name = name
         self.value = value
         self.var_type = var_type
+        self.vtype = var_type
         self.is_mutable = is_mutable
 
     def __repr__(self):
@@ -58,6 +129,18 @@ class LoopNode(ASTNode):
 
     def __repr__(self):
         return f"LoopNode(label={self.label}, body={self.body})"
+
+
+class ForNode(ASTNode):
+    """Node representing a Rust for-in loop"""
+
+    def __init__(self, pattern, iterable, body):
+        self.pattern = pattern
+        self.iterable = iterable
+        self.body = body
+
+    def __repr__(self):
+        return f"ForNode(pattern={self.pattern}, iterable={self.iterable}, body={self.body})"
 
 
 class MatchNode(ASTNode):
@@ -178,10 +261,12 @@ class BlockNode(ASTNode):
 class ConstNode(ASTNode):
     """Node representing a const declaration"""
 
-    def __init__(self, name, value, const_type=None):
+    def __init__(self, name, const_type, value, visibility=None):
         self.name = name
-        self.value = value
         self.const_type = const_type
+        self.vtype = const_type
+        self.value = value
+        self.visibility = visibility
 
     def __repr__(self):
         return f"ConstNode(name={self.name}, const_type={self.const_type}, value={self.value})"
@@ -190,11 +275,13 @@ class ConstNode(ASTNode):
 class StaticNode(ASTNode):
     """Node representing a static variable"""
 
-    def __init__(self, name, value, static_type=None, is_mutable=False):
+    def __init__(self, name, static_type, value, is_mutable=False, visibility=None):
         self.name = name
-        self.value = value
         self.static_type = static_type
+        self.vtype = static_type
+        self.value = value
         self.is_mutable = is_mutable
+        self.visibility = visibility
 
     def __repr__(self):
         mut = "mut " if self.is_mutable else ""

@@ -29,27 +29,53 @@ class MojoParser:
         return module
 
     def parse_module(self):
-        statements = []
+        imports = []
+        structs = []
+        functions = []
+        global_variables = []
+        constants = []
+        classes = []
+        all_items = []
 
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "IMPORT":
-                statements.append(self.parse_import_statement())
+                node = self.parse_import_statement()
+                imports.append(node)
+                all_items.append(node)
             elif self.current_token[0] == "STRUCT":
-                statements.append(self.parse_struct())
+                node = self.parse_struct()
+                structs.append(node)
+                all_items.append(node)
             elif self.current_token[0] == "CLASS":
-                statements.append(self.parse_class())
+                node = self.parse_class()
+                classes.append(node)
+                all_items.append(node)
             elif self.current_token[0] == "CONSTANT":
-                statements.append(self.parse_constant_buffer())
+                node = self.parse_constant_buffer()
+                constants.append(node)
+                all_items.append(node)
             elif self.current_token[0] == "FN":
-                statements.append(self.parse_function())
+                node = self.parse_function()
+                functions.append(node)
+                all_items.append(node)
             elif self.current_token[0] in ["LET", "VAR"]:
-                statements.append(self.parse_variable_declaration_or_assignment())
+                node = self.parse_variable_declaration_or_assignment()
+                global_variables.append(node)
+                all_items.append(node)
             elif self.current_token[0] == "DECORATOR":
-                statements.append(self.parse_decorator())
+                node = self.parse_decorator()
+                all_items.append(node)
             else:
                 self.eat(self.current_token[0])
 
-        return ShaderNode(statements)
+        return ShaderNode(
+            includes=imports,
+            functions=all_items,
+            structs=structs,
+            global_variables=global_variables,
+            constants=constants,
+            classes=classes,
+        )
 
     def parse_import_statement(self):
         self.eat("IMPORT")
@@ -94,7 +120,7 @@ class MojoParser:
 
             attributes = self.parse_attributes()
 
-            members.append(VariableNode(vtype, var_name, attributes))
+            members.append(VariableNode(vtype, var_name, attributes=attributes))
 
         return StructNode(name, members)
 
@@ -151,7 +177,6 @@ class MojoParser:
 
         qualifier = None
         if self.current_token[0] == "FN":
-            qualifier = self.current_token[1]
             self.eat(self.current_token[0])
 
         return_type = None
@@ -178,7 +203,11 @@ class MojoParser:
 
         body = self.parse_block()
 
-        return FunctionNode(qualifier, return_type, name, params, body, attributes)
+        func = FunctionNode(
+            return_type, name, params, body, qualifiers=[], attributes=attributes
+        )
+        func.qualifier = qualifier
+        return func
 
     def parse_parameters(self):
         params = []
@@ -330,7 +359,9 @@ class MojoParser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
 
-            return VariableDeclarationNode(var_type, name, initial_value, vtype)
+            return VariableDeclarationNode(
+                vtype, name, initial_value, is_var=var_type == "VAR"
+            )
         else:
             return self.parse_assignment()
 

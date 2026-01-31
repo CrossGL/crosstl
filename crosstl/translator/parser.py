@@ -13,6 +13,7 @@ from .ast import (
     ShaderNode,
     StageNode,
     ImportNode,
+    PreprocessorNode,
     StructNode,
     StructMemberNode,
     EnumNode,
@@ -59,12 +60,18 @@ from .ast import (
     LiteralPatternNode,
     StructPatternNode,
     TextureNode,
+    TextureOpNode,
     AtomicOpNode,
     SyncNode,
     BuiltinVariableNode,
     BufferNode,
     TextureResourceNode,
     SamplerNode,
+    BufferOpNode,
+    WaveOpNode,
+    RayTracingOpNode,
+    RayQueryOpNode,
+    MeshOpNode,
     ArrayNode,
     ShaderStage,
     ExecutionModel,
@@ -72,6 +79,68 @@ from .ast import (
 )
 from .lexer import Lexer
 import logging
+
+WAVE_INTRINSICS = {
+    "WaveGetLaneCount",
+    "WaveGetLaneIndex",
+    "WaveIsFirstLane",
+    "WaveActiveSum",
+    "WaveActiveProduct",
+    "WaveActiveBitAnd",
+    "WaveActiveBitOr",
+    "WaveActiveBitXor",
+    "WaveActiveMin",
+    "WaveActiveMax",
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveBallot",
+    "WaveReadLaneAt",
+    "WaveReadLaneFirst",
+    "WavePrefixSum",
+    "WavePrefixProduct",
+    "QuadReadAcrossX",
+    "QuadReadAcrossY",
+    "QuadReadAcrossDiagonal",
+    "QuadReadLaneAt",
+    "WaveMatch",
+    "WaveMultiPrefixSum",
+    "WaveMultiPrefixProduct",
+    "WaveMultiPrefixBitAnd",
+    "WaveMultiPrefixBitOr",
+    "WaveMultiPrefixBitXor",
+}
+
+RAYTRACING_INTRINSICS = {
+    "TraceRay",
+    "ReportHit",
+    "CallShader",
+    "AcceptHitAndEndSearch",
+    "IgnoreHit",
+}
+
+MESH_INTRINSICS = {
+    "SetMeshOutputCounts",
+    "DispatchMesh",
+}
+
+RAYQUERY_METHODS = {
+    "Proceed",
+    "Abort",
+    "CandidateType",
+    "CommittedType",
+    "CandidatePrimitiveIndex",
+    "CommittedPrimitiveIndex",
+    "CandidateInstanceID",
+    "CommittedInstanceID",
+    "CandidateGeometryIndex",
+    "CommittedGeometryIndex",
+    "CandidateObjectRayOrigin",
+    "CandidateObjectRayDirection",
+    "CommittedObjectRayOrigin",
+    "CommittedObjectRayDirection",
+    "CommittedRayT",
+    "CandidateRayT",
+}
 
 
 class Parser:
@@ -127,6 +196,7 @@ class Parser:
         constants = []
         stages = {}
         imports = []
+        preprocessors = []
 
         loop_count = 0  # Protection against infinite loops
         max_loops = 10000  # Reasonable upper limit
@@ -149,6 +219,8 @@ class Parser:
                     stages[parsed_element.stage] = parsed_element
                 elif isinstance(parsed_element, ImportNode):
                     imports.append(parsed_element)
+                elif isinstance(parsed_element, PreprocessorNode):
+                    preprocessors.append(parsed_element)
                 elif isinstance(parsed_element, EnumNode):
                     # Treat enums as special structs for now
                     structs.append(parsed_element)
@@ -177,6 +249,7 @@ class Parser:
             global_variables=global_variables,
             constants=constants,
             imports=imports,
+            preprocessors=preprocessors,
         )
 
     def parse_program(self):
@@ -209,7 +282,22 @@ class Parser:
                 functions.append(self.parse_function())
             elif self.is_variable_declaration():
                 global_variables.append(self.parse_variable_declaration())
-            elif self.current_token[0] in ["VERTEX", "FRAGMENT", "COMPUTE"]:
+            elif self.current_token[0] in [
+                "VERTEX",
+                "FRAGMENT",
+                "COMPUTE",
+                "GEOMETRY",
+                "TESSELLATION_CONTROL",
+                "TESSELLATION_EVALUATION",
+                "TASK",
+                "MESH",
+                "RAY_GENERATION",
+                "RAY_INTERSECTION",
+                "RAY_CLOSEST_HIT",
+                "RAY_MISS",
+                "RAY_ANY_HIT",
+                "RAY_CALLABLE",
+            ]:
                 # Shader stage - create a stage function
                 stage_func = self.parse_shader_stage()
                 functions.append(stage_func)
@@ -254,7 +342,22 @@ class Parser:
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE":
-            if self.current_token[0] in ["VERTEX", "FRAGMENT", "COMPUTE", "GEOMETRY"]:
+            if self.current_token[0] in [
+                "VERTEX",
+                "FRAGMENT",
+                "COMPUTE",
+                "GEOMETRY",
+                "TESSELLATION_CONTROL",
+                "TESSELLATION_EVALUATION",
+                "TASK",
+                "MESH",
+                "RAY_GENERATION",
+                "RAY_INTERSECTION",
+                "RAY_CLOSEST_HIT",
+                "RAY_MISS",
+                "RAY_ANY_HIT",
+                "RAY_CALLABLE",
+            ]:
                 stage_node = self.parse_shader_stage_block()
                 stages[stage_node.stage] = stage_node
             elif self.current_token[0] == "STRUCT":
@@ -293,6 +396,23 @@ class Parser:
             "fragment": ShaderStage.FRAGMENT,
             "compute": ShaderStage.COMPUTE,
             "geometry": ShaderStage.GEOMETRY,
+            "tessellation_control": ShaderStage.TESSELLATION_CONTROL,
+            "tessellation_evaluation": ShaderStage.TESSELLATION_EVALUATION,
+            "task": ShaderStage.TASK,
+            "amplification": ShaderStage.AMPLIFICATION,
+            "object": ShaderStage.OBJECT,
+            "mesh": ShaderStage.MESH,
+            "ray_generation": ShaderStage.RAY_GENERATION,
+            "ray_intersection": ShaderStage.RAY_INTERSECTION,
+            "ray_closest_hit": ShaderStage.RAY_CLOSEST_HIT,
+            "ray_miss": ShaderStage.RAY_MISS,
+            "ray_any_hit": ShaderStage.RAY_ANY_HIT,
+            "ray_callable": ShaderStage.RAY_CALLABLE,
+            "intersection": ShaderStage.RAY_INTERSECTION,
+            "closesthit": ShaderStage.RAY_CLOSEST_HIT,
+            "anyhit": ShaderStage.RAY_ANY_HIT,
+            "miss": ShaderStage.RAY_MISS,
+            "callable": ShaderStage.RAY_CALLABLE,
         }.get(stage_type, ShaderStage.VERTEX)
 
         self.eat(self.current_token[0])
@@ -365,6 +485,30 @@ class Parser:
 
         return ImportNode(path=path, alias=alias, items=items)
 
+    def parse_preprocessor_directive(self):
+        """Parse preprocessor directive tokens like #version/#include."""
+        text = self.current_token[1] or ""
+        self.eat("PREPROCESSOR")
+        stripped = text.lstrip("#").strip()
+        if not stripped:
+            return PreprocessorNode("", "")
+        parts = stripped.split(None, 1)
+        directive = parts[0]
+        content = parts[1] if len(parts) > 1 else ""
+        return PreprocessorNode(directive, content)
+
+    def parse_precision_statement(self):
+        """Parse GLSL-style precision statements into a preprocessor node."""
+        self.eat("PRECISION")
+        parts = []
+        while self.current_token[0] not in ["SEMICOLON", "EOF"]:
+            parts.append(str(self.current_token[1]))
+            self.eat(self.current_token[0])
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        content = " ".join(parts).strip()
+        return PreprocessorNode("precision", content)
+
     def parse_struct(self):
         """Parse struct declarations."""
         if self.current_token[0] == "EOF":
@@ -413,6 +557,14 @@ class Parser:
         # EOF protection
         if self.current_token[0] == "EOF":
             return None
+
+        # Handle preprocessor directives
+        if self.current_token[0] == "PREPROCESSOR":
+            return self.parse_preprocessor_directive()
+
+        # Handle precision directives
+        if self.current_token[0] == "PRECISION":
+            return self.parse_precision_statement()
 
         # Handle nested enum declarations inside structs
         if self.current_token[0] == "ENUM":
@@ -685,6 +837,10 @@ class Parser:
 
     def parse_variable_declaration(self):
         """Parse variable declarations."""
+        attributes = []
+        if self.current_token[0] == "AT":
+            attributes = self.parse_attributes()
+
         qualifiers = []
 
         # Parse qualifiers
@@ -702,6 +858,9 @@ class Parser:
         var_type = self.parse_type()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+
+        if self.current_token[0] == "AT":
+            attributes.extend(self.parse_attributes())
 
         # Handle multi-dimensional C-style array declarations (e.g., float arr[5][10];)
         while self.current_token[0] == "LBRACKET":
@@ -724,6 +883,7 @@ class Parser:
             var_type=var_type,
             initial_value=initial_value,
             qualifiers=qualifiers,
+            attributes=attributes,
             is_mutable="const" not in qualifiers,
         )
 
@@ -736,6 +896,10 @@ class Parser:
         saved_token = self.current_token
 
         try:
+            # Skip leading attributes
+            if self.current_token[0] == "AT":
+                self.parse_attributes()
+
             # Skip qualifiers
             while self.current_token[0] in [
                 "CONST",
@@ -1520,7 +1684,19 @@ class Parser:
                     if self.current_token[0] == "COMMA":
                         self.eat("COMMA")
                 self.eat("RPAREN")
-                left = FunctionCallNode(left, arguments)
+                if isinstance(left, IdentifierNode):
+                    if left.name in WAVE_INTRINSICS:
+                        left = WaveOpNode(left.name, arguments)
+                    elif left.name in RAYTRACING_INTRINSICS:
+                        left = RayTracingOpNode(left.name, arguments)
+                    elif left.name in MESH_INTRINSICS:
+                        left = MeshOpNode(left.name, arguments)
+                    else:
+                        left = FunctionCallNode(left, arguments)
+                elif isinstance(left, MemberAccessNode) and left.member in RAYQUERY_METHODS:
+                    left = RayQueryOpNode(left.member, left.object, arguments)
+                else:
+                    left = FunctionCallNode(left, arguments)
             elif self.current_token[0] in ["INCREMENT", "DECREMENT"]:
                 op = self.current_token[1]
                 self.eat(self.current_token[0])
@@ -1798,6 +1974,14 @@ class Parser:
         if self.current_token[0] == "EOF":
             return None
 
+        # Handle preprocessor directives
+        if self.current_token[0] == "PREPROCESSOR":
+            return self.parse_preprocessor_directive()
+
+        # Handle precision directives
+        if self.current_token[0] == "PRECISION":
+            return self.parse_precision_statement()
+
         # Temporarily disable complex generic parsing - skip instead
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "generic":
             # Skip the entire generic declaration for now
@@ -1833,7 +2017,24 @@ class Parser:
             return self.parse_constant()
 
         # Handle shader stage blocks
-        if self.current_token[0] in ["VERTEX", "FRAGMENT", "COMPUTE", "GEOMETRY"]:
+        if self.current_token[0] in [
+            "VERTEX",
+            "FRAGMENT",
+            "COMPUTE",
+            "GEOMETRY",
+            "TESSELLATION_CONTROL",
+            "TESSELLATION_EVALUATION",
+            "TASK",
+            "MESH",
+            "OBJECT",
+            "AMPLIFICATION",
+            "RAY_GENERATION",
+            "RAY_INTERSECTION",
+            "RAY_CLOSEST_HIT",
+            "RAY_MISS",
+            "RAY_ANY_HIT",
+            "RAY_CALLABLE",
+        ]:
             return self.parse_shader_stage_block()
 
         # PRIORITY: Check for function declarations first (before variable declarations)

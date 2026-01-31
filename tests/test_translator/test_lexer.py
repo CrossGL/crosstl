@@ -123,6 +123,27 @@ shader main {
         pytest.fail("Function call tokenization not implemented.")
 
 
+def test_stage_and_ray_keywords_tokenization():
+    code = """
+    object { }
+    amplification { }
+    intersection { }
+    anyhit { }
+    closesthit { }
+    miss { }
+    callable { }
+    """
+    tokens = tokenize_code(code)
+    token_types = [t[0] for t in tokens]
+    assert "OBJECT" in token_types
+    assert "AMPLIFICATION" in token_types
+    assert "RAY_INTERSECTION" in token_types
+    assert "RAY_ANY_HIT" in token_types
+    assert "RAY_CLOSEST_HIT" in token_types
+    assert "RAY_MISS" in token_types
+    assert "RAY_CALLABLE" in token_types
+
+
 def test_bitwise_operator_tokenization():
     code = """
     int a = 60; // 60 = 0011 1100

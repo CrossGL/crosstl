@@ -1,432 +1,435 @@
+import textwrap
+
 import pytest
-from typing import List
+
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
 
-def parse_code(tokens: List):
-    """Test the parser
-    Args:
-        tokens (List): The list of tokens generated from the lexer
-
-    Returns:
-        ASTNode: The abstract syntax tree generated from the code
+VERTEX_PIXEL_HLSL = textwrap.dedent(
     """
-    parser = HLSLParser(tokens)
-    return parser.parse()
+    cbuffer CameraBuffer : register(b0) {
+        float4x4 viewProj;
+        float3 eyePos;
+        float padding;
+    };
+
+    Texture2D tex0 : register(t0);
+    SamplerState samp0 : register(s0);
+
+    struct VSInput {
+        float3 position : POSITION;
+        float3 normal : NORMAL;
+        float2 uv : TEXCOORD0;
+    };
+
+    struct VSOutput {
+        float4 position : SV_Position;
+        float3 normal : TEXCOORD1;
+        float2 uv : TEXCOORD0;
+    };
+
+    VSOutput VSMain(VSInput input) {
+        VSOutput output;
+        output.position = mul(viewProj, float4(input.position, 1.0));
+        output.normal = input.normal;
+        output.uv = input.uv;
+        return output;
+    }
+
+    struct PSInput {
+        float4 position : SV_Position;
+        float3 normal : TEXCOORD1;
+        float2 uv : TEXCOORD0;
+    };
+
+    struct PSOutput {
+        float4 color : SV_Target0;
+    };
+
+    float4 Lighting(float3 n, float2 uv) {
+        float3 lightDir = normalize(float3(0.0, 1.0, 0.0));
+        float ndotl = max(dot(n, lightDir), 0.0);
+        float4 texColor = tex0.Sample(samp0, uv);
+        return texColor * ndotl;
+    }
+
+    PSOutput PSMain(PSInput input) {
+        PSOutput output;
+        output.color = Lighting(input.normal, input.uv);
+        return output;
+    }
+    """
+).strip()
+
+CONTROL_FLOW_HLSL = textwrap.dedent(
+    """
+    int ControlFlow(int a, int b) {
+        int sum = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (i % 2 == 0) {
+                continue;
+            } else if (i == 3) {
+                break;
+            }
+            sum += i;
+        }
+
+        int j = 0;
+        while (j < 3) {
+            sum += j;
+            j++;
+        }
+
+        int k = 0;
+        do {
+            sum += k;
+            k++;
+        } while (k < 2);
+
+        switch (a) {
+            case 0:
+                sum += 1;
+                break;
+            case 1:
+                sum += 2;
+                // fallthrough
+            default:
+                sum += 3;
+                break;
+        }
+
+        int ternaryVal = (a > b) ? a : b;
+        return sum + ternaryVal;
+    }
+    """
+).strip()
+
+ARRAYS_HLSL = textwrap.dedent(
+    """
+    float4 colors[4];
+    float3 grid[2][3];
+
+    float sumArray(float4 values[4]) {
+        float total = 0.0;
+        for (int i = 0; i < 4; i++) {
+            total += values[i].x;
+        }
+        return total;
+    }
+
+    float useGrid() {
+        return grid[1][2].x;
+    }
+    """
+).strip()
+
+RESOURCES_HLSL = textwrap.dedent(
+    """
+    Texture2D<float4> tex1 : register(t1);
+    SamplerComparisonState sampComp : register(s1);
+    RWTexture2D<float4> outputTex : register(u0);
+    StructuredBuffer<float4> data : register(t2);
+    RWStructuredBuffer<float4> outData : register(u1);
+
+    float4 SampleTex(float2 uv) : SV_Target0 {
+        float4 value = tex1.SampleCmpLevelZero(sampComp, uv, 0.5);
+        outData[0] = value;
+        return value;
+    }
+    """
+).strip()
+
+OVERLOADS_HLSL = textwrap.dedent(
+    """
+    float4 Blend(float4 a, float4 b) {
+        return a + b;
+    }
+
+    float4 Blend(float4 a, float4 b, float t) {
+        return lerp(a, b, t);
+    }
+
+    float4 UseBlend(float4 a, float4 b) {
+        return Blend(a, b, 0.5);
+    }
+    """
+).strip()
+
+COMPUTE_HLSL = textwrap.dedent(
+    """
+    RWTexture2D<float4> outputTex : register(u0);
+
+    [numthreads(8, 8, 1)]
+    void CSMain(uint3 dtid : SV_DispatchThreadID) {
+        outputTex[dtid.xy] = float4(1.0, 0.0, 0.0, 1.0);
+    }
+    """
+).strip()
+
+PREPROCESSOR_HLSL = textwrap.dedent(
+    """
+    #define USE_LIGHTING 1
+    #if USE_LIGHTING
+    float3 Lighting(float3 n) { return n; }
+    #endif
+
+    float4 main() : SV_Target0 {
+        return float4(1.0, 1.0, 1.0, 1.0);
+    }
+    """
+).strip()
 
 
-def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
+def tokenize_code(code: str):
     lexer = HLSLLexer(code)
     return lexer.tokenize()
 
 
-def test_struct_parsing():
+def parse_code(code: str):
+    tokens = tokenize_code(code)
+    parser = HLSLParser(tokens)
+    return parser.parse()
+
+
+def assert_parses(code: str):
+    try:
+        parse_code(code)
+    except SyntaxError as exc:
+        pytest.fail(f"Expected code to parse, but got SyntaxError: {exc}")
+
+
+def assert_parse_error(code: str):
+    with pytest.raises(SyntaxError):
+        parse_code(code)
+
+
+def test_parse_vertex_pixel_shader():
+    assert_parses(VERTEX_PIXEL_HLSL)
+
+
+def test_parse_control_flow_and_operators():
+    assert_parses(CONTROL_FLOW_HLSL)
+
+
+def test_parse_arrays_and_indexing():
+    assert_parses(ARRAYS_HLSL)
+
+
+def test_parse_resources_and_bindings():
+    assert_parses(RESOURCES_HLSL)
+
+
+def test_parse_function_overloads_and_calls():
+    assert_parses(OVERLOADS_HLSL)
+
+
+def test_parse_compute_attributes_and_semantics():
+    assert_parses(COMPUTE_HLSL)
+
+
+def test_parse_preprocessor_directives():
+    assert_parses(PREPROCESSOR_HLSL)
+
+
+def test_preprocessor_evaluates_conditionals():
     code = """
-    struct VSInput {
-        float4 position : SV_Position;
-        float4 color : TEXCOORD0;
+    #define ENABLE_BAD 0
+    #if ENABLE_BAD
+    int broken = ;
+    #endif
+
+    int ok() { return 1; }
+    """
+    assert_parses(code)
+
+
+def test_parse_enum_and_typedef():
+    code = """
+    enum BlendMode {
+        BlendOpaque = 0,
+        BlendAdd = 1,
+    };
+    typedef float4 Color;
+    Color main(Color input) : SV_Target0 {
+        return input;
+    }
+    """
+    assert_parses(code)
+
+
+def test_parse_resource_arrays_and_register_space():
+    code = """
+    Texture2D textures[4] : register(t0, space1);
+    RWTexture1DArray rwTexArray[2] : register(u1, space2);
+    SamplerState samplers[4] : register(s0);
+    float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+        return textures[0].Sample(samplers[0], uv);
+    }
+    """
+    assert_parses(code)
+
+
+def test_parse_geometry_shader():
+    code = """
+    struct GSInput {
+        float4 pos : SV_Position;
+    };
+    struct GSOutput {
+        float4 pos : SV_Position;
     };
 
-    struct VSOutput {
-        float4 out_position : TEXCOORD0;
+    [maxvertexcount(3)]
+    void GSMain(triangle GSInput input[3], inout TriangleStream<GSOutput> triStream) {
+        GSOutput outVert;
+        outVert.pos = input[0].pos;
+        triStream.Append(outVert);
+        triStream.RestartStrip();
+    }
+    """
+    assert_parses(code)
+
+
+def test_parse_tessellation_shaders():
+    code = """
+    struct HSInput {
+        float4 pos : SV_Position;
     };
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Struct parsing not implemented.")
+    struct HSOutput {
+        float4 pos : SV_Position;
+    };
 
+    struct HSConstData {
+        float edges[3] : SV_TessFactor;
+        float inside : SV_InsideTessFactor;
+    };
 
-def test_if_parsing():
-    code = """
-    VSOutput VSMain(VSInput input) {
-        VSOutput output;
-        output.out_position = input.position;
-        if (input.color.r > 0.5) {
-            output.out_position = input.color;
-        }
+    [domain(\"tri\")]
+    [partitioning(\"fractional_even\")]
+    [outputtopology(\"triangle_cw\")]
+    [outputcontrolpoints(3)]
+    [patchconstantfunc(\"HSConst\")]
+    HSOutput HSMain(InputPatch<HSInput, 3> patch, uint id : SV_OutputControlPointID) {
+        HSOutput output;
+        output.pos = patch[id].pos;
         return output;
     }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("if parsing not implemented.")
 
-
-def test_for_parsing():
-    code = """
-    VSOutput VSMain(VSInput input) {
-        VSOutput output;
-        for (int i = 0; i < 10; i=i+1) {
-            output.out_position = input.position;
-        }
-        return output;
+    [domain(\"tri\")]
+    float4 DSMain(HSConstData data, const OutputPatch<HSOutput, 3> patch, float3 uvw : SV_DomainLocation) : SV_Position {
+        return patch[0].pos;
     }
     """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("for parsing not implemented.")
+    assert_parses(code)
 
 
-def test_while_parsing():
+def test_parse_mesh_task_shaders():
     code = """
-    VSOutput VSMain(VSInput input) {
-        VSOutput output;
-        int i = 0;
-        while (i < 10) {
-            output.out_position = input.position;
-            i = i + 1;
-        }
-        return output;
+    [shader(\"amplification\")]
+    void ASMain() {
+        DispatchMesh(1, 1, 1);
+    }
+
+    [shader(\"mesh\")]
+    void MSMain() {
+        SetMeshOutputCounts(1, 1);
     }
     """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("while parsing not implemented")
+    assert_parses(code)
 
 
-def test_do_while_parsing():
+def test_parse_raytracing_shader():
     code = """
-    VSOutput VSMain(VSInput input) {
-        VSOutput output;
-        int i = 0;
-        do {
-            output.out_position = input.position;
-            i = i + 1;
-        } while (i < 10);
-        return output;
+    RaytracingAccelerationStructure accel : register(t0, space1);
+
+    [shader(\"raygeneration\")]
+    void RayGen() {
+        TraceRay(accel, 0, 0xFF, 0, 1, 0, float3(0.0, 0.0, 0.0), 0.0, float3(0.0, 0.0, 1.0), 100.0, 0);
     }
     """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("do while parsing not implemented")
+    assert_parses(code)
 
 
-def test_else_parsing():
+def test_parse_raytracing_shader_stages():
     code = """
-    PSOutput PSMain(PSInput input) {
-        PSOutput output;
-        if (input.in_position.r > 0.5) {
-            output.out_color = input.in_position;
-        } else {
-            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-        }
-        return output;
+    [shader(\"intersection\")]
+    void IsMain() { }
+    [shader(\"closesthit\")]
+    void ChMain() { }
+    [shader(\"anyhit\")]
+    void AhMain() { }
+    [shader(\"miss\")]
+    void MsMain() { }
+    [shader(\"callable\")]
+    void ClMain() { }
+    """
+    assert_parses(code)
+
+
+def test_parse_additional_attributes():
+    code = """
+    [earlydepthstencil]
+    float4 PSMain(float4 pos : SV_Position) : SV_Target0 { return pos; }
+
+    [unroll]
+    void CSMain() { }
+
+    [branch]
+    float4 BRMain(float4 pos : SV_Position) : SV_Target0 { return pos; }
+
+    [loop]
+    void LoopMain() { }
+
+    [flatten]
+    float4 FLMain(float4 pos : SV_Position) : SV_Target0 { return pos; }
+
+    [maxtessfactor(16)]
+    [instance(2)]
+    [fastopt]
+    [allow_uav_condition]
+    void AttrMain() { }
+    """
+    assert_parses(code)
+
+
+def test_parse_wave_intrinsics():
+    code = """
+    uint WaveMain(uint value) {
+        uint sum = WaveActiveSum(value);
+        uint lane = WaveGetLaneIndex();
+        return sum + lane;
     }
     """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("else parsing not implemented.")
+    assert_parses(code)
 
 
-def test_function_call_parsing():
+def test_parse_texture_methods():
     code = """
-    PSOutput PSMain(PSInput input) {
-        PSOutput output;
-        output.out_color = saturate(input.in_position);
-        return output;
+    Texture2D tex : register(t0);
+    SamplerState samp : register(s0);
+    float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+        float4 a = tex.Sample(samp, uv);
+        float4 b = tex.SampleLevel(samp, uv, 0.0);
+        float4 c = tex.SampleGrad(samp, uv, float2(1.0, 0.0), float2(0.0, 1.0));
+        float4 d = tex.SampleBias(samp, uv, 0.5);
+        float4 e = tex.SampleCmpLevelZero(samp, uv, 0.5);
+        float4 f = tex.GatherRed(samp, uv);
+        return a + b + c + d + e + f;
     }
     """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("function call parsing not implemented.")
+    assert_parses(code)
 
 
-def test_else_if_parsing():
-    code = """
-    PSOutput PSMain(PSInput input) {
-        PSOutput output;
-        if (input.in_position.r > 0.5) {
-            output.out_color = input.in_position;
-        } else if (input.in_position.r == 0.5){
-            output.out_color = float4(1.0, 1.0, 1.0, 1.0);
-        } else {
-            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-        }
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("else_if parsing not implemented.")
-
-
-def test_assignment_ops_parsing():
-    code = """
-    PSOutput PSMain(PSInput input) {
-        PSOutput output;
-        output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-
-        if (input.in_position.r > 0.5) {
-            output.out_color += input.in_position;
-        }
-
-        if (input.in_position.r < 0.5) {
-            output.out_color -= float4(0.1, 0.1, 0.1, 0.1);
-        }
-
-        if (input.in_position.g > 0.5) {
-            output.out_color *= 2.0;
-        }
-
-        if (input.in_position.b > 0.5) {
-            out_color /= 2.0;
-        }
-
-        // Testing SHIFT_LEFT (<<) operator on some condition
-        if (input.in_position.r == 0.5) {
-            uint redValue = asuint(output.out_color.r);
-            output.redValue ^= 0x1;
-            output.out_color.r = asfloat(redValue);
-
-            output.redValue |= 0x2;
-            // Applying shift left operation
-            output.redValue << 1; // Shift left by 1
-            output.redValue &= 0x3;
-        }
-        
-        // Testing SHIFT_RIGHT (>>) operator on some condition
-        if (input.in_position.r == 0.25) {
-            uint redValue = asuint(output.out_color.r);
-            output.redValue ^= 0x1;
-            output.out_color.r = asfloat(redValue);
-
-            output.redValue |= 0x2;
-            // Applying shift left operation
-            output.redValue >> 1; // Shift left by 1
-            output.redValue &= 0x3;
-        }
-
-        // Testing BITWISE_XOR (^) operator on some condition
-        if (input.in_position.r == 0.5) {
-            uint redValue = asuint(output.out_color.r);
-            output.redValue ^ 0x1;  // BITWISE_XOR operation
-            output.out_color.r = asfloat(redValue);
-        }
-
-
-
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("assign_op parsing not implemented.")
-
-
-def test_bitwise_ops_parsing():
-    code = """
-        PSOutput PSMain(PSInput input) {
-            PSOutput output;
-            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-            uint val = 0x01;
-            if (val | 0x02) {
-                // Test case for bitwise OR
-            }
-            uint filterA = 0b0001; // First filter
-            uint filterB = 0b1000; // Second filter
-
-            // Merge both filters
-            uint combinedFilter = filterA | filterB; // combinedFilter becomes 0b1001
-            return output;
-        }
-        """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("bitwise_op parsing not implemented.")
-
-
-def test_logical_or_ops_parsing():
-    code = """
-            PSOutput PSMain(PSInput input) {
-                PSOutput output;
-                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-                // Test case for logical OR
-                bool condition1 = true; // First condition
-                bool condition2 = false; // Second condition
-                if (condition1 || condition2) {
-                    // If one of the condition is true
-                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
-                } else {
-                    // If both of the conditions are false
-                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
-                }
-                return output;
-            }
-        """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("logical_or_ops not implemented.")
-
-
-def test_logical_and_ops_parsing():
-    code = """
-            PSOutput PSMain(PSInput input) {
-                PSOutput output;
-                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-                // Test case for logical AND
-                bool condition1 = true; // First condition
-                bool condition2 = false; // Second condition
-                if (condition1 && condition2) {
-                    // both the condition is true
-                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
-                } else {
-                    // any one of the condition is false
-                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
-                }
-                return output;
-            }
-        """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("logical_and_ops not implemented.")
-
-
-def test_switch_case_parsing():
-    code = """
-    PSOutput PSMain(PSInput input) {
-        PSOutput output;
-        switch (input.value) {
-            case 1:
-                output.out_color = float4(1.0, 0.0, 0.0, 1.0);
-                break;
-            case 2:
-                output.out_color = float4(0.0, 1.0, 0.0, 1.0);
-                break;
-            default:
-                output.out_color = float4(0.0, 0.0, 1.0, 1.0);
-                break;
-        }
-        return output;
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("switch-case parsing not implemented.")
-
-
-def test_bitwise_and_parsing():
-    code = """
-        PSOutput PSMain(PSInput input) {
-            PSOutput output;
-            output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-            uint val = 0x01;
-            if (val & 0x02) {
-                // Test case for bitwise AND
-            }
-            uint filterA = 0b0001; // First filter
-            uint filterB = 0b1000; // Second filter
-
-            // Merge both filters
-            uint combinedFilter = filterA & filterB; // combinedFilter becomes 0b1001
-            return output;
-        }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("bitwise_and_op parsing not implemented.")
-
-
-def test_double_dtype_parsing():
-    code = """
-            PSOutput PSMain(PSInput input) {
-                PSOutput output;
-                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-                double value1 = 3.14159; // First double value
-                double value2 = 2.71828; // Second double value
-                double result = value1 + value2; // Adding two doubles
-                if (result > 6.0) {
-                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
-                } else {
-                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
-                }
-                return output;
-            }
-        """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("double dtype not implemented.")
-
-
-def test_mod_parsing():
-    code = """
-    void main() {
-        int a = 10 % 3;  // Basic modulus
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Modulus operator parsing not implemented")
-
-
-def test_double_dtype_parsing():
-    code = """
-            PSOutput PSMain(PSInput input) {
-                PSOutput output;
-                output.out_color = float4(0.0, 0.0, 0.0, 1.0);
-                half value1 = 3.14159; // First half value
-                half value2 = 2.71828; // Second half value
-                half result = value1 + value2; // Adding them
-                if (result > 6.0) {
-                    output.out_color = float4(1.0, 0.0, 0.0, 1.0); // Set color to red
-                } else {
-                    output.out_color = float4(0.0, 1.0, 0.0, 1.0); // Set color to green
-                }
-                return output;
-            }
-        """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("half dtype not implemented.")
-
-
-def test_bitwise_not_parsing():
-    code = """
-    void main() {
-        int a = 5;
-        int b = ~a;  // Bitwise NOT
-    }
-    """
-    try:
-        tokens = tokenize_code(code)
-        parse_code(tokens)
-    except SyntaxError:
-        pytest.fail("Bitwise NOT operator parsing not implemented")
+@pytest.mark.parametrize(
+    "code",
+    [
+        "float4 main() : SV_Target0 { float x = 1.0 return float4(x, 0, 0, 1); }",
+        "struct Foo { float4 a; ",
+        "void main() { for (int i = 0; i < 4 i++) { } }",
+    ],
+)
+def test_parse_invalid_syntax(code):
+    assert_parse_error(code)
 
 
 if __name__ == "__main__":

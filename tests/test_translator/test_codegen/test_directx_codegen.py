@@ -152,6 +152,63 @@ def test_for_statement():
         pytest.fail("for statement codegen not implemented.")
 
 
+def test_ray_payload_semantics():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        ray_generation {
+            void main(Payload payload @ payload) {
+                payload.color = vec3(1.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "payload" in generated
+
+
+def test_ray_and_mesh_shader_attributes():
+    code = """
+    shader rt {
+        ray_generation {
+            void main() { }
+        }
+        mesh {
+            void main() { }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert '[shader("raygeneration")]' in generated
+    assert '[shader("mesh")]' in generated
+
+
+def test_wave_and_rayquery_intrinsics_codegen():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                uint v;
+                uint sum = WaveActiveSum(v);
+                RayQuery rq;
+                rq.Proceed();
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "WaveActiveSum" in generated
+    assert "rq.Proceed" in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {

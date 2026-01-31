@@ -153,6 +153,96 @@ def test_for_statement():
         pytest.fail("for statement codegen not implemented.")
 
 
+def test_ray_payload_semantics():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        ray_generation {
+            void main(Payload payload @ payload) {
+                payload.color = vec3(1.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "[[payload]]" in generated
+
+
+def test_mesh_object_stage_codegen():
+    code = """
+    shader meshpipe {
+        object {
+            void main() { }
+        }
+        mesh {
+            void main() { }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "object void object_main" in generated
+    assert "mesh void mesh_main" in generated
+
+
+def test_anyhit_stage_codegen():
+    code = """
+    shader rt {
+        anyhit {
+            void main() { }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "anyhit void anyhit_main" in generated
+
+
+def test_metal_atomic_fetch_codegen():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                atomic_int counter;
+                int old = atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "atomic_fetch_add_explicit" in generated
+
+
+def test_metal_raytrace_and_mesh_intrinsics():
+    code = """
+    shader main {
+        ray_generation {
+            void main() {
+                TraceRay();
+            }
+        }
+        mesh {
+            void main() {
+                SetMeshOutputCounts(64, 32);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+    assert "TraceRay" in generated
+    assert "SetMeshOutputCounts" in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {

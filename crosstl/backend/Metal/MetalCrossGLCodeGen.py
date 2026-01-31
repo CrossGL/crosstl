@@ -5,6 +5,16 @@ from .MetalLexer import *
 
 class MetalToCrossGLConverter:
     def __init__(self):
+        self.rt_qualifiers = {
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+            "mesh",
+            "object",
+            "amplification",
+        }
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -13,6 +23,12 @@ class MetalToCrossGLConverter:
             "uchar": "uint8",
             "short": "int16",
             "ushort": "uint16",
+            "int8_t": "int8",
+            "uint8_t": "uint8",
+            "int16_t": "int16",
+            "uint16_t": "uint16",
+            "int32_t": "int",
+            "uint32_t": "uint",
             "int": "int",
             "uint": "uint",
             "long": "int64",
@@ -24,6 +40,9 @@ class MetalToCrossGLConverter:
             "double": "double",
             "size_t": "uint64",
             "ptrdiff_t": "int64",
+            "atomic_int": "atomic_int",
+            "atomic_uint": "atomic_uint",
+            "atomic_bool": "atomic_bool",
             # Vector Types - float
             "float2": "vec2",
             "float3": "vec3",
@@ -60,6 +79,32 @@ class MetalToCrossGLConverter:
             "bool2": "bvec2",
             "bool3": "bvec3",
             "bool4": "bvec4",
+            # Packed vector types
+            "packed_float2": "vec2",
+            "packed_float3": "vec3",
+            "packed_float4": "vec4",
+            "packed_half2": "f16vec2",
+            "packed_half3": "f16vec3",
+            "packed_half4": "f16vec4",
+            "packed_int2": "ivec2",
+            "packed_int3": "ivec3",
+            "packed_int4": "ivec4",
+            "packed_uint2": "uvec2",
+            "packed_uint3": "uvec3",
+            "packed_uint4": "uvec4",
+            # SIMD types
+            "simd_float2": "vec2",
+            "simd_float3": "vec3",
+            "simd_float4": "vec4",
+            "simd_float2x2": "mat2",
+            "simd_float3x3": "mat3",
+            "simd_float4x4": "mat4",
+            "simd_int2": "ivec2",
+            "simd_int3": "ivec3",
+            "simd_int4": "ivec4",
+            "simd_uint2": "uvec2",
+            "simd_uint3": "uvec3",
+            "simd_uint4": "uvec4",
             # Matrix Types - float
             "float2x2": "mat2",
             "float2x3": "mat2x3",
@@ -86,11 +131,26 @@ class MetalToCrossGLConverter:
             "texture1d<half>": "sampler1D",
             "texture1d<int>": "isampler1D",
             "texture1d<uint>": "usampler1D",
+            "texture1d_array": "sampler1DArray",
+            "texture1d_array<float>": "sampler1DArray",
+            "texture1d_array<half>": "sampler1DArray",
+            "texture1d_array<int>": "isampler1DArray",
+            "texture1d_array<uint>": "usampler1DArray",
             "texture2d": "sampler2D",
             "texture2d<float>": "sampler2D",
             "texture2d<half>": "sampler2D",
             "texture2d<int>": "isampler2D",
             "texture2d<uint>": "usampler2D",
+            "texture2d_ms": "sampler2DMS",
+            "texture2d_ms<float>": "sampler2DMS",
+            "texture2d_ms<half>": "sampler2DMS",
+            "texture2d_ms<int>": "isampler2DMS",
+            "texture2d_ms<uint>": "usampler2DMS",
+            "texture2d_ms_array": "sampler2DMSArray",
+            "texture2d_ms_array<float>": "sampler2DMSArray",
+            "texture2d_ms_array<half>": "sampler2DMSArray",
+            "texture2d_ms_array<int>": "isampler2DMSArray",
+            "texture2d_ms_array<uint>": "usampler2DMSArray",
             "texture3d": "sampler3D",
             "texture3d<float>": "sampler3D",
             "texture3d<half>": "sampler3D",
@@ -102,31 +162,61 @@ class MetalToCrossGLConverter:
             "texturecube<int>": "isamplerCube",
             "texturecube<uint>": "usamplerCube",
             "TextureCube": "samplerCube",
+            "texturecube_array": "samplerCubeArray",
+            "texturecube_array<float>": "samplerCubeArray",
+            "texturecube_array<half>": "samplerCubeArray",
+            "texturecube_array<int>": "isamplerCubeArray",
+            "texturecube_array<uint>": "usamplerCubeArray",
             "texture2d_array": "sampler2DArray",
             "texture2d_array<float>": "sampler2DArray",
             "texture2d_array<half>": "sampler2DArray",
             "texture2d_array<int>": "isampler2DArray",
             "texture2d_array<uint>": "usampler2DArray",
+            "texture_buffer": "samplerBuffer",
+            "texture_buffer<float>": "samplerBuffer",
+            "texture_buffer<half>": "samplerBuffer",
+            "texture_buffer<int>": "isamplerBuffer",
+            "texture_buffer<uint>": "usamplerBuffer",
             "depth2d": "sampler2DShadow",
             "depth2d<float>": "sampler2DShadow",
+            "depth2d_array": "sampler2DArrayShadow",
+            "depth2d_array<float>": "sampler2DArrayShadow",
+            "depthcube": "samplerCubeShadow",
+            "depthcube<float>": "samplerCubeShadow",
+            "depthcube_array": "samplerCubeArrayShadow",
+            "depthcube_array<float>": "samplerCubeArrayShadow",
+            "depth2d_ms": "sampler2DMS",
+            "depth2d_ms<float>": "sampler2DMS",
+            "depth2d_ms_array": "sampler2DMSArray",
+            "depth2d_ms_array<float>": "sampler2DMSArray",
+            "acceleration_structure": "acceleration_structure",
+            "intersection_function_table": "intersection_function_table",
+            "visible_function_table": "visible_function_table",
+            "indirect_command_buffer": "indirect_command_buffer",
+            "ray": "ray",
+            "ray_data": "ray_data",
+            "intersection_result": "intersection_result",
+            "intersection_params": "intersection_params",
+            "triangle_intersection_params": "triangle_intersection_params",
+            "intersector": "intersector",
             # Sampler type
             "sampler": "sampler",
         }
 
         self.map_semantics = {
             # Vertex attributes
-            "attribute(0)": "Position",
-            "attribute(1)": "Normal",
-            "attribute(2)": "Tangent",
-            "attribute(3)": "Binormal",
-            "attribute(4)": "TexCoord",
-            "attribute(5)": "TexCoord0",
-            "attribute(6)": "TexCoord1",
-            "attribute(7)": "TexCoord2",
-            "attribute(8)": "TexCoord3",
-            "attribute(9)": "Color",
-            "attribute(10)": "Color0",
-            "attribute(11)": "Color1",
+            "attribute(0)": "POSITION",
+            "attribute(1)": "NORMAL",
+            "attribute(2)": "TANGENT",
+            "attribute(3)": "BINORMAL",
+            "attribute(4)": "TEXCOORD",
+            "attribute(5)": "TEXCOORD0",
+            "attribute(6)": "TEXCOORD1",
+            "attribute(7)": "TEXCOORD2",
+            "attribute(8)": "TEXCOORD3",
+            "attribute(9)": "COLOR",
+            "attribute(10)": "COLOR0",
+            "attribute(11)": "COLOR1",
             "vertex_id": "gl_VertexID",
             "instance_id": "gl_InstanceID",
             "base_vertex": "gl_BaseVertex",
@@ -142,11 +232,31 @@ class MetalToCrossGLConverter:
             "color(3)": "gl_FragColor3",
             "color(4)": "gl_FragColor4",
             "depth(any)": "gl_FragDepth",
-            "stage_in": "gl_FragColor",
+            "sample_id": "gl_SampleID",
+            "sample_mask": "gl_SampleMask",
+            "primitive_id": "gl_PrimitiveID",
+            "viewport_array_index": "gl_ViewportIndex",
+            "render_target_array_index": "gl_Layer",
+            "thread_position_in_grid": "gl_GlobalInvocationID",
+            "thread_position_in_threadgroup": "gl_LocalInvocationID",
+            "threadgroup_position_in_grid": "gl_WorkGroupID",
+            "thread_index_in_threadgroup": "gl_LocalInvocationIndex",
+            "stage_in": "",
         }
 
     def generate(self, ast):
-        code = "shader main {\n"
+        code = ""
+        includes = getattr(ast, "includes", []) or []
+        for inc in includes:
+            if isinstance(inc, PreprocessorNode):
+                line = f"{inc.directive} {inc.content}".strip()
+            else:
+                line = str(inc).strip()
+            if line:
+                code += f"{line}\n"
+        if includes:
+            code += "\n"
+        code += "shader main {\n"
         # Generate custom functions
         code += "\n"
         self.constant_struct_name = []
@@ -159,6 +269,28 @@ class MetalToCrossGLConverter:
 
         # Get structs - support both 'struct' and 'structs' attributes
         structs = getattr(ast, "structs", []) or getattr(ast, "struct", []) or []
+        enums = getattr(ast, "enums", []) or []
+        typedefs = getattr(ast, "typedefs", []) or []
+
+        if typedefs:
+            code += "    // Typedefs\n"
+            for alias in typedefs:
+                if isinstance(alias, TypeAliasNode):
+                    code += f"    typedef {self.map_type(alias.alias_type)} {alias.name};\n"
+            code += "\n"
+
+        if enums:
+            code += "    // Enums\n"
+            for enum in enums:
+                if isinstance(enum, EnumNode):
+                    code += f"    enum {enum.name} {{\n"
+                    for member_name, member_value in enum.members:
+                        if member_value is not None:
+                            value = self.generate_expression(member_value, False)
+                            code += f"        {member_name} = {value},\n"
+                        else:
+                            code += f"        {member_name},\n"
+                    code += "    };\n\n"
         for struct_node in structs:
             if isinstance(struct_node, StructNode):
                 if struct_node.name in self.constant_struct_name:
@@ -166,11 +298,47 @@ class MetalToCrossGLConverter:
                     code += f"    cbuffer {struct_node.name} {{\n"
                 else:
                     code += "    // Structs\n"
-                    code += f"    struct {struct_node.name} {{\n"
+                    struct_alignas = ""
+                    if hasattr(struct_node, "alignas") and struct_node.alignas:
+                        parts = []
+                        for item in struct_node.alignas:
+                            if isinstance(item, tuple) and item[0] == "type":
+                                parts.append(f"alignas({self.map_type(item[1])})")
+                            else:
+                                parts.append(
+                                    f"alignas({self.generate_expression(item, False)})"
+                                )
+                        struct_alignas = " ".join(parts) + " "
+                    code += f"    {struct_alignas}struct {struct_node.name} {{\n"
                 for member in struct_node.members:
-                    semantic = self.map_semantic(getattr(member, "attributes", None))
-                    code += f"        {self.map_type(member.vtype)} {member.name} {semantic};\n"
+                    decl = self.format_decl(member, include_semantic=True)
+                    code += f"        {decl};\n"
                 code += "    }\n\n"
+
+        globals_list = getattr(ast, "global_variables", []) or getattr(ast, "global_vars", [])
+        if globals_list:
+            code += "    // Globals\n"
+            for glob in globals_list:
+                if isinstance(glob, StaticAssertNode):
+                    cond = self.generate_expression(glob.condition, False)
+                    if glob.message is not None:
+                        msg = (
+                            glob.message
+                            if isinstance(glob.message, str)
+                            else self.generate_expression(glob.message, False)
+                        )
+                        code += f"    static_assert({cond}, {msg});\n"
+                    else:
+                        code += f"    static_assert({cond});\n"
+                    continue
+                if isinstance(glob, AssignmentNode):
+                    left = self.generate_expression(glob.left, False)
+                    right = self.generate_expression(glob.right, False)
+                    code += f"    {left} {glob.operator} {right};\n"
+                elif isinstance(glob, VariableNode):
+                    decl = self.format_decl(glob, include_semantic=True)
+                    code += f"    {decl};\n"
+            code += "\n"
 
         # Get functions
         functions = getattr(ast, "functions", []) or []
@@ -191,6 +359,9 @@ class MetalToCrossGLConverter:
                 code += "    compute {\n"
                 code += self.generate_function(f)
                 code += "    }\n\n"
+            elif qualifier in self.rt_qualifiers:
+                code += f"    // {qualifier} function\n"
+                code += self.generate_function(f)
             else:
                 code += self.generate_function(f)
 
@@ -209,14 +380,44 @@ class MetalToCrossGLConverter:
                     struct.name for struct in structs if struct.name == constant.name
                 )
 
+    def format_array_suffix(self, var):
+        if not hasattr(var, "array_sizes") or not var.array_sizes:
+            return ""
+        suffix = ""
+        for size in var.array_sizes:
+            if size is None:
+                suffix += "[]"
+            else:
+                suffix += f"[{self.generate_expression(size, False)}]"
+        return suffix
+
+    def format_decl(self, var, include_semantic=False):
+        alignas_prefix = ""
+        if hasattr(var, "alignas") and var.alignas:
+            parts = []
+            for item in var.alignas:
+                if isinstance(item, tuple) and item[0] == "type":
+                    parts.append(f"alignas({self.map_type(item[1])})")
+                else:
+                    parts.append(f"alignas({self.generate_expression(item, False)})")
+            alignas_prefix = " ".join(parts) + " "
+        type_str = f"{self.map_type(var.vtype)}{self.format_array_suffix(var)}"
+        const_str = (
+            "const " if hasattr(var, "is_const") and var.is_const else ""
+        )
+        semantic = self.map_semantic(getattr(var, "attributes", None)) if include_semantic else ""
+        parts = [alignas_prefix + const_str + type_str, var.name]
+        if semantic:
+            parts.append(semantic)
+        return " ".join(part for part in parts if part)
+
     def generate_function(self, func, indent=2):
         code = ""
         code += "    " * indent
-        params = ", ".join(
-            f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.attributes)}"
-            for p in func.params
-        )
-        code += f"{self.map_type(func.return_type)} {func.name}({params})  {self.map_semantic(func.attributes)} {{\n"
+        params = ", ".join(self.format_decl(p, include_semantic=True) for p in func.params)
+        fn_semantic = self.map_semantic(func.attributes)
+        suffix = f" {fn_semantic}" if fn_semantic else ""
+        code += f"{self.map_type(func.return_type)} {func.name}({params}){suffix} {{\n"
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
         return code
@@ -226,30 +427,57 @@ class MetalToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                const_str = (
-                    "const " if hasattr(stmt, "is_const") and stmt.is_const else ""
-                )
-                code += f"{const_str}{self.map_type(stmt.vtype)} {stmt.name};\n"
+                decl = self.format_decl(stmt, include_semantic=False)
+                code += f"{decl};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
-                    code += f"return {self.generate_expression(stmt.value, is_main)};\n"
+                    if stmt.value is None:
+                        code += "return;\n"
+                    else:
+                        code += f"return {self.generate_expression(stmt.value, is_main)};\n"
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent, is_main)
+            elif isinstance(stmt, WhileNode):
+                code += self.generate_while_loop(stmt, indent, is_main)
+            elif isinstance(stmt, DoWhileNode):
+                code += self.generate_do_while_loop(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
             elif isinstance(stmt, SwitchNode):
                 code += self.generate_switch_statement(stmt, indent, is_main)
-            elif isinstance(stmt, FunctionCallNode):
+            elif isinstance(stmt, FunctionCallNode) or isinstance(stmt, MethodCallNode) or isinstance(stmt, CallNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
+            elif isinstance(stmt, PostfixOpNode):
+                code += f"{self.generate_expression(stmt, is_main)};\n"
+            elif isinstance(stmt, ContinueNode):
+                code += "continue;\n"
+            elif isinstance(stmt, BreakNode):
+                code += "break;\n"
+            elif isinstance(stmt, DiscardNode):
+                code += "discard;\n"
+            elif isinstance(stmt, StaticAssertNode):
+                cond = self.generate_expression(stmt.condition, is_main)
+                if stmt.message is not None:
+                    msg = (
+                        stmt.message
+                        if isinstance(stmt.message, str)
+                        else self.generate_expression(stmt.message, is_main)
+                    )
+                    code += f"static_assert({cond}, {msg});\n"
+                else:
+                    code += f"static_assert({cond});\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:
-                # For any unhandled statement type, attempt to generate something useful
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                expr = self.generate_expression(stmt, is_main)
+                if expr:
+                    code += f"{expr};\n"
+                else:
+                    code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
 
     def generate_for_loop(self, node, indent, is_main):
@@ -260,6 +488,20 @@ class MetalToCrossGLConverter:
         code = f"for ({init}; {condition}; {update}) {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
+        return code
+
+    def generate_while_loop(self, node, indent, is_main):
+        condition = self.generate_expression(node.condition, is_main)
+        code = f"while ({condition}) {{\n"
+        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + "}\n"
+        return code
+
+    def generate_do_while_loop(self, node, indent, is_main):
+        condition = self.generate_expression(node.condition, is_main)
+        code = "do {\n"
+        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + f"}} while ({condition});\n"
         return code
 
     def generate_if_statement(self, node, indent, is_main):
@@ -304,7 +546,7 @@ class MetalToCrossGLConverter:
                 const_str = (
                     "const " if hasattr(expr, "is_const") and expr.is_const else ""
                 )
-                return f"{const_str}{self.map_type(expr.vtype)} {expr.name}"
+                return f"{const_str}{self.map_type(expr.vtype)}{self.format_array_suffix(expr)} {expr.name}"
             else:
                 return expr.name
         elif isinstance(expr, AssignmentNode):
@@ -318,14 +560,48 @@ class MetalToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{expr.name}({args})"
+        elif isinstance(expr, CallNode):
+            callee = self.generate_expression(expr.callee, is_main)
+            args = ", ".join(
+                self.generate_expression(arg, is_main) for arg in expr.args
+            )
+            return f"{callee}({args})"
+        elif isinstance(expr, MethodCallNode):
+            obj = self.generate_expression(expr.object, is_main)
+            args = ", ".join(
+                self.generate_expression(arg, is_main) for arg in expr.args
+            )
+            method = expr.method
+            if method == "read":
+                return f"textureLoad({obj}, {args})" if args else f"{obj}.read()"
+            if method == "write":
+                return f"textureStore({obj}, {args})" if args else f"{obj}.write()"
+            if method == "sample_compare":
+                return f"textureCompare({obj}, {args})"
+            if method == "sample_compare_level":
+                return f"textureCompareLod({obj}, {args})"
+            if method == "gather":
+                return f"textureGather({obj}, {args})"
+            if method == "gather_compare":
+                return f"textureGatherCompare({obj}, {args})"
+            return f"{obj}.{method}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, ArrayAccessNode):
+            array = self.generate_expression(expr.array, is_main)
+            index = self.generate_expression(expr.index, is_main)
+            return f"{array}[{index}]"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
             return f"({expr.op}{operand})"
+        elif isinstance(expr, PostfixOpNode):
+            operand = self.generate_expression(expr.operand, is_main)
+            return f"{operand}{expr.op}"
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
+        elif isinstance(expr, CastNode):
+            return f"({self.map_type(expr.target_type)}){self.generate_expression(expr.expression, is_main)}"
         elif isinstance(expr, VectorConstructorNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
@@ -333,7 +609,6 @@ class MetalToCrossGLConverter:
             return f"{self.map_type(expr.type_name)}({args})"
         elif isinstance(expr, TextureSampleNode):
             texture = self.generate_expression(expr.texture, is_main)
-            self.generate_expression(expr.sampler, is_main)
             coords = self.generate_expression(expr.coordinates, is_main)
 
             # Handle LOD parameter if present
@@ -351,51 +626,50 @@ class MetalToCrossGLConverter:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def map_type(self, metal_type):
-        if metal_type:
-            # Special case for generic types not explicitly defined in the map
-            if (
-                "<" in metal_type
-                and ">" in metal_type
-                and metal_type not in self.type_map
-            ):
-                base_type, inner_type = metal_type.split("<", 1)
-                inner_type = inner_type.rstrip(">")
-                if base_type == "texture2d":
-                    if inner_type in ["float", "half"]:
-                        return "sampler2D"
-                    elif inner_type == "int":
-                        return "isampler2D"
-                    elif inner_type == "uint":
-                        return "usampler2D"
-                elif base_type == "texturecube":
-                    if inner_type in ["float", "half"]:
-                        return "samplerCube"
-                    elif inner_type == "int":
-                        return "isamplerCube"
-                    elif inner_type == "uint":
-                        return "usamplerCube"
+        if not metal_type:
+            return metal_type
 
-            return self.type_map.get(metal_type, metal_type)
-        return metal_type
+        base = metal_type.strip()
+        if base.startswith("metal::"):
+            base = base.split("metal::", 1)[1]
+        if base.startswith("raytracing::"):
+            base = base.split("raytracing::", 1)[1]
+        suffix = ""
+        while base.endswith("*") or base.endswith("&"):
+            suffix = base[-1] + suffix
+            base = base[:-1].strip()
+
+        # Normalize generic access qualifiers: texture2d<float, access::read_write>
+        if "<" in base and ">" in base:
+            base_name, inner = base.split("<", 1)
+            inner = inner.rstrip(">")
+            if "," in inner:
+                inner = inner.split(",", 1)[0].strip()
+            base = f"{base_name}<{inner.strip()}>"
+
+        mapped = self.type_map.get(base, base)
+        return f"{mapped}{suffix}"
 
     def map_semantic(self, semantic):
-        if semantic:
-            for semantic in semantic:
-                if isinstance(semantic, AttributeNode):
-                    name = semantic.name
-                    args = semantic.args
-                    if args:
-                        out = self.map_semantics.get(
-                            f"{name}({args[0]})", f"{name}({args[0]})"
-                        )
-                        return f"@{out}"
-                    else:
-                        out = self.map_semantics.get(f"{name}", f"{name}")
-                        return f"@{out}"
-                else:
-                    return ""
-        else:
+        if not semantic:
             return ""
+
+        outputs = []
+        for attr in semantic:
+            if not isinstance(attr, AttributeNode):
+                continue
+            name = attr.name
+            args = [str(a).strip() for a in attr.args] if attr.args else []
+            key = f"{name}({args[0]})" if args else name
+            out = self.map_semantics.get(key, self.map_semantics.get(name, None))
+            if out is None:
+                if args:
+                    out = f"{name}({', '.join(args)})"
+                else:
+                    out = name
+            if out:
+                outputs.append(f"@{out}")
+        return " ".join(outputs)
 
     def generate_switch_statement(self, node, indent, is_main):
         """Generate CrossGL code for a switch statement

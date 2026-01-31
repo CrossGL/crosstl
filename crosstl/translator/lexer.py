@@ -6,6 +6,8 @@ TOKENS = OrderedDict(
         # Comments
         ("COMMENT_SINGLE", r"//.*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
+        # Preprocessor directives
+        ("PREPROCESSOR", r"#[^\n]*"),
         # Keywords - Core Language
         ("SHADER", r"\bshader\b"),
         ("STRUCT", r"\bstruct\b"),
@@ -267,6 +269,7 @@ KEYWORDS = {
     "uniform": "UNIFORM",
     "cbuffer": "CBUFFER",
     "buffer": "BUFFER",
+    "precision": "PRECISION",
     # Visibility
     "pub": "PUBLIC",
     "priv": "PRIVATE",
@@ -284,6 +287,25 @@ KEYWORDS = {
     "compute": "COMPUTE",
     "geometry": "GEOMETRY",
     "tessellation": "TESSELLATION",
+    "tessellation_control": "TESSELLATION_CONTROL",
+    "tessellation_evaluation": "TESSELLATION_EVALUATION",
+    "hull": "TESSELLATION_CONTROL",
+    "domain": "TESSELLATION_EVALUATION",
+    "task": "TASK",
+    "amplification": "AMPLIFICATION",
+    "object": "OBJECT",
+    "mesh": "MESH",
+    "ray_generation": "RAY_GENERATION",
+    "ray_intersection": "RAY_INTERSECTION",
+    "ray_closest_hit": "RAY_CLOSEST_HIT",
+    "ray_miss": "RAY_MISS",
+    "ray_any_hit": "RAY_ANY_HIT",
+    "ray_callable": "RAY_CALLABLE",
+    "intersection": "RAY_INTERSECTION",
+    "anyhit": "RAY_ANY_HIT",
+    "closesthit": "RAY_CLOSEST_HIT",
+    "miss": "RAY_MISS",
+    "callable": "RAY_CALLABLE",
     # GPU
     "kernel": "KERNEL",
     "global": "GLOBAL",

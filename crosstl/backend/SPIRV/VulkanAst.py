@@ -2,8 +2,8 @@
 
 from ..common_ast import *
 
-
 # SPIR-V/Vulkan-specific nodes
+
 
 class DescriptorSetNode(ASTNode):
     """Node representing a descriptor set binding"""
@@ -26,7 +26,9 @@ class LayoutNode(ASTNode):
         self.declaration = declaration
 
     def __repr__(self):
-        return f"LayoutNode(qualifiers={self.qualifiers}, declaration={self.declaration})"
+        return (
+            f"LayoutNode(qualifiers={self.qualifiers}, declaration={self.declaration})"
+        )
 
 
 class UniformNode(ASTNode):

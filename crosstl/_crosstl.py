@@ -1,18 +1,13 @@
-from . import translator
-from .translator.lexer import Lexer
-from .translator.parser import Parser
+from typing import Optional
+
 from .translator.codegen import (
-    GLSL_codegen,
-    directx_codegen,
-    metal_codegen,
-    SPIRV_codegen,
-    mojo_codegen,
-    rust_codegen,
-    cuda_codegen,
-    hip_codegen,
-    slang_codegen,
+    get_codegen,
+    get_backend_extension,
+    normalize_backend_name,
+    backend_names,
 )
-from .translator.ast import ASTNode
+from .translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from .translator.plugin_loader import discover_backend_plugins
 import argparse
 import sys
 import os
@@ -28,7 +23,7 @@ except ImportError:
 def translate(
     file_path: str,
     backend: str = "cgl",
-    save_shader: str = None,
+    save_shader: Optional[str] = None,
     format_output: bool = True,
 ) -> str:
     """Translate a shader file to another language.
@@ -42,147 +37,67 @@ def translate(
     Returns:
         str: The translated shader code
     """
-    backend = backend.lower()
+    register_default_sources()
+    discover_backend_plugins()
+    backend = (backend or "cgl").strip().lower()
 
-    with open(file_path, "r") as file:
+    with open(file_path, "r", encoding="utf-8") as file:
         shader_code = file.read()
 
-    # Determine the input shader type based on the file extension
-    if file_path.endswith(".cgl"):
-        lexer = Lexer(shader_code)
-        parser = Parser(lexer.tokens)
-    elif file_path.endswith(".hlsl"):
-        from .backend.DirectX import HLSLLexer, HLSLParser
+    source_spec = SOURCE_REGISTRY.get_by_extension(file_path)
+    if not source_spec:
+        supported = ", ".join(SOURCE_REGISTRY.extensions())
+        raise ValueError(
+            f"Unsupported shader file type: {file_path}. Supported: {supported}"
+        )
 
-        lexer = HLSLLexer(shader_code)
-        parser = HLSLParser(lexer.tokenize())
-    elif file_path.endswith(".metal"):
-        from .backend.Metal import MetalLexer, MetalParser
+    ast = source_spec.parse(shader_code)
 
-        lexer = MetalLexer(shader_code)
-        parser = MetalParser(lexer.tokenize())
-    elif file_path.endswith(".glsl"):
-        from .backend.GLSL import GLSLLexer, GLSLParser
+    requested_backend = backend
+    normalized_backend = normalize_backend_name(requested_backend) or requested_backend
 
-        lexer = GLSLLexer(shader_code)
-        parser = GLSLParser(lexer.tokenize())
-    elif file_path.endswith(".slang"):
-        from .backend.slang import SlangLexer, SlangParser
-
-        lexer = SlangLexer(shader_code)
-        parser = SlangParser(lexer.tokenize())
-    elif file_path.endswith(".spv") or file_path.endswith(".spirv"):
-        from .backend.SPIRV import VulkanLexer, VulkanParser
-
-        lexer = VulkanLexer(shader_code)
-        parser = VulkanParser(lexer.tokenize())
-    elif file_path.endswith(".mojo"):
-        from .backend.Mojo import MojoLexer, MojoParser
-
-        lexer = MojoLexer(shader_code)
-        parser = MojoParser(lexer.tokenize())
-    elif file_path.endswith(".rs") or file_path.endswith(".rust"):
-        from .backend.Rust import RustLexer, RustParser
-
-        lexer = RustLexer(shader_code)
-        parser = RustParser(lexer.tokenize())
-    elif (
-        file_path.endswith(".cu")
-        or file_path.endswith(".cuh")
-        or file_path.endswith(".cuda")
-    ):
-        from .backend.CUDA import CudaLexer, CudaParser
-
-        lexer = CudaLexer(shader_code)
-        parser = CudaParser(lexer.tokenize())
-    elif file_path.endswith(".hip"):
-        from .backend.HIP import HipLexer, HipParser
-
-        lexer = HipLexer(shader_code)
-        parser = HipParser(lexer.tokenize())
-    else:
-        raise ValueError(f"Unsupported shader file type: {file_path}")
-
-    ast = parser.parse()
-
-    if file_path.endswith(".cgl"):
-        if backend == "metal":
-            codegen = metal_codegen.MetalCodeGen()
-        elif backend == "directx":
-            codegen = directx_codegen.HLSLCodeGen()
-        elif backend == "opengl":
-            codegen = GLSL_codegen.GLSLCodeGen()
-        elif backend == "vulkan":
-            codegen = SPIRV_codegen.VulkanSPIRVCodeGen()
-        elif backend == "mojo":
-            codegen = mojo_codegen.MojoCodeGen()
-        elif backend == "rust":
-            codegen = rust_codegen.RustCodeGen()
-        elif backend == "cuda":
-            codegen = cuda_codegen.CudaCodeGen()
-        elif backend == "hip":
-            codegen = hip_codegen.HipCodeGen()
-        elif backend == "slang":
-            codegen = slang_codegen.SlangCodeGen()
+    if source_spec.name == "cgl":
+        if normalized_backend in ["cgl", "crossgl"]:
+            generated_code = shader_code
         else:
-            raise ValueError(f"Unsupported backend for CrossGL file: {backend}")
+            codegen = get_codegen(normalized_backend)
+            generated_code = codegen.generate(ast)
     else:
-        if backend == "cgl":
-            if file_path.endswith(".hlsl"):
-                from .backend.DirectX.DirectxCrossGLCodeGen import (
-                    HLSLToCrossGLConverter,
+        if normalized_backend in ["cgl", "crossgl"]:
+            if not source_spec.reverse_codegen_factory:
+                raise ValueError(
+                    f"Reverse translation not supported for: {file_path}"
                 )
-
-                codegen = HLSLToCrossGLConverter()
-            elif file_path.endswith(".metal"):
-                from .backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
-
-                codegen = MetalToCrossGLConverter()
-            elif file_path.endswith(".glsl"):
-                from .backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
-
-                codegen = GLSLToCrossGLConverter()
-            elif file_path.endswith(".slang"):
-                from .backend.slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
-
-                codegen = SlangToCrossGLConverter()
-            elif file_path.endswith(".mojo"):
-                from .backend.Mojo.MojoCrossGLCodeGen import MojoToCrossGLConverter
-
-                codegen = MojoToCrossGLConverter()
-            elif file_path.endswith(".rs") or file_path.endswith(".rust"):
-                from .backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
-
-                codegen = RustToCrossGLConverter()
-            elif (
-                file_path.endswith(".cu")
-                or file_path.endswith(".cuh")
-                or file_path.endswith(".cuda")
-            ):
-                from .backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
-
-                codegen = CudaToCrossGLConverter()
-            elif file_path.endswith(".hip"):
-                from .backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
-
-                codegen = HipToCrossGLConverter()
-            else:
-                raise ValueError(f"Reverse translation not supported for: {file_path}")
+            codegen = source_spec.reverse_codegen_factory()
+            generated_code = codegen.generate(ast)
         else:
-            raise ValueError(
-                f"Unsupported translation scenario: {file_path} to {backend}"
-            )
-
-    # Generate the code
-    generated_code = codegen.generate(ast)
+            if not source_spec.reverse_codegen_factory:
+                raise ValueError(
+                    f"Unsupported translation scenario: {file_path} to {backend}"
+                )
+            # Translate to CrossGL first, then to target backend
+            reverse_codegen = source_spec.reverse_codegen_factory()
+            intermediate_code = reverse_codegen.generate(ast)
+            cgl_spec = SOURCE_REGISTRY.get("cgl")
+            if not cgl_spec:
+                raise ValueError("CrossGL parser not available for intermediate step")
+            cgl_ast = cgl_spec.parse(intermediate_code)
+            codegen = get_codegen(normalized_backend)
+            generated_code = codegen.generate(cgl_ast)
 
     # Format the code if requested and the formatter is available
-    if format_output and FORMATTER_AVAILABLE:
-        generated_code = format_shader_code(generated_code, backend, save_shader)
+    if (
+        format_output
+        and FORMATTER_AVAILABLE
+        and normalized_backend not in ["cgl", "crossgl"]
+    ):
+        generated_code = format_shader_code(
+            generated_code, normalized_backend, save_shader
+        )
 
     # Write to the file if a path is provided
     if save_shader is not None:
-        with open(save_shader, "w") as file:
+        with open(save_shader, "w", encoding="utf-8") as file:
             file.write(generated_code)
 
     return generated_code
@@ -193,11 +108,12 @@ def main():
     parser = argparse.ArgumentParser(description="CrossGL Shader Translator")
 
     parser.add_argument("input", help="Input shader file path")
+    supported_backends = ", ".join(backend_names() + ["cgl"])
     parser.add_argument(
         "--backend",
         "-b",
         default="cgl",
-        help="Target backend (metal, directx, opengl, vulkan, mojo, rust, cuda, hip, slang, cgl)",
+        help=f"Target backend ({supported_backends})",
     )
     parser.add_argument("--output", "-o", help="Output file path")
     parser.add_argument(
@@ -215,22 +131,15 @@ def main():
         output_path = args.output
         if not output_path:
             base, _ = os.path.splitext(args.input)
-            ext_map = {
-                "metal": ".metal",
-                "directx": ".hlsl",
-                "opengl": ".glsl",
-                "vulkan": ".spirv",
-                "mojo": ".mojo",
-                "rust": ".rs",
-                "cuda": ".cu",
-                "hip": ".hip",
-                "slang": ".slang",
-                "cgl": ".cgl",
-            }
-            output_path = base + ext_map.get(args.backend, ".out")
+            normalized_backend = normalize_backend_name(args.backend) or args.backend
+            if normalized_backend in ["cgl", "crossgl"]:
+                ext = ".cgl"
+            else:
+                ext = get_backend_extension(normalized_backend) or ".out"
+            output_path = base + ext
 
         # Perform translation
-        code = translate(
+        translate(
             args.input,
             backend=args.backend,
             save_shader=output_path,

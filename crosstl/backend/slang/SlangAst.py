@@ -2,8 +2,8 @@
 
 from ..common_ast import *
 
-
 # Slang-specific nodes
+
 
 class ImportNode(ASTNode):
     """Node representing an import statement"""

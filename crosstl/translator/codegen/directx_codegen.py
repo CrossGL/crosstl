@@ -5,11 +5,16 @@ from ..ast import (
     FunctionCallNode,
     IfNode,
     MemberAccessNode,
+    MeshOpNode,
+    PreprocessorNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     StructNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     ArrayAccessNode,
     ArrayNode,
 )
@@ -66,10 +71,22 @@ class HLSLCodeGen:
             "gl_FragColor6": "SV_TARGET6",
             "gl_FragColor7": "SV_TARGET7",
             "gl_FragDepth": "SV_DEPTH",
+            "payload": "payload",
+            "hit_attribute": "hit_attribute",
+            "callable_data": "callable_data",
+            "shader_record": "shader_record",
         }
 
     def generate(self, ast):
         code = "\n"
+        preprocessors = getattr(ast, "preprocessors", []) or []
+        for directive in preprocessors:
+            if isinstance(directive, PreprocessorNode):
+                line = f"#{directive.directive} {directive.content}".strip()
+            else:
+                line = str(directive).strip()
+            if line:
+                code += f"{line}\n"
 
         # Generate structs - handle both old and new AST
         structs = getattr(ast, "structs", [])
@@ -318,6 +335,21 @@ class HLSLCodeGen:
 
         params_str = ", ".join(params)
         shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
+        shader_attr_map = {
+            "geometry": "geometry",
+            "tessellation_control": "hull",
+            "tessellation_evaluation": "domain",
+            "mesh": "mesh",
+            "amplification": "amplification",
+            "task": "amplification",
+            "object": "amplification",
+            "ray_generation": "raygeneration",
+            "ray_intersection": "intersection",
+            "ray_closest_hit": "closesthit",
+            "ray_any_hit": "anyhit",
+            "ray_miss": "miss",
+            "ray_callable": "callable",
+        }
 
         # Handle return type - support both old and new AST
         if hasattr(func, "return_type"):
@@ -334,10 +366,15 @@ class HLSLCodeGen:
         else:
             qualifier = getattr(func, "qualifier", None)
 
-        if qualifier in shader_map:
-            code += f"// {qualifier.capitalize()} Shader\n"
-            code += f"{return_type} {shader_map[qualifier]}({params_str}) {{\n"
+        effective_shader_type = shader_type or qualifier
+
+        if effective_shader_type in shader_map:
+            code += f"// {effective_shader_type.capitalize()} Shader\n"
+            code += f"{return_type} {shader_map[effective_shader_type]}({params_str}) {{\n"
         else:
+            shader_attr = shader_attr_map.get(effective_shader_type)
+            if shader_attr:
+                code += f"[shader(\"{shader_attr}\")]\n"
             code += f"{return_type} {func.name}({params_str}) {{\n"
 
         # Handle function body - support both old and new AST
@@ -579,6 +616,27 @@ class HLSLCodeGen:
             operand = self.generate_expression(getattr(expr, "operand", ""))
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             return f"{self.map_operator(op)}{operand}"
+        elif isinstance(expr, WaveOpNode):
+            args_str = ", ".join(
+                self.generate_expression(arg) for arg in expr.arguments
+            )
+            return f"{expr.operation}({args_str})"
+        elif isinstance(expr, RayTracingOpNode):
+            args_str = ", ".join(
+                self.generate_expression(arg) for arg in expr.arguments
+            )
+            return f"{expr.operation}({args_str})"
+        elif isinstance(expr, MeshOpNode):
+            args_str = ", ".join(
+                self.generate_expression(arg) for arg in expr.arguments
+            )
+            return f"{expr.operation}({args_str})"
+        elif isinstance(expr, RayQueryOpNode):
+            query = self.generate_expression(expr.query_expr)
+            args_str = ", ".join(
+                self.generate_expression(arg) for arg in expr.arguments
+            )
+            return f"{query}.{expr.operation}({args_str})"
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             # Handle ArrayAccessNode
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
@@ -588,9 +646,16 @@ class HLSLCodeGen:
             return f"{array}[{index}]"
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             # Handle FunctionCallNode
-            func_name = getattr(expr, "function", getattr(expr, "name", "unknown"))
-            if hasattr(func_name, "name"):
-                func_name = func_name.name
+            func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
+            func_name = None
+            if hasattr(func_expr, "name"):
+                func_name = func_expr.name
+                callee = func_name
+            elif isinstance(func_expr, str):
+                func_name = func_expr
+                callee = func_expr
+            else:
+                callee = self.generate_expression(func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
             # Handle special vector constructor calls
@@ -600,7 +665,7 @@ class HLSLCodeGen:
                 return f"{mapped_type}({args_str})"
             # Standard function call
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
-            return f"{func_name}({args_str})"
+            return f"{callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             # Handle MemberAccessNode
             obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))

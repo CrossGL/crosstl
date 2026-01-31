@@ -16,6 +16,8 @@ from .OpenglAst import (
     FunctionCallNode,
     IfNode,
     ForNode,
+    WhileNode,
+    DoWhileNode,
     LayoutNode,
     VectorConstructorNode,
     ConstantNode,
@@ -26,6 +28,12 @@ from .OpenglAst import (
     UniformNode,
     SwitchNode,
     CaseNode,
+    BlockNode,
+    NumberNode,
+    PostfixOpNode,
+    BreakNode,
+    ContinueNode,
+    DiscardNode,
 )
 
 
@@ -91,8 +99,79 @@ class GLSLToCrossGLConverter:
             "mat2": "mat2",
             "mat3": "mat3",
             "mat4": "mat4",
+            "sampler1D": "Texture1D",
             "sampler2D": "Texture2D",
+            "sampler3D": "Texture3D",
             "samplerCube": "TextureCube",
+            "sampler1DArray": "Texture1DArray",
+            "sampler2DArray": "Texture2DArray",
+            "samplerCubeArray": "TextureCubeArray",
+            "sampler2DShadow": "Texture2DShadow",
+            "sampler1DShadow": "Texture1DShadow",
+            "sampler1DArrayShadow": "Texture1DArrayShadow",
+            "sampler2DArrayShadow": "Texture2DArrayShadow",
+            "samplerCubeShadow": "TextureCubeShadow",
+            "samplerCubeArrayShadow": "TextureCubeArrayShadow",
+            "sampler2DRect": "Texture2DRect",
+            "sampler2DRectShadow": "Texture2DRectShadow",
+            "samplerBuffer": "TextureBuffer",
+            "sampler2DMS": "Texture2DMS",
+            "sampler2DMSArray": "Texture2DMSArray",
+            "isampler1D": "Texture1DInt",
+            "isampler2D": "Texture2DInt",
+            "isampler3D": "Texture3DInt",
+            "isamplerCube": "TextureCubeInt",
+            "isampler1DArray": "Texture1DArrayInt",
+            "isampler2DArray": "Texture2DArrayInt",
+            "isamplerCubeArray": "TextureCubeArrayInt",
+            "isampler2DRect": "Texture2DRectInt",
+            "isamplerBuffer": "TextureBufferInt",
+            "isampler2DMS": "Texture2DMSInt",
+            "isampler2DMSArray": "Texture2DMSArrayInt",
+            "usampler1D": "Texture1DUint",
+            "usampler2D": "Texture2DUint",
+            "usampler3D": "Texture3DUint",
+            "usamplerCube": "TextureCubeUint",
+            "usampler1DArray": "Texture1DArrayUint",
+            "usampler2DArray": "Texture2DArrayUint",
+            "usamplerCubeArray": "TextureCubeArrayUint",
+            "usampler2DRect": "Texture2DRectUint",
+            "usamplerBuffer": "TextureBufferUint",
+            "usampler2DMS": "Texture2DMSUint",
+            "usampler2DMSArray": "Texture2DMSArrayUint",
+            "image1D": "Image1D",
+            "image2D": "Image2D",
+            "image3D": "Image3D",
+            "imageCube": "ImageCube",
+            "image1DArray": "Image1DArray",
+            "image2DArray": "Image2DArray",
+            "imageCubeArray": "ImageCubeArray",
+            "image2DRect": "Image2DRect",
+            "imageBuffer": "ImageBuffer",
+            "image2DMS": "Image2DMS",
+            "image2DMSArray": "Image2DMSArray",
+            "iimage1D": "Image1DInt",
+            "iimage2D": "Image2DInt",
+            "iimage3D": "Image3DInt",
+            "iimageCube": "ImageCubeInt",
+            "iimage1DArray": "Image1DArrayInt",
+            "iimage2DArray": "Image2DArrayInt",
+            "iimageCubeArray": "ImageCubeArrayInt",
+            "iimage2DRect": "Image2DRectInt",
+            "iimageBuffer": "ImageBufferInt",
+            "iimage2DMS": "Image2DMSInt",
+            "iimage2DMSArray": "Image2DMSArrayInt",
+            "uimage1D": "Image1DUint",
+            "uimage2D": "Image2DUint",
+            "uimage3D": "Image3DUint",
+            "uimageCube": "ImageCubeUint",
+            "uimage1DArray": "Image1DArrayUint",
+            "uimage2DArray": "Image2DArrayUint",
+            "uimageCubeArray": "ImageCubeArrayUint",
+            "uimage2DRect": "Image2DRectUint",
+            "uimageBuffer": "ImageBufferUint",
+            "uimage2DMS": "Image2DMSUint",
+            "uimage2DMSArray": "Image2DMSArrayUint",
             "void": "void",
         }
 
@@ -144,6 +223,47 @@ class GLSLToCrossGLConverter:
         """Decrease the indentation level"""
         self.indent_level -= 1
 
+    def stage_struct_name(self):
+        return "".join(part.capitalize() for part in self.shader_type.split("_"))
+
+    def _qualifier_set(self, var):
+        qualifiers = getattr(var, "qualifiers", None) or []
+        return {str(q).lower() for q in qualifiers}
+
+    def _is_input_var(self, var):
+        io_type = str(getattr(var, "io_type", "") or "").upper()
+        qualifiers = self._qualifier_set(var)
+        return io_type == "IN" or "in" in qualifiers or "inout" in qualifiers
+
+    def _is_output_var(self, var):
+        io_type = str(getattr(var, "io_type", "") or "").upper()
+        qualifiers = self._qualifier_set(var)
+        return io_type == "OUT" or "out" in qualifiers or "inout" in qualifiers
+
+    def _is_resource_type(self, type_name):
+        if not type_name:
+            return False
+        name = str(type_name)
+        return name.startswith(
+            ("sampler", "isampler", "usampler", "image", "iimage", "uimage")
+        )
+
+    def format_layout(self, layout_entry):
+        layout = layout_entry.get("layout", {}) if isinstance(layout_entry, dict) else {}
+        qualifiers = (
+            layout_entry.get("qualifiers", []) if isinstance(layout_entry, dict) else []
+        )
+        parts = []
+        for key, value in layout.items():
+            if value is None:
+                parts.append(str(key))
+            else:
+                parts.append(f"{key} = {value}")
+        layout_str = f"layout({', '.join(parts)})" if parts else "layout()"
+        if qualifiers:
+            layout_str += " " + " ".join(qualifiers)
+        return layout_str.strip()
+
     def generate(self, ast):
         """Generate CrossGL code from a GLSL AST
 
@@ -179,72 +299,151 @@ class GLSLToCrossGLConverter:
 
         # Collect shader inputs and outputs
         for var in node.io_variables:
-            if isinstance(var, LayoutNode) or isinstance(var, VariableNode):
-                io_type = getattr(var, "io_type", None)
-                if io_type and "IN" in io_type:
+            if isinstance(var, (LayoutNode, VariableNode)):
+                if self._is_input_var(var):
                     self.inputs.append(var)
-                elif io_type and "OUT" in io_type:
+                if self._is_output_var(var):
                     self.outputs.append(var)
 
-        # Collect uniforms
+        # Ensure vertex-like stages include gl_Position
+        if self.shader_type in (
+            "vertex",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+        ):
+            has_position = any(
+                isinstance(var, VariableNode) and var.name == "gl_Position"
+                for var in self.outputs
+            )
+            if not has_position:
+                builtin = VariableNode(
+                    "vec4", "gl_Position", qualifiers=["out"], semantic="gl_Position"
+                )
+                self.outputs.append(builtin)
+
+        # Ensure fragment outputs include gl_FragColor if no outputs declared
+        if self.shader_type == "fragment" and not self.outputs:
+            builtin = VariableNode(
+                "vec4", "gl_FragColor", qualifiers=["out"], semantic="gl_FragColor"
+            )
+            self.outputs.append(builtin)
+
+        # Collect uniforms (split resources vs constant data)
         for uniform in node.uniforms:
             self.uniform_vars.append(uniform)
 
         # Start building the shader
-        result = "shader main {\n"
+        result = ""
+        preprocessor = getattr(node, "preprocessor", []) or []
+        if preprocessor:
+            for line in preprocessor:
+                result += f"{line}\n"
+            result += "\n"
+        result += "shader main {\n"
+
+        layouts = getattr(node, "layouts", []) or []
+        if layouts:
+            for layout in layouts:
+                result += self.indent_str + f"// {self.format_layout(layout)}\n"
+            result += "\n"
 
         # Generate struct definitions
         for struct in node.structs:
             result += self.indent_str + self.generate_struct(struct) + "\n\n"
 
         # Generate input struct if needed
-        if self.inputs:
+        if self.inputs and self.shader_type in (
+            "vertex",
+            "fragment",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+        ):
             result += (
-                self.indent_str + f"struct {self.shader_type.capitalize()}Input {{\n"
+                self.indent_str + f"struct {self.stage_struct_name()}Input {{\n"
             )
             self.increase_indent()
             for input_var in self.inputs:
-                var_type = self.convert_type(
-                    input_var.dtype if hasattr(input_var, "dtype") else input_var.vtype
-                )
+                var_type = self.convert_type(input_var.vtype)
                 var_name = input_var.name
                 semantic = ""
-                if hasattr(input_var, "semantic") and input_var.semantic:
+                if getattr(input_var, "semantic", None):
                     semantic = f" @ {input_var.semantic}"
                 result += self.indent() + f"{var_type} {var_name}{semantic};\n"
             self.decrease_indent()
             result += self.indent_str + "};\n\n"
 
-        # Generate output struct if needed
-        if self.outputs:
+        # Generate output struct for vertex-like stages
+        if self.outputs and self.shader_type in (
+            "vertex",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+        ):
             result += (
-                self.indent_str + f"struct {self.shader_type.capitalize()}Output {{\n"
+                self.indent_str + f"struct {self.stage_struct_name()}Output {{\n"
             )
             self.increase_indent()
             for output_var in self.outputs:
-                var_type = self.convert_type(
-                    output_var.dtype
-                    if hasattr(output_var, "dtype")
-                    else output_var.vtype
-                )
+                var_type = self.convert_type(output_var.vtype)
                 var_name = output_var.name
                 semantic = ""
-                if hasattr(output_var, "semantic") and output_var.semantic:
+                if getattr(output_var, "semantic", None):
                     semantic = f" @ {output_var.semantic}"
                 result += self.indent() + f"{var_type} {var_name}{semantic};\n"
             self.decrease_indent()
             result += self.indent_str + "};\n\n"
 
-        # Generate uniform block if needed
+        # Generate uniforms: split resource uniforms from constant data
         if self.uniform_vars:
-            result += self.indent_str + "cbuffer Uniforms {\n"
-            self.increase_indent()
-            for uniform in self.uniform_vars:
+            resource_uniforms = [
+                u for u in self.uniform_vars if self._is_resource_type(u.vtype)
+            ]
+            data_uniforms = [
+                u for u in self.uniform_vars if not self._is_resource_type(u.vtype)
+            ]
+
+            for uniform in resource_uniforms:
                 var_type = self.convert_type(uniform.vtype)
                 var_name = uniform.name
-                result += self.indent() + f"{var_type} {var_name};\n"
-            self.decrease_indent()
-            result += self.indent_str + "};\n\n"
+                array_suffix = ""
+                if getattr(uniform, "array_size", None) is not None:
+                    array_suffix = f"[{self.generate_expression(uniform.array_size)}]"
+                result += self.indent_str + f"{var_type} {var_name}{array_suffix};\n"
+
+            if data_uniforms:
+                result += self.indent_str + "cbuffer Uniforms {\n"
+                self.increase_indent()
+                for uniform in data_uniforms:
+                    var_type = self.convert_type(uniform.vtype)
+                    var_name = uniform.name
+                    array_suffix = ""
+                    if getattr(uniform, "array_size", None) is not None:
+                        array_suffix = (
+                            f"[{self.generate_expression(uniform.array_size)}]"
+                        )
+                    result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+                self.decrease_indent()
+                result += self.indent_str + "};\n"
+
+            result += "\n"
+
+        # Generate global constants
+        for const_var in getattr(node, "constant", []) or []:
+            result += self.indent_str + self.generate_variable_declaration(const_var) + ";\n"
+        if getattr(node, "constant", []):
+            result += "\n"
+
+        # Generate global variables
+        for global_var in getattr(node, "global_variables", []) or []:
+            result += (
+                self.indent_str
+                + self.generate_variable_declaration(global_var)
+                + ";\n"
+            )
+        if getattr(node, "global_variables", []):
+            result += "\n"
 
         # Generate shader function
         result += self.indent_str + f"{self.shader_type} {{\n"
@@ -273,25 +472,25 @@ class GLSLToCrossGLConverter:
             if self.shader_type == "vertex":
                 result += (
                     self.indent()
-                    + f"{self.shader_type.capitalize()}Output main({self.shader_type.capitalize()}Input input)"
+                    + f"{self.stage_struct_name()}Output main({self.stage_struct_name()}Input input)"
                 )
             elif self.shader_type == "fragment":
+                output_type = "vec4"
+                output_name = "gl_FragColor"
                 if self.outputs:
-                    output_type = self.convert_type(
-                        self.outputs[0].dtype
-                        if hasattr(self.outputs[0], "dtype")
-                        else self.outputs[0].vtype
-                    )
+                    output_type = self.convert_type(self.outputs[0].vtype)
                     output_name = self.outputs[0].name
-                    result += (
-                        self.indent()
-                        + f"{output_type} main({self.shader_type.capitalize()}Input input) @ {output_name}"
-                    )
-                else:
-                    result += (
-                        self.indent()
-                        + f"vec4 main({self.shader_type.capitalize()}Input input) @ gl_FragColor"
-                    )
+                result += (
+                    self.indent()
+                    + f"{output_type} main({self.stage_struct_name()}Input input) @ {output_name}"
+                )
+            elif self.shader_type == "compute":
+                result += self.indent() + "void main()"
+            else:
+                result += (
+                    self.indent()
+                    + f"{self.stage_struct_name()}Output main({self.stage_struct_name()}Input input)"
+                )
 
             result += " {\n"
 
@@ -300,19 +499,35 @@ class GLSLToCrossGLConverter:
 
             # For vertex shaders, create the output struct
             if self.shader_type == "vertex":
-                result += (
-                    self.indent() + f"{self.shader_type.capitalize()}Output output;\n"
-                )
+                result += self.indent() + f"{self.stage_struct_name()}Output output;\n"
+
+            # For fragment shaders, declare a local output if assignments are used
+            if self.shader_type == "fragment" and self.outputs:
+                output_type = self.convert_type(self.outputs[0].vtype)
+                output_name = self.outputs[0].name
+                result += self.indent() + f"{output_type} {output_name};\n"
 
             # Generate statements for the main function
             for statement in main_function.body:
                 result += self.indent() + self.generate_statement(statement) + "\n"
 
-            # Add implicit return for vertex shaders if not present
-            if self.shader_type == "vertex" and not any(
+            # Add implicit return for stages with output struct if not present
+            if self.shader_type in (
+                "vertex",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+            ) and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body):
+                result += self.indent() + "return output;\n"
+
+            # Add implicit return for fragment shaders if not present
+            if self.shader_type == "fragment" and not any(
                 isinstance(stmt, ReturnNode) for stmt in main_function.body
             ):
-                result += self.indent() + "return output;\n"
+                output_name = (
+                    self.outputs[0].name if self.outputs else "gl_FragColor"
+                )
+                result += self.indent() + f"return {output_name};\n"
 
             self.decrease_indent()
             result += self.indent() + "}\n"
@@ -337,10 +552,18 @@ class GLSLToCrossGLConverter:
         result = f"struct {node.name} {{\n"
 
         self.increase_indent()
-        for field in node.fields:
-            var_type = self.convert_type(field["type"])
-            var_name = field["name"]
-            semantic = ""
+        members = getattr(node, "members", None) or getattr(node, "fields", [])
+        for field in members:
+            if isinstance(field, dict):
+                var_type = self.convert_type(field.get("type"))
+                var_name = field.get("name")
+                semantic = ""
+            else:
+                var_type = self.convert_type(getattr(field, "vtype", ""))
+                var_name = getattr(field, "name", "")
+                semantic = ""
+                if getattr(field, "semantic", None):
+                    semantic = f" @ {field.semantic}"
             result += self.indent() + f"{var_type} {var_name}{semantic};\n"
         self.decrease_indent()
 
@@ -391,30 +614,34 @@ class GLSLToCrossGLConverter:
             str: The CrossGL statement
         """
         if isinstance(node, AssignmentNode):
-            # Check if this is a variable declaration and initialization
-            if isinstance(node.left, VariableNode) and node.left.vtype:
-                var_type = self.convert_type(node.left.vtype)
-                var_name = node.left.name
-                value = self.generate_expression(node.right)
-                return f"{var_type} {var_name} = {value};"
-            else:
-                return self.generate_assignment(node) + ";"
+            return self.generate_assignment(node) + ";"
         elif isinstance(node, IfNode):
             return self.generate_if(node)
         elif isinstance(node, ForNode):
             return self.generate_for(node)
+        elif isinstance(node, WhileNode):
+            return self.generate_while(node)
+        elif isinstance(node, DoWhileNode):
+            return self.generate_do_while(node)
         elif isinstance(node, ReturnNode):
             return self.generate_return(node) + ";"
         elif isinstance(node, VariableNode):
-            # Variable declaration
-            var_type = self.convert_type(node.vtype)
-            var_name = node.name
-            return f"{var_type} {var_name};"
+            return self.generate_variable_declaration(node) + ";"
         elif isinstance(node, FunctionCallNode):
             # Function call as a statement
             return self.generate_function_call(node) + ";"
         elif isinstance(node, SwitchNode):
             return self.generate_switch_statement(node)
+        elif isinstance(node, BlockNode):
+            return self.generate_block(node)
+        elif isinstance(node, BreakNode):
+            return "break;"
+        elif isinstance(node, ContinueNode):
+            return "continue;"
+        elif isinstance(node, DiscardNode):
+            return "discard;"
+        elif isinstance(node, PostfixOpNode):
+            return self.generate_expression(node) + ";"
         else:
             # Generic expression statement
             return self.generate_expression(node) + ";"
@@ -428,47 +655,22 @@ class GLSLToCrossGLConverter:
         Returns:
             str: The CrossGL assignment
         """
-        # Handle the old AssignmentNode structure
-        if hasattr(node, "name") and hasattr(node, "value"):
-            left = ""
-            if isinstance(node.name, VariableNode):
-                # Variable declaration with initialization
-                left = f"{self.convert_type(node.name.vtype)} {node.name.name}"
-                self.local_vars.append(node.name.name)
-            elif isinstance(node.name, MemberAccessNode):
-                # Member access (e.g., struct.field)
-                left = self.generate_member_access(node.name)
-            elif isinstance(node.name, ArrayAccessNode):
-                # Array access (e.g., array[index])
-                left = self.generate_array_access(node.name)
-            else:
-                # Simple variable
-                left = str(node.name)
-
-            operator = self.operator_map.get(node.operator, node.operator)
-            right = self.generate_expression(node.value)
-
-            return f"{left} {operator} {right}"
-
-        # Handle the BinaryOpNode-based assignments
-        elif hasattr(node, "left") and hasattr(node, "right"):
+        if hasattr(node, "left") and hasattr(node, "right"):
             lhs = node.left
-            op = self.operator_map.get(node.op, node.op)
             rhs = node.right
+            op = getattr(node, "operator", "=")
 
-            # If lhs is a VariableNode with a type, it's a variable declaration
             if isinstance(lhs, VariableNode) and lhs.vtype:
                 var_type = self.convert_type(lhs.vtype)
                 var_name = lhs.name
                 value = self.generate_expression(rhs)
-                return f"{var_type} {var_name} = {value}"
-            else:
-                left_expr = self.generate_expression(lhs)
-                right_expr = self.generate_expression(rhs)
-                return f"({left_expr} {op} {right_expr})"
+                return f"{var_type} {var_name} {op} {value}"
 
-        # Default fallback
-        return f"{self.generate_expression(node)}"
+            left_expr = self.generate_expression(lhs)
+            right_expr = self.generate_expression(rhs)
+            return f"{left_expr} {op} {right_expr}"
+
+        return self.generate_expression(node)
 
     def generate_if(self, node):
         """Generate CrossGL code for an if statement
@@ -479,24 +681,33 @@ class GLSLToCrossGLConverter:
         Returns:
             str: The CrossGL if statement
         """
-        condition = self.generate_expression(node.if_condition)
+        condition_node = getattr(node, "condition", None)
+        if condition_node is None:
+            condition_node = getattr(node, "if_condition", None)
+        condition = self.generate_expression(condition_node)
         result = f"if ({condition}) {{\n"
 
         # Generate if body
         self.increase_indent()
-        for statement in node.if_body:
+        for statement in getattr(node, "if_body", []) or []:
             result += self.indent() + self.generate_statement(statement) + "\n"
         self.decrease_indent()
 
         result += self.indent() + "}"
 
-        # Generate else-if blocks
-        for i, elif_condition in enumerate(node.else_if_conditions):
+        # Generate else-if blocks (support multiple representations)
+        else_if_chain = []
+        if hasattr(node, "else_if_conditions") and hasattr(node, "else_if_bodies"):
+            else_if_chain = list(zip(node.else_if_conditions, node.else_if_bodies))
+        elif hasattr(node, "else_if_chain"):
+            else_if_chain = node.else_if_chain
+
+        for elif_condition, elif_body in else_if_chain:
             elif_cond = self.generate_expression(elif_condition)
             result += f" else if ({elif_cond}) {{\n"
 
             self.increase_indent()
-            for statement in node.else_if_bodies[i]:
+            for statement in elif_body:
                 result += self.indent() + self.generate_statement(statement) + "\n"
             self.decrease_indent()
 
@@ -524,13 +735,48 @@ class GLSLToCrossGLConverter:
         Returns:
             str: The CrossGL for loop
         """
-        init = self.generate_statement(node.init).rstrip(";")
-        condition = self.generate_expression(node.condition)
-        iteration = self.generate_statement(node.iteration).rstrip(";")
+        init = self.generate_statement(node.init).rstrip(";") if node.init else ""
+        condition = self.generate_expression(node.condition) if node.condition else ""
+        update_node = getattr(node, "update", None) or getattr(node, "iteration", None)
+        iteration = self.generate_statement(update_node).rstrip(";") if update_node else ""
 
         result = f"for ({init}; {condition}; {iteration}) {{\n"
         self.increase_indent()
         for statement in node.body:
+            result += self.indent() + self.generate_statement(statement) + "\n"
+        self.decrease_indent()
+        result += self.indent() + "}"
+        return result
+
+    def generate_while(self, node):
+        condition = self.generate_expression(node.condition)
+        result = f"while ({condition}) {{\n"
+        self.increase_indent()
+        for statement in node.body:
+            result += self.indent() + self.generate_statement(statement) + "\n"
+        self.decrease_indent()
+        result += self.indent() + "}"
+        return result
+
+    def generate_do_while(self, node):
+        condition = self.generate_expression(node.condition)
+        result = "while (true) {\n"
+        self.increase_indent()
+        for statement in node.body:
+            result += self.indent() + self.generate_statement(statement) + "\n"
+        result += self.indent() + f"if (!({condition})) {{\n"
+        self.increase_indent()
+        result += self.indent() + "break;\n"
+        self.decrease_indent()
+        result += self.indent() + "}\n"
+        self.decrease_indent()
+        result += self.indent() + "}"
+        return result
+
+    def generate_block(self, node):
+        result = "{\n"
+        self.increase_indent()
+        for statement in node.statements:
             result += self.indent() + self.generate_statement(statement) + "\n"
         self.decrease_indent()
         result += self.indent() + "}"
@@ -564,21 +810,33 @@ class GLSLToCrossGLConverter:
         if isinstance(node, str):
             # Literal string value
             return node
+        elif isinstance(node, NumberNode):
+            return str(node.value)
         elif isinstance(node, (int, float)):
             # Numeric literal
             return str(node)
         elif isinstance(node, VariableNode):
             # Variable reference
-            if self.shader_type == "vertex" and any(
+            if self.shader_type in (
+                "vertex",
+                "fragment",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+            ) and any(
                 var.name == node.name for var in self.inputs
             ):
                 return f"input.{node.name}"
-            elif self.shader_type == "vertex" and any(
+            if self.shader_type in (
+                "vertex",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+            ) and any(
                 var.name == node.name for var in self.outputs
             ):
                 return f"output.{node.name}"
-            else:
-                return node.name
+            return node.name
         elif isinstance(node, BinaryOpNode):
             # Binary operation
             left = self.generate_expression(node.left)
@@ -590,6 +848,11 @@ class GLSLToCrossGLConverter:
             operand = self.generate_expression(node.operand)
             operator = self.operator_map.get(node.op, node.op)
             return f"({operator}{operand})"
+        elif isinstance(node, PostfixOpNode):
+            operand = self.generate_expression(node.operand)
+            return f"({operand}{node.op})"
+        elif isinstance(node, AssignmentNode):
+            return self.generate_assignment(node)
         elif isinstance(node, FunctionCallNode):
             # Function call
             return self.generate_function_call(node)
@@ -623,7 +886,13 @@ class GLSLToCrossGLConverter:
             str: The CrossGL function call
         """
         # Check if this is a vector constructor
-        if node.name in [
+        name = node.name
+        if isinstance(name, MemberAccessNode):
+            name = self.generate_member_access(name)
+        elif isinstance(name, VariableNode):
+            name = name.name
+
+        if name in [
             "vec2",
             "vec3",
             "vec4",
@@ -633,12 +902,30 @@ class GLSLToCrossGLConverter:
             "bvec2",
             "bvec3",
             "bvec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "dvec2",
+            "dvec3",
+            "dvec4",
+            "mat2",
+            "mat3",
+            "mat4",
+            "mat2x2",
+            "mat2x3",
+            "mat2x4",
+            "mat3x2",
+            "mat3x3",
+            "mat3x4",
+            "mat4x2",
+            "mat4x3",
+            "mat4x4",
         ]:
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
-            return f"{self.convert_type(node.name)}({args})"
+            return f"{self.convert_type(name)}({args})"
 
         # Check if this is a built-in function that needs to be mapped
-        mapped_name = self.function_map.get(node.name, node.name)
+        mapped_name = self.function_map.get(name, name)
 
         # Generate argument list
         args = ", ".join(self.generate_expression(arg) for arg in node.args)
@@ -657,11 +944,22 @@ class GLSLToCrossGLConverter:
         # Special case for vertex shader input/output access
         object_name = ""
         if isinstance(node.object, VariableNode):
-            if self.shader_type == "vertex" and any(
+            if self.shader_type in (
+                "vertex",
+                "fragment",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+            ) and any(
                 var.name == node.object.name for var in self.inputs
             ):
                 object_name = f"input.{node.object.name}"
-            elif self.shader_type == "vertex" and any(
+            elif self.shader_type in (
+                "vertex",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+            ) and any(
                 var.name == node.object.name for var in self.outputs
             ):
                 object_name = f"output.{node.object.name}"
@@ -707,10 +1005,18 @@ class GLSLToCrossGLConverter:
         """
         var_type = self.convert_type(node.vtype)
         var_name = node.name
+        qualifiers = {str(q).lower() for q in (getattr(node, "qualifiers", None) or [])}
+        prefix = "const " if getattr(node, "is_const", False) or "const" in qualifiers else ""
         array_suffix = ""
         if node.array_size is not None:
-            array_suffix = f"[{node.array_size}]"
-        return f"{var_type} {var_name}{array_suffix}"
+            array_size = self.generate_expression(node.array_size)
+            array_suffix = f"[{array_size}]"
+
+        if getattr(node, "value", None) is not None:
+            value = self.generate_expression(node.value)
+            return f"{prefix}{var_type} {var_name}{array_suffix} = {value}"
+
+        return f"{prefix}{var_type} {var_name}{array_suffix}"
 
     def generate_switch_statement(self, node):
         """Generate CrossGL code for a switch statement

@@ -16,6 +16,7 @@ class ShaderLanguage(Enum):
     GLSL = "glsl"
     METAL = "metal"
     SPIRV = "spirv"
+    SLANG = "slang"
     MOJO = "mojo"
     RUST = "rust"
     CUDA = "cuda"
@@ -64,6 +65,8 @@ class CodeFormatter:
             return ShaderLanguage.METAL
         elif ext in [".spv", ".spirv", ".vulkan"]:
             return ShaderLanguage.SPIRV
+        elif ext in [".slang"]:
+            return ShaderLanguage.SLANG
         elif ext in [".rs", ".rust"]:
             return ShaderLanguage.RUST
         elif ext in [".cu", ".cuh", ".cuda"]:
@@ -100,6 +103,7 @@ class CodeFormatter:
             ShaderLanguage.HLSL,
             ShaderLanguage.GLSL,
             ShaderLanguage.METAL,
+            ShaderLanguage.SLANG,
             ShaderLanguage.RUST,
             ShaderLanguage.CUDA,
             ShaderLanguage.HIP,
@@ -122,6 +126,7 @@ class CodeFormatter:
             ShaderLanguage.HLSL: "Microsoft",
             ShaderLanguage.GLSL: "Google",
             ShaderLanguage.METAL: "LLVM",
+            ShaderLanguage.SLANG: "Microsoft",
             ShaderLanguage.RUST: "LLVM",
             ShaderLanguage.CUDA: "Google",
             ShaderLanguage.HIP: "Google",
@@ -134,6 +139,7 @@ class CodeFormatter:
                 ShaderLanguage.HLSL: ".hlsl",
                 ShaderLanguage.GLSL: ".glsl",
                 ShaderLanguage.METAL: ".metal",
+                ShaderLanguage.SLANG: ".slang",
                 ShaderLanguage.RUST: ".rs",
                 ShaderLanguage.CUDA: ".cu",
                 ShaderLanguage.HIP: ".hip",
@@ -327,19 +333,31 @@ def format_shader_code(code, backend, output_path=None):
     Returns:
         Formatted shader code
     """
+    if not backend:
+        return code
+
+    backend_key = backend.lower()
+    if backend_key in ["cgl", "crossgl"]:
+        return code
+
     # Map backend to language
     language_map = {
         "metal": ShaderLanguage.METAL,
         "directx": ShaderLanguage.HLSL,
+        "hlsl": ShaderLanguage.HLSL,
         "opengl": ShaderLanguage.GLSL,
+        "glsl": ShaderLanguage.GLSL,
         "vulkan": ShaderLanguage.SPIRV,
+        "spirv": ShaderLanguage.SPIRV,
+        "spv": ShaderLanguage.SPIRV,
         "mojo": ShaderLanguage.MOJO,
         "rust": ShaderLanguage.RUST,
         "cuda": ShaderLanguage.CUDA,
         "hip": ShaderLanguage.HIP,
+        "slang": ShaderLanguage.SLANG,
     }
 
-    language = language_map.get(backend.lower())
+    language = language_map.get(backend_key)
     formatter = CodeFormatter()
 
     return formatter.format_code(code, language, output_path)

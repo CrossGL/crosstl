@@ -927,7 +927,7 @@ class RustParser:
         if self.current_token[0] == "AS":
             self.eat("AS")
             target_type = self.parse_type()
-            return CastNode(left, target_type)
+            return CastNode(target_type, left)
 
         return left
 

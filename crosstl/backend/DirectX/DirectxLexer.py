@@ -1,6 +1,9 @@
+import os
 import re
 from typing import Iterator, Tuple, List, Optional
 from enum import Enum, auto
+
+from .preprocessor import HLSLPreprocessor
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -11,15 +14,11 @@ TOKENS = tuple(
         # Comments (must come first to avoid partial matches)
         ("COMMENT_SINGLE", r"//.*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
-        # Preprocessor directives
-        ("PRAGMA", r"#\s*pragma\b"),
-        ("INCLUDE", r"#\s*include\b"),
-        ("DEFINE", r"#\s*define\b"),
-        ("IFDEF", r"#\s*ifdef\b"),
-        ("IFNDEF", r"#\s*ifndef\b"),
-        ("ENDIF", r"#\s*endif\b"),
-        ("UNDEF", r"#\s*undef\b"),
+        # Preprocessor directives (capture entire line)
+        ("PREPROCESSOR", r"#.*"),
         # Keywords - struct and buffer types
+        ("ENUM", r"\benum\b"),
+        ("TYPEDEF", r"\btypedef\b"),
         ("STRUCT", r"\bstruct\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("TBUFFER", r"\btbuffer\b"),
@@ -28,18 +27,53 @@ TOKENS = tuple(
         ("CONST", r"\bconst\b"),
         ("INLINE", r"\binline\b"),
         ("EXTERN", r"\bextern\b"),
+        ("VOLATILE", r"\bvolatile\b"),
+        ("PRECISE", r"\bprecise\b"),
+        ("ROW_MAJOR", r"\brow_major\b"),
+        ("COLUMN_MAJOR", r"\bcolumn_major\b"),
+        # Interpolation modifiers
+        ("NOINTERPOLATION", r"\bnointerpolation\b"),
+        ("LINEAR", r"\blinear\b"),
+        ("CENTROID", r"\bcentroid\b"),
+        ("SAMPLE", r"\bsample\b"),
         # Texture and sampler types
+        ("TEXTURE1D", r"\bTexture1D\b"),
+        ("TEXTURE1DARRAY", r"\bTexture1DArray\b"),
         ("TEXTURE2D", r"\bTexture2D\b"),
+        ("TEXTURE2DARRAY", r"\bTexture2DArray\b"),
+        ("TEXTURE2DMS", r"\bTexture2DMS\b"),
+        ("TEXTURE2DMSARRAY", r"\bTexture2DMSArray\b"),
         ("TEXTURE3D", r"\bTexture3D\b"),
         ("TEXTURECUBE", r"\bTextureCube\b"),
-        ("TEXTURE2DARRAY", r"\bTexture2DArray\b"),
-        ("TEXTURE1D", r"\bTexture1D\b"),
-        ("RWSTRUCTUREDBUFFER", r"\bRWStructuredBuffer\b"),
-        ("STRUCTUREDBUFFER", r"\bStructuredBuffer\b"),
-        ("RWBUFFER", r"\bRWBuffer\b"),
+        ("TEXTURECUBEARRAY", r"\bTextureCubeArray\b"),
+        ("FEEDBACKTEXTURE2D", r"\bFeedbackTexture2D\b"),
+        ("FEEDBACKTEXTURE2DARRAY", r"\bFeedbackTexture2DArray\b"),
+        ("RWTEXTURE1D", r"\bRWTexture1D\b"),
+        ("RWTEXTURE1DARRAY", r"\bRWTexture1DArray\b"),
         ("RWTEXTURE2D", r"\bRWTexture2D\b"),
+        ("RWTEXTURE2DARRAY", r"\bRWTexture2DArray\b"),
+        ("RWTEXTURE2DMS", r"\bRWTexture2DMS\b"),
+        ("RWTEXTURE2DMSARRAY", r"\bRWTexture2DMSArray\b"),
+        ("RWTEXTURE3D", r"\bRWTexture3D\b"),
+        ("RWTEXTURECUBE", r"\bRWTextureCube\b"),
+        ("RWTEXTURECUBEARRAY", r"\bRWTextureCubeArray\b"),
+        ("STRUCTUREDBUFFER", r"\bStructuredBuffer\b"),
+        ("RWSTRUCTUREDBUFFER", r"\bRWStructuredBuffer\b"),
+        ("APPENDSTRUCTUREDBUFFER", r"\bAppendStructuredBuffer\b"),
+        ("CONSUMESTRUCTUREDBUFFER", r"\bConsumeStructuredBuffer\b"),
+        ("BYTEADDRESSBUFFER", r"\bByteAddressBuffer\b"),
+        ("RWBYTEADDRESSBUFFER", r"\bRWByteAddressBuffer\b"),
+        ("RAYTRACING_ACCELERATION_STRUCTURE", r"\bRaytracingAccelerationStructure\b"),
+        ("RAYQUERY", r"\bRayQuery\b"),
+        ("BUFFER", r"\bBuffer\b"),
+        ("RWBUFFER", r"\bRWBuffer\b"),
         ("SAMPLER_STATE", r"\bSamplerState\b"),
         ("SAMPLER_COMPARISON_STATE", r"\bSamplerComparisonState\b"),
+        ("INPUTPATCH", r"\bInputPatch\b"),
+        ("OUTPUTPATCH", r"\bOutputPatch\b"),
+        ("POINTSTREAM", r"\bPointStream\b"),
+        ("LINESTREAM", r"\bLineStream\b"),
+        ("TRIANGLESTREAM", r"\bTriangleStream\b"),
         # Matrix types (must come before vector and scalar types)
         ("MATRIX", r"\b(float|half|double|int|uint|bool)[2-4]x[2-4]\b"),
         # Vector types (must come before scalar types)
@@ -61,6 +95,8 @@ TOKENS = tuple(
         ("MIN16INT", r"\bmin16int\b"),
         ("MIN12INT", r"\bmin12int\b"),
         ("MIN16UINT", r"\bmin16uint\b"),
+        ("INT64_T", r"\bint64_t\b"),
+        ("UINT64_T", r"\buint64_t\b"),
         # Control flow keywords
         ("RETURN", r"\breturn\b"),
         ("ELSE_IF", r"\belse\s+if\b"),
@@ -89,12 +125,22 @@ TOKENS = tuple(
         ("FALSE", r"\bfalse\b"),
         # Identifiers (must come after all keywords)
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        # Numeric literals (hex, binary, float, int with suffixes)
-        ("HEX_NUMBER", r"0[xX][0-9a-fA-F]+[uUlL]*"),
-        ("BINARY_NUMBER", r"0[bB][01]+[uUlL]*"),
+        # Numeric literals (hex, binary, octal, float, int with suffixes)
+        (
+            "HEX_NUMBER",
+            r"0[xX][0-9a-fA-F]+(?:[uU][lL]?|[lL][uU]?|[uUlL]{0,2})?",
+        ),
+        (
+            "BINARY_NUMBER",
+            r"0[bB][01]+(?:[uU][lL]?|[lL][uU]?|[uUlL]{0,2})?",
+        ),
+        (
+            "OCT_NUMBER",
+            r"0[0-7]+(?:[uU][lL]?|[lL][uU]?|[uUlL]{0,2})?",
+        ),
         (
             "NUMBER",
-            r"\d+\.\d+([eE][+-]?\d+)?[fFhHlL]?|\d+[fFhHuUlL]*|\d+[eE][+-]?\d+[fFhHlL]?",
+            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?|\d+[eE][+-]?\d+[fFhH]?|\d+(?:[uU][lL]?|[lL][uU]?|[fFhH]|[uUlL]{0,2})?",
         ),
         # Brackets and braces
         ("LBRACE", r"\{"),
@@ -105,10 +151,22 @@ TOKENS = tuple(
         ("RBRACKET", r"\]"),
         # Punctuation
         ("SEMICOLON", r";"),
-        ("STRING", r'"[^"]*"'),
+        ("STRING", r'"([^"\\]|\\.)*"'),
+        ("CHAR_LITERAL", r"'(?:[^'\\]|\\.)'"),
         ("COMMA", r","),
         ("COLON", r":"),
         ("QUESTION", r"\?"),
+        # Assignment operators (compound first)
+        ("ASSIGN_SHIFT_LEFT", r"<<="),
+        ("ASSIGN_SHIFT_RIGHT", r">>="),
+        ("PLUS_EQUALS", r"\+="),
+        ("MINUS_EQUALS", r"-="),
+        ("MULTIPLY_EQUALS", r"\*="),
+        ("DIVIDE_EQUALS", r"/="),
+        ("MOD_EQUALS", r"%="),
+        ("ASSIGN_AND", r"&="),
+        ("ASSIGN_OR", r"\|="),
+        ("ASSIGN_XOR", r"\^="),
         # Shift operators (must come before comparison operators)
         ("SHIFT_LEFT", r"<<"),
         ("SHIFT_RIGHT", r">>"),
@@ -123,17 +181,7 @@ TOKENS = tuple(
         ("LOGICAL_AND", r"&&"),
         ("LOGICAL_OR", r"\|\|"),
         ("LOGICAL_NOT", r"!"),
-        # Assignment operators (compound first)
-        ("PLUS_EQUALS", r"\+="),
-        ("MINUS_EQUALS", r"-="),
-        ("MULTIPLY_EQUALS", r"\*="),
-        ("DIVIDE_EQUALS", r"/="),
-        ("MOD_EQUALS", r"%="),
-        ("ASSIGN_AND", r"&="),
-        ("ASSIGN_OR", r"\|="),
-        ("ASSIGN_XOR", r"\^="),
-        ("ASSIGN_SHIFT_LEFT", r"<<="),
-        ("ASSIGN_SHIFT_RIGHT", r">>="),
+        # Assignment operator (single)
         ("EQUALS", r"="),
         # Bitwise operators
         ("BITWISE_NOT", r"~"),
@@ -156,6 +204,8 @@ TOKENS = tuple(
 )
 
 KEYWORDS = {
+    "enum": "ENUM",
+    "typedef": "TYPEDEF",
     "struct": "STRUCT",
     "cbuffer": "CBUFFER",
     "tbuffer": "TBUFFER",
@@ -164,17 +214,51 @@ KEYWORDS = {
     "const": "CONST",
     "inline": "INLINE",
     "extern": "EXTERN",
+    "volatile": "VOLATILE",
+    "precise": "PRECISE",
+    "row_major": "ROW_MAJOR",
+    "column_major": "COLUMN_MAJOR",
+    "nointerpolation": "NOINTERPOLATION",
+    "linear": "LINEAR",
+    "centroid": "CENTROID",
+    "sample": "SAMPLE",
+    "Texture1D": "TEXTURE1D",
+    "Texture1DArray": "TEXTURE1DARRAY",
     "Texture2D": "TEXTURE2D",
+    "Texture2DArray": "TEXTURE2DARRAY",
+    "Texture2DMS": "TEXTURE2DMS",
+    "Texture2DMSArray": "TEXTURE2DMSARRAY",
     "Texture3D": "TEXTURE3D",
     "TextureCube": "TEXTURECUBE",
-    "Texture2DArray": "TEXTURE2DARRAY",
-    "Texture1D": "TEXTURE1D",
-    "RWStructuredBuffer": "RWSTRUCTUREDBUFFER",
-    "StructuredBuffer": "STRUCTUREDBUFFER",
-    "RWBuffer": "RWBUFFER",
+    "TextureCubeArray": "TEXTURECUBEARRAY",
+    "FeedbackTexture2D": "FEEDBACKTEXTURE2D",
+    "FeedbackTexture2DArray": "FEEDBACKTEXTURE2DARRAY",
+    "RWTexture1D": "RWTEXTURE1D",
+    "RWTexture1DArray": "RWTEXTURE1DARRAY",
     "RWTexture2D": "RWTEXTURE2D",
+    "RWTexture2DArray": "RWTEXTURE2DARRAY",
+    "RWTexture2DMS": "RWTEXTURE2DMS",
+    "RWTexture2DMSArray": "RWTEXTURE2DMSARRAY",
+    "RWTexture3D": "RWTEXTURE3D",
+    "RWTextureCube": "RWTEXTURECUBE",
+    "RWTextureCubeArray": "RWTEXTURECUBEARRAY",
+    "StructuredBuffer": "STRUCTUREDBUFFER",
+    "RWStructuredBuffer": "RWSTRUCTUREDBUFFER",
+    "AppendStructuredBuffer": "APPENDSTRUCTUREDBUFFER",
+    "ConsumeStructuredBuffer": "CONSUMESTRUCTUREDBUFFER",
+    "ByteAddressBuffer": "BYTEADDRESSBUFFER",
+    "RWByteAddressBuffer": "RWBYTEADDRESSBUFFER",
+    "RaytracingAccelerationStructure": "RAYTRACING_ACCELERATION_STRUCTURE",
+    "RayQuery": "RAYQUERY",
+    "Buffer": "BUFFER",
+    "RWBuffer": "RWBUFFER",
     "SamplerState": "SAMPLER_STATE",
     "SamplerComparisonState": "SAMPLER_COMPARISON_STATE",
+    "InputPatch": "INPUTPATCH",
+    "OutputPatch": "OUTPUTPATCH",
+    "PointStream": "POINTSTREAM",
+    "LineStream": "LINESTREAM",
+    "TriangleStream": "TRIANGLESTREAM",
     "float": "FLOAT",
     "half": "HALF",
     "double": "DOUBLE",
@@ -188,6 +272,8 @@ KEYWORDS = {
     "min16int": "MIN16INT",
     "min12int": "MIN12INT",
     "min16uint": "MIN16UINT",
+    "int64_t": "INT64_T",
+    "uint64_t": "UINT64_T",
     "return": "RETURN",
     "if": "IF",
     "else": "ELSE",
@@ -217,13 +303,9 @@ class TokenType(Enum):
 
     COMMENT_SINGLE = auto()
     COMMENT_MULTI = auto()
-    PRAGMA = auto()
-    INCLUDE = auto()
-    DEFINE = auto()
-    IFDEF = auto()
-    IFNDEF = auto()
-    ENDIF = auto()
-    UNDEF = auto()
+    PREPROCESSOR = auto()
+    ENUM = auto()
+    TYPEDEF = auto()
     STRUCT = auto()
     CBUFFER = auto()
     TBUFFER = auto()
@@ -232,17 +314,51 @@ class TokenType(Enum):
     CONST = auto()
     INLINE = auto()
     EXTERN = auto()
+    VOLATILE = auto()
+    PRECISE = auto()
+    ROW_MAJOR = auto()
+    COLUMN_MAJOR = auto()
+    NOINTERPOLATION = auto()
+    LINEAR = auto()
+    CENTROID = auto()
+    SAMPLE = auto()
+    TEXTURE1D = auto()
+    TEXTURE1DARRAY = auto()
     TEXTURE2D = auto()
+    TEXTURE2DARRAY = auto()
+    TEXTURE2DMS = auto()
+    TEXTURE2DMSARRAY = auto()
     TEXTURE3D = auto()
     TEXTURECUBE = auto()
-    TEXTURE2DARRAY = auto()
-    TEXTURE1D = auto()
-    RWSTRUCTUREDBUFFER = auto()
-    STRUCTUREDBUFFER = auto()
-    RWBUFFER = auto()
+    TEXTURECUBEARRAY = auto()
+    FEEDBACKTEXTURE2D = auto()
+    FEEDBACKTEXTURE2DARRAY = auto()
+    RWTEXTURE1D = auto()
+    RWTEXTURE1DARRAY = auto()
     RWTEXTURE2D = auto()
+    RWTEXTURE2DARRAY = auto()
+    RWTEXTURE2DMS = auto()
+    RWTEXTURE2DMSARRAY = auto()
+    RWTEXTURE3D = auto()
+    RWTEXTURECUBE = auto()
+    RWTEXTURECUBEARRAY = auto()
+    STRUCTUREDBUFFER = auto()
+    RWSTRUCTUREDBUFFER = auto()
+    APPENDSTRUCTUREDBUFFER = auto()
+    CONSUMESTRUCTUREDBUFFER = auto()
+    BYTEADDRESSBUFFER = auto()
+    RWBYTEADDRESSBUFFER = auto()
+    RAYTRACING_ACCELERATION_STRUCTURE = auto()
+    RAYQUERY = auto()
+    BUFFER = auto()
+    RWBUFFER = auto()
     SAMPLER_STATE = auto()
     SAMPLER_COMPARISON_STATE = auto()
+    INPUTPATCH = auto()
+    OUTPUTPATCH = auto()
+    POINTSTREAM = auto()
+    LINESTREAM = auto()
+    TRIANGLESTREAM = auto()
     MATRIX = auto()
     FVECTOR = auto()
     IVECTOR = auto()
@@ -261,6 +377,8 @@ class TokenType(Enum):
     MIN16INT = auto()
     MIN12INT = auto()
     MIN16UINT = auto()
+    INT64_T = auto()
+    UINT64_T = auto()
     RETURN = auto()
     ELSE_IF = auto()
     IF = auto()
@@ -286,6 +404,7 @@ class TokenType(Enum):
     IDENTIFIER = auto()
     HEX_NUMBER = auto()
     BINARY_NUMBER = auto()
+    OCT_NUMBER = auto()
     NUMBER = auto()
     LBRACE = auto()
     RBRACE = auto()
@@ -295,9 +414,21 @@ class TokenType(Enum):
     RBRACKET = auto()
     SEMICOLON = auto()
     STRING = auto()
+    CHAR_LITERAL = auto()
     COMMA = auto()
     COLON = auto()
     QUESTION = auto()
+    ASSIGN_SHIFT_LEFT = auto()
+    ASSIGN_SHIFT_RIGHT = auto()
+    PLUS_EQUALS = auto()
+    MINUS_EQUALS = auto()
+    MULTIPLY_EQUALS = auto()
+    DIVIDE_EQUALS = auto()
+    MOD_EQUALS = auto()
+    ASSIGN_AND = auto()
+    ASSIGN_OR = auto()
+    ASSIGN_XOR = auto()
+    EQUALS = auto()
     SHIFT_LEFT = auto()
     SHIFT_RIGHT = auto()
     LESS_EQUAL = auto()
@@ -309,17 +440,6 @@ class TokenType(Enum):
     LOGICAL_AND = auto()
     LOGICAL_OR = auto()
     LOGICAL_NOT = auto()
-    PLUS_EQUALS = auto()
-    MINUS_EQUALS = auto()
-    MULTIPLY_EQUALS = auto()
-    DIVIDE_EQUALS = auto()
-    MOD_EQUALS = auto()
-    ASSIGN_AND = auto()
-    ASSIGN_OR = auto()
-    ASSIGN_XOR = auto()
-    ASSIGN_SHIFT_LEFT = auto()
-    ASSIGN_SHIFT_RIGHT = auto()
-    EQUALS = auto()
     BITWISE_NOT = auto()
     BITWISE_XOR = auto()
     BITWISE_OR = auto()
@@ -350,8 +470,25 @@ class Token:
 class HLSLLexer:
     """Lexer for High-Level Shading Language (HLSL)"""
 
-    def __init__(self, code: str):
+    def __init__(
+        self,
+        code: str,
+        preprocess: bool = True,
+        file_path: Optional[str] = None,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[dict] = None,
+        strict_preprocessor: bool = False,
+    ):
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
+        self.file_path = file_path
+        self.include_paths = include_paths or []
+        if preprocess:
+            preprocessor = HLSLPreprocessor(
+                include_paths=self.include_paths,
+                defines=defines,
+                strict=strict_preprocessor,
+            )
+            code = preprocessor.preprocess(code, file_path=file_path)
         self.code = code
         self._length = len(code)
 
@@ -363,6 +500,12 @@ class HLSLLexer:
         """Generator function that yields tokens one at a time"""
         pos = 0
         while pos < self._length:
+            if self.code.startswith("/*", pos) and "*/" not in self.code[pos + 2 :]:
+                line_num = self.code[:pos].count("\n") + 1
+                col_num = pos - self.code.rfind("\n", 0, pos)
+                raise SyntaxError(
+                    f"Unterminated comment starting at line {line_num}, column {col_num}"
+                )
             token = self._next_token(pos)
             if token is None:
                 # Provide more context in error message
@@ -398,7 +541,8 @@ class HLSLLexer:
     def from_file(cls, filepath: str) -> "HLSLLexer":
         """Create a lexer instance from a file"""
         with open(filepath, "r", encoding="utf-8") as f:
-            return cls(f.read())
+            base_dir = os.path.dirname(filepath)
+            return cls(f.read(), file_path=filepath, include_paths=[base_dir])
 
 
 class Lexer:

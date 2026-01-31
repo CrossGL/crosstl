@@ -2,7 +2,16 @@ from crosstl.translator.lexer import Lexer
 import pytest
 from typing import List
 from crosstl.translator.parser import Parser
-from crosstl.translator.ast import ShaderNode
+from crosstl.translator.ast import (
+    PreprocessorNode,
+    ShaderNode,
+    ShaderStage,
+    VariableNode,
+    WaveOpNode,
+    RayTracingOpNode,
+    MeshOpNode,
+    RayQueryOpNode,
+)
 
 
 def tokenize_code(code: str) -> List:
@@ -135,6 +144,27 @@ def test_for_statement():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("for parsing not implemented.")
+
+
+def test_preprocessor_and_precision_parsing():
+    code = """
+    #version 450 core
+    precision highp float;
+    shader main {
+        vertex {
+            void main() { }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    assert isinstance(ast, ShaderNode)
+    directives = [
+        pp for pp in getattr(ast, "preprocessors", []) if isinstance(pp, PreprocessorNode)
+    ]
+    names = {pp.directive for pp in directives}
+    assert "version" in names
+    assert "precision" in names
 
 
 def test_else_if_statement():
@@ -737,6 +767,114 @@ def test_array_syntax():
         parse_code(tokens)
     except SyntaxError as e:
         pytest.fail(f"Array syntax parsing failed: {e}")
+
+
+def test_extended_shader_stages_parse():
+    code = """
+    shader main {
+        task {
+            void main() { return; }
+        }
+        mesh {
+            void main() { return; }
+        }
+        tessellation_control {
+            void main() { return; }
+        }
+        tessellation_evaluation {
+            void main() { return; }
+        }
+        ray_generation {
+            void main() { return; }
+        }
+        ray_any_hit {
+            void main() { return; }
+        }
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        assert ShaderStage.TASK in ast.stages
+        assert ShaderStage.MESH in ast.stages
+        assert ShaderStage.TESSELLATION_CONTROL in ast.stages
+        assert ShaderStage.TESSELLATION_EVALUATION in ast.stages
+        assert ShaderStage.RAY_GENERATION in ast.stages
+        assert ShaderStage.RAY_ANY_HIT in ast.stages
+    except SyntaxError as e:
+        pytest.fail(f"Extended shader stage parsing failed: {e}")
+
+
+def test_wave_intrinsic_parses_to_node():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int sum = WaveActiveSum(1);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    stage = ast.stages[ShaderStage.COMPUTE]
+    body = stage.entry_point.body.statements
+    var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
+    assert isinstance(var_decl.initial_value, WaveOpNode)
+
+
+def test_raytracing_intrinsic_parses_to_node():
+    code = """
+    shader main {
+        ray_generation {
+            void main() {
+                int handle = TraceRay(1, 2, 3);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    stage = ast.stages[ShaderStage.RAY_GENERATION]
+    body = stage.entry_point.body.statements
+    var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
+    assert isinstance(var_decl.initial_value, RayTracingOpNode)
+
+
+def test_mesh_intrinsic_parses_to_node():
+    code = """
+    shader main {
+        mesh {
+            void main() {
+                int ok = SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    stage = ast.stages[ShaderStage.MESH]
+    body = stage.entry_point.body.statements
+    var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
+    assert isinstance(var_decl.initial_value, MeshOpNode)
+
+
+def test_rayquery_method_parses_to_node():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int ok = rayQuery.Proceed();
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    stage = ast.stages[ShaderStage.COMPUTE]
+    body = stage.entry_point.body.statements
+    var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
+    assert isinstance(var_decl.initial_value, RayQueryOpNode)
 
 
 if __name__ == "__main__":

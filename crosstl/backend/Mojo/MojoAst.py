@@ -2,8 +2,8 @@
 
 from ..common_ast import *
 
-
 # Mojo-specific nodes
+
 
 class VariableDeclarationNode(VariableNode):
     """Node representing a Mojo variable declaration with type inference"""
@@ -11,6 +11,8 @@ class VariableDeclarationNode(VariableNode):
     def __init__(self, vtype, name, value=None, is_var=True):
         super().__init__(vtype, name, value)
         self.is_var = is_var  # True for 'var', False for 'let'
+        self.var_type = "var" if is_var else "let"
+        self.initial_value = value
 
     def __repr__(self):
         keyword = "var" if self.is_var else "let"
@@ -22,11 +24,14 @@ class ImportNode(ASTNode):
 
     def __init__(self, module, items=None, alias=None):
         self.module = module
+        self.module_name = module
         self.items = items or []
         self.alias = alias
 
     def __repr__(self):
-        return f"ImportNode(module={self.module}, items={self.items}, alias={self.alias})"
+        return (
+            f"ImportNode(module={self.module}, items={self.items}, alias={self.alias})"
+        )
 
 
 class ClassNode(ASTNode):
@@ -58,6 +63,8 @@ class SwitchCaseNode(ASTNode):
     def __init__(self, value, statements):
         self.value = value
         self.statements = statements
+        self.condition = value
+        self.body = statements
 
     def __repr__(self):
         return f"SwitchCaseNode(value={self.value}, statements={len(self.statements)})"
