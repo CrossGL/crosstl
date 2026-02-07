@@ -1,3 +1,22 @@
+"""
+Slang Code Generator Module.
+
+This module provides code generation for Slang shading language from CrossGL
+Abstract Syntax Trees. Slang is a high-performance shading language designed
+for real-time graphics.
+
+The generator supports:
+    - Type mapping from CrossGL to Slang types
+    - Shader stage translation
+    - Struct generation
+    - Control flow structures
+
+Example:
+    >>> from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+    >>> codegen = SlangCodeGen()
+    >>> slang_code = codegen.generate(ast)
+"""
+
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
@@ -20,6 +39,17 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 
 class SlangCodeGen:
+    """
+    Code generator for Slang shading language.
+
+    Translates CrossGL AST nodes to Slang code, handling type mappings
+    and Slang-specific syntax.
+
+    Attributes:
+        indent_level: Current indentation level for code formatting.
+        indent_str: String used for indentation (default: 4 spaces).
+    """
+
     def __init__(self):
         self.indent_level = 0
         self.indent_str = "    "

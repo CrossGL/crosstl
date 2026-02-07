@@ -1,3 +1,23 @@
+"""
+DirectX/HLSL Code Generator Module.
+
+This module provides code generation for Microsoft HLSL (High-Level Shading Language)
+from CrossGL Abstract Syntax Trees. It handles the translation of shader programs
+to DirectX-compatible HLSL code.
+
+The generator supports:
+    - Type mapping from CrossGL to HLSL types
+    - Shader stage translation (vertex, pixel, compute, etc.)
+    - Ray tracing operations
+    - Mesh shader operations
+    - Wave intrinsics
+
+Example:
+    >>> from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+    >>> codegen = HLSLCodeGen()
+    >>> hlsl_code = codegen.generate(ast)
+"""
+
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
@@ -22,6 +42,16 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 
 class HLSLCodeGen:
+    """
+    Code generator for Microsoft HLSL (DirectX).
+
+    Translates CrossGL AST nodes to HLSL shader code, handling type mappings,
+    shader stages, and DirectX-specific constructs.
+
+    Attributes:
+        type_mapping: Dictionary mapping CrossGL types to HLSL types.
+    """
+
     def __init__(self):
         self.type_mapping = {
             "void": "void",

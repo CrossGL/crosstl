@@ -1,3 +1,23 @@
+"""
+Metal Code Generator Module.
+
+This module provides code generation for Apple Metal Shading Language from
+CrossGL Abstract Syntax Trees. It handles the translation of shader programs
+including vertex, fragment, and compute shaders to Metal's syntax.
+
+The generator supports:
+    - Type mapping from CrossGL to Metal types
+    - Shader stage translation (vertex, fragment, compute)
+    - Texture and sampler handling
+    - Ray tracing operations
+    - Wave/SIMD operations
+
+Example:
+    >>> from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+    >>> codegen = MetalCodeGen()
+    >>> metal_code = codegen.generate(ast)
+"""
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -22,7 +42,22 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 
 class CharTypeMapper:
+    """
+    Maps character types to their Metal equivalents.
+
+    Metal doesn't have native char types, so they are mapped to int/uint types.
+    """
+
     def map_char_type(self, vtype):
+        """
+        Map a char type to its Metal equivalent.
+
+        Args:
+            vtype: The type name to map.
+
+        Returns:
+            The Metal-compatible type name.
+        """
         char_type_mapping = {
             "char": "int",
             "signed char": "int",
@@ -38,6 +73,23 @@ class CharTypeMapper:
 
 
 class MetalCodeGen:
+    """
+    Code generator for Apple Metal Shading Language.
+
+    Translates CrossGL AST nodes to Metal shader code, handling type mappings,
+    shader stages, and Metal-specific constructs.
+
+    Attributes:
+        current_shader: The current shader stage being processed.
+        vertex_item: Input/output structure for vertex shaders.
+        fragment_item: Input/output structure for fragment shaders.
+        gl_position: Whether gl_Position is used.
+        char_mapper: CharTypeMapper instance for type conversion.
+        texture_variables: List of texture variable names.
+        sampler_variables: List of sampler variable names.
+        type_mapping: Dictionary mapping CrossGL types to Metal types.
+    """
+
     def __init__(self):
         self.current_shader = None
         self.vertex_item = None

@@ -1,3 +1,23 @@
+"""
+Vulkan SPIR-V Code Generator Module.
+
+This module provides code generation for Vulkan SPIR-V assembly from CrossGL
+Abstract Syntax Trees. It generates human-readable SPIR-V assembly that can be
+assembled into binary SPIR-V using spirv-as.
+
+The generator supports:
+    - Type mapping from CrossGL to SPIR-V types
+    - Shader stage translation (vertex, fragment, compute)
+    - Storage class handling
+    - Built-in variable decorations
+    - Structured control flow
+
+Example:
+    >>> from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+    >>> codegen = VulkanSPIRVCodeGen()
+    >>> spirv_code = codegen.generate(ast)
+"""
+
 import re
 from typing import List, Optional, Tuple, Union
 
@@ -20,9 +40,22 @@ from ..ast import (
 
 
 class SpirvType:
-    """Represents a SPIR-V type with storage class information."""
+    """
+    Represents a SPIR-V type with storage class information.
+
+    Attributes:
+        base_type: The underlying SPIR-V type name.
+        storage_class: The storage class (e.g., "Input", "Output", "Uniform").
+    """
 
     def __init__(self, base_type: str, storage_class: Optional[str] = None):
+        """
+        Initialize a SPIR-V type.
+
+        Args:
+            base_type: The base type name.
+            storage_class: Optional storage class qualifier.
+        """
         self.base_type = base_type
         self.storage_class = storage_class
 

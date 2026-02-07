@@ -1,4 +1,22 @@
-"""Common AST Node definitions shared across backends"""
+"""
+Common AST Node Definitions.
+
+This module defines the Abstract Syntax Tree (AST) node classes that are shared
+across all backend parsers in CrossTL. These nodes represent the common
+elements of shader programs.
+
+The AST hierarchy includes:
+    - ShaderNode: Root node representing a complete program
+    - FunctionNode: Function declarations
+    - StructNode: Structure definitions
+    - Statement nodes: If, For, While, Switch, Return, etc.
+    - Expression nodes: Binary operations, function calls, member access, etc.
+    - Type nodes: Variables, constants, arrays
+
+Example:
+    >>> from crosstl.backend.common_ast import ShaderNode, FunctionNode
+    >>> shader = ShaderNode(functions=[FunctionNode("void", "main", [], [])])
+"""
 
 
 class ASTNode:
