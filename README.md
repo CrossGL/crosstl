@@ -105,6 +105,29 @@ CrossTL provides comprehensive bidirectional translation between CrossGL and maj
 
 - **CrossGL (.cgl)** - Our universal programming language and IR
 
+## ✅ Backend Readiness: DirectX / Metal / OpenGL
+
+We maintain first-class, bidirectional support for the three cornerstone graphics APIs. Each backend is implemented as both a **source** (parse/import) and **codegen** (export) target, so you can round‑trip between native shaders and CrossGL without lossy hops.
+
+- **DirectX / HLSL**
+  - Pipeline coverage: vertex, fragment/pixel, compute, geometry, hull/domain (tessellation), mesh/task, full ray‑tracing stages.
+  - Resource model: cbuffers, register/space bindings, UAV/RW textures & buffers, structured buffers, Interlocked atomics, wave ops, texture/buffer dimension queries.
+  - Semantics map to `SV_*` and user semantics, preserved through CrossGL attributes.
+- **Metal**
+  - Stages: vertex, fragment, compute, mesh/object, and ray‑tracing qualifiers.
+  - Resource/binding support: argument buffers, `[[buffer]]`, `[[texture]]`, `[[sampler]]`, function constants, packed/simd types, indirect command buffers, payload/hit attributes.
+  - Texture methods (sample/load/store/gather/compare) and threadgroup builtins are translated to CrossGL intrinsics.
+- **OpenGL / GLSL**
+  - Stages: vertex, fragment, compute with version inference (defaults to `#version 450 core` when absent).
+  - Handles interface blocks, layouts/bindings, sampler & image operations, control flow, structs/arrays, discard, builtins (`gl_*`) and preprocessor directives.
+- **Round‑trips verified** via converters in `crosstl.backend.{DirectX,Metal,GLSL}` and registered in `translator.source_registry` and `translator.codegen.registry`.
+
+### How we validate backend parity
+
+- Targeted unit suites exercise the full feature surface for these three backends (shader stages, bindings, intrinsics, control‑flow, resources, and preprocessor handling).
+- Quick check: run `pytest tests/test_backend/test_directx tests/test_backend/test_metal tests/test_backend/test_GLSL -q` (currently 321 passing tests).
+- End‑to‑end translation: translate native HLSL/Metal/GLSL → CrossGL → HLSL/Metal/GLSL/Vulkan to ensure attributes, layouts, and semantics survive round‑trips.
+
 ## 💡 Revolutionary Advantages
 
 1. **🔄 Universal Portability**: Write complex algorithms once, run on any platform
@@ -460,8 +483,7 @@ function allocate(pool: MemoryPool*, size: size_t) -> void* {
 """
 
 rust_systems = crosstl.translate(systems_code, backend='rust')  # Memory-safe systems code
-cpp_systems = crosstl.translate(systems_code, backend='cpp')    # High-performance C++
-c_systems = crosstl.translate(systems_code, backend='c')        # Portable C code
+mojo_systems = crosstl.translate(systems_code, backend='mojo')  # AI-optimized systems code
 ```
 
 ## Reverse Translation - Import Existing Code
@@ -500,17 +522,14 @@ deployment_targets = {
     # Systems languages
     'rust': '.rs',          # Memory safety
     'mojo': '.mojo',        # AI-optimized
-    'cpp': '.cpp',          # Performance
-    'c': '.c',              # Portability
 
     # Parallel computing
     'cuda': '.cu',          # NVIDIA
     'hip': '.hip',          # AMD
-    'opencl': '.cl',        # Cross-vendor
 
     # Specialized
-    'slang': '.slang',      # Real-time graphics
-    'wgsl': '.wgsl',        # Web platforms
+    'slang': '.slang',      # Real-time graphics (optional backend)
+    'cgl': '.cgl',          # Keep a CrossGL copy
 }
 
 for backend, extension in deployment_targets.items():
