@@ -55,6 +55,9 @@ class HLSLCodeGen:
             "gl_InstanceID": "SV_InstanceID",
             "gl_IsFrontFace": "FRONT_FACE",
             "gl_PrimitiveID": "PRIMITIVE_ID",
+            "gl_ViewID": "SV_ViewID",
+            "gl_Layer": "SV_RenderTargetArrayIndex",
+            "gl_ViewportIndex": "SV_ViewportArrayIndex",
             "InstanceID": "INSTANCE_ID",
             "VertexID": "VERTEX_ID",
             "gl_Position": "SV_POSITION",
@@ -147,9 +150,24 @@ class HLSLCodeGen:
                                     "color",
                                     "texcoord",
                                     "normal",
+                                    "gl_ViewID",
+                                    "gl_Layer",
+                                    "gl_ViewportIndex",
                                 ]:
                                     semantic = attr.name
                                     break
+                        elif getattr(member, "name", "") in [
+                            "view",
+                            "layer",
+                            "viewport",
+                        ]:
+                            # Fallback to name-based mapping for common multiview outputs
+                            name_semantics = {
+                                "view": "gl_ViewID",
+                                "layer": "gl_Layer",
+                                "viewport": "gl_ViewportIndex",
+                            }
+                            semantic = name_semantics.get(member.name)
 
                         code += f"    {member_type} {member.name}{array_syntax}{self.map_semantic(semantic)};\n"
                 code += "};\n"

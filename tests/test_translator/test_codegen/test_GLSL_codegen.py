@@ -233,6 +233,27 @@ def test_else_statement():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_codegen_emits_version_when_absent_in_crossgl():
+    shader = """
+    shader simple {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VSOut main() {
+                VSOut o;
+                o.position = vec4(0.0, 0.0, 0.0, 1.0);
+                return o;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    glsl_code = GLSLCodeGen().generate(ast)
+    assert glsl_code.lstrip().startswith("#version 450 core")
+
+
 def test_geometry_stage_entrypoint():
     code = """
     shader geom {

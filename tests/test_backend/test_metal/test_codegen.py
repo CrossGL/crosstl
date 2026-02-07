@@ -627,5 +627,23 @@ def test_codegen_preserves_preprocessor_define():
     assert "#define FOO 1" in result
 
 
+def test_codegen_threadgroup_memory_and_barrier():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void main(device float* data [[buffer(0)]],
+                     threadgroup float* sharedMem [[threadgroup(0)]],
+                     uint tid [[thread_index_in_threadgroup]]) {
+        sharedMem[tid] = data[tid];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        data[tid] = sharedMem[tid];
+    }
+    """
+    result = convert(code)
+    assert "threadgroup_barrier" in result
+    assert "@threadgroup" in result or "threadgroup" in result
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -520,6 +520,34 @@ def test_shift_operators(shader, expected_outputs):
         assert expected in generated_code
 
 
+def test_multiview_and_viewport_semantics_roundtrip():
+    shader = """
+    shader ViewShader {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            uint view @ gl_ViewID;
+            uint layer @ gl_Layer;
+            uint viewport @ gl_ViewportIndex;
+        };
+
+        vertex {
+            VSOut main() {
+                VSOut o;
+                o.position = vec4(0.0, 0.0, 0.0, 1.0);
+                o.view = 1;
+                o.layer = 2;
+                o.viewport = 3;
+                return o;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+    for semantic in ["SV_ViewID", "SV_RenderTargetArrayIndex", "SV_ViewportArrayIndex"]:
+        assert semantic in generated_code
+
+
 def test_bitwise_or_operator():
     code = """
     shader main {

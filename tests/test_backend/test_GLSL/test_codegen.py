@@ -8,6 +8,7 @@ from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 
 VERTEX_GLSL = textwrap.dedent("""
     #version 450 core
@@ -196,6 +197,42 @@ def test_codegen_interface_block_roundtrip():
     assert "struct VertexOut" in output
     assert "struct Globals" in output
     assert "cbuffer Uniforms" in output
+
+
+def test_codegen_compute_atomics_and_barriers():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+        layout(binding = 0, rgba8) uniform coherent image2D img;
+        layout(std430, binding = 1) buffer Counter { uint value; } counter;
+
+        void main() {
+            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+            imageAtomicAdd(img, coord, 1);
+            atomicAdd(counter.value, 1);
+            memoryBarrier();
+            barrier();
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+    for expected in ["imageAtomicAdd", "atomicAdd", "memoryBarrier", "barrier"]:
+        assert expected in output
+
+
+def test_codegen_inserts_default_version_when_missing():
+    code = textwrap.dedent("""
+        layout(location = 0) in vec3 position;
+        void main() {
+            gl_Position = vec4(position, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+    shader_ast = parse_crossgl(crossgl)
+    assert ShaderStage.VERTEX in shader_ast.stages
+    glsl_code = GLSLCodeGen().generate(shader_ast)
+    assert glsl_code.lstrip().startswith("#version 450 core")
 
 
 if __name__ == "__main__":

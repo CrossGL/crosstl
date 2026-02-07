@@ -582,6 +582,50 @@ def test_codegen_preserves_parentheses():
     assert "clamp((a - b) / c, 0.0, 1.0)" in output
 
 
+def test_codegen_multiview_and_viewport_semantics():
+    code = textwrap.dedent("""
+        struct GSInput {
+            float4 pos : SV_Position;
+        };
+        struct GSOutput {
+            float4 pos : SV_Position;
+            uint view : SV_ViewID;
+            uint layer : SV_RenderTargetArrayIndex;
+            uint viewport : SV_ViewportArrayIndex;
+        };
+        [maxvertexcount(1)]
+        void GSMain(point GSInput input[1], inout PointStream<GSOutput> stream) {
+            GSOutput o;
+            o.pos = input[0].pos;
+            o.view = 1;
+            o.layer = 2;
+            o.viewport = 3;
+            stream.Append(o);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+    for expected in ["gl_ViewID", "gl_Layer", "gl_ViewportIndex"]:
+        assert expected in output
+
+
+def test_codegen_interlocked_compare_exchange_mapping():
+    code = textwrap.dedent("""
+        RWTexture2D<uint> tex : register(u0);
+        RWBuffer<uint> buf : register(u1);
+
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 dtid : SV_DispatchThreadID) {
+            uint original;
+            InterlockedCompareExchange(tex[dtid.xy], 1u, 0u, original);
+            InterlockedCompareExchange(buf[dtid.x], 2u, 1u, original);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+    assert "atomicCompareExchange" in output
+
+
 def test_codegen_invalid_hlsl_raises():
     code = "float4 main() : SV_Target0 { float x = 1.0 return float4(x, 0, 0, 1); }"
     with pytest.raises(SyntaxError):

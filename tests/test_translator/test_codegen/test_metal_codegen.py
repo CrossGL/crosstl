@@ -221,6 +221,28 @@ def test_metal_atomic_fetch_codegen():
     assert "atomic_fetch_add_explicit" in generated
 
 
+def test_compute_builtin_semantics_roundtrip():
+    code = """
+    shader cs {
+        compute {
+            void main(uvec3 gid @ gl_GlobalInvocationID,
+                      uvec3 lid @ gl_LocalInvocationID,
+                      uvec3 group @ gl_WorkGroupID,
+                      uint idx @ gl_LocalInvocationIndex) { }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate(ast)
+    for expected in [
+        "thread_position_in_grid",
+        "thread_position_in_threadgroup",
+        "threadgroup_position_in_grid",
+        "thread_index_in_threadgroup",
+    ]:
+        assert expected in generated
+
+
 def test_metal_raytrace_and_mesh_intrinsics():
     code = """
     shader main {
