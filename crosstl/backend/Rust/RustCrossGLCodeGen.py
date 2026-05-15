@@ -280,7 +280,8 @@ class RustToCrossGLConverter:
             elif isinstance(stmt, str):
                 code += f"{indent_str}{stmt};\n"
             else:
-                expr = self.generate_expression(stmt)                if expr:
+                expr = self.generate_expression(stmt)
+                if expr:
                     code += f"{indent_str}{expr};\n"
 
         return code
