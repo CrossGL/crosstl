@@ -391,17 +391,20 @@ VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 
 }
 
 // Vertex Shader
-void main()
+// Vertex Shader
+void VSMain()
 {
 }
 
 // Fragment Shader
-void main()
+// Fragment Shader
+void PSMain()
 {
 }
 
 // Compute Shader
-void precompute_environment()
+// Compute Shader
+void CSMain()
 {
     int2 coord = ivec2(gl_GlobalInvocationID.xy);
     int2 size = imageSize(irradiance_map);

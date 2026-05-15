@@ -18,7 +18,8 @@ struct FragmentOutput
     float4 color;
 };
 // Vertex Shader
-VertexOutput main(VertexInput input)
+// Vertex Shader
+VertexOutput VSMain(VertexInput input)
 {
     VertexOutput output;
     output.uv = input.texCoord;
@@ -27,7 +28,8 @@ VertexOutput main(VertexInput input)
 }
 
 // Fragment Shader
-FragmentOutput main(FragmentInput input)
+// Fragment Shader
+FragmentOutput PSMain(FragmentInput input)
 {
     FragmentOutput output;
     float r = input.uv.x;

@@ -52,45 +52,37 @@ class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     def __init__(self):
-        # Core tracking
         self.next_id = 1
         self.code_lines = []
-        self.decorations = []  # List for OpDecorate instructions
+        self.decorations = []
 
-        # Type system
-        self.primitive_types = {}  # name -> SpirvId
-        self.vector_types = {}  # (component_type, count) -> SpirvId
-        self.matrix_types = {}  # (column_type, count) -> SpirvId
-        self.struct_types = {}  # name -> SpirvId
-        self.pointer_types = {}  # (pointed_type, storage_class) -> SpirvId
-        self.function_types = {}  # (return_type, [param_types]) -> SpirvId
-        self.array_types = {}  # (element_type, size) -> SpirvId
+        self.primitive_types = {}
+        self.vector_types = {}
+        self.matrix_types = {}
+        self.struct_types = {}
+        self.pointer_types = {}
+        self.function_types = {}
+        self.array_types = {}
 
-        # Variables and constants
-        self.global_variables = {}  # name -> SpirvId
-        self.local_variables = {}  # name -> SpirvId  (cleared per function)
-        self.constants = {}  # value -> SpirvId
-        self.vector_constants = {}  # (type, components) -> SpirvId
+        self.global_variables = {}
+        self.local_variables = {}
+        self.constants = {}
+        self.vector_constants = {}
 
-        # Functions
-        self.functions = {}  # name -> SpirvId
-        self.function_signatures = {}  # name -> (return_type, [param_types])
+        self.functions = {}
+        self.function_signatures = {}
 
-        # Special IDs
         self.glsl_std450_id = None
         self.main_fn_id = None
 
-        # Tracking
         self.current_label = None
         self.defined_functions = set()
-        self.current_struct_members = {}  # struct_name -> [(type, name)]
+        self.current_struct_members = {}
 
-        # Shader interface
-        self.inputs = []  # (name, type, location)
-        self.outputs = []  # (name, type, location)
-        self.uniform_buffers = []  # (name, bindings)
+        self.inputs = []
+        self.outputs = []
+        self.uniform_buffers = []
 
-        # State
         self.is_vertex_shader = False
         self.bound_id = 0
 
@@ -183,14 +175,11 @@ class VulkanSPIRVCodeGen:
 
         id_value = self.get_id()
 
-        # Define the struct type
         member_types = " ".join([f"%{member[0].id}" for member in members])
         self.emit(f"%{id_value} = OpTypeStruct {member_types}")
 
-        # Add name decoration
         self.emit(f'OpName %{id_value} "{name}"')
 
-        # Add member names
         for i, (_, member_name) in enumerate(members):
             self.emit(f'OpMemberName %{id_value} {i} "{member_name}"')
 
@@ -198,7 +187,6 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, spirv_type, name)
         self.struct_types[name] = spirv_id
 
-        # Store member info for later access
         self.current_struct_members[name] = members
 
         return spirv_id
@@ -355,7 +343,6 @@ class VulkanSPIRVCodeGen:
         """Create a binary operation."""
         id_value = self.get_id()
 
-        # Map CrossGL operators to SPIR-V instructions
         spv_op = {
             "+": "OpFAdd",
             "-": "OpFSub",
@@ -390,7 +377,6 @@ class VulkanSPIRVCodeGen:
         """Create a unary operation."""
         id_value = self.get_id()
 
-        # Map CrossGL unary operators to SPIR-V instructions
         spv_op = {
             "+": None,  # No operation needed
             "-": "OpFNegate",
@@ -431,12 +417,10 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
-        # Ensure we have the GLSL.std450 extended instruction set imported
         if self.glsl_std450_id is None:
             self.glsl_std450_id = self.get_id()
             self.emit(f'%{self.glsl_std450_id} = OpExtInstImport "GLSL.std.450"')
 
-        # Vector constructors
         if function_name in ["vec2", "vec3", "vec4"]:
             component_count = int(function_name[3:])
             float_type = self.primitive_types["float"]
@@ -671,7 +655,6 @@ class VulkanSPIRVCodeGen:
 
     def map_crossgl_type(self, type_name) -> SpirvId:
         """Map a CrossGL type name to a SPIR-V type ID."""
-        # Handle TypeNode objects by converting to string first
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
             type_str = self.convert_type_node_to_string(type_name)
         else:
@@ -686,22 +669,18 @@ class VulkanSPIRVCodeGen:
         elif type_str == "void":
             return self.register_primitive_type("void")
         elif type_str.startswith("vec"):
-            # Vector types (vec2, vec3, vec4)
             size = int(type_str[3:])
             float_type = self.register_primitive_type("float")
             return self.register_vector_type(float_type, size)
         elif type_str.startswith("ivec"):
-            # Integer vector types (ivec2, ivec3, ivec4)
             size = int(type_str[4:])
             int_type = self.register_primitive_type("int")
             return self.register_vector_type(int_type, size)
         elif type_str.startswith("bvec"):
-            # Boolean vector types (bvec2, bvec3, bvec4)
             size = int(type_str[4:])
             bool_type = self.register_primitive_type("bool")
             return self.register_vector_type(bool_type, size)
         elif type_str.startswith("mat"):
-            # Matrix types (mat2, mat3, mat4)
             dim = int(type_str[3:])
             float_type = self.register_primitive_type("float")
             col_type = self.register_vector_type(float_type, dim)
@@ -717,23 +696,18 @@ class VulkanSPIRVCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         if hasattr(type_node, "name"):
-            # PrimitiveType
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
-            # VectorType or ArrayType
             if hasattr(type_node, "rows"):
-                # MatrixType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 return f"mat{type_node.rows}x{type_node.cols}"
             elif str(type(type_node)).find("ArrayType") != -1:
-                # ArrayType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     return f"{element_type}[{type_node.size}]"
                 else:
                     return f"{element_type}[]"
             else:
-                # VectorType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
                 if element_type == "float":
@@ -756,19 +730,14 @@ class VulkanSPIRVCodeGen:
             member_name = member.name
 
             if isinstance(member, VariableNode):
-                # Regular struct member - handle both old and new AST
                 if hasattr(member, "var_type"):
-                    # New AST structure
                     vtype_str = self.convert_type_node_to_string(member.var_type)
                 elif hasattr(member, "vtype"):
-                    # Old AST structure
                     if hasattr(member.vtype, "name") or hasattr(
                         member.vtype, "element_type"
                     ):
-                        # TypeNode object
                         vtype_str = self.convert_type_node_to_string(member.vtype)
                     else:
-                        # String
                         vtype_str = str(member.vtype)
                 else:
                     vtype_str = "float"
@@ -800,8 +769,6 @@ class VulkanSPIRVCodeGen:
                         member_type = self.register_primitive_type("float")
 
             elif isinstance(member, ArrayNode):
-                # Array member
-                # Determine base type of the array
                 if member.element_type == "float":
                     base_type = self.register_primitive_type("float")
                 elif member.element_type == "int":
@@ -818,40 +785,32 @@ class VulkanSPIRVCodeGen:
                     col_type = self.register_vector_type(float_type, dim)
                     base_type = self.register_matrix_type(col_type, dim)
                 else:
-                    # Use a default type if unknown
                     self.emit(
                         f"; WARNING: Unknown type {member.element_type} in array member of struct {struct_node.name}"
                     )
                     base_type = self.register_primitive_type("float")
 
-                # Create array type with size (if provided)
                 if member.size:
-                    # Try to parse the size as an integer
                     try:
                         array_size = int(member.size)
                         member_type = self.register_array_type(base_type, array_size)
                     except ValueError:
-                        # Dynamic size or non-integer size
                         self.emit(
                             f"; WARNING: Non-integer array size {member.size} in struct {struct_node.name}"
                         )
                         member_type = self.register_array_type(base_type)
                 else:
-                    # Runtime array
                     member_type = self.register_array_type(base_type)
 
             if member_type:
                 members.append((member_type, member_name))
 
-        # Create struct type
         return self.register_struct_type(struct_node.name, members)
 
     def process_function_node(self, function_node: "FunctionNode"):
         """Process a CrossGL function definition."""
-        # Map return type
         return_type = self.map_crossgl_type(function_node.return_type)
 
-        # Map parameter types
         param_types = []
         for param in getattr(
             function_node, "parameters", getattr(function_node, "params", [])
@@ -859,14 +818,11 @@ class VulkanSPIRVCodeGen:
             if hasattr(param, "vtype"):
                 param_type = self.map_crossgl_type(param.vtype)
             else:
-                # Default to float if type info missing
                 param_type = self.map_crossgl_type("float")
             param_types.append(param_type)
 
-        # Create function
         self.create_function(function_node.name, return_type, param_types)
 
-        # Add parameters
         parameters = []
         for i, param in enumerate(
             getattr(function_node, "parameters", getattr(function_node, "params", []))
@@ -880,33 +836,24 @@ class VulkanSPIRVCodeGen:
             parameters.append(param_id)
             self.local_variables[param_name] = param_id
 
-        # Create entry block
         self.begin_block()
 
-        # Process function body
         self.process_statements(function_node.body)
 
-        # Add implicit return if needed
         if function_node.return_type == "void":
             self.create_return()
 
-        # End function
         self.end_function()
 
-        # Clear local variables
         self.local_variables.clear()
 
     def process_statements(self, statements):
         """Process a list of CrossGL statements."""
-        # Handle both List and BlockNode structures
         if hasattr(statements, "statements"):
-            # BlockNode structure (new AST)
             stmt_list = statements.statements
         elif isinstance(statements, list):
-            # List of statements (old AST)
             stmt_list = statements
         else:
-            # Single statement - wrap in list
             stmt_list = [statements]
 
         for stmt in stmt_list:
@@ -927,23 +874,17 @@ class VulkanSPIRVCodeGen:
 
     def process_assignment(self, node: AssignmentNode):
         """Process a CrossGL assignment statement."""
-        # Evaluate right-hand side
         rhs_value = self.process_expression(node.value)
         if rhs_value is None:
             return
 
-        # Handle different types of left-hand side
         if isinstance(node.name, str):
-            # Simple variable assignment
             if node.name in self.local_variables:
-                # Existing local variable
                 var_id = self.local_variables[node.name]
             elif node.name in self.global_variables:
-                # Existing global variable
                 var_id = self.global_variables[node.name]
             else:
-                # Create new local variable
-                var_type = self.primitive_types["float"]  # Default if unknown
+                var_type = self.primitive_types["float"]
                 if hasattr(rhs_value, "type"):
                     for type_dict in [
                         self.primitive_types,
@@ -959,36 +900,28 @@ class VulkanSPIRVCodeGen:
                 var_id = self.create_variable(var_type, "Function", node.name)
                 self.local_variables[node.name] = var_id
 
-            # Store value to variable
             self.store_to_variable(var_id, rhs_value)
 
         elif isinstance(node.name, MemberAccessNode):
-            # Member access (e.g., struct.field)
             base = self.process_expression(node.name.object)
             if base is None:
                 return
 
-            # Find member index
             member_name = node.name.member
             struct_type = base.type.base_type
 
             if struct_type in self.current_struct_members:
                 for i, (_, name) in enumerate(self.current_struct_members[struct_type]):
                     if name == member_name:
-                        # Create access chain
                         int_type = self.primitive_types["int"]
                         index = self.register_constant(i, int_type)
 
-                        # Determine member type
                         member_type = self.current_struct_members[struct_type][i][0]
 
-                        # Create pointer to member
                         ptr_type = self.register_pointer_type(member_type, "Function")
 
-                        # Create access chain
                         access = self.access_chain(base, [index], ptr_type)
 
-                        # Store value to member
                         self.store_to_variable(access, rhs_value)
                         return
 
@@ -998,7 +931,6 @@ class VulkanSPIRVCodeGen:
             )
 
         elif isinstance(node.name, ArrayAccessNode):
-            # Array access (e.g., array[index])
             array = self.process_expression(node.name.array)
             index = self.process_expression(node.name.index)
 
@@ -1006,23 +938,18 @@ class VulkanSPIRVCodeGen:
                 self.emit(f"; WARNING: Failed to evaluate array in assignment")
                 return
 
-            # Use the improved element type detection
             element_type = self.determine_array_element_type(array)
 
             if element_type is None:
                 self.emit(
                     f"; WARNING: Could not determine array element type for {node.name.array}"
                 )
-                # Default to float if we can't determine the element type
                 element_type = self.primitive_types["float"]
 
-            # Create pointer to element
             ptr_type = self.register_pointer_type(element_type, "Function")
 
-            # Create access chain
             access = self.access_chain(array, [index], ptr_type)
 
-            # Store value to array element
             self.store_to_variable(access, rhs_value)
         else:
             self.emit(
@@ -1032,113 +959,82 @@ class VulkanSPIRVCodeGen:
     def process_return(self, node: ReturnNode):
         """Process a CrossGL return statement."""
         if hasattr(node, "value") and node.value:
-            # Handle return values
             if isinstance(node.value, list) and node.value:
-                # Return first value from list (most common case)
                 return_value = self.process_expression(node.value[0])
                 if return_value:
                     self.create_return_value(return_value)
                 else:
                     self.create_return()
             else:
-                # Single return value
                 return_value = self.process_expression(node.value)
                 if return_value:
                     self.create_return_value(return_value)
                 else:
                     self.create_return()
         else:
-            # Void return
             self.create_return()
 
     def process_if(self, node: IfNode):
         """Process a CrossGL if statement."""
-        # Evaluate condition
         condition = self.process_expression(node.if_condition)
         if condition is None:
-            # Use default true condition if expression failed
             condition = self.register_constant(True, self.primitive_types["bool"])
 
-        # Create merge block for end of if statement
         merge_label = SpirvId(self.get_id(), SpirvType("label"))
-
-        # Create label for then block
         then_label = SpirvId(self.get_id(), SpirvType("label"))
-
-        # Create label for else block
         else_label = SpirvId(self.get_id(), SpirvType("label"))
 
-        # Create the selection structure
         self.create_selection_merge(merge_label)
         self.create_conditional_branch(condition, then_label, else_label)
 
-        # Then block
         self.emit(f"%{then_label.id} = OpLabel")
         self.current_label = then_label.id
         self.process_statements(node.if_body)
         self.create_branch(merge_label)
 
-        # Else block
         self.emit(f"%{else_label.id} = OpLabel")
         self.current_label = else_label.id
         if node.else_body:
             self.process_statements(node.else_body)
         self.create_branch(merge_label)
 
-        # Merge block
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
 
     def process_for(self, node: ForNode):
         """Process a CrossGL for loop."""
-        # Process loop initialization
         if node.init:
             self.process_statement(node.init)
 
-        # Create loop header block
         header_label = SpirvId(self.get_id(), SpirvType("label"))
-
-        # Create loop body block
         body_label = SpirvId(self.get_id(), SpirvType("label"))
-
-        # Create continue block
         continue_label = SpirvId(self.get_id(), SpirvType("label"))
-
-        # Create merge block
         merge_label = SpirvId(self.get_id(), SpirvType("label"))
 
-        # Branch to header
         self.create_branch(header_label)
 
-        # Header block
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        # Evaluate condition
         condition = self.process_expression(node.condition)
         if condition is None:
-            # Use default true condition if expression failed
             condition = self.register_constant(True, self.primitive_types["bool"])
 
-        # Create loop structure
         self.create_loop_merge(merge_label, continue_label)
         self.create_conditional_branch(condition, body_label, merge_label)
 
-        # Body block
         self.emit(f"%{body_label.id} = OpLabel")
         self.current_label = body_label.id
         if node.body:
             self.process_statements(node.body)
         self.create_branch(continue_label)
 
-        # Continue block
         self.emit(f"%{continue_label.id} = OpLabel")
         self.current_label = continue_label.id
         if node.update:
             self.process_statement(node.update)
         self.create_branch(header_label)
 
-        # Merge block
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
 
@@ -1147,7 +1043,6 @@ class VulkanSPIRVCodeGen:
         if expr is None:
             return None
 
-        # Literal values
         if isinstance(expr, bool):
             bool_type = self.register_primitive_type("bool")
             return self.register_constant(expr, bool_type)
@@ -1158,7 +1053,6 @@ class VulkanSPIRVCodeGen:
             float_type = self.register_primitive_type("float")
             return self.register_constant(expr, float_type)
 
-        # Variable references
         elif isinstance(expr, str):
             if expr in self.local_variables:
                 var_id = self.local_variables[expr]
@@ -1198,7 +1092,6 @@ class VulkanSPIRVCodeGen:
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-        # Variable node
         elif isinstance(expr, VariableNode):
             if expr.name in self.local_variables:
                 var_id = self.local_variables[expr.name]
@@ -1217,36 +1110,28 @@ class VulkanSPIRVCodeGen:
 
         # Array access
         elif isinstance(expr, ArrayAccessNode):
-            # Process the array and index expressions
             array = self.process_expression(expr.array)
             index = self.process_expression(expr.index)
 
             if array is None or index is None:
                 self.emit(f"; WARNING: Failed to evaluate array access")
-                # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-            # Use the improved element type detection
             element_type = self.determine_array_element_type(array)
 
             if element_type is None:
                 self.emit(
                     f"; WARNING: Could not determine array element type for {expr.array}"
                 )
-                # Default to float if we can't determine the element type
                 element_type = self.primitive_types["float"]
 
-            # Create pointer to element
             ptr_type = self.register_pointer_type(element_type, "Function")
 
-            # Create access chain
             access = self.access_chain(array, [index], ptr_type)
 
-            # Load value from array element
             return self.load_from_variable(access, element_type)
 
-        # Binary operations
         elif isinstance(expr, BinaryOpNode):
             left = self.process_expression(expr.left)
             right = self.process_expression(expr.right)
@@ -1263,7 +1148,6 @@ class VulkanSPIRVCodeGen:
                 expr.op, self.map_crossgl_type(result_type.base_type), left, right
             )
 
-        # Unary operations
         elif isinstance(expr, UnaryOpNode):
             operand = self.process_expression(expr.operand)
             if operand is None:
@@ -1273,7 +1157,6 @@ class VulkanSPIRVCodeGen:
 
             return self.unary_operation(expr.op, operand.type, operand)
 
-        # Function calls
         elif isinstance(expr, FunctionCallNode):
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = None
@@ -1321,13 +1204,11 @@ class VulkanSPIRVCodeGen:
 
             return self.call_function(callee_name, args)
 
-        # Member access
         elif isinstance(expr, MemberAccessNode):
             base = self.process_expression(expr.object)
             if base is None:
                 return None
 
-            # Find member index
             member_name = expr.member
             struct_type = base.type.base_type
 
@@ -1336,17 +1217,13 @@ class VulkanSPIRVCodeGen:
                     self.current_struct_members[struct_type]
                 ):
                     if name == member_name:
-                        # Create access chain
                         int_type = self.primitive_types["int"]
                         index = self.register_constant(i, int_type)
 
-                        # Create pointer to member
                         ptr_type = self.register_pointer_type(member_type, "Function")
 
-                        # Create access chain
                         access = self.access_chain(base, [index], ptr_type)
 
-                        # Load value from member
                         return self.load_from_variable(access, member_type)
 
             # Default handling if member not found
@@ -1355,7 +1232,6 @@ class VulkanSPIRVCodeGen:
             )
             return None
 
-        # Unknown expression type
         else:
             self.emit(f"; WARNING: Unknown expression type {type(expr).__name__}")
             return None
@@ -1364,21 +1240,16 @@ class VulkanSPIRVCodeGen:
         self, name: str, type_id: SpirvId, location: int, binding: int
     ) -> SpirvId:
         """Register an input variable with location decoration."""
-        # Create an Input pointer type
         ptr_type = self.register_pointer_type(type_id, "Input")
 
-        # Create the variable
         id_value = self.get_id()
         self.emit(f"%{id_value} = OpVariable %{ptr_type.id} Input")
 
-        # Add the location decoration
         self.decorations.append(f"OpDecorate %{id_value} Location {location}")
 
-        # Add the name
         if name:
             self.emit(f'OpName %{id_value} "{name}"')
 
-        # Create and return the ID
         spirv_id = SpirvId(id_value, ptr_type.type, name)
         return spirv_id
 
@@ -1386,21 +1257,16 @@ class VulkanSPIRVCodeGen:
         self, name: str, type_id: SpirvId, location: int, binding: int
     ) -> SpirvId:
         """Register an output variable with location decoration."""
-        # Create an Output pointer type
         ptr_type = self.register_pointer_type(type_id, "Output")
 
-        # Create the variable
         id_value = self.get_id()
         self.emit(f"%{id_value} = OpVariable %{ptr_type.id} Output")
 
-        # Add the location decoration
         self.decorations.append(f"OpDecorate %{id_value} Location {location}")
 
-        # Add the name
         if name:
             self.emit(f'OpName %{id_value} "{name}"')
 
-        # Create and return the ID
         spirv_id = SpirvId(id_value, ptr_type.type, name)
         return spirv_id
 
@@ -1415,13 +1281,11 @@ class VulkanSPIRVCodeGen:
         id_value = self.get_id()
 
         if size is not None:
-            # Fixed-size array
             size_const = self.register_constant(
                 size, self.register_primitive_type("int")
             )
             self.emit(f"%{id_value} = OpTypeArray %{element_type.id} %{size_const.id}")
         else:
-            # Runtime array
             self.emit(f"%{id_value} = OpTypeRuntimeArray %{element_type.id}")
 
         type_name = f"array_{element_type.type.base_type}_{size if size else 'rt'}"
@@ -1521,38 +1385,30 @@ class VulkanSPIRVCodeGen:
                 self.is_vertex_shader = True
                 break
 
-        # === Header section ===
         self.emit("; SPIR-V")
         self.emit("; Version: 1.0")
         self.emit("; Generator: CrossGL Vulkan SPIR-V Generator")
         self.emit("; Schema: 0")
 
-        # Capabilities and extensions
         self.emit("OpCapability Shader")
 
-        # Import GLSL.std450
         self.glsl_std450_id = self.get_id()
         self.emit(f'%{self.glsl_std450_id} = OpExtInstImport "GLSL.std.450"')
 
-        # Memory model
         self.emit("OpMemoryModel Logical GLSL450")
 
-        # Register primitive types
         self.register_primitive_type("void")
         self.register_primitive_type("bool")
         self.register_primitive_type("int")
         self.register_primitive_type("float")
 
-        # Register common vector types
         float_type = self.primitive_types["float"]
         for i in range(2, 5):
             self.register_vector_type(float_type, i)
 
-        # Process structs first
         for struct in ast.structs:
             self.process_crossgl_struct(struct)
 
-        # Process functions
         for func in ast.functions:
             # Handle both old and new AST structures for function qualifiers
             if hasattr(func, "qualifiers") and func.qualifiers:
@@ -1583,17 +1439,13 @@ class VulkanSPIRVCodeGen:
             if qualifier in ["vertex", "fragment"]:
                 self.process_function_node(func)
 
-        # === Entry point ===
         shader_stage = "Vertex" if self.is_vertex_shader else "Fragment"
         if self.main_fn_id:
             self.emit(f'OpEntryPoint {shader_stage} %{self.main_fn_id} "main"')
 
-        # Execution mode
         if not self.is_vertex_shader:
             self.emit("OpExecutionMode %main OriginUpperLeft")
 
-        # === Finalize ===
-        # Update bound with final ID count
         header_lines = self.code_lines[:3]
         bound_line = f"; Bound: {self.next_id}"
         rest_lines = self.code_lines[4:]

@@ -152,3 +152,16 @@ def test_backend_extension_is_available(backend):
     ext = codegen.get_backend_extension(backend)
     assert ext is not None
     assert ext.startswith(".")
+
+
+def test_translate_api_roundtrip(tmp_path):
+    """Verify the crosstl.translate() API works end-to-end with a CGL file."""
+    import crosstl
+
+    cgl_file = tmp_path / "test_shader.cgl"
+    cgl_file.write_text(SMOKE_SHADER, encoding="utf-8")
+
+    for backend in ["metal", "directx", "opengl"]:
+        output = crosstl.translate(str(cgl_file), backend=backend)
+        assert isinstance(output, str)
+        assert len(output) > 50, f"{backend} output too small: {len(output)}"

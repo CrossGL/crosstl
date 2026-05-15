@@ -5,103 +5,58 @@ use math::*;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MaterialProperties {
-  pub albedo : Vec3<f32>,
-               pub metallic : f32,
-                              pub roughness : f32,
-                                              pub ao : f32,
-                                                       pub emission
-      : Vec3<f32>,
-        pub normal_scale : f32,
-                           pub height_scale : f32,
-                                              pub has_albedo_map
-      : bool,
-        pub has_normal_map : bool,
-                             pub has_metallic_roughness_map : bool,
-                                                              pub has_ao_map
-      : bool,
-        pub has_emission_map : bool,
-                               pub has_height_map : bool,
+  pub albedo : Vec3<f32>, pub metallic : f32, pub roughness : f32, pub ao : f32,
+      pub emission : Vec3<f32>, pub normal_scale : f32, pub height_scale : f32,
+      pub has_albedo_map : bool, pub has_normal_map : bool,
+      pub has_metallic_roughness_map : bool, pub has_ao_map : bool,
+      pub has_emission_map : bool, pub has_height_map : bool,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct LightData {
-  pub position : Vec3<f32>,
-                 pub direction : Vec3<f32>,
-                                 pub color : Vec3<f32>,
-                                             pub intensity : f32,
-                                                             pub range
-      : f32,
-        pub inner_cone_angle : f32,
-                               pub outer_cone_angle : f32,
-                                                      pub type
-      : i32,
-        pub cast_shadows : bool,
-                           pub light_view_proj : mat4x4,
+  pub position : Vec3<f32>, pub direction : Vec3<f32>, pub color : Vec3<f32>,
+      pub intensity : f32, pub range : f32, pub inner_cone_angle : f32,
+      pub outer_cone_angle : f32, pub type : i32, pub cast_shadows : bool,
+      pub light_view_proj : mat4x4,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct EnvironmentData {
-  pub irradiance_map : TextureCube<f32>,
-                       pub prefilter_map : TextureCube<f32>,
-                                           pub brdf_lut : Texture2D<f32>,
-                                                          pub max_reflection_lod
-      : f32,
-        pub exposure : f32,
-                       pub ambient_color : Vec3<f32>,
+  pub irradiance_map : TextureCube<f32>, pub prefilter_map : TextureCube<f32>,
+      pub brdf_lut : Texture2D<f32>, pub max_reflection_lod : f32,
+      pub exposure : f32, pub ambient_color : Vec3<f32>,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CameraData {
-  pub position : Vec3<f32>,
-                 pub forward : Vec3<f32>,
-                               pub up : Vec3<f32>,
-                                        pub right : Vec3<f32>,
-                                                    pub view_matrix
-      : mat4x4,
-        pub projection_matrix : mat4x4,
-                                pub view_projection_matrix : mat4x4,
-                                                             pub near_plane
-      : f32,
-        pub far_plane : f32,
-                        pub fov : f32,
-                                  pub screen_size : Vec2<f32>,
+  pub position : Vec3<f32>, pub forward : Vec3<f32>, pub up : Vec3<f32>,
+      pub right : Vec3<f32>, pub view_matrix : mat4x4,
+      pub projection_matrix : mat4x4, pub view_projection_matrix : mat4x4,
+      pub near_plane : f32, pub far_plane : f32, pub fov : f32,
+      pub screen_size : Vec2<f32>,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct RenderSettings {
-  pub enable_ibl : bool,
-                   pub enable_shadows : bool,
-                                        pub enable_normal_mapping
-      : bool,
-        pub enable_parallax_mapping : bool,
-                                      pub enable_tone_mapping
-      : bool,
-        pub enable_gamma_correction : bool,
-                                      pub shadow_cascade_count : i32,
-                                                                 pub shadow_bias
-      : f32,
-        pub max_lights : i32,
-                         pub lod_bias : f32,
+  pub enable_ibl : bool, pub enable_shadows : bool,
+      pub enable_normal_mapping : bool, pub enable_parallax_mapping : bool,
+      pub enable_tone_mapping : bool, pub enable_gamma_correction : bool,
+      pub shadow_cascade_count : i32, pub shadow_bias : f32,
+      pub max_lights : i32, pub lod_bias : f32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct VertexOutput {
-  pub clip_position : Vec4<f32>,
-                      pub world_position : Vec3<f32>,
-                                           pub world_normal : Vec3<f32>,
-                                                              pub world_tangent
-      : Vec3<f32>,
-        pub world_bitangent : Vec3<f32>,
-                              pub uv : Vec2<f32>,
-                                       pub color : Vec4<f32>,
-                                                   pub tbn_matrix
-      : mat3x3,
-        pub shadow_coords : vec4IdentifierNode(name = MAX_SHADOW_CASCADES),
+  pub clip_position : Vec4<f32>, pub world_position : Vec3<f32>,
+      pub world_normal : Vec3<f32>, pub world_tangent : Vec3<f32>,
+      pub world_bitangent : Vec3<f32>, pub uv : Vec2<f32>,
+      pub color : Vec4<f32>, pub tbn_matrix : mat3x3,
+      pub shadow_coords : vec4IdentifierNode(name = MAX_SHADOW_CASCADES),
 }
 
 static model_matrix : mat4x4 = Default::default();
@@ -130,14 +85,14 @@ static active_light_count : i32 = Default::default();
 pub fn getNormalFromMap(normal_map : Texture2D<f32>, uv : Vec2<f32>,
                         tbn : mat3x3, scale : f32) -> Vec3<f32> {
   let mut tangent_normal : Vec3<f32> =
-                               ((sample(normal_map, uv).xyz * 2.0) - 1.0);
+                               ((texture(normal_map, uv).xyz * 2.0) - 1.0);
   tangent_normal.xy *= scale;
   return normalize((tbn * tangent_normal));
 }
 
 pub fn parallaxMapping(height_map : Texture2D<f32>, uv : Vec2<f32>,
                        view_dir : Vec3<f32>, height_scale : f32) -> Vec2<f32> {
-  let mut height : f32 = sample(height_map, uv).r;
+  let mut height : f32 = texture(height_map, uv).r;
   let mut p : Vec2<f32> =
                   ((view_dir.xy / view_dir.z) * (height * height_scale));
   return (uv - p);
@@ -198,8 +153,8 @@ pub fn calculateShadow(shadow_map : Texture2D<f32>,
     while (y <= 1) {
       let mut pcf_depth
           : f32 =
-                sample(shadow_map,
-                       (proj_coords.xy + (Vec2<f32>::new (x, y) * texel_size)))
+                texture(shadow_map,
+                        (proj_coords.xy + (Vec2<f32>::new (x, y) * texel_size)))
                     .r;
       shadow += (if ((proj_coords.z - bias) > pcf_depth){1.0} else {0.0});
       (++y);
@@ -212,13 +167,13 @@ pub fn calculateShadow(shadow_map : Texture2D<f32>,
 pub fn calculateIBL(N : Vec3<f32>, V : Vec3<f32>, albedo : Vec3<f32>,
                     metallic : f32, roughness : f32, env : EnvironmentData)
     -> Vec3<f32> {
-  let mut F0 : Vec3<f32> = lerp(Vec3<f32>::new (0.04), albedo, metallic);
+  let mut F0 : Vec3<f32> = mix(Vec3<f32>::new (0.04), albedo, metallic);
   let mut F : Vec3<f32> =
                   fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
   let mut kS : Vec3<f32> = F;
   let mut kD : Vec3<f32> = (1.0 - kS);
   kD *= (1.0 - metallic);
-  let mut irradiance : Vec3<f32> = sample(env.irradiance_map, N).rgb;
+  let mut irradiance : Vec3<f32> = texture(env.irradiance_map, N).rgb;
   let mut diffuse : Vec3<f32> = (irradiance * albedo);
   let mut R : Vec3<f32> = reflect((-V), N);
   let mut prefiltered_color
@@ -226,8 +181,8 @@ pub fn calculateIBL(N : Vec3<f32>, V : Vec3<f32>, albedo : Vec3<f32>,
                                (roughness * env.max_reflection_lod))
                         .rgb;
   let mut brdf : Vec2<f32> =
-                     sample(env.brdf_lut,
-                            Vec2<f32>::new (max(dot(N, V), 0.0), roughness))
+                     texture(env.brdf_lut,
+                             Vec2<f32>::new (max(dot(N, V), 0.0), roughness))
                          .rg;
   let mut specular : Vec3<f32> = (prefiltered_color * ((F * brdf.x) + brdf.y));
   return (((kD * diffuse) + specular) * env.exposure);
@@ -238,7 +193,7 @@ pub fn calculateDirectLighting(N : Vec3<f32>, V : Vec3<f32>, L : Vec3<f32>,
                                roughness : f32, light_color : Vec3<f32>)
     -> Vec3<f32> {
   let mut H : Vec3<f32> = normalize((V + L));
-  let mut F0 : Vec3<f32> = lerp(Vec3<f32>::new (0.04), albedo, metallic);
+  let mut F0 : Vec3<f32> = mix(Vec3<f32>::new (0.04), albedo, metallic);
   let mut NDF : f32 = distributionGGX(N, H, roughness);
   let mut G : f32 = geometrySmith(N, V, L, roughness);
   let mut F : Vec3<f32> = fresnelSchlick(max(dot(H, V), 0.0), F0);
@@ -330,22 +285,22 @@ pub fn main(input : FragmentInput) -> Vec4<f32> {
   }
   let mut albedo : Vec3<f32> = material.albedo;
   if material
-    .has_albedo_map { albedo *= sample(albedo_map, uv).rgb; }
+    .has_albedo_map { albedo *= texture(albedo_map, uv).rgb; }
   albedo *= input.color.rgb;
   let mut metallic : f32 = material.metallic;
   let mut roughness : f32 = material.roughness;
   if material
     .has_metallic_roughness_map {
-      let mut mr_sample : Vec3<f32> = sample(metallic_roughness_map, uv).rgb;
+      let mut mr_sample : Vec3<f32> = texture(metallic_roughness_map, uv).rgb;
       metallic *= mr_sample.b;
       roughness *= mr_sample.g;
     }
   let mut ao : f32 = material.ao;
   if material
-    .has_ao_map { ao *= sample(ao_map, uv).r; }
+    .has_ao_map { ao *= texture(ao_map, uv).r; }
   let mut emission : Vec3<f32> = material.emission;
   if material
-    .has_emission_map { emission *= sample(emission_map, uv).rgb; }
+    .has_emission_map { emission *= texture(emission_map, uv).rgb; }
   let mut N : Vec3<f32> = normalize(input.world_normal);
   if (settings.enable_normal_mapping && material.has_normal_map) {
     N = getNormalFromMap(normal_map, uv, input.tbn_matrix,
@@ -433,8 +388,8 @@ pub fn precompute_environment() -> () {
           : Vec3<f32> =
                 (((tangent_sample.x * right) + (tangent_sample.y * up)) +
                  (tangent_sample.z * N));
-      irradiance +=
-          ((sample(environment_map, sample_vec).rgb * cos(theta)) * sin(theta));
+      irradiance += ((texture(environment_map, sample_vec).rgb * cos(theta)) *
+                     sin(theta));
       (++sample_count);
       theta += 0.025;
     }

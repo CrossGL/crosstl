@@ -38,7 +38,7 @@ __device__ VertexOutput main(VertexInput input) {
   float scale = (values[0] + values[1]);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) position = (input.position * scale);
-  output.position = IdentifierNode(name = vec4)(position, 1.0);
+  output.position = make_float4(position, 1.0);
   return output;
 }
 
@@ -49,6 +49,6 @@ __device__ FragmentOutput main(FragmentInput input) {
   if ((input.uv.x > 0.5)) {
     color = colors[1];
   }
-  output.color = IdentifierNode(name = vec4)(color, 1.0);
+  output.color = make_float4(color, 1.0);
   return output;
 }

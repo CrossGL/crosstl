@@ -55,35 +55,27 @@ class RustParser:
 
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "USE":
-                # Handle use statement
                 u = self.parse_use_statement()
                 use_statements.append(u)
             elif self.current_token[0] == "STRUCT":
-                # Handle struct definition
                 s = self.parse_struct()
                 structs.append(s)
             elif self.current_token[0] == "IMPL":
-                # Handle impl block
                 i = self.parse_impl_block()
                 impl_blocks.append(i)
             elif self.current_token[0] == "TRAIT":
-                # Handle trait definition
                 t = self.parse_trait()
                 traits.append(t)
             elif self.current_token[0] == "FN":
-                # Handle function definition
                 f = self.parse_function()
                 functions.append(f)
             elif self.current_token[0] == "CONST":
-                # Handle const declaration
                 c = self.parse_const()
                 global_variables.append(c)
             elif self.current_token[0] == "STATIC":
-                # Handle static declaration
                 s = self.parse_static()
                 global_variables.append(s)
             elif self.current_token[0] == "PUB":
-                # Handle public items
                 visibility = "pub"
                 self.eat("PUB")
 
@@ -108,7 +100,6 @@ class RustParser:
                 else:
                     self.eat(self.current_token[0])
             elif self.current_token[0] == "POUND":
-                # Handle attributes
                 attrs = self.parse_attributes()
                 # The next item should use these attributes
                 if self.current_token[0] == "STRUCT":
@@ -159,17 +150,14 @@ class RustParser:
         self.eat("USE")
         path = []
 
-        # Parse the use path
         path.append(self.current_token[1])
         self.eat("IDENTIFIER")
 
         while self.current_token[0] == "DOUBLE_COLON":
             self.eat("DOUBLE_COLON")
-            # Handle glob imports (use module::*)
             if self.current_token[0] == "MULTIPLY":
                 path.append("*")
                 self.eat("MULTIPLY")
-            # Handle braced imports (use module::{item1, item2})
             elif self.current_token[0] == "LBRACE":
                 self.eat("LBRACE")
                 items = []
@@ -187,7 +175,6 @@ class RustParser:
             else:
                 path.append(self.current_token[1])
                 self.eat("IDENTIFIER")
-        # Handle alias
         alias = None
         if self.current_token[0] == "AS":
             self.eat("AS")
@@ -226,7 +213,6 @@ class RustParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        # Handle generics
         generics = []
         if self.current_token[0] == "LESS_THAN":
             generics = self.parse_generics()
@@ -235,7 +221,6 @@ class RustParser:
 
         members = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            # Parse member attributes
             member_attrs = []
             if self.current_token[0] == "POUND":
                 member_attrs = self.parse_attributes()
@@ -243,30 +228,23 @@ class RustParser:
             if self.current_token[0] == "PUB":
                 self.eat("PUB")
 
-            # Parse member name
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
             self.eat("COLON")
 
-            # Parse member type
             member_type = self.parse_type()
 
             var = VariableNode(member_type, member_name, attributes=member_attrs)
             members.append(var)
 
-            # Handle comma and potential continuation on the same line
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
 
-                # Check if there's another member on the same line
                 if self.current_token[0] == "PUB":
-                    # Continue parsing the next member without breaking the loop
                     continue
                 elif self.current_token[0] == "IDENTIFIER":
-                    # Direct member without pub keyword
                     continue
-                # If comma is followed by something else, just continue
 
         self.eat("RBRACE")
 
@@ -275,18 +253,15 @@ class RustParser:
     def parse_impl_block(self):
         self.eat("IMPL")
 
-        # Handle generics
         generics = []
         if self.current_token[0] == "LESS_THAN":
             generics = self.parse_generics()
 
-        # Handle trait implementation
         trait_name = None
         struct_name = self.current_token[1]
         self.eat("IDENTIFIER")
 
         if self.current_token[0] == "FOR":
-            # This is a trait implementation
             trait_name = struct_name
             self.eat("FOR")
             struct_name = self.current_token[1]
@@ -323,7 +298,6 @@ class RustParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        # Handle generics
         generics = []
         if self.current_token[0] == "LESS_THAN":
             generics = self.parse_generics()
@@ -363,7 +337,6 @@ class RustParser:
         type_parts = []
 
         if self.current_token[0] == "AMPERSAND":
-            # Reference type
             self.eat("AMPERSAND")
             if self.current_token[0] == "MUT":
                 self.eat("MUT")
@@ -371,11 +344,9 @@ class RustParser:
             else:
                 type_parts.append("&")
 
-        # Basic type
         type_parts.append(self.current_token[1])
         self.eat(self.current_token[0])
 
-        # Handle generic types
         if self.current_token[0] == "LESS_THAN":
             type_parts.append("<")
             self.eat("LESS_THAN")
@@ -387,7 +358,6 @@ class RustParser:
             type_parts.append(">")
             self.eat("GREATER_THAN")
 
-        # Handle array types
         if self.current_token[0] == "LBRACKET":
             type_parts.append("[")
             self.eat("LBRACKET")
@@ -460,24 +430,20 @@ class RustParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        # Handle generics
         generics = []
         if self.current_token[0] == "LESS_THAN":
             generics = self.parse_generics()
 
         params = self.parse_parameters()
 
-        # Parse return type
-        return_type = "()"  # Default unit type
+        return_type = "()"
         if self.current_token[0] == "ARROW":
             self.eat("ARROW")
             return_type = self.parse_type()
 
-        # Parse optional WHERE clause
         if self.current_token[0] == "WHERE":
             self.parse_where_clause()
 
-        # Parse function body
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
@@ -492,15 +458,13 @@ class RustParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        # Handle generics
         generics = []
         if self.current_token[0] == "LESS_THAN":
             generics = self.parse_generics()
 
         params = self.parse_parameters()
 
-        # Parse return type
-        return_type = "()"  # Default unit type
+        return_type = "()"
         if self.current_token[0] == "ARROW":
             self.eat("ARROW")
             return_type = self.parse_type()
@@ -514,14 +478,12 @@ class RustParser:
 
         params = []
         if self.current_token[0] != "RPAREN":
-            # Handle self parameter
             if self.current_token[0] == "SELF":
                 params.append(VariableNode("Self", "self"))
                 self.eat("SELF")
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
             elif self.current_token[0] == "AMPERSAND":
-                # &self or &mut self
                 self.eat("AMPERSAND")
                 if self.current_token[0] == "MUT":
                     self.eat("MUT")
@@ -532,14 +494,11 @@ class RustParser:
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
 
-            # Parse regular parameters
             while self.current_token[0] != "RPAREN":
-                # Parse parameter attributes
                 param_attrs = []
                 while self.current_token[0] == "POUND":
                     param_attrs.extend(self.parse_attributes())
 
-                # Handle mut keyword
                 is_mutable = False
                 if self.current_token[0] == "MUT":
                     is_mutable = True
@@ -597,92 +556,75 @@ class RustParser:
         statements = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            try:
-                # Let binding
-                if self.current_token[0] == "LET":
-                    stmt = self.parse_let_statement()
-                    statements.append(stmt)
-                # Assignment or expression
-                elif self.current_token[0] == "IDENTIFIER" or self.current_token[0] in [
-                    "VEC2",
-                    "VEC3",
-                    "VEC4",
-                    "MAT2",
-                    "MAT3",
-                    "MAT4",
-                ]:
-                    left = self.parse_expression()
+            if self.current_token[0] == "LET":
+                stmt = self.parse_let_statement()
+                statements.append(stmt)
+            elif self.current_token[0] == "IDENTIFIER" or self.current_token[0] in [
+                "VEC2",
+                "VEC3",
+                "VEC4",
+                "MAT2",
+                "MAT3",
+                "MAT4",
+            ]:
+                left = self.parse_expression()
 
-                    if self.current_token[0] in [
-                        "EQUALS",
-                        "PLUS_EQUALS",
-                        "MINUS_EQUALS",
-                        "MULTIPLY_EQUALS",
-                        "DIVIDE_EQUALS",
-                        "MOD_EQUALS",
-                    ]:
-                        op = self.current_token[1]
-                        self.eat(self.current_token[0])
-                        right = self.parse_expression()
+                if self.current_token[0] in [
+                    "EQUALS",
+                    "PLUS_EQUALS",
+                    "MINUS_EQUALS",
+                    "MULTIPLY_EQUALS",
+                    "DIVIDE_EQUALS",
+                    "MOD_EQUALS",
+                ]:
+                    op = self.current_token[1]
+                    self.eat(self.current_token[0])
+                    right = self.parse_expression()
+                    self.eat("SEMICOLON")
+                    statements.append(AssignmentNode(left, right, op))
+                else:
+                    if self.current_token[0] == "SEMICOLON":
                         self.eat("SEMICOLON")
-                        statements.append(AssignmentNode(left, right, op))
-                    else:
-                        # Expression statement
-                        if self.current_token[0] == "SEMICOLON":
-                            self.eat("SEMICOLON")
-                        statements.append(left)
-                # Return statement
-                elif self.current_token[0] == "RETURN":
-                    self.eat("RETURN")
-                    value = None
-                    if self.current_token[0] != "SEMICOLON":
-                        value = self.parse_expression()
-                    self.eat("SEMICOLON")
-                    statements.append(ReturnNode(value))
-                # Break statement
-                elif self.current_token[0] == "BREAK":
-                    self.eat("BREAK")
-                    label = None
-                    value = None
-                    if self.current_token[0] != "SEMICOLON":
-                        # Could be label or value
-                        if self.current_token[0] == "IDENTIFIER":
-                            label = self.current_token[1]
-                            self.eat("IDENTIFIER")
-                    self.eat("SEMICOLON")
-                    statements.append(BreakNode(label, value))
-                # Continue statement
-                elif self.current_token[0] == "CONTINUE":
-                    self.eat("CONTINUE")
-                    label = None
+                    statements.append(left)
+            elif self.current_token[0] == "RETURN":
+                self.eat("RETURN")
+                value = None
+                if self.current_token[0] != "SEMICOLON":
+                    value = self.parse_expression()
+                self.eat("SEMICOLON")
+                statements.append(ReturnNode(value))
+            elif self.current_token[0] == "BREAK":
+                self.eat("BREAK")
+                label = None
+                value = None
+                if self.current_token[0] != "SEMICOLON":
                     if self.current_token[0] == "IDENTIFIER":
                         label = self.current_token[1]
                         self.eat("IDENTIFIER")
-                    self.eat("SEMICOLON")
-                    statements.append(ContinueNode(label))
-                # If statement
-                elif self.current_token[0] == "IF":
-                    statements.append(self.parse_if_statement())
-                # Match statement
-                elif self.current_token[0] == "MATCH":
-                    statements.append(self.parse_match_statement())
-                # For loop
-                elif self.current_token[0] == "FOR":
-                    statements.append(self.parse_for_loop())
-                # While loop
-                elif self.current_token[0] == "WHILE":
-                    statements.append(self.parse_while_loop())
-                # Loop
-                elif self.current_token[0] == "LOOP":
-                    statements.append(self.parse_loop())
-                else:
-                    if self.current_token[0] == "EOF":
-                        break
-                    self.eat(self.current_token[0])
-            except SyntaxError:
-                self.skip_until("SEMICOLON")
-                if self.current_token[0] == "SEMICOLON":
-                    self.eat("SEMICOLON")
+                self.eat("SEMICOLON")
+                statements.append(BreakNode(label, value))
+            elif self.current_token[0] == "CONTINUE":
+                self.eat("CONTINUE")
+                label = None
+                if self.current_token[0] == "IDENTIFIER":
+                    label = self.current_token[1]
+                    self.eat("IDENTIFIER")
+                self.eat("SEMICOLON")
+                statements.append(ContinueNode(label))
+            elif self.current_token[0] == "IF":
+                statements.append(self.parse_if_statement())
+            elif self.current_token[0] == "MATCH":
+                statements.append(self.parse_match_statement())
+            elif self.current_token[0] == "FOR":
+                statements.append(self.parse_for_loop())
+            elif self.current_token[0] == "WHILE":
+                statements.append(self.parse_while_loop())
+            elif self.current_token[0] == "LOOP":
+                statements.append(self.parse_loop())
+            else:
+                if self.current_token[0] == "EOF":
+                    break
+                self.eat(self.current_token[0])
 
         return statements
 
@@ -697,13 +639,11 @@ class RustParser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        # Optional type annotation
         var_type = None
         if self.current_token[0] == "COLON":
             self.eat("COLON")
             var_type = self.parse_type()
 
-        # Optional initialization
         value = None
         if self.current_token[0] == "EQUALS":
             self.eat("EQUALS")
@@ -724,7 +664,6 @@ class RustParser:
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             if self.current_token[0] == "IF":
-                # else if
                 else_body = [self.parse_if_statement()]
             else:
                 # else block
@@ -742,7 +681,6 @@ class RustParser:
         arms = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            # Parse pattern - handle different pattern types
             if self.current_token[0] == "UNDERSCORE":
                 pattern = "_"
                 self.eat("UNDERSCORE")
@@ -759,7 +697,6 @@ class RustParser:
                 # Fall back to full expression parsing for complex patterns
                 pattern = self.parse_expression()
 
-            # Optional guard
             guard = None
             if self.current_token[0] == "IF":
                 self.eat("IF")
@@ -767,19 +704,15 @@ class RustParser:
 
             self.eat("FAT_ARROW")
 
-            # Parse arm body
             if self.current_token[0] == "LBRACE":
                 self.eat("LBRACE")
                 body = self.parse_block()
                 self.eat("RBRACE")
             else:
-                # Single expression
                 body = [self.parse_expression()]
-                # Handle optional semicolon after expression
                 if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
 
-            # Handle optional trailing comma
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
 
@@ -936,7 +869,6 @@ class RustParser:
             op = self.current_token[1]
             self.eat(self.current_token[0])
 
-            # Handle references specially
             if op == "&":
                 is_mutable = False
                 if self.current_token[0] == "MUT":
@@ -968,7 +900,6 @@ class RustParser:
                 self.eat("RBRACKET")
                 left = ArrayAccessNode(left, index)
             elif self.current_token[0] == "EXCLAMATION":
-                # Macro call (identifier!)
                 self.eat("EXCLAMATION")
                 self.eat("LPAREN")
                 args = []
@@ -982,7 +913,6 @@ class RustParser:
                 # Treat macro calls as function calls for code generation
                 left = FunctionCallNode(left, args)
             elif self.current_token[0] == "LPAREN":
-                # Function call
                 self.eat("LPAREN")
                 args = []
                 while self.current_token[0] != "RPAREN":
@@ -1003,13 +933,11 @@ class RustParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            # Check for associated function call (Type::function)
             if self.current_token[0] == "DOUBLE_COLON":
                 self.eat("DOUBLE_COLON")
                 function_name = self.current_token[1]
                 self.eat("IDENTIFIER")
 
-                # Must be followed by function call parentheses
                 if self.current_token[0] == "LPAREN":
                     self.eat("LPAREN")
                     args = []
@@ -1020,18 +948,15 @@ class RustParser:
                         else:
                             break
                     self.eat("RPAREN")
-                    # Return as a function call with qualified name
                     return FunctionCallNode(f"{name}::{function_name}", args)
                 else:
                     # Path without function call (e.g., Type::CONSTANT)
                     return f"{name}::{function_name}"
 
-            # Check for struct initialization: Name { ... }
             # Only if this identifier is likely a struct constructor (starts with uppercase)
             if self.current_token[0] == "LBRACE" and name[0].isupper():
                 return self.parse_struct_initialization(name)
 
-            # Check for vector constructor syntax
             if (
                 name in ["Vec2", "Vec3", "Vec4", "Mat2", "Mat3", "Mat4"]
                 and self.current_token[0] == "LPAREN"
@@ -1049,11 +974,9 @@ class RustParser:
 
             return name
         elif self.current_token[0] in ["VEC2", "VEC3", "VEC4", "MAT2", "MAT3", "MAT4"]:
-            # Handle vector types that are tokenized as specific tokens
             name = self.current_token[1]
             self.eat(self.current_token[0])
 
-            # Check for constructor syntax (::new)
             if self.current_token[0] == "DOUBLE_COLON":
                 self.eat("DOUBLE_COLON")
                 if (
@@ -1097,16 +1020,13 @@ class RustParser:
 
             return name
         elif self.current_token[0] == "LPAREN":
-            # Parenthesized expression or tuple
             self.eat("LPAREN")
             if self.current_token[0] == "RPAREN":
-                # Unit type ()
                 self.eat("RPAREN")
                 return "()"
 
             expr = self.parse_expression()
 
-            # Check if it's a tuple
             if self.current_token[0] == "COMMA":
                 elements = [expr]
                 while self.current_token[0] == "COMMA":
@@ -1119,7 +1039,6 @@ class RustParser:
                 self.eat("RPAREN")
                 return expr
         elif self.current_token[0] == "LBRACKET":
-            # Array literal
             self.eat("LBRACKET")
             elements = []
             while self.current_token[0] != "RBRACKET":
@@ -1131,7 +1050,6 @@ class RustParser:
             self.eat("RBRACKET")
             return ArrayNode(elements)
         elif self.current_token[0] == "LBRACE":
-            # Block expression
             self.eat("LBRACE")
             statements = []
             expression = None
@@ -1153,7 +1071,6 @@ class RustParser:
             )
 
     def peek_is_statement(self):
-        # Helper to determine if we're parsing a statement vs expression
         return self.current_token[0] in [
             "LET",
             "IF",
@@ -1191,7 +1108,6 @@ class RustParser:
             label = None
             value = None
             if self.current_token[0] != "SEMICOLON":
-                # Could be label or value
                 if self.current_token[0] == "IDENTIFIER":
                     label = self.current_token[1]
                     self.eat("IDENTIFIER")
@@ -1206,7 +1122,6 @@ class RustParser:
             self.eat("SEMICOLON")
             return ContinueNode(label)
         else:
-            # Expression statement
             expr = self.parse_expression()
             self.eat("SEMICOLON")
             return expr

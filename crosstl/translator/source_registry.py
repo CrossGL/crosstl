@@ -22,12 +22,20 @@ def _normalize_extension(ext: str) -> str:
 
 
 def _extract_tokens(lexer) -> Any:
-    if hasattr(lexer, "tokenize"):
-        return lexer.tokenize()
-    if hasattr(lexer, "get_tokens"):
-        return lexer.get_tokens()
-    if hasattr(lexer, "tokens"):
+    if hasattr(lexer, "tokens") and lexer.tokens:
         return lexer.tokens
+    if hasattr(lexer, "tokenize"):
+        result = lexer.tokenize()
+        if result is not None:
+            return result
+        if hasattr(lexer, "tokens") and lexer.tokens:
+            return lexer.tokens
+    if hasattr(lexer, "get_tokens"):
+        result = lexer.get_tokens()
+        if result is not None:
+            return result
+    if hasattr(lexer, "token_generator"):
+        return list(lexer.token_generator())
     raise ValueError(f"Unsupported lexer interface: {type(lexer)}")
 
 

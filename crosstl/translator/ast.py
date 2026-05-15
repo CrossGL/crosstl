@@ -6,22 +6,19 @@ class ASTNode:
     """Base class for all AST nodes with common functionality."""
 
     def __init__(self, source_location=None, annotations=None):
-        self.source_location = source_location  # For error reporting
-        self.annotations = annotations or {}  # For backend-specific metadata
-        self.parent = None  # Parent node reference
+        self.source_location = source_location
+        self.annotations = annotations or {}
+        self.parent = None
 
     def accept(self, visitor):
-        """Visitor pattern support for AST traversal."""
         method_name = f"visit_{self.__class__.__name__}"
         method = getattr(visitor, method_name, visitor.generic_visit)
         return method(self)
 
     def add_annotation(self, key: str, value: Any):
-        """Add backend-specific annotation."""
         self.annotations[key] = value
 
     def get_annotation(self, key: str, default=None):
-        """Get backend-specific annotation."""
         return self.annotations.get(key, default)
 
 
@@ -39,8 +36,8 @@ class PrimitiveType(TypeNode):
 
     def __init__(self, name: str, size_bits: Optional[int] = None, **kwargs):
         super().__init__(**kwargs)
-        self.name = name  # int, float, double, bool, void
-        self.size_bits = size_bits  # 8, 16, 32, 64 for sized types
+        self.name = name
+        self.size_bits = size_bits
 
     def __repr__(self):
         return f"PrimitiveType(name={self.name}, size_bits={self.size_bits})"
@@ -52,7 +49,7 @@ class VectorType(TypeNode):
     def __init__(self, element_type: TypeNode, size: int, **kwargs):
         super().__init__(**kwargs)
         self.element_type = element_type
-        self.size = size  # 2, 3, 4
+        self.size = size
 
     def __repr__(self):
         return f"VectorType(element_type={self.element_type}, size={self.size})"
@@ -83,7 +80,6 @@ class ArrayType(TypeNode):
         super().__init__(**kwargs)
         self.element_type = element_type
         self.size = size  # None for dynamic arrays, int or expression for static
-
     def __repr__(self):
         return f"ArrayType(element_type={self.element_type}, size={self.size})"
 
@@ -130,7 +126,7 @@ class GenericType(TypeNode):
     def __init__(self, name: str, constraints: List[TypeNode] = None, **kwargs):
         super().__init__(**kwargs)
         self.name = name
-        self.constraints = constraints or []  # Type constraints/bounds
+        self.constraints = constraints or []
 
     def __repr__(self):
         return f"GenericType(name={self.name}, constraints={self.constraints})"
@@ -231,9 +227,7 @@ class StageNode(ASTNode):
         self.entry_point = entry_point
         self.local_variables = local_variables or []
         self.local_functions = local_functions or []
-        self.execution_config = (
-            execution_config or {}
-        )  # For compute workgroup size, etc.
+        self.execution_config = execution_config or {}
 
     def __repr__(self):
         return f"StageNode(stage={self.stage}, entry_point={self.entry_point.name})"
@@ -248,7 +242,7 @@ class ImportNode(ASTNode):
         super().__init__(**kwargs)
         self.path = path
         self.alias = alias
-        self.items = items  # For selective imports
+        self.items = items
 
     def __repr__(self):
         return f"ImportNode(path={self.path}, alias={self.alias}, items={self.items})"
@@ -289,7 +283,7 @@ class StructNode(ASTNode):
         self.members = members
         self.generic_params = generic_params or []
         self.attributes = attributes or []
-        self.inheritance = inheritance or []  # Base classes/traits
+        self.inheritance = inheritance or []
         self.visibility = visibility
 
     def __repr__(self):
@@ -353,7 +347,7 @@ class EnumVariantNode(ASTNode):
         super().__init__(**kwargs)
         self.name = name
         self.value = value
-        self.fields = fields or []  # For tagged unions
+        self.fields = fields or []
 
     def __repr__(self):
         return f"EnumVariantNode(name={self.name})"
@@ -384,7 +378,7 @@ class FunctionNode(ASTNode):
         self.generic_params = generic_params or []
         self.attributes = attributes or []
         self.visibility = visibility
-        self.qualifiers = qualifiers or []  # __global__, __device__, inline, etc.
+        self.qualifiers = qualifiers or []
         self.is_unsafe = is_unsafe
         self.is_async = is_async
 
@@ -434,16 +428,15 @@ class VariableNode(ASTNode):
         self.var_type = var_type
         self.initial_value = initial_value
         self.attributes = attributes or []
-        self.qualifiers = qualifiers or []  # const, volatile, __shared__, etc.
+        self.qualifiers = qualifiers or []
         self.is_mutable = is_mutable
         self.visibility = visibility
 
-        # Legacy compatibility
+        # Legacy aliases
         self.vtype = var_type
         self.semantic = self.get_semantic_from_attributes()
 
     def get_semantic_from_attributes(self):
-        """Extract semantic information from attributes for legacy compatibility."""
         for attr in self.attributes:
             if attr.name in ["position", "color", "texcoord", "normal"]:
                 return attr.name
@@ -551,7 +544,7 @@ class AssignmentNode(StatementNode):
         self.value = value
         self.operator = operator
 
-        # Legacy compatibility
+        # Legacy aliases
         self.left = target
         self.right = value
 
@@ -574,7 +567,7 @@ class IfNode(StatementNode):
         self.then_branch = then_branch
         self.else_branch = else_branch
 
-        # Legacy compatibility
+        # Legacy aliases
         self.if_condition = condition
         self.if_body = then_branch
         self.else_if_conditions = []
@@ -754,9 +747,9 @@ class ExpressionNode(ASTNode):
 
     def __init__(self, expression_type: Optional[TypeNode] = None, **kwargs):
         super().__init__(**kwargs)
-        self.expression_type = expression_type  # Type of the expression result
+        self.expression_type = expression_type
 
-        # Legacy compatibility for code generators that expect these
+        # These legacy aliases are read by old code generators.
         self.vtype = expression_type
         self.name = getattr(self, "identifier", None)
         self.semantic = None
@@ -780,7 +773,7 @@ class IdentifierNode(ExpressionNode):
     def __init__(self, name: str, **kwargs):
         super().__init__(**kwargs)
         self.identifier = name
-        self.name = name  # Legacy compatibility
+        self.name = name
 
     def __repr__(self):
         return f"IdentifierNode(name={self.identifier})"
@@ -796,7 +789,7 @@ class BinaryOpNode(ExpressionNode):
         self.left = left
         self.operator = operator
         self.right = right
-        self.op = operator  # Legacy compatibility
+        self.op = operator
 
     def __repr__(self):
         return f"BinaryOpNode(left={self.left}, operator={self.operator}, right={self.right})"
@@ -812,7 +805,7 @@ class UnaryOpNode(ExpressionNode):
         self.operator = operator
         self.operand = operand
         self.is_postfix = is_postfix
-        self.op = operator  # Legacy compatibility
+        self.op = operator
 
     def __repr__(self):
         return f"UnaryOpNode(operator={self.operator}, operand={self.operand}, is_postfix={self.is_postfix})"
@@ -852,7 +845,7 @@ class FunctionCallNode(ExpressionNode):
         self.arguments = arguments
         self.generic_args = generic_args or []
 
-        # Legacy compatibility
+        # These legacy aliases are read by old code generators.
         self.name = function
         self.args = arguments
 
@@ -868,7 +861,6 @@ class MemberAccessNode(ExpressionNode):
         self.object_expr = object_expr
         self.member = member
 
-        # Legacy compatibility
         self.object = object_expr
 
     def __repr__(self):
@@ -897,7 +889,6 @@ class ArrayAccessNode(ExpressionNode):
         self.array_expr = array_expr
         self.index_expr = index_expr
 
-        # Legacy compatibility
         self.array = array_expr
         self.index = index_expr
 
@@ -911,7 +902,7 @@ class SwizzleNode(ExpressionNode):
     def __init__(self, vector_expr: ExpressionNode, components: str, **kwargs):
         super().__init__(**kwargs)
         self.vector_expr = vector_expr
-        self.components = components  # "xyz", "xxy", etc.
+        self.components = components
 
     def __repr__(self):
         return f"SwizzleNode(vector={self.vector_expr}, components={self.components})"
@@ -961,7 +952,7 @@ class LambdaNode(ExpressionNode):
         super().__init__(**kwargs)
         self.parameters = parameters
         self.body = body
-        self.captures = captures or []  # Captured variables
+        self.captures = captures or []
 
     def __repr__(self):
         return f"LambdaNode(parameters={len(self.parameters)})"
@@ -1081,7 +1072,7 @@ class AtomicOpNode(ExpressionNode):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.operation = operation  # atomicAdd, atomicCAS, etc.
+        self.operation = operation
         self.target = target
         self.arguments = arguments
 
@@ -1096,7 +1087,7 @@ class SyncNode(StatementNode):
         self, sync_type: str, arguments: List[ExpressionNode] = None, **kwargs
     ):
         super().__init__(**kwargs)
-        self.sync_type = sync_type  # __syncthreads, barrier, etc.
+        self.sync_type = sync_type
         self.arguments = arguments or []
 
     def __repr__(self):
@@ -1137,7 +1128,7 @@ class BufferNode(ASTNode):
         self.buffer_type = buffer_type
         self.binding = binding
         self.set = set_
-        self.access = access  # read, write, read_write
+        self.access = access
 
     def __repr__(self):
         return f"BufferNode(name={self.name}, buffer_type={self.buffer_type})"
@@ -1157,7 +1148,7 @@ class TextureResourceNode(ASTNode):
     ):
         super().__init__(**kwargs)
         self.name = name
-        self.texture_type = texture_type  # texture2D, textureCube, etc.
+        self.texture_type = texture_type
         self.format = format
         self.binding = binding
         self.set = set_
@@ -1267,25 +1258,21 @@ class MeshOpNode(ExpressionNode):
 # LEGACY COMPATIBILITY HELPERS
 # ============================================================================
 
-# Create aliases for backward compatibility
-CbufferNode = StructNode  # cbuffer is essentially a struct
-VectorConstructorNode = ConstructorNode  # Vector constructors are just constructors
+CbufferNode = StructNode
+VectorConstructorNode = ConstructorNode
 
 
-# Helper functions for backward compatibility
 def create_legacy_shader_node(structs, functions, global_variables, cbuffers):
-    """Create a ShaderNode with legacy parameters."""
     return ShaderNode(
         name="LegacyShader",
         execution_model=ExecutionModel.GRAPHICS_PIPELINE,
         structs=structs or [],
         functions=functions or [],
         global_variables=global_variables or [],
-        constants=cbuffers or [],  # Map cbuffers to constants
+        constants=cbuffers or [],
     )
 
 
-# Helper to create array nodes with legacy interface
 class ArrayNode(VariableNode):
     """Legacy array node for backward compatibility."""
 
@@ -1296,10 +1283,4 @@ class ArrayNode(VariableNode):
         self.size = size
         if semantic:
             self.attributes.append(AttributeNode(semantic))
-
-        # Legacy compatibility
         self.vtype = f"{element_type}[]" if size is None else f"{element_type}[{size}]"
-
-
-# Legacy compatibility - ensure all required classes are available
-TernaryOpNode = TernaryOpNode  # Already defined above

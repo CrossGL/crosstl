@@ -2,7 +2,6 @@ import re
 from typing import Iterator, Tuple, List
 from enum import Enum, auto
 
-# Skip tokens that don't need processing
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
 # CUDA token definitions - order matters for correct tokenization
@@ -451,11 +450,9 @@ class CudaLexer:
                 )
             new_pos, token_type, text = token
 
-            # Check if identifier is a reserved keyword
             if token_type == "IDENTIFIER" and text in self.reserved_keywords:
                 token_type = self.reserved_keywords[text]
 
-            # Skip whitespace and comments unless needed for debugging
             if token_type not in SKIP_TOKENS:
                 yield (token_type, text)
 

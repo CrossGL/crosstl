@@ -1,5 +1,3 @@
-"""CUDA Code Generator"""
-
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
@@ -24,27 +22,22 @@ from ..ast import (
 
 
 class CudaCodeGen:
-    """Generates CUDA code from CrossGL AST"""
-
     def __init__(self):
         self.indent_level = 0
         self.output = []
 
     def generate(self, ast_node):
-        """Generate CUDA code from CrossGL AST"""
         self.output = []
         self.indent_level = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
     def visit(self, node):
-        """Visit an AST node and generate code"""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node):
-        """Generic visitor for unknown nodes"""
         if isinstance(node, str):
             return node
         elif isinstance(node, list):
@@ -53,38 +46,31 @@ class CudaCodeGen:
             return str(node)
 
     def emit(self, code):
-        """Emit code with proper indentation"""
         if code.strip():
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
 
     def visit_ShaderNode(self, node):
-        """Visit the main shader node"""
-        # Add CUDA headers
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("")
 
-        # Process structs
         structs = getattr(node, "structs", [])
         for struct in structs:
             self.visit(struct)
             self.emit("")
 
-        # Process cbuffers as constant memory
         cbuffers = getattr(node, "cbuffers", [])
         for cbuffer in cbuffers:
             self.visit_cbuffer(cbuffer)
             self.emit("")
 
-        # Process global variables
         global_vars = getattr(node, "global_variables", [])
         for var in global_vars:
             self.visit(var)
             self.emit("")
 
-        # Process functions
         functions = getattr(node, "functions", [])
         for func in functions:
             self.visit(func)
@@ -114,11 +100,8 @@ class CudaCodeGen:
                     self.emit("")
 
     def visit_FunctionNode(self, node):
-        """Visit function declaration"""
-        # Determine function qualifiers based on CrossGL qualifier
         qualifiers = []
 
-        # Check CrossGL function qualifier (new AST)
         if hasattr(node, "qualifiers") and node.qualifiers:
             for qualifier in node.qualifiers:
                 if qualifier == "compute":
@@ -127,7 +110,6 @@ class CudaCodeGen:
                     qualifiers.append("__device__")
                 else:
                     qualifiers.append("__device__")
-        # Check old AST structure
         elif hasattr(node, "qualifier") and node.qualifier:
             if node.qualifier == "compute":
                 qualifiers.append("__global__")
@@ -136,10 +118,8 @@ class CudaCodeGen:
             else:
                 qualifiers.append("__device__")
         else:
-            # Default to device function
             qualifiers.append("__device__")
 
-        # Handle return type - support both old and new AST structures
         if hasattr(node, "return_type"):
             if hasattr(node.return_type, "name"):
                 return_type = self.convert_crossgl_type_to_cuda(node.return_type.name)
@@ -150,13 +130,11 @@ class CudaCodeGen:
 
         qualifier_str = " ".join(qualifiers)
 
-        # Generate parameters - support both old and new AST structures
         params = []
         param_list = getattr(node, "parameters", getattr(node, "params", []))
 
         for param in param_list:
             if hasattr(param, "param_type"):
-                # New AST structure
                 if hasattr(param.param_type, "name"):
                     param_type = self.convert_crossgl_type_to_cuda(
                         param.param_type.name
@@ -166,7 +144,6 @@ class CudaCodeGen:
                         str(param.param_type)
                     )
             elif hasattr(param, "vtype"):
-                # Old AST structure
                 param_type = self.convert_crossgl_type_to_cuda(param.vtype)
             else:
                 param_type = "void"
@@ -187,14 +164,11 @@ class CudaCodeGen:
             self.emit("int3 gridDim = {gridDim.x, gridDim.y, gridDim.z};")
             self.emit("")
 
-        # Process function body - support both old and new AST structures
         body = getattr(node, "body", [])
         if hasattr(body, "statements"):
-            # New AST BlockNode structure
             for stmt in body.statements:
                 self.visit(stmt)
         elif isinstance(body, list):
-            # Old AST structure or list of statements
             for stmt in body:
                 self.visit(stmt)
 
@@ -202,18 +176,15 @@ class CudaCodeGen:
         self.emit("}")
 
     def visit_StructNode(self, node):
-        """Visit struct declaration"""
         self.emit(f"struct {node.name} {{")
         self.indent_level += 1
 
         members = getattr(node, "members", [])
         for member in members:
             if hasattr(member, "member_type"):
-                # New AST structure - convert TypeNode properly
                 member_type_str = self.convert_type_node_to_string(member.member_type)
                 member_type = self.convert_crossgl_type_to_cuda(member_type_str)
             elif hasattr(member, "vtype"):
-                # Old AST structure
                 member_type = self.convert_crossgl_type_to_cuda(member.vtype)
             else:
                 member_type = "float"
@@ -224,17 +195,13 @@ class CudaCodeGen:
         self.emit("};")
 
     def visit_VariableNode(self, node):
-        """Visit variable declaration"""
-        # Handle both declaration and usage cases
         var_type = None
 
-        # New AST structure
         if hasattr(node, "var_type"):
             if hasattr(node.var_type, "name"):
                 var_type = self.convert_crossgl_type_to_cuda(node.var_type.name)
             else:
                 var_type = self.convert_crossgl_type_to_cuda(str(node.var_type))
-        # Old AST structure
         elif hasattr(node, "vtype"):
             var_type = self.convert_crossgl_type_to_cuda(node.vtype)
 
@@ -258,35 +225,29 @@ class CudaCodeGen:
             return node.name
 
     def visit_ExpressionStatementNode(self, node):
-        """Visit expression statement"""
         expr = self.visit(node.expression)
         if expr and expr.strip():
             self.emit(f"{expr};")
 
     def visit_IdentifierNode(self, node):
-        """Visit identifier"""
         return node.name
 
     def visit_LiteralNode(self, node):
-        """Visit literal value"""
         return str(node.value)
 
     def visit_AssignmentNode(self, node):
-        """Visit assignment statement"""
         target = self.visit(node.target)
         value = self.visit(node.value)
         operator = getattr(node, "operator", "=")
         self.emit(f"{target} {operator} {value};")
 
     def visit_BinaryOpNode(self, node):
-        """Visit binary operation"""
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
         return f"({left} {operator} {right})"
 
     def visit_UnaryOpNode(self, node):
-        """Visit unary operation"""
         operand = self.visit(node.operand)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
         return f"({operator}{operand})"
@@ -578,23 +539,18 @@ class CudaCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         if hasattr(type_node, "name"):
-            # PrimitiveType
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
-            # VectorType or ArrayType
             if hasattr(type_node, "rows"):
-                # MatrixType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 return f"mat{type_node.rows}x{type_node.cols}"
             elif str(type(type_node)).find("ArrayType") != -1:
-                # ArrayType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     return f"{element_type}[{type_node.size}]"
                 else:
                     return f"{element_type}[]"
             else:
-                # VectorType
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
                 if element_type == "float":

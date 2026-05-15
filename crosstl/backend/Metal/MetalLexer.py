@@ -303,24 +303,19 @@ KEYWORDS = {
 
 
 class MetalLexer:
-    """Lexer for Metal Shading Language (MSL)"""
-
     def __init__(self, code: str):
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
-        """Tokenize the input code and return list of tokens"""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
-        """Generator function that yields tokens one at a time"""
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
             if token is None:
-                # Provide more context in error message
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
                 context = self.code[max(0, pos - 20) : min(self._length, pos + 20)]
@@ -330,7 +325,6 @@ class MetalLexer:
                 )
             new_pos, token_type, text = token
 
-            # Check if identifier is a keyword
             if token_type == "IDENTIFIER" and text in KEYWORDS:
                 token_type = KEYWORDS[text]
 
@@ -342,7 +336,6 @@ class MetalLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
-        """Find the next token starting at the given position"""
         if self.code.startswith("/*", pos):
             end_pos = self.code.find("*/", pos + 2)
             if end_pos == -1:
@@ -359,6 +352,5 @@ class MetalLexer:
 
     @classmethod
     def from_file(cls, filepath: str) -> "MetalLexer":
-        """Create a lexer instance from a file"""
         with open(filepath, "r", encoding="utf-8") as f:
             return cls(f.read())

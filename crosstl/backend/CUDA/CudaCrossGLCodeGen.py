@@ -11,20 +11,17 @@ class CudaToCrossGLConverter:
         self.output = []
 
     def generate(self, ast_node):
-        """Generate CrossGL code from CUDA AST"""
         self.output = []
         self.indent_level = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
     def visit(self, node):
-        """Visit a node and generate code"""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node):
-        """Default visitor for unknown nodes"""
         if isinstance(node, str):
             return node
         elif isinstance(node, list):
@@ -33,43 +30,35 @@ class CudaToCrossGLConverter:
             return str(node)
 
     def emit(self, code):
-        """Emit code with proper indentation"""
         if code.strip():
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
 
     def visit_ShaderNode(self, node):
-        """Visit shader node (main program)"""
-        # Always emit the comment first
         self.emit("// CUDA to CrossGL conversion")
 
-        # Process includes
         if hasattr(node, "includes") and node.includes:
             for include in node.includes:
                 self.visit(include)
             self.emit("")
 
-        # Process structs
         if hasattr(node, "structs") and node.structs:
             for struct in node.structs:
                 self.visit(struct)
                 self.emit("")
 
-        # Process global variables
         if hasattr(node, "global_variables") and node.global_variables:
             for var in node.global_variables:
                 self.visit(var)
                 self.emit("")
 
-        # Process functions (convert kernels to compute shaders)
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 self.emit(f"// Function: {func.name}")
                 self.visit(func)
                 self.emit("")
 
-        # Process kernels (convert to compute shaders)
         if hasattr(node, "kernels") and node.kernels:
             for kernel in node.kernels:
                 self.emit(f"// Kernel: {kernel.name}")
@@ -77,9 +66,7 @@ class CudaToCrossGLConverter:
                 self.emit("")
 
     def visit_PreprocessorNode(self, node):
-        """Visit preprocessor directive"""
         if node.directive == "include":
-            # Convert CUDA includes to CrossGL equivalents
             if "cuda_runtime.h" in node.content:
                 self.emit("// CUDA runtime functionality built-in")
             elif "device_launch_parameters.h" in node.content:
@@ -90,7 +77,6 @@ class CudaToCrossGLConverter:
             self.emit(f"// {node.directive} {node.content}")
 
     def visit_StructNode(self, node):
-        """Visit struct declaration"""
         self.emit(f"struct {node.name} {{")
         self.indent_level += 1
 
@@ -102,7 +88,6 @@ class CudaToCrossGLConverter:
         self.emit("};")
 
     def visit_FunctionNode(self, node):
-        """Visit function declaration"""
         # Skip device functions in CrossGL (they become inline)
         if "__device__" in node.qualifiers:
             return
@@ -126,11 +111,9 @@ class CudaToCrossGLConverter:
 
     def visit_kernel_as_compute_shader(self, kernel):
         """Convert CUDA kernel to CrossGL compute shader"""
-        # Generate compute shader layout
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
-        # Generate function signature
         params = []
         for param in kernel.params:
             param_type = self.convert_cuda_type_to_crossgl(param.vtype)
@@ -152,7 +135,6 @@ class CudaToCrossGLConverter:
         self.indent_level -= 1
         self.emit(") {")
 
-        # Add built-in variable declarations
         self.indent_level += 1
         self.emit("let thread_id = gl_GlobalInvocationID;")
         self.emit("let block_id = gl_WorkGroupID;")
@@ -160,7 +142,6 @@ class CudaToCrossGLConverter:
         self.emit("let block_dim = gl_WorkGroupSize;")
         self.emit("")
 
-        # Process kernel body
         for stmt in kernel.body:
             self.visit(stmt)
 
@@ -168,7 +149,6 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_KernelLaunchNode(self, node):
-        """Visit kernel launch (convert to dispatch call comment)"""
         self.emit(
             f"// Kernel launch: {node.kernel_name}<<<{self.visit(node.blocks)}, {self.visit(node.threads)}>>>()"
         )
@@ -177,7 +157,6 @@ class CudaToCrossGLConverter:
             self.emit(f"// Arguments: {args_str}")
 
     def visit_VariableNode(self, node):
-        """Visit variable declaration"""
         var_type = self.convert_cuda_type_to_crossgl(node.vtype)
 
         if node.value:
@@ -187,7 +166,6 @@ class CudaToCrossGLConverter:
             self.emit(f"var {node.name}: {var_type};")
 
     def visit_SharedMemoryNode(self, node):
-        """Visit shared memory declaration"""
         # Convert to workgroup memory in CrossGL
         var_type = self.convert_cuda_type_to_crossgl(node.vtype)
         if node.size:
@@ -197,7 +175,6 @@ class CudaToCrossGLConverter:
             self.emit(f"var<workgroup> {node.name}: {var_type};")
 
     def visit_ConstantMemoryNode(self, node):
-        """Visit constant memory declaration"""
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_type_to_crossgl(node.vtype)
         if node.value:
@@ -209,19 +186,16 @@ class CudaToCrossGLConverter:
             self.emit(f"@group(0) @binding(0) var<uniform> {node.name}: {var_type};")
 
     def visit_AssignmentNode(self, node):
-        """Visit assignment"""
         left = self.visit(node.left)
         right = self.visit(node.right)
         self.emit(f"{left} {node.operator} {right};")
 
     def visit_BinaryOpNode(self, node):
-        """Visit binary operation"""
         left = self.visit(node.left)
         right = self.visit(node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
-        """Visit unary operation"""
         operand = self.visit(node.operand)
         if node.op.startswith("post"):
             return f"({operand}{node.op[4:]})"
@@ -229,20 +203,15 @@ class CudaToCrossGLConverter:
             return f"({node.op}{operand})"
 
     def visit_FunctionCallNode(self, node):
-        """Visit function call"""
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
-
-        # Convert CUDA built-in functions
         func_name = self.convert_cuda_builtin_function(node.name)
         return f"{func_name}({args_str})"
 
     def visit_AtomicOperationNode(self, node):
-        """Visit atomic operation"""
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
 
-        # Convert CUDA atomic operations to CrossGL equivalents
         atomic_map = {
             "atomicAdd": "atomicAdd",
             "atomicSub": "atomicSub",
@@ -256,7 +225,6 @@ class CudaToCrossGLConverter:
         return f"{crossgl_func}({args_str})"
 
     def visit_SyncNode(self, node):
-        """Visit synchronization"""
         if node.sync_type == "__syncthreads":
             self.emit("workgroupBarrier();")
         elif node.sync_type == "__syncwarp":
@@ -265,7 +233,6 @@ class CudaToCrossGLConverter:
             self.emit(f"// {node.sync_type}();")
 
     def visit_CudaBuiltinNode(self, node):
-        """Visit CUDA built-in variables"""
         builtin_map = {
             "threadIdx": "gl_LocalInvocationID",
             "blockIdx": "gl_WorkGroupID",
@@ -281,22 +248,15 @@ class CudaToCrossGLConverter:
             return base_name
 
     def visit_MemberAccessNode(self, node):
-        """Visit member access"""
         obj = self.visit(node.object)
-        if node.is_pointer:
-            # Convert pointer access to direct access in CrossGL
-            return f"{obj}.{node.member}"
-        else:
-            return f"{obj}.{node.member}"
+        return f"{obj}.{node.member}"
 
     def visit_ArrayAccessNode(self, node):
-        """Visit array access"""
         array = self.visit(node.array)
         index = self.visit(node.index)
         return f"{array}[{index}]"
 
     def visit_IfNode(self, node):
-        """Visit if statement"""
         condition = self.visit(node.condition)
         self.emit(f"if ({condition}) {{")
 
@@ -321,7 +281,6 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_ForNode(self, node):
-        """Visit for loop"""
         init = self.visit(node.init) if node.init else ""
         condition = self.visit(node.condition) if node.condition else ""
         update = self.visit(node.update) if node.update else ""
@@ -339,7 +298,6 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_WhileNode(self, node):
-        """Visit while loop"""
         condition = self.visit(node.condition)
         self.emit(f"while ({condition}) {{")
 
@@ -354,7 +312,6 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_ReturnNode(self, node):
-        """Visit return statement"""
         if node.value:
             value = self.visit(node.value)
             self.emit(f"return {value};")
@@ -362,17 +319,14 @@ class CudaToCrossGLConverter:
             self.emit("return;")
 
     def visit_BreakNode(self, node):
-        """Visit break statement"""
         self.emit("break;")
 
     def visit_ContinueNode(self, node):
-        """Visit continue statement"""
         self.emit("continue;")
 
     def convert_cuda_type_to_crossgl(self, cuda_type):
         """Convert CUDA types to CrossGL equivalents"""
         type_mapping = {
-            # Basic types
             "void": "void",
             "bool": "bool",
             "char": "i8",
@@ -386,7 +340,6 @@ class CudaToCrossGLConverter:
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
-            # CUDA vector types
             "float2": "vec2<f32>",
             "float3": "vec3<f32>",
             "float4": "vec4<f32>",
@@ -420,7 +373,6 @@ class CudaToCrossGLConverter:
     def convert_cuda_builtin_function(self, func_name):
         """Convert CUDA built-in functions to CrossGL equivalents"""
         function_mapping = {
-            # Math functions
             "sqrtf": "sqrt",
             "powf": "pow",
             "sinf": "sin",
@@ -433,7 +385,6 @@ class CudaToCrossGLConverter:
             "fmaxf": "max",
             "floorf": "floor",
             "ceilf": "ceil",
-            # Double precision variants
             "sqrt": "sqrt",
             "pow": "pow",
             "sin": "sin",
@@ -446,7 +397,6 @@ class CudaToCrossGLConverter:
             "fmax": "max",
             "floor": "floor",
             "ceil": "ceil",
-            # Vector functions
             "make_float2": "vec2<f32>",
             "make_float3": "vec3<f32>",
             "make_float4": "vec4<f32>",

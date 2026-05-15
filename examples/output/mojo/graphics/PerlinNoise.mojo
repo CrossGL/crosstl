@@ -39,5 +39,5 @@ fn main(input: FragmentInput) -> FragmentOutput:
     return output
 
 fn perlinNoise(p: SIMD[DType.float32, 2]) -> Float32:
-    return fract((sin(dot_product(p, SIMD[DType.float32, 2](12.9898, 78.233))) * 43758.5453))
+    return fract((sin(dot(p, SIMD[DType.float32, 2](12.9898, 78.233))) * 43758.5453))
 

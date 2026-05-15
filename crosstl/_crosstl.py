@@ -83,7 +83,6 @@ def translate(
             codegen = get_codegen(normalized_backend)
             generated_code = codegen.generate(cgl_ast)
 
-    # Format the code if requested and the formatter is available
     if (
         format_output
         and FORMATTER_AVAILABLE
@@ -93,7 +92,6 @@ def translate(
             generated_code, normalized_backend, save_shader
         )
 
-    # Write to the file if a path is provided
     if save_shader is not None:
         with open(save_shader, "w", encoding="utf-8") as file:
             file.write(generated_code)
@@ -125,7 +123,6 @@ def main():
             print(f"Error: Input file {args.input} not found")
             return 1
 
-        # Determine output path if not specified
         output_path = args.output
         if not output_path:
             base, _ = os.path.splitext(args.input)
@@ -136,7 +133,6 @@ def main():
                 ext = get_backend_extension(normalized_backend) or ".out"
             output_path = base + ext
 
-        # Perform translation
         translate(
             args.input,
             backend=args.backend,

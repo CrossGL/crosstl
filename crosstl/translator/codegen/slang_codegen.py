@@ -41,12 +41,10 @@ class SlangCodeGen:
             # Handle new AST structure
             result = ""
 
-            # Generate structs - handle both old and new AST
             structs = getattr(ast, "structs", [])
             for struct in structs:
                 result += self.generate_struct(struct) + "\n\n"
 
-            # Generate global variables - handle both old and new AST
             global_vars = getattr(ast, "global_variables", [])
             for node in global_vars:
                 # Handle both old and new AST variable structures
@@ -61,7 +59,6 @@ class SlangCodeGen:
                     vtype = "float"
                 result += f"{self.convert_type(vtype)} {node.name};\n"
 
-            # Generate cbuffers - handle both old and new AST
             cbuffers = getattr(ast, "cbuffers", [])
             for node in cbuffers:
                 if isinstance(node, StructNode):
@@ -71,7 +68,6 @@ class SlangCodeGen:
                 elif hasattr(node, "name") and hasattr(node, "members"):
                     result += f"cbuffer {node.name} {{\n"
                     for member in node.members:
-                        # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
                             member_type = str(member.member_type)
                         else:
@@ -81,7 +77,6 @@ class SlangCodeGen:
                         )
                     result += "};\n\n"
 
-            # Generate functions - handle both old and new AST
             functions = getattr(ast, "functions", [])
             for function in functions:
                 # Handle both old and new AST function structures
@@ -117,12 +112,10 @@ class SlangCodeGen:
     def generate_shader(self, node):
         result = ""
 
-        # Generate struct definitions - handle both old and new AST
         structs = getattr(node, "structs", [])
         for struct in structs:
             result += self.generate_struct(struct) + "\n\n"
 
-        # Generate vertex and fragment shaders - handle both old and new AST
         functions = getattr(node, "functions", [])
         for function in functions:
             # Handle both old and new AST function structures
@@ -146,23 +139,18 @@ class SlangCodeGen:
         result = f"struct {node.name}\n{{\n"
         self.indent_level += 1
 
-        # Generate struct members - handle both old and new AST
         members = getattr(node, "members", [])
         for member in members:
-            # Handle both old and new AST member structures
             if hasattr(member, "member_type"):
-                # New AST structure
                 if hasattr(member.member_type, "name"):
                     member_type = self.convert_type(member.member_type.name)
                 else:
                     member_type = self.convert_type(str(member.member_type))
             elif hasattr(member, "vtype"):
-                # Old AST structure
                 member_type = self.convert_type(member.vtype)
             else:
                 member_type = "float"
 
-            # Handle semantic - get from attributes in new AST
             semantic = None
             if hasattr(member, "semantic"):
                 semantic = member.semantic
@@ -187,10 +175,8 @@ class SlangCodeGen:
     def generate_struct_definition(self, node):
         result = f"{node.name}\n{{\n"
 
-        # Generate struct members - handle both old and new AST
         members = getattr(node, "members", [])
         for member in members:
-            # Handle both old and new AST member structures
             if hasattr(member, "member_type"):
                 member_type = self.convert_type(str(member.member_type))
             else:
@@ -201,7 +187,6 @@ class SlangCodeGen:
         return result
 
     def generate_function(self, node):
-        # Handle return type - support both old and new AST
         if hasattr(node, "return_type"):
             if hasattr(node.return_type, "name"):
                 ret_type = self.convert_type(node.return_type.name)
@@ -210,7 +195,6 @@ class SlangCodeGen:
         else:
             ret_type = "void"
 
-        # Handle semantic
         semantic = None
         if hasattr(node, "semantic"):
             semantic = node.semantic
@@ -222,29 +206,24 @@ class SlangCodeGen:
 
         semantic_str = f" : {semantic}" if semantic else ""
 
-        # Handle parameters - support both old and new AST
         param_list = getattr(node, "parameters", getattr(node, "params", []))
         params_str = ""
         if param_list:
             if param_list and hasattr(param_list[0], "name"):
-                # Handle list of parameter objects
                 params = []
                 for param in param_list:
                     if hasattr(param, "param_type"):
-                        # New AST structure
                         if hasattr(param.param_type, "name"):
                             param_type = self.convert_type(param.param_type.name)
                         else:
                             param_type = self.convert_type(str(param.param_type))
                     elif hasattr(param, "vtype"):
-                        # Old AST structure
                         param_type = self.convert_type(param.vtype)
                     else:
                         param_type = "float"
                     params.append(f"{param_type} {param.name}")
                 params_str = ", ".join(params)
             else:
-                # Handle tuples of (type, name)
                 params_str = ", ".join(
                     [
                         f"{self.convert_type(param_type)} {param_name}"
@@ -255,14 +234,11 @@ class SlangCodeGen:
         result = f"{ret_type} {node.name}({params_str}){semantic_str}\n{{\n"
         self.indent_level += 1
 
-        # Generate function body - handle both old and new AST
         body = getattr(node, "body", [])
         if hasattr(body, "statements"):
-            # New AST BlockNode structure
             for stmt in body.statements:
                 result += self.indent() + self.generate_statement(stmt) + "\n"
         elif isinstance(body, list):
-            # Old AST structure
             for stmt in body:
                 result += self.indent() + self.generate_statement(stmt) + "\n"
 

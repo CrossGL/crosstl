@@ -5,39 +5,25 @@ use math::*;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Material {
-  pub albedo : Vec3<f32>,
-               pub roughness : f32,
-                               pub metallic : f32,
-                                              pub emissive : Vec3<f32>,
-                                                             pub opacity
-      : f32,
-        pub hasNormalMap : bool,
-                           pub albedoMap : Texture2D<f32>,
-                                           pub normalMap
-      : Texture2D<f32>,
-        pub metallicRoughnessMap : Texture2D<f32>,
+  pub albedo : Vec3<f32>, pub roughness : f32, pub metallic : f32,
+      pub emissive : Vec3<f32>, pub opacity : f32, pub hasNormalMap : bool,
+      pub albedoMap : Texture2D<f32>, pub normalMap : Texture2D<f32>,
+      pub metallicRoughnessMap : Texture2D<f32>,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Light {
-  pub position : Vec3<f32>,
-                 pub color : Vec3<f32>,
-                             pub intensity : f32,
-                                             pub radius : f32,
-                                                          pub castShadows
-      : bool,
-        pub viewProjection : mat4x4,
+  pub position : Vec3<f32>, pub color : Vec3<f32>, pub intensity : f32,
+      pub radius : f32, pub castShadows : bool, pub viewProjection : mat4x4,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Scene {
-  pub materials
-      : MaterialLiteralNode(value = 4,
-                            literal_type = PrimitiveType(name = int,
-                                                         size_bits = None)),
-        pub lights
+  pub materials : MaterialLiteralNode(
+      value = 4, literal_type = PrimitiveType(name = int, size_bits = None)),
+      pub lights
       : LightLiteralNode(value = 8,
                          literal_type = PrimitiveType(name = int,
                                                       size_bits = None)),
@@ -53,61 +39,38 @@ pub struct Scene {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct VertexInput {
-  pub position : Vec3<f32>,
-                 pub normal : Vec3<f32>,
-                              pub tangent : Vec3<f32>,
-                                            pub bitangent : Vec3<f32>,
-                                                            pub texCoord0
-      : Vec2<f32>,
-        pub texCoord1 : Vec2<f32>,
-                        pub color : Vec4<f32>,
-                                    pub materialIndex : i32,
+  pub position : Vec3<f32>, pub normal : Vec3<f32>, pub tangent : Vec3<f32>,
+      pub bitangent : Vec3<f32>, pub texCoord0 : Vec2<f32>,
+      pub texCoord1 : Vec2<f32>, pub color : Vec4<f32>, pub materialIndex : i32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct VertexOutput {
-  pub worldPosition : Vec3<f32>,
-                      pub worldNormal : Vec3<f32>,
-                                        pub worldTangent : Vec3<f32>,
-                                                           pub worldBitangent
-      : Vec3<f32>,
-        pub texCoord0 : Vec2<f32>,
-                        pub texCoord1 : Vec2<f32>,
-                                        pub color : Vec4<f32>,
-                                                    pub TBN : mat3x3,
-                                                              pub materialIndex
-      : i32,
-        pub clipPosition : Vec4<f32>,
+  pub worldPosition : Vec3<f32>, pub worldNormal : Vec3<f32>,
+      pub worldTangent : Vec3<f32>, pub worldBitangent : Vec3<f32>,
+      pub texCoord0 : Vec2<f32>, pub texCoord1 : Vec2<f32>,
+      pub color : Vec4<f32>, pub TBN : mat3x3, pub materialIndex : i32,
+      pub clipPosition : Vec4<f32>,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FragmentOutput {
-  pub color : Vec4<f32>,
-              pub normalBuffer : Vec4<f32>,
-                                 pub positionBuffer : Vec4<f32>,
-                                                      pub depth : f32,
+  pub color : Vec4<f32>, pub normalBuffer : Vec4<f32>,
+      pub positionBuffer : Vec4<f32>, pub depth : f32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalUniforms {
-  pub scene : Scene,
-              pub cameraPosition : Vec3<f32>,
-                                   pub globalRoughness : f32,
-                                                         pub screenSize
-      : Vec2<f32>,
-        pub nearPlane : f32,
-                        pub farPlane : f32,
-                                       pub frameCount : i32,
-                                                        pub noiseValues
-      : vecNone,
+  pub scene : Scene, pub cameraPosition : Vec3<f32>, pub globalRoughness : f32,
+      pub screenSize : Vec2<f32>, pub nearPlane : f32, pub farPlane : f32,
+      pub frameCount : i32, pub noiseValues : vecNone,
 }
 
 // Constant Buffers
-pub fn
-distributionGGX(N : Vec3<f32>, H : Vec3<f32>, roughness : f32) -> f32 {
+pub fn distributionGGX(N : Vec3<f32>, H : Vec3<f32>, roughness : f32) -> f32 {
   let mut a : f32 = (roughness * roughness);
   let mut a2 : f32 = (a * a);
   let mut NdotH : f32 = max(dot(N, H), 0.0);
@@ -174,13 +137,13 @@ pub fn noise3D(p : Vec3<f32>) -> f32 {
                      fract((sin(dot((i + Vec3<f32>::new (1.0, 1.0, 1.0)),
                                     Vec3<f32>::new (13.534, 43.5234, 243.32))) *
                             4453.0));
-  let mut n00 : f32 = lerp(n000, n001, u.z);
-  let mut n01 : f32 = lerp(n010, n011, u.z);
-  let mut n10 : f32 = lerp(n100, n101, u.z);
-  let mut n11 : f32 = lerp(n110, n111, u.z);
-  let mut n0 : f32 = lerp(n00, n01, u.y);
-  let mut n1 : f32 = lerp(n10, n11, u.y);
-  return lerp(n0, n1, u.x);
+  let mut n00 : f32 = mix(n000, n001, u.z);
+  let mut n01 : f32 = mix(n010, n011, u.z);
+  let mut n10 : f32 = mix(n100, n101, u.z);
+  let mut n11 : f32 = mix(n110, n111, u.z);
+  let mut n0 : f32 = mix(n00, n01, u.y);
+  let mut n1 : f32 = mix(n10, n11, u.y);
+  return mix(n0, n1, u.x);
 }
 
 pub fn fbm(p : Vec3<f32>, octaves : i32, lacunarity : f32, gain : f32) -> f32 {
@@ -220,7 +183,7 @@ pub fn samplePlanarProjection(tex : Texture2D<f32>, worldPos : Vec3<f32>,
     if (normal.z < 0.0) {
     }
   }
-  return sample(tex, uv);
+  return texture(tex, uv);
 }
 
 // Vertex Shader
@@ -301,10 +264,12 @@ pub fn main(input : VertexInput) -> VertexOutput {
 pub fn main(input : VertexOutput) -> FragmentOutput {
   let mut output : FragmentOutput;
   let mut material : Material = globals.scene.materials[input.materialIndex];
-  let mut albedoValue : Vec4<f32> = sample(material.albedoMap, input.texCoord0);
-  let mut normalValue : Vec4<f32> = sample(material.normalMap, input.texCoord0);
+  let mut albedoValue : Vec4<f32> =
+                            texture(material.albedoMap, input.texCoord0);
+  let mut normalValue : Vec4<f32> =
+                            texture(material.normalMap, input.texCoord0);
   let mut metallicRoughnessValue
-      : Vec4<f32> = sample(material.metallicRoughnessMap, input.texCoord0);
+      : Vec4<f32> = texture(material.metallicRoughnessMap, input.texCoord0);
   let mut normal : Vec3<f32> = ((normalValue.xyz * 2.0) - 1.0);
   let mut worldNormal : Vec3<f32> = normalize((input.TBN * normal));
   let mut albedo : Vec3<f32> = (albedoValue.rgb * material.albedo);
@@ -313,7 +278,7 @@ pub fn main(input : VertexOutput) -> FragmentOutput {
   let mut ao : f32 = metallicRoughnessValue.r;
   let mut viewDir
       : Vec3<f32> = normalize((globals.cameraPosition - input.worldPosition));
-  let mut F0 : Vec3<f32> = lerp(Vec3<f32>::new (0.04), albedo, metallic);
+  let mut F0 : Vec3<f32> = mix(Vec3<f32>::new (0.04), albedo, metallic);
   let mut Lo : Vec3<f32> = Vec3<f32>::new (0.0);
   let mut i : i32 = 0;
   ;
@@ -386,7 +351,7 @@ pub fn shadowCalculation(fragPosLightSpace : Vec4<f32>, iteration : i32)
   let mut projCoords : Vec3<f32> =
                            (fragPosLightSpace.xyz / fragPosLightSpace.w);
   projCoords = ((projCoords * 0.5) + 0.5);
-  let mut closestDepth : f32 = sample(shadowMap, projCoords.xy).r;
+  let mut closestDepth : f32 = texture(shadowMap, projCoords.xy).r;
   let mut currentDepth : f32 = projCoords.z;
   let mut bias : f32 =
                      max((0.05 * (1.0 - dot(input.worldNormal,
@@ -406,9 +371,9 @@ pub fn shadowCalculation(fragPosLightSpace : Vec4<f32>, iteration : i32)
     while (y <= 1) {
       let mut pcfDepth
           : f32 =
-                sample(shadowMap,
-                       ((projCoords.xy + (Vec2<f32>::new (x, y) * texelSize)) +
-                        Vec2<f32>::new (offset)))
+                texture(shadowMap,
+                        ((projCoords.xy + (Vec2<f32>::new (x, y) * texelSize)) +
+                         Vec2<f32>::new (offset)))
                     .r;
       shadow += (if ((currentDepth - bias) > pcfDepth){1.0} else {0.0});
       (++y);

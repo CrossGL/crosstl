@@ -1,10 +1,4 @@
-"""
-AST Utilities for CrossGL Code Generators
-
-This module provides comprehensive utilities for working with the new AST structure,
-including type conversion, semantic extraction, and compatibility functions for
-all backends.
-"""
+"""AST utilities for CrossGL code generators."""
 
 from typing import Optional, List
 from ..ast import (
@@ -31,11 +25,11 @@ from ..ast import (
 
 
 class ASTUtils:
-    """Comprehensive utilities for AST processing and type conversion."""
+    """Utilities for AST processing and type conversion."""
 
     @staticmethod
     def get_type_string(type_node: TypeNode, backend: str = "generic") -> str:
-        """Convert a TypeNode to a string representation for a specific backend."""
+        """Convert a TypeNode to a backend-specific string."""
         if isinstance(type_node, PrimitiveType):
             return ASTUtils._map_primitive_type(type_node.name, backend)
 
@@ -55,7 +49,6 @@ class ASTUtils:
                 if isinstance(type_node.size, int):
                     return f"{element_type}[{type_node.size}]"
                 else:
-                    # Size is an expression
                     return f"{element_type}[{ASTUtils.expression_to_string(type_node.size)}]"
             else:
                 return f"{element_type}[]"
@@ -82,7 +75,7 @@ class ASTUtils:
             return ASTUtils._map_function_type(return_type, param_types, backend)
 
         elif isinstance(type_node, GenericType):
-            return type_node.name  # Generic types stay as-is
+            return type_node.name
 
         elif isinstance(type_node, NamedType):
             if type_node.generic_args:
@@ -94,14 +87,12 @@ class ASTUtils:
             return type_node.name
 
         else:
-            # Fallback for string types or unknown
             return str(type_node)
 
     @staticmethod
     def _map_primitive_type(type_name: str, backend: str) -> str:
         """Map primitive type names to backend-specific types."""
-        type_mappings = {
-            "generic": {
+        type_mappings = {            "generic": {
                 "void": "void",
                 "bool": "bool",
                 "int": "int",
@@ -211,7 +202,7 @@ class ASTUtils:
         elif backend == "mojo":
             return f"SIMD[DType.{element_type.lower()}, {size}]"
 
-        return f"{element_type}{size}"  # Fallback
+        return f"{element_type}{size}"
 
     @staticmethod
     def _map_matrix_type(element_type: str, rows: int, cols: int, backend: str) -> str:
@@ -232,7 +223,7 @@ class ASTUtils:
         elif backend == "mojo":
             return f"Matrix[DType.{element_type.lower()}, {rows}, {cols}]"
 
-        return f"{element_type}{rows}x{cols}"  # Fallback
+        return f"{element_type}{rows}x{cols}"
 
     @staticmethod
     def _map_pointer_type(pointee_type: str, is_mutable: bool, backend: str) -> str:
@@ -269,7 +260,6 @@ class ASTUtils:
 
     @staticmethod
     def get_semantic_from_attributes(attributes: List[AttributeNode]) -> Optional[str]:
-        """Extract semantic information from attribute list."""
         semantic_attrs = [
             "position",
             "color",
@@ -303,7 +293,6 @@ class ASTUtils:
 
     @staticmethod
     def get_member_info(member: StructMemberNode, backend: str = "generic"):
-        """Extract complete member information for code generation."""
         return {
             "name": member.name,
             "type": ASTUtils.get_type_string(member.member_type, backend),
@@ -315,7 +304,6 @@ class ASTUtils:
 
     @staticmethod
     def get_variable_info(variable: VariableNode, backend: str = "generic"):
-        """Extract complete variable information for code generation."""
         return {
             "name": variable.name,
             "type": ASTUtils.get_type_string(variable.var_type, backend),
@@ -329,7 +317,6 @@ class ASTUtils:
 
     @staticmethod
     def get_parameter_info(parameter: ParameterNode, backend: str = "generic"):
-        """Extract complete parameter information for code generation."""
         return {
             "name": parameter.name,
             "type": ASTUtils.get_type_string(parameter.param_type, backend),
@@ -341,7 +328,6 @@ class ASTUtils:
 
     @staticmethod
     def get_function_info(function: FunctionNode, backend: str = "generic"):
-        """Extract complete function information for code generation."""
         return {
             "name": function.name,
             "return_type": ASTUtils.get_type_string(function.return_type, backend),
@@ -358,8 +344,7 @@ class ASTUtils:
 
     @staticmethod
     def expression_to_string(expr: ExpressionNode) -> str:
-        """Convert an expression node to a string representation."""
-        # This is a simplified version - in practice, you'd need a full expression visitor
+        # Simplified — a full implementation would use an expression visitor.
         if hasattr(expr, "value"):
             return str(expr.value)
         elif hasattr(expr, "name"):
@@ -369,18 +354,13 @@ class ASTUtils:
 
     @staticmethod
     def is_legacy_ast_node(node) -> bool:
-        """Check if a node is from the legacy AST structure."""
-        # Check for old-style attributes
         return hasattr(node, "vtype") and isinstance(getattr(node, "vtype", None), str)
 
     @staticmethod
     def get_legacy_compatible_type(node, backend: str = "generic") -> str:
-        """Get type string with legacy compatibility."""
         if ASTUtils.is_legacy_ast_node(node):
-            # Old AST structure
             return getattr(node, "vtype", "float")
         else:
-            # New AST structure
             if hasattr(node, "var_type"):
                 return ASTUtils.get_type_string(node.var_type, backend)
             elif hasattr(node, "member_type"):
@@ -388,16 +368,13 @@ class ASTUtils:
             elif hasattr(node, "param_type"):
                 return ASTUtils.get_type_string(node.param_type, backend)
             else:
-                return "float"  # Fallback
+                return "float"
 
     @staticmethod
     def get_legacy_compatible_semantic(node) -> Optional[str]:
-        """Get semantic information with legacy compatibility."""
         if ASTUtils.is_legacy_ast_node(node):
-            # Old AST structure
             return getattr(node, "semantic", None)
         else:
-            # New AST structure
             if hasattr(node, "attributes"):
                 return ASTUtils.get_semantic_from_attributes(node.attributes)
             else:
@@ -405,7 +382,7 @@ class ASTUtils:
 
     @staticmethod
     def safe_get_body_statements(body):
-        """Safely extract statements from function body, handling both old and new AST."""
+        """Extract statements from function body, handling both old and new AST."""
         if body is None:
             return []
         elif isinstance(body, BlockNode):
@@ -417,11 +394,9 @@ class ASTUtils:
 
     @staticmethod
     def safe_get_function_qualifier(function: FunctionNode) -> Optional[str]:
-        """Safely get function qualifier, handling both old and new AST."""
-        # New AST uses qualifiers list
+        """Get function qualifier, handling both old and new AST."""
         if hasattr(function, "qualifiers") and function.qualifiers:
             return function.qualifiers[0]
-        # Legacy compatibility
         elif hasattr(function, "qualifier"):
             return function.qualifier
         else:

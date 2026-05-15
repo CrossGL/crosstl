@@ -1,11 +1,4 @@
-"""
-HIP to CrossGL Code Generator
-
-This module provides code generation functionality to convert HIP (HIP Is a Portable GPU Runtime)
-AST nodes to CrossGL intermediate representation.
-"""
-
-from typing import Any
+"""HIP to CrossGL Code Generator"""
 from .HipAst import (
     ASTNode,
     ShaderNode,
@@ -40,20 +33,17 @@ class HipToCrossGLConverter:
         self.output = []
 
     def generate(self, ast_node):
-        """Generate CrossGL code from HIP AST"""
         self.output = []
         self.indent_level = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
     def visit(self, node):
-        """Visit a node and generate code"""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node):
-        """Default visitor for unknown nodes"""
         if isinstance(node, str):
             return node
         elif isinstance(node, list):
@@ -62,18 +52,14 @@ class HipToCrossGLConverter:
             return str(node)
 
     def emit(self, code):
-        """Emit code with proper indentation"""
         if code.strip():
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
 
     def visit_HipProgramNode(self, node):
-        """Visit HIP program node (main program)"""
-        # Always emit the comment first
         self.emit("// HIP to CrossGL conversion")
 
-        # Process all statements
         for stmt in node.statements:
             if isinstance(stmt, FunctionNode):
                 if hasattr(stmt, "qualifiers") and "__global__" in getattr(
@@ -95,7 +81,6 @@ class HipToCrossGLConverter:
                 self.visit(stmt)
 
     def visit_FunctionNode(self, node):
-        """Visit function declaration"""
         # Skip device functions in CrossGL (they become inline)
         if hasattr(node, "qualifiers") and "__device__" in getattr(
             node, "qualifiers", []
@@ -137,12 +122,9 @@ class HipToCrossGLConverter:
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
-        """Convert HIP kernel to CrossGL compute shader"""
-        # Generate compute shader layout
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
-        # Generate function signature
         params = []
         if hasattr(kernel, "params") and kernel.params:
             for param in kernel.params:
@@ -188,7 +170,6 @@ class HipToCrossGLConverter:
         self.emit("let block_dim = gl_WorkGroupSize;")
         self.emit("")
 
-        # Process kernel body
         if hasattr(kernel, "body") and kernel.body:
             if isinstance(kernel.body, list):
                 for stmt in kernel.body:
@@ -200,7 +181,6 @@ class HipToCrossGLConverter:
         self.emit("}")
 
     def visit_StructNode(self, node):
-        """Visit struct declaration"""
         self.emit(f"struct {node.name} {{")
         self.indent_level += 1
 
@@ -216,7 +196,6 @@ class HipToCrossGLConverter:
         self.emit("};")
 
     def visit_VariableNode(self, node):
-        """Visit variable declaration"""
         var_type = self.convert_hip_type_to_crossgl(getattr(node, "vtype", "int"))
 
         if hasattr(node, "value") and node.value:
@@ -226,20 +205,17 @@ class HipToCrossGLConverter:
             self.emit(f"var {node.name}: {var_type};")
 
     def visit_AssignmentNode(self, node):
-        """Visit assignment"""
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", "=")
         self.emit(f"{left} {operator} {right};")
 
     def visit_BinaryOpNode(self, node):
-        """Visit binary operation"""
         left = self.visit(node.left)
         right = self.visit(node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
-        """Visit unary operation"""
         operand = self.visit(node.operand)
         if hasattr(node, "postfix") and node.postfix:
             return f"({operand}{node.op})"
@@ -247,7 +223,6 @@ class HipToCrossGLConverter:
             return f"({node.op}{operand})"
 
     def visit_FunctionCallNode(self, node):
-        """Visit function call"""
         args = []
         if hasattr(node, "args") and node.args:
             args = [self.visit(arg) for arg in node.args]
@@ -256,7 +231,6 @@ class HipToCrossGLConverter:
 
         args_str = ", ".join(args)
 
-        # Get function name
         if hasattr(node, "name"):
             func_name = node.name
         else:
@@ -267,22 +241,15 @@ class HipToCrossGLConverter:
         return f"{crossgl_func}({args_str})"
 
     def visit_MemberAccessNode(self, node):
-        """Visit member access"""
         obj = self.visit(node.object)
-        if hasattr(node, "is_pointer") and node.is_pointer:
-            # Convert pointer access to direct access in CrossGL
-            return f"{obj}.{node.member}"
-        else:
-            return f"{obj}.{node.member}"
+        return f"{obj}.{node.member}"
 
     def visit_ArrayAccessNode(self, node):
-        """Visit array access"""
         array = self.visit(node.array)
         index = self.visit(node.index)
         return f"{array}[{index}]"
 
     def visit_HipBuiltinNode(self, node):
-        """Visit HIP built-in variables"""
         builtin_map = {
             "threadIdx": "gl_LocalInvocationID",
             "blockIdx": "gl_WorkGroupID",
@@ -297,7 +264,6 @@ class HipToCrossGLConverter:
             return base_name
 
     def visit_ReturnNode(self, node):
-        """Visit return statement"""
         if hasattr(node, "value") and node.value:
             value = self.visit(node.value)
             self.emit(f"return {value};")
@@ -305,15 +271,12 @@ class HipToCrossGLConverter:
             self.emit("return;")
 
     def visit_BreakNode(self, node):
-        """Visit break statement"""
         self.emit("break;")
 
     def visit_ContinueNode(self, node):
-        """Visit continue statement"""
         self.emit("continue;")
 
     def visit_IfNode(self, node):
-        """Visit if statement"""
         condition = self.visit(node.condition)
         self.emit(f"if ({condition}) {{")
 
@@ -339,7 +302,6 @@ class HipToCrossGLConverter:
         self.emit("}")
 
     def visit_ForNode(self, node):
-        """Visit for loop"""
         init = self.visit(node.init) if hasattr(node, "init") and node.init else ""
         condition = (
             self.visit(node.condition)
@@ -364,7 +326,6 @@ class HipToCrossGLConverter:
         self.emit("}")
 
     def convert_hip_type_to_crossgl(self, hip_type):
-        """Convert HIP types to CrossGL equivalents"""
         if hip_type is None:
             return "void"
 
@@ -418,7 +379,6 @@ class HipToCrossGLConverter:
         return type_mapping.get(hip_type, hip_type)
 
     def convert_hip_builtin_function(self, func_name):
-        """Convert HIP built-in functions to CrossGL equivalents"""
         function_mapping = {
             # Math functions
             "sqrtf": "sqrt",
@@ -460,12 +420,7 @@ class HipToCrossGLConverter:
 
         return function_mapping.get(func_name, func_name)
 
-    def visit_BreakNode(self, node):
-        """Visit break statement"""
-        self.emit("break;")
-
     def visit_EnumNode(self, node):
-        """Visit enum declaration"""
         self.emit(f"enum {node.name} {{")
         self.indent_level += 1
 
@@ -486,7 +441,7 @@ class HipToCrossGLConverter:
         return self.generate(node)
 
 
-def hip_to_crossgl(hip_ast: Any) -> str:
+def hip_to_crossgl(hip_ast) -> str:
     """Convert HIP AST to CrossGL code string"""
     converter = HipToCrossGLConverter()
     return converter.generate(hip_ast)

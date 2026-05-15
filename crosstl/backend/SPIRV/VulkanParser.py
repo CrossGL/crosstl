@@ -103,7 +103,7 @@ class VulkanParser:
     def parse_layout(self):
         self.eat("LAYOUT")
         self.eat("LPAREN")
-        bindings = []  # Stores pairs like ('location', '0'), ('binding', '1'), etc.
+        bindings = []
         push_constant = False
         if self.current_token[0] == "PUSH_CONSTANT":
             push_constant = True
@@ -111,12 +111,10 @@ class VulkanParser:
         if self.current_token[0] == "COMMA":
             self.eat("COMMA")
 
-        # Parse layout bindings
         while self.current_token[0] != "RPAREN":
             binding_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            # Handle assignment with EQUALS and a number
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
                 binding_value = self.current_token[1]
@@ -140,7 +138,6 @@ class VulkanParser:
         data_type = None
         struct_fields = None
         if layout_type in ["UNIFORM", "BUFFER"]:
-            # If a curly brace follows, we have a structured data block
             if self.current_token[0] == "LBRACE":
                 self.eat("LBRACE")
                 struct_fields = []
@@ -148,32 +145,30 @@ class VulkanParser:
                 # Parse structured fields within the uniform/push_constant/buffer block
                 while self.current_token[0] != "RBRACE":
                     if self.current_token[1] in VALID_DATA_TYPES:
-                        field_type = self.current_token[1]  # Field type (e.g., mat4)
+                        field_type = self.current_token[1]
                         self.eat(self.current_token[0])
                     else:
                         raise SyntaxError(
                             "Expected some data type before an identifier"
                         )
-                    field_name = self.current_token[1]  # Field name
+                    field_name = self.current_token[1]
                     self.eat("IDENTIFIER")
                     self.eat("SEMICOLON")
                     struct_fields.append((field_type, field_name))
 
                 self.eat("RBRACE")
-                data_type = "struct"  # Use 'struct' as data_type placeholder for uniform/push_constant/buffer
+                data_type = "struct"
             else:
                 raise SyntaxError(
                     "Expected structured data block after 'uniform' or 'buffer'"
                 )
         else:
-            # For `in` and `out`, expect a data type and variable name
             if self.current_token[1] in VALID_DATA_TYPES:
                 data_type = self.current_token[1]
                 self.eat(self.current_token[0])
             else:
                 raise SyntaxError(f"Unexpected type: {self.current_token[1]}")
 
-        # Parse variable name
         variable_name = None
         if self.current_token[0] == "IDENTIFIER":
             variable_name = self.current_token[1]
@@ -217,7 +212,6 @@ class VulkanParser:
         members = []
 
         while self.current_token[0] != "RBRACE":
-            # Get the member type
             if self.current_token[0] in [
                 "VEC2",
                 "VEC3",
@@ -236,15 +230,12 @@ class VulkanParser:
                 "MAT3",
                 "MAT4",
             ]:
-                # Vector/matrix/scalar types
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
             elif self.current_token[1] in VALID_DATA_TYPES:
-                # Other valid data types
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
             elif self.current_token[0] == "IDENTIFIER":
-                # Custom type
                 type_name = self.current_token[1]
                 self.eat("IDENTIFIER")
             else:
@@ -252,11 +243,9 @@ class VulkanParser:
                     f"Unexpected token in struct member: {self.current_token}"
                 )
 
-            # Get the member name
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            # Check for semicolon
             self.eat("SEMICOLON")
 
             members.append(VariableNode(type_name, member_name))
@@ -443,12 +432,10 @@ class VulkanParser:
                 self.eat("SEMICOLON")
                 return AssignmentNode(VariableNode(type_name, name), value)
             else:
-                # Handle comments or other tokens that might appear before semicolon
                 self.skip_until("SEMICOLON")
                 self.eat("SEMICOLON")
                 return AssignmentNode(VariableNode(type_name, name), value)
 
-        # Handle binary operators
         elif self.current_token[0] in ("BINARY_AND", "BINARY_OR", "BINARY_XOR"):
             op = self.current_token[0]
             op_symbol = (
@@ -461,7 +448,6 @@ class VulkanParser:
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op_symbol, right)
             else:
-                # Handle comments or other tokens that might appear before semicolon
                 self.skip_until("SEMICOLON")
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op_symbol, right)
@@ -495,13 +481,10 @@ class VulkanParser:
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op_name, value)
             else:
-                # Handle comments or other tokens that might appear before semicolon
                 self.skip_until("SEMICOLON")
                 self.eat("SEMICOLON")
                 return BinaryOpNode(VariableNode(type_name, name), op_name, value)
         else:
-            # For other cases like function calls, direct member access
-            # Skip to the next semicolon and create a simple variable node
             self.skip_until("SEMICOLON")
             self.eat("SEMICOLON")
             return VariableNode(type_name, name)
@@ -529,21 +512,6 @@ class VulkanParser:
                 self.eat("COMMA")
                 args.append(self.parse_expression())
         self.eat("RPAREN")
-
-        # Handle vector constructors (vec4, vec3, etc.)
-        if name in [
-            "vec4",
-            "vec3",
-            "vec2",
-            "ivec4",
-            "ivec3",
-            "ivec2",
-            "uvec4",
-            "uvec3",
-            "uvec2",
-        ]:
-            return FunctionCallNode(name, args)
-
         return FunctionCallNode(name, args)
 
     def parse_function_call_or_identifier(self):
@@ -578,9 +546,8 @@ class VulkanParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
-            # Check if there's a 'u' suffix (for uint literals)
             if value.endswith("u"):
-                value = value[:-1]  # Remove the 'u' suffix
+                value = value[:-1]
             return value
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
@@ -737,7 +704,6 @@ class VulkanParser:
             self.eat(op)
             right = self.parse_additive()
 
-            # Map token types to operator symbols
             op_symbol = (
                 "&"
                 if op == "BINARY_AND"
@@ -750,7 +716,7 @@ class VulkanParser:
                         else "<<" if op == "BITWISE_SHIFT_LEFT" else ">>"
                     )
                 )
-            )  # BITWISE_SHIFT_RIGHT
+            )
 
             left = BinaryOpNode(left, op_symbol, right)
 

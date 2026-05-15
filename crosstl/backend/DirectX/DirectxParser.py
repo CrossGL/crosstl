@@ -406,7 +406,6 @@ class HLSLParser:
 
         self.eat("RBRACE")
 
-        # Variable declarations after struct
         variables = []
         if self.current_token[0] == "IDENTIFIER":
             variables.append(self.current_token[1])

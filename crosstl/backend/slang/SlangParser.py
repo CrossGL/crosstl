@@ -78,7 +78,6 @@ class SlangParser:
         )
 
     def is_function(self):
-        # Look ahead to check if there's a left parenthesis after the identifier
         current_pos = self.pos
         while self.tokens[current_pos][0] != "EOF":
             if self.tokens[current_pos][0] == "LPAREN":
@@ -328,7 +327,6 @@ class SlangParser:
                     expr = self.parse_expression()
                     self.eat("SEMICOLON")
                     return BinaryOpNode(VariableNode("", first_token[1]), op, expr)
-                    # This handles cases like "float3(1.0, 1.0, 1.0);"
                 else:
                     expr = self.parse_expression()
                     self.eat("SEMICOLON")
@@ -370,7 +368,6 @@ class SlangParser:
         self.eat("FOR")
         self.eat("LPAREN")
 
-        # Parse initialization
         if self.current_token[0] in ["INT", "FLOAT", "FVECTOR"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
@@ -384,15 +381,12 @@ class SlangParser:
             init = self.parse_expression()
         self.eat("SEMICOLON")
 
-        # Parse condition
         condition = self.parse_expression()
         self.eat("SEMICOLON")
 
-        # Parse update
         update = self.parse_expression()
         self.eat("RPAREN")
 
-        # Parse body
         body = self.parse_block()
 
         return ForNode(init, condition, update, body)
@@ -590,7 +584,6 @@ class SlangParser:
         member = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        # Check if there's another dot after this member access
         if self.current_token[0] == "DOT":
             return self.parse_member_access(MemberAccessNode(object, member))
 

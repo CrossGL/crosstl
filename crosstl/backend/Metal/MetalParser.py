@@ -266,7 +266,6 @@ class MetalParser:
             else:
                 self.eat(self.current_token[0])  # Skip unknown tokens
 
-        # Create ShaderNode with proper keyword arguments for compatibility
         return ShaderNode(
             includes=preprocessors,
             functions=functions,
@@ -286,10 +285,8 @@ class MetalParser:
 
     def is_function_definition(self):
         idx = self.pos
-        # Skip attributes
         while idx < len(self.tokens) and self.tokens[idx][0] == "ATTRIBUTE":
             idx += 1
-        # Skip qualifiers
         while idx < len(self.tokens) and self.tokens[idx][0] in QUALIFIER_TOKENS:
             idx += 1
         if idx >= len(self.tokens):
@@ -310,7 +307,6 @@ class MetalParser:
             return False
         idx += 1
 
-        # Skip generic type parameters
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
             depth = 0
             while idx < len(self.tokens):
@@ -359,7 +355,6 @@ class MetalParser:
             content = self.current_token[1]
             self.eat("STRING")
         elif self.current_token[0] not in ["EOF", "PREPROCESSOR"]:
-            # Best-effort capture of directive argument
             content = str(self.current_token[1])
             self.eat(self.current_token[0])
         return PreprocessorNode(directive, content)
@@ -371,7 +366,6 @@ class MetalParser:
             self.eat("METAL")
             self.eat("SEMICOLON")
             return None
-        # Handle using alias: using Alias = Type;
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("EQUALS")
@@ -476,7 +470,6 @@ class MetalParser:
             base_type = self.current_token[1]
             self.eat(self.current_token[0])
 
-        # Handle generic types like texture2d<float, access::read_write>
         if self.current_token[0] == "LESS_THAN":
             depth = 0
             inner = []
@@ -499,7 +492,6 @@ class MetalParser:
                     self.eat(self.current_token[0])
             base_type = f"{base_type}<{''.join(inner)}>"
 
-        # Handle pointers/references
         pointer_suffix = ""
         while self.current_token[0] in ["MULTIPLY", "BITWISE_AND"]:
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
@@ -615,7 +607,6 @@ class MetalParser:
 
         return_type, _return_qualifiers = self.parse_type_specifier()
 
-        # Handle potential second qualifier after return type
         if self.current_token[0] in STAGE_TOKENS:
             if qualifier is None:
                 qualifier = self.current_token[1]
@@ -628,13 +619,11 @@ class MetalParser:
         params = self.parse_parameters()
         self.eat("RPAREN")
 
-        # Handle possible attribute after parameters
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
 
         body = self.parse_block()
 
-        # Create FunctionNode with proper argument order matching common_ast
         return FunctionNode(
             return_type=return_type,
             name=name,
@@ -803,7 +792,6 @@ class MetalParser:
             self.eat("SEMICOLON")
             return AssignmentNode(var_node, value, op)
 
-        # Fallback to expression statement if not a declaration
         expr = self.parse_expression()
         self.eat("SEMICOLON")
         return expr
@@ -1070,7 +1058,6 @@ class MetalParser:
         if self.current_token[0] != "LPAREN":
             return False
         idx = self.pos + 1
-        # Skip qualifiers
         while idx < len(self.tokens) and self.tokens[idx][0] in QUALIFIER_TOKENS:
             idx += 1
         if idx >= len(self.tokens):
@@ -1079,7 +1066,6 @@ class MetalParser:
         if tok_type not in TYPE_TOKENS:
             return False
         idx += 1
-        # Skip generic type parameters
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
             depth = 0
             while idx < len(self.tokens):
@@ -1091,7 +1077,6 @@ class MetalParser:
                         idx += 1
                         break
                 idx += 1
-        # Pointer/reference
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",
             "BITWISE_AND",
@@ -1263,13 +1248,6 @@ class MetalParser:
         return TextureSampleNode(texture, sampler, coordinates)
 
     def parse_switch_statement(self):
-        """Parse a switch statement
-
-        This method parses a switch statement in Metal shader code.
-
-        Returns:
-            SwitchNode: A node representing the switch statement
-        """
         self.eat("SWITCH")
         self.eat("LPAREN")
         expression = self.parse_expression()
@@ -1287,7 +1265,7 @@ class MetalParser:
                 self.eat("COLON")
                 default_statements = []
 
-                # Parse statements until we hit a case, default, or end of switch
+                # Parse statements until next case/default or end of switch
                 while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
                     if self.current_token[0] == "BREAK":
                         self.eat("BREAK")
@@ -1306,20 +1284,13 @@ class MetalParser:
         return SwitchNode(expression, cases, default)
 
     def parse_case_statement(self):
-        """Parse a case statement
-
-        This method parses a case statement in Metal shader code.
-
-        Returns:
-            CaseNode: A node representing the case statement
-        """
         self.eat("CASE")
         value = self.parse_expression()
         self.eat("COLON")
 
         statements = []
 
-        # Parse statements until we hit a case, default, break, or end of switch
+        # Parse statements until next case/default/break or end of switch
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
             if self.current_token[0] == "BREAK":
                 self.eat("BREAK")

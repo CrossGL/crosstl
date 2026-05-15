@@ -181,11 +181,9 @@ class RustToCrossGLConverter:
     def generate(self, ast):
         code = "shader main {\n"
 
-        # Generate use statements as comments
         for use_stmt in ast.use_statements:
             code += f"    // use {use_stmt.path}\n"
 
-        # Generate constants and statics
         for global_var in ast.global_variables:
             if isinstance(global_var, ConstNode):
                 code += f"    const {self.map_type(global_var.vtype)} {global_var.name} = {self.generate_expression(global_var.value)};\n"
@@ -193,7 +191,6 @@ class RustToCrossGLConverter:
                 mutability = "mut " if global_var.is_mutable else ""
                 code += f"    static {mutability}{self.map_type(global_var.vtype)} {global_var.name} = {self.generate_expression(global_var.value)};\n"
 
-        # Generate structs
         for struct in ast.structs:
             if isinstance(struct, StructNode):
                 code += f"    struct {struct.name} {{\n"
@@ -203,7 +200,6 @@ class RustToCrossGLConverter:
                     code += f"        {type_str} {member.name}{semantic};\n"
                 code += "    }\n\n"
 
-        # Generate functions (including shader entry points)
         for func in ast.functions:
             shader_type = self.get_shader_type_from_attributes(func.attributes)
             if shader_type:
@@ -212,10 +208,8 @@ class RustToCrossGLConverter:
                 code += self.generate_function_body(func.body, indent=2)
                 code += "    }\n\n"
             else:
-                # Regular function
                 code += self.generate_function(func, indent=1)
 
-        # Generate impl blocks as helper functions
         for impl_block in ast.impl_blocks:
             code += f"    // Implementation for {impl_block.struct_name}\n"
             for func in impl_block.functions:
@@ -230,7 +224,6 @@ class RustToCrossGLConverter:
         code = ""
         indent_str = "    " * indent
 
-        # Generate function signature
         params = []
         for param in func.params:
             param_type = self.map_type(param.vtype)
@@ -287,9 +280,7 @@ class RustToCrossGLConverter:
             elif isinstance(stmt, str):
                 code += f"{indent_str}{stmt};\n"
             else:
-                # Handle other statement types
-                expr = self.generate_expression(stmt)
-                if expr:
+                expr = self.generate_expression(stmt)                if expr:
                     code += f"{indent_str}{expr};\n"
 
         return code
@@ -301,8 +292,7 @@ class RustToCrossGLConverter:
         if stmt.vtype:
             type_str = f"{self.map_type(stmt.vtype)} "
         elif stmt.value:
-            # Try to infer type from value
-            type_str = ""  # Let CrossGL infer the type
+            type_str = ""
 
         if stmt.value:
             value_str = self.generate_expression(stmt.value)
@@ -329,11 +319,9 @@ class RustToCrossGLConverter:
                 and len(node.else_body) == 1
                 and isinstance(node.else_body[0], IfNode)
             ):
-                # else if
                 code += " else "
                 code += self.generate_if_statement(node.else_body[0], 0).lstrip()
             else:
-                # else block
                 code += " else {\n"
                 if isinstance(node.else_body, list):
                     code += self.generate_function_body(node.else_body, indent + 1)
@@ -464,7 +452,6 @@ class RustToCrossGLConverter:
         if not rust_type:
             return "void"
 
-        # Handle generic types
         if "<" in rust_type and ">" in rust_type:
             base_type = rust_type.split("<")[0]
             if base_type in ["Vec2", "Vec3", "Vec4"]:

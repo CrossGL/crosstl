@@ -91,13 +91,12 @@ __device__ float distributionGGX(
     float roughness) {
   float a = (roughness * roughness);
   float a2 = (a * a);
-  float NdotH =
-      IdentifierNode(name = max)(IdentifierNode(name = dot)(N, H), 0.0);
+  float NdotH = fmaxf(dot(N, H), 0.0);
   float NdotH2 = (NdotH * NdotH);
   float num = a2;
   float denom = ((NdotH2 * (a2 - 1.0)) + 1.0);
   denom = ((PI * denom) * denom);
-  return (num / IdentifierNode(name = max)(denom, EPSILON));
+  return (num / fmaxf(denom, EPSILON));
 }
 
 __device__ float geometrySchlickGGX(float NdotV, float roughness) {
@@ -105,7 +104,7 @@ __device__ float geometrySchlickGGX(float NdotV, float roughness) {
   float k = ((r * r) / 8.0);
   float num = NdotV;
   float denom = ((NdotV * (1.0 - k)) + k);
-  return (num / IdentifierNode(name = max)(denom, EPSILON));
+  return (num / fmaxf(denom, EPSILON));
 }
 
 __device__ float geometrySmith(
@@ -116,12 +115,10 @@ __device__ float geometrySmith(
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) L,
     float roughness) {
-  float NdotV =
-      IdentifierNode(name = max)(IdentifierNode(name = dot)(N, V), 0.0);
-  float NdotL =
-      IdentifierNode(name = max)(IdentifierNode(name = dot)(N, L), 0.0);
-  float ggx2 = IdentifierNode(name = geometrySchlickGGX)(NdotV, roughness);
-  float ggx1 = IdentifierNode(name = geometrySchlickGGX)(NdotL, roughness);
+  float NdotV = fmaxf(dot(N, V), 0.0);
+  float NdotL = fmaxf(dot(N, L), 0.0);
+  float ggx2 = geometrySchlickGGX(NdotV, roughness);
+  float ggx1 = geometrySchlickGGX(NdotL, roughness);
   return (ggx1 * ggx2);
 }
 
@@ -132,65 +129,47 @@ __device__ VectorType(element_type = PrimitiveType(name = float,
                    VectorType(element_type = PrimitiveType(name = float,
                                                            size_bits = None),
                               size = 3) F0) {
-  return (F0 + ((1.0 - F0) *
-                IdentifierNode(name = pow)(
-                    IdentifierNode(name = max)((1.0 - cosTheta), 0.0), 5.0)));
+  return (F0 + ((1.0 - F0) * powf(fmaxf((1.0 - cosTheta), 0.0), 5.0)));
 }
 
 __device__ float noise3D(VectorType(
     element_type = PrimitiveType(name = float, size_bits = None), size = 3) p) {
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) i = IdentifierNode(name = floor)(p);
+             size = 3) i = floorf(p);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) f = IdentifierNode(name = fract)(p);
+             size = 3) f = fracf(p);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) u = (((f * f) * f) * ((f * ((f * 6.0) - 15.0)) + 10.0));
-  float n000 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           i, IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n001 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           (i + IdentifierNode(name = vec3)(0.0, 0.0, 1.0)),
-           IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n010 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           (i + IdentifierNode(name = vec3)(0.0, 1.0, 0.0)),
-           IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n011 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           (i + IdentifierNode(name = vec3)(0.0, 1.0, 1.0)),
-           IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n100 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           (i + IdentifierNode(name = vec3)(1.0, 0.0, 0.0)),
-           IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n101 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           (i + IdentifierNode(name = vec3)(1.0, 0.0, 1.0)),
-           IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n110 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           (i + IdentifierNode(name = vec3)(1.0, 1.0, 0.0)),
-           IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n111 = IdentifierNode(name = fract)(
-      (IdentifierNode(name = sin)(IdentifierNode(name = dot)(
-           (i + IdentifierNode(name = vec3)(1.0, 1.0, 1.0)),
-           IdentifierNode(name = vec3)(13.534, 43.5234, 243.32))) *
-       4453.0));
-  float n00 = IdentifierNode(name = mix)(n000, n001, u.z);
-  float n01 = IdentifierNode(name = mix)(n010, n011, u.z);
-  float n10 = IdentifierNode(name = mix)(n100, n101, u.z);
-  float n11 = IdentifierNode(name = mix)(n110, n111, u.z);
-  float n0 = IdentifierNode(name = mix)(n00, n01, u.y);
-  float n1 = IdentifierNode(name = mix)(n10, n11, u.y);
-  return IdentifierNode(name = mix)(n0, n1, u.x);
+  float n000 =
+      fracf((sinf(dot(i, make_float3(13.534, 43.5234, 243.32))) * 4453.0));
+  float n001 = fracf((sinf(dot((i + make_float3(0.0, 0.0, 1.0)),
+                               make_float3(13.534, 43.5234, 243.32))) *
+                      4453.0));
+  float n010 = fracf((sinf(dot((i + make_float3(0.0, 1.0, 0.0)),
+                               make_float3(13.534, 43.5234, 243.32))) *
+                      4453.0));
+  float n011 = fracf((sinf(dot((i + make_float3(0.0, 1.0, 1.0)),
+                               make_float3(13.534, 43.5234, 243.32))) *
+                      4453.0));
+  float n100 = fracf((sinf(dot((i + make_float3(1.0, 0.0, 0.0)),
+                               make_float3(13.534, 43.5234, 243.32))) *
+                      4453.0));
+  float n101 = fracf((sinf(dot((i + make_float3(1.0, 0.0, 1.0)),
+                               make_float3(13.534, 43.5234, 243.32))) *
+                      4453.0));
+  float n110 = fracf((sinf(dot((i + make_float3(1.0, 1.0, 0.0)),
+                               make_float3(13.534, 43.5234, 243.32))) *
+                      4453.0));
+  float n111 = fracf((sinf(dot((i + make_float3(1.0, 1.0, 1.0)),
+                               make_float3(13.534, 43.5234, 243.32))) *
+                      4453.0));
+  float n00 = lerp(n000, n001, u.z);
+  float n01 = lerp(n010, n011, u.z);
+  float n10 = lerp(n100, n101, u.z);
+  float n11 = lerp(n110, n111, u.z);
+  float n0 = lerp(n00, n01, u.y);
+  float n1 = lerp(n10, n11, u.y);
+  return lerp(n0, n1, u.x);
 }
 
 __device__ float fbm(VectorType(element_type = PrimitiveType(name = float,
@@ -205,7 +184,7 @@ __device__ float fbm(VectorType(element_type = PrimitiveType(name = float,
     if ((i >= MAX_ITERATIONS)) {
       break;
     }
-    sum = (amplitude * IdentifierNode(name = noise3D)((p * frequency)));
+    sum = (amplitude * noise3D((p * frequency)));
     amplitude = gain;
     frequency = lacunarity;
   }
@@ -222,7 +201,7 @@ __device__ VectorType(element_type = PrimitiveType(name = float,
         VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                    size = 3) normal) {
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) absNormal = IdentifierNode(name = abs)(normal);
+             size = 3) absNormal = fabsf(normal);
   bool useX = ((absNormal.x >= absNormal.y) && (absNormal.x >= absNormal.z));
   bool useY = (!useX && (absNormal.y >= absNormal.z));
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
@@ -245,13 +224,13 @@ __device__ VectorType(element_type = PrimitiveType(name = float,
       }
     }
   }
-  return IdentifierNode(name = texture)(tex, uv);
+  return tex2D(tex, uv);
 }
 
 __device__ VertexOutput main(VertexInput input) {
   VertexOutput output;
   MatrixType(element_type = PrimitiveType(name = float, size_bits = None),
-             rows = 4, cols = 4) modelMatrix = IdentifierNode(name = mat4)(1.0);
+             rows = 4, cols = 4) modelMatrix = mat4(1.0);
   MatrixType(element_type = PrimitiveType(name = float, size_bits = None),
              rows = 4, cols = 4) viewMatrix = globals.scene.viewMatrix;
   MatrixType(element_type = PrimitiveType(name = float, size_bits = None),
@@ -264,41 +243,32 @@ __device__ VertexOutput main(VertexInput input) {
       (projectionMatrix * modelViewMatrix);
   MatrixType(element_type = PrimitiveType(name = float, size_bits = None),
              rows = 3, cols = 3) normalMatrix =
-      IdentifierNode(name = mat3)(IdentifierNode(name = transpose)(
-          IdentifierNode(name = inverse)(modelMatrix)));
+      mat3(transpose(inverse(modelMatrix)));
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 4) worldPosition =
-      (modelMatrix * IdentifierNode(name = vec4)(input.position, 1.0));
+      (modelMatrix * make_float4(input.position, 1.0));
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) worldNormal =
-      IdentifierNode(name = normalize)((normalMatrix * input.normal));
+             size = 3) worldNormal = normalize((normalMatrix * input.normal));
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) worldTangent =
-      IdentifierNode(name = normalize)((normalMatrix * input.tangent));
+             size = 3) worldTangent = normalize((normalMatrix * input.tangent));
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) worldBitangent =
-      IdentifierNode(name = normalize)((normalMatrix * input.bitangent));
+      normalize((normalMatrix * input.bitangent));
   MatrixType(element_type = PrimitiveType(name = float, size_bits = None),
              rows = 3, cols = 3) TBN =
-      IdentifierNode(name = mat3)(worldTangent, worldBitangent, worldNormal);
+      mat3(worldTangent, worldBitangent, worldNormal);
   float displacement =
-      (IdentifierNode(name = fbm)(
-           (worldPosition.xyz + (globals.scene.time * 0.1)), 4, 2.0, 0.5) *
+      (fbm((worldPosition.xyz + (globals.scene.time * 0.1)), 4, 2.0, 0.5) *
        0.1);
   if ((input.materialIndex > 0)) {
     worldPosition.xyz = (worldNormal * displacement);
   }
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) viewDir =
-      IdentifierNode(name = normalize)(
-          (globals.cameraPosition - worldPosition.xyz));
-  float fresnel = IdentifierNode(name = pow)(
-      (1.0 - IdentifierNode(name = max)(
-                 0.0, IdentifierNode(name = dot)(worldNormal, viewDir))),
-      5.0);
+      normalize((globals.cameraPosition - worldPosition.xyz));
+  float fresnel = powf((1.0 - fmaxf(0.0, dot(worldNormal, viewDir))), 5.0);
   if ((input.materialIndex < globals.scene.activeLightCount)) {
-    output.color =
-        (input.color * IdentifierNode(name = vec4)(1.0, 1.0, 1.0, 1.0));
+    output.color = (input.color * make_float4(1.0, 1.0, 1.0, 1.0));
     int i = 0;
     for (; (i < 4); ++i) {
       if ((i >= (globals.frameCount % 5))) {
@@ -307,17 +277,13 @@ __device__ VertexOutput main(VertexInput input) {
       Light light = globals.scene.lights[i];
       VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                  size = 3) lightDir =
-          IdentifierNode(name =
-                             normalize)((light.position - worldPosition.xyz));
-      float lightDistance =
-          IdentifierNode(name = length)((light.position - worldPosition.xyz));
+          normalize((light.position - worldPosition.xyz));
+      float lightDistance = length((light.position - worldPosition.xyz));
       float attenuation = (1.0 / (1.0 + (lightDistance * lightDistance)));
       float lightIntensity = (light.intensity * attenuation);
-      output.color.rgb =
-          (((light.color * lightIntensity) *
-            IdentifierNode(name = max)(
-                0.0, IdentifierNode(name = dot)(worldNormal, lightDir))) *
-           0.025);
+      output.color.rgb = (((light.color * lightIntensity) *
+                           fmaxf(0.0, dot(worldNormal, lightDir))) *
+                          0.025);
     }
   } else {
     output.color = input.color;
@@ -337,8 +303,8 @@ __device__ VertexOutput main(VertexInput input) {
   output.texCoord1 = input.texCoord1;
   output.TBN = TBN;
   output.materialIndex = input.materialIndex;
-  output.clipPosition = (modelViewProjectionMatrix *
-                         IdentifierNode(name = vec4)(input.position, 1.0));
+  output.clipPosition =
+      (modelViewProjectionMatrix * make_float4(input.position, 1.0));
   return output;
 }
 
@@ -346,20 +312,16 @@ __device__ FragmentOutput main(VertexOutput input) {
   FragmentOutput output;
   Material material = globals.scene.materials[input.materialIndex];
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 4) albedoValue =
-      IdentifierNode(name = texture)(material.albedoMap, input.texCoord0);
+             size = 4) albedoValue = tex2D(material.albedoMap, input.texCoord0);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 4) normalValue =
-      IdentifierNode(name = texture)(material.normalMap, input.texCoord0);
+             size = 4) normalValue = tex2D(material.normalMap, input.texCoord0);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 4) metallicRoughnessValue =
-      IdentifierNode(name = texture)(material.metallicRoughnessMap,
-                                     input.texCoord0);
+      tex2D(material.metallicRoughnessMap, input.texCoord0);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) normal = ((normalValue.xyz * 2.0) - 1.0);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) worldNormal =
-      IdentifierNode(name = normalize)((input.TBN * normal));
+             size = 3) worldNormal = normalize((input.TBN * normal));
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) albedo = (albedoValue.rgb * material.albedo);
   float metallic = (metallicRoughnessValue.b * material.metallic);
@@ -367,14 +329,11 @@ __device__ FragmentOutput main(VertexOutput input) {
   float ao = metallicRoughnessValue.r;
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) viewDir =
-      IdentifierNode(name = normalize)(
-          (globals.cameraPosition - input.worldPosition));
+      normalize((globals.cameraPosition - input.worldPosition));
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) F0 =
-      IdentifierNode(name = mix)(IdentifierNode(name = vec3)(0.04), albedo,
-                                 metallic);
+             size = 3) F0 = lerp(make_float3(0.04), albedo, metallic);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 3) Lo = IdentifierNode(name = vec3)(0.0);
+             size = 3) Lo = make_float3(0.0);
   int i = 0;
   for (; (i < globals.scene.activeLightCount); ++i) {
     if ((i >= 8)) {
@@ -383,60 +342,47 @@ __device__ FragmentOutput main(VertexOutput input) {
     Light light = globals.scene.lights[i];
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) lightDir =
-        IdentifierNode(name =
-                           normalize)((light.position - input.worldPosition));
+        normalize((light.position - input.worldPosition));
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) halfway =
-        IdentifierNode(name = normalize)((viewDir + lightDir));
-    float distance =
-        IdentifierNode(name = length)((light.position - input.worldPosition));
+               size = 3) halfway = normalize((viewDir + lightDir));
+    float distance = length((light.position - input.worldPosition));
     float attenuation = (1.0 / (distance * distance));
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) radiance =
         ((light.color * light.intensity) * attenuation);
-    float NDF =
-        IdentifierNode(name = distributionGGX)(worldNormal, halfway, roughness);
-    float G = IdentifierNode(name = geometrySmith)(worldNormal, viewDir,
-                                                   lightDir, roughness);
+    float NDF = distributionGGX(worldNormal, halfway, roughness);
+    float G = geometrySmith(worldNormal, viewDir, lightDir, roughness);
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) F =
-        IdentifierNode(name = fresnelSchlick)(
-            IdentifierNode(name = max)(
-                IdentifierNode(name = dot)(halfway, viewDir), 0.0),
-            F0);
+        fresnelSchlick(fmaxf(dot(halfway, viewDir), 0.0), F0);
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) kS = F;
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-               size = 3) kD = (IdentifierNode(name = vec3)(1.0) - kS);
+               size = 3) kD = (make_float3(1.0) - kS);
     kD = (1.0 - metallic);
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) numerator = ((NDF * G) * F);
-    float denominator =
-        (((4.0 * IdentifierNode(name = max)(
-                     IdentifierNode(name = dot)(worldNormal, viewDir), 0.0)) *
-          IdentifierNode(name = max)(
-              IdentifierNode(name = dot)(worldNormal, lightDir), 0.0)) +
-         EPSILON);
+    float denominator = (((4.0 * fmaxf(dot(worldNormal, viewDir), 0.0)) *
+                          fmaxf(dot(worldNormal, lightDir), 0.0)) +
+                         EPSILON);
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) specular = (numerator / denominator);
-    float NdotL = IdentifierNode(name = max)(
-        IdentifierNode(name = dot)(worldNormal, lightDir), 0.0);
+    float NdotL = fmaxf(dot(worldNormal, lightDir), 0.0);
     float shadow = 0.0;
     if (light.castShadows) {
       VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                  size = 4) fragPosLightSpace =
-          (light.viewProjection *
-           IdentifierNode(name = vec4)(input.worldPosition, 1.0));
-      shadow = IdentifierNode(name = shadowCalculation)(fragPosLightSpace, 0);
+          (light.viewProjection * make_float4(input.worldPosition, 1.0));
+      shadow = shadowCalculation(fragPosLightSpace, 0);
       int s = 0;
       for (; (s < 4); ++s) {
         if ((s >= (globals.frameCount % 3))) {
           continue;
         }
-        shadow = IdentifierNode(name = shadowCalculation)(
+        shadow = shadowCalculation(
             (fragPosLightSpace +
-             IdentifierNode(name = vec4)(
-                 (globals.noiseValues[(s % 16)] * 0.001), 0.0, 0.0, 0.0)),
+             make_float4((globals.noiseValues[(s % 16)] * 0.001), 0.0, 0.0,
+                         0.0)),
             (s + 1));
       }
       shadow = 5.0;
@@ -448,14 +394,11 @@ __device__ FragmentOutput main(VertexOutput input) {
              size = 3) ambient = ((globals.scene.ambientLight * albedo) * ao);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 3) color = (ambient + Lo);
-  color = (color / (color + IdentifierNode(name = vec3)(1.0)));
-  color = IdentifierNode(name = pow)(color,
-                                     IdentifierNode(name = vec3)((1.0 / 2.2)));
-  output.color =
-      IdentifierNode(name = vec4)(color, (material.opacity * albedoValue.a));
-  output.normalBuffer =
-      IdentifierNode(name = vec4)(((worldNormal * 0.5) + 0.5), 1.0);
-  output.positionBuffer = IdentifierNode(name = vec4)(input.worldPosition, 1.0);
+  color = (color / (color + make_float3(1.0)));
+  color = powf(color, make_float3((1.0 / 2.2)));
+  output.color = make_float4(color, (material.opacity * albedoValue.a));
+  output.normalBuffer = make_float4(((worldNormal * 0.5) + 0.5), 1.0);
+  output.positionBuffer = make_float4(input.worldPosition, 1.0);
   output.depth = (input.clipPosition.z / input.clipPosition.w);
   return output;
 }
@@ -476,30 +419,24 @@ __device__ float shadowCalculation(
              size = 3) projCoords =
       (fragPosLightSpace.xyz / fragPosLightSpace.w);
   projCoords = ((projCoords * 0.5) + 0.5);
-  float closestDepth =
-      IdentifierNode(name = texture)(shadowMap, projCoords.xy).r;
+  float closestDepth = tex2D(shadowMap, projCoords.xy).r;
   float currentDepth = projCoords.z;
-  float bias = IdentifierNode(name = max)(
-      (0.05 * (1.0 - IdentifierNode(name = dot)(
-                         input.worldNormal,
-                         IdentifierNode(name = normalize)(
-                             (globals.cameraPosition - input.worldPosition))))),
+  float bias = fmaxf(
+      (0.05 * (1.0 - dot(input.worldNormal, normalize((globals.cameraPosition -
+                                                       input.worldPosition))))),
       0.005);
   float shadow = (((currentDepth - bias) > closestDepth) ? 1.0 : 0.0);
   float pcfDepth = 0.0;
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 2) texelSize =
-      (1.0 / IdentifierNode(name = vec2)(globals.screenSize));
+             size = 2) texelSize = (1.0 / make_float2(globals.screenSize));
   float offset = (globals.noiseValues[((iteration * 4) % 16)] * 0.001);
   int x = -1;
   for (; (x <= 1); ++x) {
     int y = -1;
     for (; (y <= 1); ++y) {
       float pcfDepth =
-          IdentifierNode(name = texture)(
-              shadowMap, ((projCoords.xy +
-                           (IdentifierNode(name = vec2)(x, y) * texelSize)) +
-                          IdentifierNode(name = vec2)(offset)))
+          tex2D(shadowMap, ((projCoords.xy + (make_float2(x, y) * texelSize)) +
+                            make_float2(offset)))
               .r;
       shadow = (((currentDepth - bias) > pcfDepth) ? 1.0 : 0.0);
     }
@@ -513,60 +450,49 @@ __device__ float shadowCalculation(
 
 __global__ void main() {
   VectorType(element_type = PrimitiveType(name = int, size_bits = None),
-             size = 2) texCoord =
-      IdentifierNode(name = ivec2)(gl_GlobalInvocationID.xy);
+             size = 2) texCoord = make_int2(gl_GlobalInvocationID.xy);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
              size = 2) screenSize = globals.screenSize;
-  if (((texCoord.x >= IdentifierNode(name = int)(screenSize.x)) ||
-       (texCoord.y >= IdentifierNode(name = int)(screenSize.y)))) {
+  if (((texCoord.x >= int(screenSize.x)) ||
+       (texCoord.y >= int(screenSize.y)))) {
     return;
   }
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 2) uv =
-      (IdentifierNode(name = vec2)(texCoord) / screenSize);
+             size = 2) uv = (make_float2(texCoord) / screenSize);
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 4) color = IdentifierNode(name = vec4)(0.0);
+             size = 4) color = make_float4(0.0);
   float totalWeight = 0.0;
   VectorType(element_type = PrimitiveType(name = float, size_bits = None),
-             size = 2) direction = (IdentifierNode(name = vec2)(0.5) - uv);
-  float len = IdentifierNode(name = length)(direction);
-  direction = IdentifierNode(name = normalize)(direction);
+             size = 2) direction = (make_float2(0.5) - uv);
+  float len = length(direction);
+  direction = normalize(direction);
   int i = 0;
   for (; (i < 32); ++i) {
     if ((i >= MAX_ITERATIONS)) {
       break;
     }
-    float t = (IdentifierNode(name = float)(i) / 32.0);
+    float t = (float(i) / 32.0);
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 2) pos = (uv + (((direction * t) * len) * 0.1));
-    float noise = IdentifierNode(name = fbm)(
-        IdentifierNode(name = vec3)((pos * 10.0), (globals.scene.time * 0.05)),
-        4, 2.0, 0.5);
+    float noise = fbm(make_float3((pos * 10.0), (globals.scene.time * 0.05)), 4,
+                      2.0, 0.5);
     float weight = (1.0 - t);
     weight = (weight * weight);
     VectorType(element_type = PrimitiveType(name = float, size_bits = None),
                size = 3) noiseColor =
-        IdentifierNode(name = vec3)(
-            (0.5 + (0.5 * IdentifierNode(name = sin)(
-                              (((noise * 5.0) + globals.scene.time) + 0.0)))),
-            (0.5 + (0.5 * IdentifierNode(name = sin)(
-                              (((noise * 5.0) + globals.scene.time) + 2.0)))),
-            (0.5 + (0.5 * IdentifierNode(name = sin)(
-                              (((noise * 5.0) + globals.scene.time) + 4.0)))));
+        make_float3(
+            (0.5 + (0.5 * sinf((((noise * 5.0) + globals.scene.time) + 0.0)))),
+            (0.5 + (0.5 * sinf((((noise * 5.0) + globals.scene.time) + 2.0)))),
+            (0.5 + (0.5 * sinf((((noise * 5.0) + globals.scene.time) + 4.0)))));
     color.rgb = (noiseColor * weight);
     totalWeight = weight;
-    direction =
-        (IdentifierNode(name = mat2)(IdentifierNode(name = cos)((t * 3.0)),
-                                     -IdentifierNode(name = sin)((t * 3.0)),
-                                     IdentifierNode(name = sin)((t * 3.0)),
-                                     IdentifierNode(name = cos)((t * 3.0))) *
-         direction);
+    direction = (mat2(cosf((t * 3.0)), -sinf((t * 3.0)), sinf((t * 3.0)),
+                      cosf((t * 3.0))) *
+                 direction);
   }
   color.rgb = totalWeight;
   color.a = 1.0;
-  float vignette =
-      (1.0 - IdentifierNode(name = smoothstep)(
-                 0.5, 1.0, (IdentifierNode(name = length)((uv - 0.5)) * 1.5)));
+  float vignette = (1.0 - smoothstep(0.5, 1.0, (length((uv - 0.5)) * 1.5)));
   color.rgb = vignette;
-  IdentifierNode(name = imageStore)(outputImage, texCoord, color);
+  imageStore(outputImage, texCoord, color);
 }

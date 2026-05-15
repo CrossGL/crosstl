@@ -1,12 +1,12 @@
-"""Common AST Node definitions shared across backends"""
+"""Common AST node definitions shared across backends."""
 
 
 class ASTNode:
-    """Base class for all AST nodes"""
+    pass
 
 
 class ShaderNode(ASTNode):
-    """Root node representing a complete program"""
+    """Root node representing a complete program."""
 
     def __init__(
         self,
@@ -24,7 +24,6 @@ class ShaderNode(ASTNode):
         self.global_variables = global_variables or []
         self.kernels = kernels or []
 
-        # Initialize common backend-specific attributes with defaults
         self.uniforms = kwargs.get("uniforms", [])
         self.in_out = kwargs.get("in_out", [])
         self.constant = kwargs.get("constant", [])
@@ -35,11 +34,9 @@ class ShaderNode(ASTNode):
         self.exports = kwargs.get("exports", [])
         self.typedefs = kwargs.get("typedefs", [])
         self.extensions = kwargs.get("extensions", [])
-        self.global_vars = kwargs.get("global_vars", self.global_variables)  # Alias
+        self.global_vars = kwargs.get("global_vars", self.global_variables)
 
-        # Support different backend signatures
         if args:
-            # Handle positional arguments from different backends
             if len(args) >= 1:
                 self.uniforms = args[0]
             if len(args) >= 2:
@@ -47,7 +44,6 @@ class ShaderNode(ASTNode):
             if len(args) >= 3:
                 self.constant = args[2]
 
-        # Store any extra kwargs as attributes
         for key, value in kwargs.items():
             if not hasattr(self, key):
                 setattr(self, key, value)
@@ -57,7 +53,7 @@ class ShaderNode(ASTNode):
 
 
 class FunctionNode(ASTNode):
-    """Node representing a function declaration"""
+    """Node representing a function declaration."""
 
     def __init__(
         self,
@@ -76,12 +72,11 @@ class FunctionNode(ASTNode):
         self.body = body
         self.qualifiers = qualifiers or []
         self.attributes = attributes or []
-        self.generics = kwargs.get("generics", [])  # For generic/template functions
+        self.generics = kwargs.get("generics", [])
 
-        # Support additional arguments from different backends
         if args:
             if len(args) >= 1:
-                self.qualifier = args[0]  # Some backends use singular
+                self.qualifier = args[0]
 
         for key, value in kwargs.items():
             if not hasattr(self, key):
@@ -92,7 +87,7 @@ class FunctionNode(ASTNode):
 
 
 class StructNode(ASTNode):
-    """Node representing a struct declaration"""
+    """Node representing a struct declaration."""
 
     def __init__(self, name, members, attributes=None):
         self.name = name
@@ -109,7 +104,6 @@ class EnumNode(ASTNode):
     def __init__(self, name, members):
         self.name = name
         self.members = members  # list of (name, value_or_None)
-
     def __repr__(self):
         return f"EnumNode(name={self.name}, members={self.members})"
 
@@ -155,9 +149,8 @@ class VariableNode(ASTNode):
         self.qualifiers = qualifiers or []
         self.attributes = attributes or []
         self.is_const = is_const
-        self.semantic = kwargs.get("semantic", None)  # Common in shader languages
+        self.semantic = kwargs.get("semantic", None)
 
-        # Support additional parameters from different backends
         for key, val in kwargs.items():
             if not hasattr(self, key):
                 setattr(self, key, val)
@@ -271,7 +264,7 @@ class ArrayAccessNode(ASTNode):
 
 
 class IfNode(ASTNode):
-    """Node representing an if statement"""
+    """Node representing an if statement."""
 
     def __init__(
         self,
@@ -281,7 +274,6 @@ class IfNode(ASTNode):
         if_chain=None,
         else_if_chain=None,
     ):
-        # Support both old and new style
         if if_chain is not None or else_if_chain is not None:
             self.if_chain = if_chain or []
             self.else_if_chain = else_if_chain or []
@@ -344,12 +336,11 @@ class DoWhileNode(ASTNode):
 
 
 class SwitchNode(ASTNode):
-    """Node representing a switch statement"""
+    """Node representing a switch statement."""
 
     def __init__(self, expression, cases, default_case=None, default=None):
         self.expression = expression
         self.cases = cases
-        # Support both parameter names for compatibility
         self.default_case = default_case or default
         self.default = self.default_case
 
@@ -358,11 +349,10 @@ class SwitchNode(ASTNode):
 
 
 class CaseNode(ASTNode):
-    """Node representing a case in a switch statement"""
+    """Node representing a case in a switch statement."""
 
     def __init__(self, value, body=None, statements=None):
         self.value = value
-        # Support both parameter names for compatibility
         self.body = body or statements or []
         self.statements = self.body
 
@@ -381,10 +371,9 @@ class ReturnNode(ASTNode):
 
 
 class ContinueNode(ASTNode):
-    """Node representing a continue statement"""
+    """Node representing a continue statement."""
 
     def __init__(self, *args, **kwargs):
-        # Accept any arguments for compatibility
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -393,10 +382,9 @@ class ContinueNode(ASTNode):
 
 
 class BreakNode(ASTNode):
-    """Node representing a break statement"""
+    """Node representing a break statement."""
 
     def __init__(self, *args, **kwargs):
-        # Accept any arguments for compatibility
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -416,10 +404,9 @@ class DiscardNode(ASTNode):
 
 
 class VectorConstructorNode(ASTNode):
-    """Node representing vector constructor"""
+    """Node representing a vector constructor."""
 
     def __init__(self, vector_type, args, type_name=None):
-        # Support both parameter names for compatibility
         self.vector_type = vector_type or type_name
         self.type_name = self.vector_type
         self.args = args
@@ -465,11 +452,10 @@ class PreprocessorNode(ASTNode):
 
 
 class AttributeNode(ASTNode):
-    """Attributes/annotations"""
+    """Attributes/annotations."""
 
     def __init__(self, name, args=None, arguments=None):
         self.name = name
-        # Support both parameter names for compatibility
         self.args = args or arguments or []
         self.arguments = self.args
 
@@ -493,11 +479,10 @@ class TextureSampleNode(ASTNode):
 
 
 class SyncNode(ASTNode):
-    """Node representing synchronization operations"""
+    """Node representing synchronization operations."""
 
     def __init__(self, sync_type, args=None, arguments=None):
         self.sync_type = sync_type
-        # Support both parameter names
         self.args = args or arguments or []
         self.arguments = self.args
 

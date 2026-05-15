@@ -299,8 +299,6 @@ KEYWORDS = {
 
 
 class TokenType(Enum):
-    """Enumeration of all token types for type-safe token handling"""
-
     COMMENT_SINGLE = auto()
     COMMENT_MULTI = auto()
     PREPROCESSOR = auto()
@@ -457,8 +455,6 @@ class TokenType(Enum):
 
 
 class Token:
-    """Represents a single token with type and text"""
-
     def __init__(self, token_type: TokenType, text: str):
         self.token_type = token_type
         self.text = text
@@ -493,11 +489,9 @@ class HLSLLexer:
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
-        """Tokenize the input code and return list of tokens"""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
-        """Generator function that yields tokens one at a time"""
         pos = 0
         while pos < self._length:
             if self.code.startswith("/*", pos) and "*/" not in self.code[pos + 2 :]:
@@ -518,7 +512,6 @@ class HLSLLexer:
                 )
             new_pos, token_type, text = token
 
-            # Check if identifier is a keyword
             if token_type == "IDENTIFIER" and text in KEYWORDS:
                 token_type = KEYWORDS[text]
 
@@ -530,7 +523,6 @@ class HLSLLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
-        """Find the next token starting at the given position"""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -554,7 +546,6 @@ class Lexer:
         self.current_pos = 0
 
     def next(self) -> Tuple[str, str]:
-        """Get the next token and advance position"""
         if self.current_pos < len(self.tokens):
             token = self.tokens[self.current_pos]
             self.current_pos += 1
@@ -562,11 +553,9 @@ class Lexer:
         return ("EOF", "")
 
     def peek(self) -> Tuple[str, str]:
-        """Look at the next token without advancing position"""
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
         return ("EOF", "")
 
     def reset(self):
-        """Reset the lexer to the beginning"""
         self.current_pos = 0

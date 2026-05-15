@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: Khronos SPIR-V Tools Assembler; 0
-; Bound: 10
+; Bound: 65
 ; Schema: 0
                OpCapability Shader
           %1 = OpExtInstImport "GLSL.std.450"
@@ -13,4 +13,103 @@
     %v2float = OpTypeVector %float 2
     %v3float = OpTypeVector %float 3
     %v4float = OpTypeVector %float 4
-               OpExecutionMode %9 OriginUpperLeft
+  %_struct_9 = OpTypeStruct
+               OpName %_struct_9 "Particle"
+ %_struct_10 = OpTypeStruct
+               OpName %_struct_10 "PhysicsConstants"
+ %_struct_11 = OpTypeStruct
+               OpName %_struct_11 "SimulationState"
+ %_struct_12 = OpTypeStruct
+               OpName %_struct_12 "ParticleBuffer"
+ %_struct_13 = OpTypeStruct
+               OpName %_struct_13 "AtomicCounters"
+         %14 = OpTypeFunction %float %float
+         %15 = OpFunction %float None %14
+         %16 = OpFunctionParameter %float
+               OpName %16 "st"
+         %17 = OpLabel
+    %float_0 = OpConstant %float 0
+         %19 = OpCompositeConstruct %v2float %float_0 %float_0
+         %20 = OpDot %float %float_0 %19
+         %21 = OpExtInst %float %1 Sin %20
+         %22 = OpExtInst %float %1 Fract %float_0
+               OpReturnValue %22
+               OpFunctionEnd
+         %23 = OpTypeFunction %v3float %float
+         %24 = OpFunction %v3float None %23
+         %25 = OpFunctionParameter %float
+               OpName %25 "seed"
+         %26 = OpLabel
+         %27 = OpExtInst %float %1 Sin %float_0
+         %28 = OpExtInst %float %1 Fract %float_0
+         %29 = OpFAdd %float %float_0 %float_0
+               OpReturnValue %29
+               OpFunctionEnd
+         %30 = OpTypeFunction %v3float %float %float %float
+         %31 = OpFunction %v3float None %30
+         %32 = OpFunctionParameter %float
+               OpName %32 "position"
+         %33 = OpFunctionParameter %float
+               OpName %33 "attractor_pos"
+         %34 = OpFunctionParameter %float
+               OpName %34 "strength"
+         %35 = OpLabel
+               OpSelectionMerge %36 None
+               OpBranchConditional %float_0 %37 %38
+         %37 = OpLabel
+         %39 = OpCompositeConstruct %v3float %float_0
+               OpReturnValue %39
+               OpBranch %36
+         %38 = OpLabel
+               OpBranch %36
+         %36 = OpLabel
+         %40 = OpExtInst %float %1 Normalize %float_0
+               OpReturnValue %float_0
+               OpFunctionEnd
+         %41 = OpTypeFunction %float %float %float %float
+         %42 = OpFunction %float None %41
+         %43 = OpFunctionParameter %float
+               OpName %43 "pos1"
+         %44 = OpFunctionParameter %float
+               OpName %44 "pos2"
+         %45 = OpFunctionParameter %float
+               OpName %45 "radius"
+         %46 = OpLabel
+         %47 = OpExtInst %float %1 Length %float_0
+         %48 = OpFOrdLessThan %float %47 %float_0
+               OpReturnValue %48
+               OpFunctionEnd
+         %49 = OpTypeFunction %v3float %float %float %float %float %float %float
+         %50 = OpFunction %v3float None %49
+         %51 = OpFunctionParameter %float
+               OpName %51 "pos1"
+         %52 = OpFunctionParameter %float
+               OpName %52 "vel1"
+         %53 = OpFunctionParameter %float
+               OpName %53 "pos2"
+         %54 = OpFunctionParameter %float
+               OpName %54 "vel2"
+         %55 = OpFunctionParameter %float
+               OpName %55 "mass1"
+         %56 = OpFunctionParameter %float
+               OpName %56 "mass2"
+         %57 = OpLabel
+               OpSelectionMerge %58 None
+               OpBranchConditional %float_0 %59 %60
+         %59 = OpLabel
+               OpReturn
+               OpBranch %58
+         %60 = OpLabel
+               OpBranch %58
+         %58 = OpLabel
+               OpSelectionMerge %61 None
+               OpBranchConditional %float_0 %62 %63
+         %62 = OpLabel
+               OpReturn
+               OpBranch %61
+         %63 = OpLabel
+               OpBranch %61
+         %61 = OpLabel
+               OpReturnValue %float_0
+               OpFunctionEnd
+               OpExecutionMode %64 OriginUpperLeft

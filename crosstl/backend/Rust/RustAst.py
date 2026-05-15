@@ -20,26 +20,6 @@ from ..common_ast import (
     WhileNode,
 )
 
-# Keep common AST imports used for re-exports (autoflake-safe).
-_COMMON_NODES = (
-    ArrayAccessNode,
-    AssignmentNode,
-    AttributeNode,
-    BinaryOpNode,
-    BreakNode,
-    CastNode,
-    ContinueNode,
-    FunctionCallNode,
-    IfNode,
-    MemberAccessNode,
-    ReturnNode,
-    TernaryOpNode,
-    UnaryOpNode,
-    VariableNode,
-    VectorConstructorNode,
-    WhileNode,
-)
-
 
 class ShaderNode(ASTNode):
     """Root node representing a Rust module/program."""

@@ -160,11 +160,9 @@ class VulkanLexer:
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
-        # tokenize the input code and return list of tokens
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
-        # function that yields tokens one at a time
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -185,7 +183,6 @@ class VulkanLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Tuple[int, str, str]:
-        # find the next token starting at the given position
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -194,6 +191,5 @@ class VulkanLexer:
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "VulkanLexer":
-        # create a lexer instance from a file, reading in chunks
         with open(filepath, "r") as f:
             return cls(f.read())

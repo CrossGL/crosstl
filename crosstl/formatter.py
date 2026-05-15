@@ -28,19 +28,11 @@ class CodeFormatter:
     """Formats shader code using appropriate external tools"""
 
     def __init__(self, clang_format_path=None, spirv_tools_path=None):
-        """Initialize the formatter with paths to external tools
-
-        Args:
-            clang_format_path: Path to clang-format executable
-            spirv_tools_path: Path to spirv-tools executables
-        """
-        # Try to find tools in PATH if not explicitly provided
         self.clang_format_path = clang_format_path or shutil.which("clang-format")
         self.spirv_as_path = spirv_tools_path or shutil.which("spirv-as")
         self.spirv_dis_path = spirv_tools_path or shutil.which("spirv-dis")
         self.spirv_val_path = spirv_tools_path or shutil.which("spirv-val")
 
-        # Check if tools are available
         self.has_clang = bool(self.clang_format_path)
         self.has_spirv_tools = bool(self.spirv_as_path and self.spirv_dis_path)
 
@@ -77,28 +69,15 @@ class CodeFormatter:
             return ShaderLanguage.UNKNOWN
 
     def format_code(self, code, language=None, file_path=None):
-        """Format shader code according to its language
-
-        Args:
-            code: The shader code to format
-            language: ShaderLanguage enum or string
-            file_path: Optional file path for language detection
-
-        Returns:
-            Formatted code string or original if formatting failed
-        """
-        # Detect language if not provided
         if language is None and file_path:
             language = self.detect_language(file_path)
 
-        # Convert string to enum if needed
         if isinstance(language, str):
             try:
                 language = ShaderLanguage(language)
             except ValueError:
                 language = ShaderLanguage.UNKNOWN
 
-        # Apply appropriate formatter
         if language in [
             ShaderLanguage.HLSL,
             ShaderLanguage.GLSL,
@@ -116,12 +95,11 @@ class CodeFormatter:
             return code
 
     def _format_with_clang(self, code, language):
-        """Format C-like shader code with clang-format"""
+        """Format C-like shader code with clang-format."""
         if not self.has_clang:
             logger.warning("clang-format not available for code formatting")
             return code
 
-        # Map language to clang-format style
         style_map = {
             ShaderLanguage.HLSL: "Microsoft",
             ShaderLanguage.GLSL: "Google",
@@ -134,7 +112,6 @@ class CodeFormatter:
         style = style_map.get(language, "LLVM")
 
         try:
-            # Create temp file with appropriate extension
             ext_map = {
                 ShaderLanguage.HLSL: ".hlsl",
                 ShaderLanguage.GLSL: ".glsl",
@@ -152,7 +129,6 @@ class CodeFormatter:
                 tmp_path = tmp.name
                 tmp.write(code)
 
-            # Run clang-format
             cmd = [self.clang_format_path, "-style=" + style, "-i", tmp_path]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -160,7 +136,6 @@ class CodeFormatter:
                 logger.error(f"clang-format failed: {result.stderr}")
                 return code
 
-            # Read formatted code
             with open(tmp_path, "r") as f:
                 formatted_code = f.read()
 
@@ -169,7 +144,6 @@ class CodeFormatter:
             logger.error(f"Error formatting with clang-format: {e}")
             return code
         finally:
-            # Clean up temporary file
             if "tmp_path" in locals():
                 try:
                     os.unlink(tmp_path)
@@ -177,13 +151,12 @@ class CodeFormatter:
                     pass
 
     def _format_spirv(self, code):
-        """Format SPIR-V assembly code using spirv-as and spirv-dis"""
+        """Format SPIR-V assembly code using spirv-as and spirv-dis."""
         if not self.has_spirv_tools:
             logger.warning("SPIRV-Tools not available for SPIR-V formatting")
             return code
 
         try:
-            # Create temp files for input and output
             with tempfile.NamedTemporaryFile(
                 suffix=".spvasm", mode="w+", delete=False
             ) as tmp_in:
@@ -192,16 +165,13 @@ class CodeFormatter:
 
             tmp_out_path = tmp_in_path + ".spv"
 
-            # First pass: Assemble to binary
             assemble_cmd = [self.spirv_as_path, tmp_in_path, "-o", tmp_out_path]
             result = subprocess.run(assemble_cmd, capture_output=True, text=True)
 
             if result.returncode != 0:
                 logger.error(f"spirv-as failed: {result.stderr}")
-                # Still try to make it more readable even if invalid
                 return self._make_spirv_readable(code)
 
-            # Second pass: Disassemble with formatting
             disassemble_cmd = [self.spirv_dis_path, tmp_out_path, "--no-color"]
             result = subprocess.run(disassemble_cmd, capture_output=True, text=True)
 
@@ -214,7 +184,6 @@ class CodeFormatter:
             logger.error(f"Error formatting SPIR-V: {e}")
             return self._make_spirv_readable(code)
         finally:
-            # Clean up temporary files
             for path in [tmp_in_path, tmp_out_path]:
                 if "path" in locals():
                     try:
@@ -223,11 +192,10 @@ class CodeFormatter:
                         pass
 
     def _make_spirv_readable(self, code):
-        """Make SPIR-V code more readable without external tools"""
+        """Make SPIR-V code more readable without external tools."""
         lines = code.split("\n")
         result = []
 
-        # Simple indentation based on the expected test output
         for line in lines:
             line = line.strip()
             if not line:
@@ -244,7 +212,6 @@ class CodeFormatter:
             elif line == "OpFunctionEnd":
                 result.append(line)
             else:
-                # Default indentation logic for other lines not in the test
                 if any(keyword in line for keyword in ["OpFunction", "OpLabel"]):
                     result.append(line)
                 elif "OpFunctionEnd" in line:
@@ -255,20 +222,18 @@ class CodeFormatter:
         return "\n".join(result)
 
     def validate_spirv(self, code):
-        """Validate SPIR-V code"""
+        """Validate SPIR-V code."""
         if not self.has_spirv_tools:
             logger.warning("SPIRV-Tools not available for validation")
             return False, "SPIRV-Tools not available"
 
         try:
-            # Create temp file for input
             with tempfile.NamedTemporaryFile(
                 suffix=".spvasm", mode="w+", delete=False
             ) as tmp:
                 tmp_path = tmp.name
                 tmp.write(code)
 
-            # Assemble and validate
             assemble_cmd = [self.spirv_as_path, "--target-env", "vulkan1.0", tmp_path]
             result = subprocess.run(assemble_cmd, capture_output=True, text=True)
 
@@ -285,7 +250,6 @@ class CodeFormatter:
         except Exception as e:
             return False, f"Error validating SPIR-V: {e}"
         finally:
-            # Clean up temporary file
             if "tmp_path" in locals():
                 try:
                     os.unlink(tmp_path)
@@ -295,15 +259,7 @@ class CodeFormatter:
 
 
 def format_file(file_path, language=None):
-    """Format a shader file in-place
-
-    Args:
-        file_path: Path to the file to format
-        language: Optional language override
-
-    Returns:
-        True if formatting was successful, False otherwise
-    """
+    """Format a shader file in-place."""
     formatter = CodeFormatter()
 
     try:
@@ -323,16 +279,7 @@ def format_file(file_path, language=None):
 
 # Helper function to be called from _crosstl.py
 def format_shader_code(code, backend, output_path=None):
-    """Format shader code based on backend
-
-    Args:
-        code: Shader code to format
-        backend: Backend identifier (e.g., 'metal', 'directx', 'opengl', 'vulkan')
-        output_path: Optional path where code will be saved (for language detection)
-
-    Returns:
-        Formatted shader code
-    """
+    """Format shader code based on backend."""
     if not backend:
         return code
 

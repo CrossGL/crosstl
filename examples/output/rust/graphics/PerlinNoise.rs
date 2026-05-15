@@ -28,8 +28,7 @@ pub struct FragmentOutput {
 
 // Vertex Shader
 #[vertex_shader]
-pub fn
-main(input : VertexInput) -> VertexOutput {
+pub fn main(input : VertexInput) -> VertexOutput {
   let mut output : VertexOutput;
   output.uv = (input.position.xy * 10.0);
   output.position = Vec4<f32>::new (input.position, 1.0);

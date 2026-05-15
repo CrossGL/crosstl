@@ -196,7 +196,8 @@ VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 
 }
 
 // Vertex Shader
-VertexOutput main(VertexInput input)
+// Vertex Shader
+VertexOutput VSMain(VertexInput input)
 {
     VertexOutput output;
     MatrixType(element_type = PrimitiveType(name = float, size_bits = None), rows = 4, cols = 4) modelMatrix =
@@ -269,7 +270,8 @@ VertexOutput main(VertexInput input)
 }
 
 // Fragment Shader
-FragmentOutput main(VertexOutput input)
+// Fragment Shader
+FragmentOutput PSMain(VertexOutput input)
 {
     FragmentOutput output;
     Material material = globals.scene.materials[input.materialIndex];
@@ -378,7 +380,8 @@ float shadowCalculation(VectorType(element_type = PrimitiveType(name = float, si
 }
 
 // Compute Shader
-void main()
+// Compute Shader
+void CSMain()
 {
     int2 texCoord = ivec2(gl_GlobalInvocationID.xy);
     float2 screenSize = globals.screenSize;

@@ -257,7 +257,6 @@ class MetalToCrossGLConverter:
         if includes:
             code += "\n"
         code += "shader main {\n"
-        # Generate custom functions
         code += "\n"
         self.constant_struct_name = []
 
@@ -344,7 +343,6 @@ class MetalToCrossGLConverter:
                     code += f"    {decl};\n"
             code += "\n"
 
-        # Get functions
         functions = getattr(ast, "functions", []) or []
         for f in functions:
             qualifier = getattr(f, "qualifier", None)
@@ -379,7 +377,6 @@ class MetalToCrossGLConverter:
         structs = getattr(node, "structs", []) or getattr(node, "struct", []) or []
         for constant in constants:
             if isinstance(constant, ConstantBufferNode):
-                # Iterate over all structs and append the ones matching the constant name
                 self.constant_struct_name.extend(
                     struct.name for struct in structs if struct.name == constant.name
                 )
@@ -521,12 +518,10 @@ class MetalToCrossGLConverter:
     def generate_if_statement(self, node, indent, is_main):
         code = ""
         if node.if_chain:
-            # Handle the if chain
             for condition, body in node.if_chain:
                 code += f"if ({self.generate_expression(condition, is_main)}) {{\n"
                 code += self.generate_function_body(body, indent + 1, is_main)
                 code += "    " * indent + "}"
-        # Handling the else if chain
         if node.else_if_chain:
             for condition, body in node.else_if_chain:
                 code += (
@@ -535,7 +530,6 @@ class MetalToCrossGLConverter:
                 code += self.generate_function_body(body, indent + 1, is_main)
                 code += "    " * indent + "}"
 
-        # Handling the else condition
         if node.else_body:
             code += " else {\n"
             code += self.generate_function_body(node.else_body, indent + 1, is_main)
@@ -636,7 +630,6 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
             return str(expr)
         else:
-            # For any unhandled expression type, return a placeholder
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def map_type(self, metal_type):
@@ -686,25 +679,13 @@ class MetalToCrossGLConverter:
         return " ".join(outputs)
 
     def generate_switch_statement(self, node, indent, is_main):
-        """Generate CrossGL code for a switch statement
-
-        Args:
-            node: SwitchNode representing a Metal switch statement
-            indent: Current indentation level
-            is_main: Whether this is within the main function
-
-        Returns:
-            str: The CrossGL switch statement
-        """
         expression = self.generate_expression(node.expression, is_main)
         code = f"switch ({expression}) {{\n"
 
-        # Generate case statements
         for case in node.cases:
             case_value = self.generate_expression(case.value, is_main)
             code += "    " * (indent + 1) + f"case {case_value}:\n"
 
-            # Generate case body
             for stmt in case.statements:
                 code += "    " * (indent + 2)
                 if isinstance(stmt, SwitchNode):
@@ -719,7 +700,6 @@ class MetalToCrossGLConverter:
             # Add implicit break if not present
             code += "    " * (indent + 2) + "break;\n"
 
-        # Generate default case if present
         if node.default:
             code += "    " * (indent + 1) + "default:\n"
 

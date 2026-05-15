@@ -117,7 +117,6 @@ class MojoToCrossGLConverter:
     def generate(self, ast):
         code = "shader main {\n"
 
-        # Generate imports as comments
         if hasattr(ast, "functions") and ast.functions:
             imports = [f for f in ast.functions if isinstance(f, ImportNode)]
             if imports:
@@ -129,11 +128,9 @@ class MojoToCrossGLConverter:
                     code += "\n"
                 code += "\n"
 
-        # Generate struct definitions
         if hasattr(ast, "functions"):
             structs = [f for f in ast.functions if isinstance(f, StructNode)]
             for struct_node in structs:
-                code += f"    // Structs\n"
                 code += f"    struct {struct_node.name} {{\n"
                 for member in struct_node.members:
                     semantic = (
@@ -144,7 +141,6 @@ class MojoToCrossGLConverter:
                     code += f"        {self.map_type(member.vtype)} {member.name}{semantic};\n"
                 code += "    }\n\n"
 
-        # Generate constant buffers
         if hasattr(ast, "functions"):
             cbuffers = [f for f in ast.functions if isinstance(f, ConstantBufferNode)]
             if cbuffers:
@@ -157,7 +153,6 @@ class MojoToCrossGLConverter:
                         )
                     code += "    }\n\n"
 
-        # Generate functions
         if hasattr(ast, "functions"):
             functions = [f for f in ast.functions if isinstance(f, FunctionNode)]
             for func in functions:
@@ -195,7 +190,6 @@ class MojoToCrossGLConverter:
         return code
 
     def has_vertex_attribute(self, func):
-        """Check if function has vertex-related attributes"""
         if not hasattr(func, "attributes") or not func.attributes:
             return False
         for attr in func.attributes:
@@ -204,7 +198,6 @@ class MojoToCrossGLConverter:
         return False
 
     def has_fragment_attribute(self, func):
-        """Check if function has fragment-related attributes"""
         if not hasattr(func, "attributes") or not func.attributes:
             return False
         for attr in func.attributes:
@@ -213,7 +206,6 @@ class MojoToCrossGLConverter:
         return False
 
     def has_compute_attribute(self, func):
-        """Check if function has compute-related attributes"""
         if not hasattr(func, "attributes") or not func.attributes:
             return False
         for attr in func.attributes:
@@ -225,7 +217,6 @@ class MojoToCrossGLConverter:
         code = ""
         indent_str = "    " * indent
 
-        # Generate function parameters
         params = []
         if hasattr(func, "params") and func.params:
             for p in func.params:
@@ -239,7 +230,6 @@ class MojoToCrossGLConverter:
         params_str = ", ".join(params) if params else ""
         return_type = self.map_type(func.return_type) if func.return_type else "void"
 
-        # Generate function attributes
         func_attributes = ""
         if hasattr(func, "attributes") and func.attributes:
             func_attributes = self.map_semantic(func.attributes)
@@ -248,7 +238,6 @@ class MojoToCrossGLConverter:
             f"{indent_str}{return_type} {func.name}({params_str}){func_attributes} {{\n"
         )
 
-        # Generate function body
         if hasattr(func, "body") and func.body:
             code += self.generate_function_body(func.body, indent + 1)
 
@@ -341,23 +330,18 @@ class MojoToCrossGLConverter:
         code += indent_str + "}"
 
         if hasattr(node, "else_body") and node.else_body:
-            # Check if else_body is a list
             if isinstance(node.else_body, list):
                 if len(node.else_body) == 1 and isinstance(node.else_body[0], IfNode):
-                    # This is an elif statement
                     code += " else "
                     code += self.generate_if_statement(node.else_body[0], indent)
                 else:
-                    # Regular else with multiple statements
                     code += " else {\n"
                     code += self.generate_function_body(node.else_body, indent + 1)
                     code += indent_str + "}"
             elif isinstance(node.else_body, IfNode):
-                # Direct IfNode for elif
                 code += " else "
                 code += self.generate_if_statement(node.else_body, indent)
             else:
-                # Regular else body
                 code += " else {\n"
                 code += self.generate_function_body([node.else_body], indent + 1)
                 code += indent_str + "}"
@@ -371,7 +355,6 @@ class MojoToCrossGLConverter:
 
         code = f"switch ({expression}) {{\n"
 
-        # Generate case statements
         if hasattr(node, "cases") and node.cases:
             for case in node.cases:
                 if hasattr(case, "condition") and case.condition is not None:
@@ -396,10 +379,8 @@ class MojoToCrossGLConverter:
             return str(expr)
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "vtype") and expr.vtype:
-                # If this is a type declaration, format it properly
                 return f"{self.map_type(expr.vtype)} {expr.name}"
             else:
-                # Just a variable reference
                 return expr.name
         elif isinstance(expr, VariableDeclarationNode):
             return self.generate_variable_declaration(expr)

@@ -119,13 +119,11 @@ class MojoCodeGen:
         code += "from simd import *\n"
         code += "from gpu import *\n\n"
 
-        # Generate structs - handle both old and new AST
         structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
                 code += self.generate_struct(node)
 
-        # Generate global variables - handle both old and new AST
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
             if isinstance(node, ArrayNode):
@@ -143,13 +141,11 @@ class MojoCodeGen:
                     vtype = "float"
                 code += f"var {node.name}: {self.map_type(vtype)}\n"
 
-        # Generate cbuffers as structs - handle both old and new AST
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
             code += "# Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        # Generate functions - handle both old and new AST
         functions = getattr(ast, "functions", [])
         for func in functions:
             # Handle both old and new AST function structures
@@ -189,30 +185,23 @@ class MojoCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
-        # Handle different TypeNode types
         if hasattr(type_node, "name"):
-            # PrimitiveType
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
-            # VectorType - map to proper Mojo vector types
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = type_node.size
-
-            # Map to Mojo vector types
             if element_type == "float":
-                return f"vec{size}"  # This will be mapped to SIMD[DType.float32, {size}] later
+                return f"vec{size}"
             elif element_type == "int":
-                return f"ivec{size}"  # This will be mapped to SIMD[DType.int32, {size}] later
+                return f"ivec{size}"
             elif element_type == "uint":
-                return f"uvec{size}"  # This will be mapped to SIMD[DType.uint32, {size}] later
+                return f"uvec{size}"
             else:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
-            # MatrixType
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            return f"mat{type_node.rows}x{type_node.cols}"  # Will be mapped later
+            return f"mat{type_node.rows}x{type_node.cols}"
         else:
-            # Fallback
             return str(type_node)
 
     def extract_semantic_from_attributes(self, attributes):
@@ -244,7 +233,6 @@ class MojoCodeGen:
     def generate_struct(self, node):
         code = f"@value\nstruct {node.name}:\n"
 
-        # Generate struct members - handle both old and new AST
         members = getattr(node, "members", [])
         for member in members:
             if isinstance(member, ArrayNode):
@@ -256,17 +244,13 @@ class MojoCodeGen:
                 else:
                     code += f"    var {member.name}: DynamicVector[{self.map_type(element_type)}]\n"
             else:
-                # Handle both old and new AST member structures
                 if hasattr(member, "member_type"):
-                    # New AST structure
                     member_type = self.convert_type_node_to_string(member.member_type)
                 elif hasattr(member, "vtype"):
-                    # Old AST structure
                     member_type = member.vtype
                 else:
                     member_type = "float"
 
-                # Handle semantic - get from attributes in new AST
                 semantic = None
                 if hasattr(member, "semantic"):
                     semantic = member.semantic
@@ -334,20 +318,16 @@ class MojoCodeGen:
         code = ""
         "    " * indent
 
-        # Handle parameters - support both old and new AST
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
         for p in param_list:
             if hasattr(p, "param_type"):
-                # New AST structure
                 param_type = self.convert_type_node_to_string(p.param_type)
             elif hasattr(p, "vtype"):
-                # Old AST structure
                 param_type = p.vtype
             else:
                 param_type = "float"
 
-            # Handle semantic
             semantic = None
             if hasattr(p, "semantic"):
                 semantic = p.semantic
@@ -359,13 +339,11 @@ class MojoCodeGen:
 
         params_str = ", ".join(params) if params else ""
 
-        # Handle return type - support both old and new AST
         if hasattr(func, "return_type"):
             return_type = self.convert_type_node_to_string(func.return_type)
         else:
             return_type = "void"
 
-        # Add shader type decorators for Mojo GPU programming
         if shader_type == "vertex":
             code += f"@vertex_shader\n"
         elif shader_type == "fragment":
@@ -375,14 +353,11 @@ class MojoCodeGen:
 
         code += f"fn {func.name}({params_str}) -> {self.map_type(return_type)}:\n"
 
-        # Handle function body - support both old and new AST
         body = getattr(func, "body", [])
         if hasattr(body, "statements"):
-            # New AST BlockNode structure
             for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
-            # Old AST structure
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
         else:
@@ -395,9 +370,7 @@ class MojoCodeGen:
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
-            # Handle variable declarations with initialization
             if hasattr(stmt, "var_type"):
-                # New AST structure
                 var_type = self.convert_type_node_to_string(stmt.var_type)
             elif hasattr(stmt, "vtype") and stmt.vtype:
                 # Old AST structure - check if this is actually an array declaration disguised as a variable
@@ -420,7 +393,6 @@ class MojoCodeGen:
             else:
                 var_type = "float"
 
-            # Handle initialization
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
                 init_expr = self.generate_expression(stmt.initial_value)
                 return f"{indent_str}var {stmt.name}: {self.map_type(var_type)} = {init_expr}\n"
@@ -476,21 +448,16 @@ class MojoCodeGen:
         )
         code = f"{indent_str}if {condition}:\n"
 
-        # Generate if body - handle BlockNode structure
         if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
         if hasattr(if_body, "statements"):
-            # New AST BlockNode structure
             for stmt in if_body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(if_body, list):
-            # Old AST structure - list of statements
             for stmt in if_body:
                 code += self.generate_statement(stmt, indent + 1)
 
-        # Handle else branch - check if it's another if statement (else-if chain)
         else_branch = getattr(node, "else_branch", None)
         if else_branch:
-            # Check if else branch is another IfNode (else-if chain)
             if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
                 # Generate elif by recursively generating the nested if with elif prefix
                 elif_condition = self.generate_expression(
@@ -511,10 +478,8 @@ class MojoCodeGen:
                     for stmt in elif_body:
                         code += self.generate_statement(stmt, indent + 1)
 
-                # Recursively handle any remaining else-if chain
                 nested_else = getattr(else_branch, "else_branch", None)
                 if nested_else:
-                    # Create a temporary node to continue the chain
                     if hasattr(nested_else, "__class__") and "If" in str(
                         nested_else.__class__
                     ):
@@ -539,18 +504,14 @@ class MojoCodeGen:
                         else:
                             code += self.generate_statement(nested_else, indent + 1)
             else:
-                # Regular else clause
                 code += f"{indent_str}else:\n"
                 if hasattr(else_branch, "statements"):
-                    # New AST BlockNode structure
                     for stmt in else_branch.statements:
                         code += self.generate_statement(stmt, indent + 1)
                 elif isinstance(else_branch, list):
-                    # Old AST structure
                     for stmt in else_branch:
                         code += self.generate_statement(stmt, indent + 1)
                 else:
-                    # Single statement
                     code += self.generate_statement(else_branch, indent + 1)
 
         return code
@@ -558,27 +519,20 @@ class MojoCodeGen:
     def generate_for(self, node, indent):
         indent_str = "    " * indent
 
-        # Extract init, condition, and update
         init = self.generate_statement(node.init, 0).strip()
         condition = self.generate_expression(node.condition)
         update = self.generate_expression(node.update)
 
-        # In Mojo, we'll use a while loop for C-style for loops
         code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
 
-        # Generate loop body
-        # Handle BlockNode structure
         if hasattr(node.body, "statements"):
-            # New AST BlockNode structure
             for stmt in node.body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(node.body, list):
-            # Old AST list structure
             for stmt in node.body:
                 code += self.generate_statement(stmt, indent + 1)
         else:
-            # Single statement
             code += self.generate_statement(node.body, indent + 1)
 
         # Add update at the end of the loop
@@ -708,13 +662,11 @@ class MojoCodeGen:
         if vtype is None:
             return "Float32"
 
-        # Handle TypeNode objects by converting to string first
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
 
-        # Handle array types first
         if "[" in vtype_str and "]" in vtype_str:
             base_type, size = parse_array_type(vtype_str)
             base_mapped = self.type_mapping.get(base_type, base_type)
@@ -723,7 +675,6 @@ class MojoCodeGen:
             else:
                 return f"DynamicVector[{base_mapped}]"
 
-        # Use regular type mapping
         return self.type_mapping.get(vtype_str, vtype_str)
 
     def map_operator(self, op):

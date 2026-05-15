@@ -1,10 +1,3 @@
-"""
-OpenGL to CrossGL converter implementation
-
-This module implements a converter from GLSL to CrossGL syntax.
-It translates GLSL AST structures into CrossGL code.
-"""
-
 from .OpenglAst import (
     ShaderNode,
     VariableNode,
@@ -38,12 +31,10 @@ from .OpenglAst import (
 
 
 class GLSLToCrossGLConverter:
-    """Convert GLSL shaders to CrossGL format"""
-
     def __init__(self, shader_type="vertex"):
         self.shader_type = shader_type
         self.indent_level = 0
-        self.indent_str = "    "  # 4 spaces for indentation
+        self.indent_str = "    "
 
         # Mapping of GLSL built-in functions to CrossGL equivalents
         self.function_map = {
@@ -212,15 +203,12 @@ class GLSLToCrossGLConverter:
         self.local_vars = []
 
     def indent(self):
-        """Return the current indentation string"""
         return self.indent_str * self.indent_level
 
     def increase_indent(self):
-        """Increase the indentation level"""
         self.indent_level += 1
 
     def decrease_indent(self):
-        """Decrease the indentation level"""
         self.indent_level -= 1
 
     def stage_struct_name(self):
@@ -267,39 +255,20 @@ class GLSLToCrossGLConverter:
         return layout_str.strip()
 
     def generate(self, ast):
-        """Generate CrossGL code from a GLSL AST
-
-        Args:
-            ast: The abstract syntax tree representing the GLSL shader
-
-        Returns:
-            str: The equivalent CrossGL code
-        """
         if ast is None:
             return "// Empty shader"
 
         if not isinstance(ast, ShaderNode):
             return f"// Unexpected AST node type: {type(ast)}"
 
-        # Process the shader node
         return self.generate_shader(ast)
 
     def generate_shader(self, node):
-        """Generate CrossGL code for a shader
-
-        Args:
-            node: ShaderNode representing a GLSL shader
-
-        Returns:
-            str: The CrossGL shader code
-        """
-        # Reset shader-specific info
         self.uniform_vars = []
         self.inputs = []
         self.outputs = []
         self.local_vars = []
 
-        # Collect shader inputs and outputs
         for var in node.io_variables:
             if isinstance(var, (LayoutNode, VariableNode)):
                 if self._is_input_var(var):
@@ -331,11 +300,9 @@ class GLSLToCrossGLConverter:
             )
             self.outputs.append(builtin)
 
-        # Collect uniforms (split resources vs constant data)
         for uniform in node.uniforms:
             self.uniform_vars.append(uniform)
 
-        # Start building the shader
         result = ""
         preprocessor = getattr(node, "preprocessor", []) or []
         if preprocessor:
@@ -428,16 +395,14 @@ class GLSLToCrossGLConverter:
             result += "\n"
 
         # Generate global constants
-        for const_var in getattr(node, "constant", []) or []:
-            result += (
+        for const_var in getattr(node, "constant", []) or []:            result += (
                 self.indent_str + self.generate_variable_declaration(const_var) + ";\n"
             )
         if getattr(node, "constant", []):
             result += "\n"
 
         # Generate global variables
-        for global_var in getattr(node, "global_variables", []) or []:
-            result += (
+        for global_var in getattr(node, "global_variables", []) or []:            result += (
                 self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
             )
         if getattr(node, "global_variables", []):
@@ -446,7 +411,6 @@ class GLSLToCrossGLConverter:
         # Generate shader function
         result += self.indent_str + f"{self.shader_type} {{\n"
 
-        # Find the main function and other functions
         main_function = None
         other_functions = []
 
@@ -492,7 +456,6 @@ class GLSLToCrossGLConverter:
 
             result += " {\n"
 
-            # Generate function body
             self.increase_indent()
 
             # For vertex shaders, create the output struct
@@ -531,20 +494,11 @@ class GLSLToCrossGLConverter:
 
         result += self.indent_str + "}\n"
 
-        # Close the shader
         result += "}\n"
 
         return result
 
     def generate_struct(self, node):
-        """Generate CrossGL code for a struct definition
-
-        Args:
-            node: StructNode representing a GLSL struct
-
-        Returns:
-            str: The CrossGL struct definition
-        """
         result = f"struct {node.name} {{\n"
 
         self.increase_indent()
@@ -567,18 +521,9 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_function(self, node):
-        """Generate CrossGL code for a function definition
-
-        Args:
-            node: FunctionNode representing a GLSL function
-
-        Returns:
-            str: The CrossGL function definition
-        """
         return_type = self.convert_type(node.return_type)
         name = node.name
 
-        # Process parameters
         params = []
         for param in node.params:
             if isinstance(param, tuple):  # (type, name)
@@ -591,7 +536,6 @@ class GLSLToCrossGLConverter:
 
         result = f"{return_type} {name}({params_str}) {{\n"
 
-        # Generate function body
         self.increase_indent()
         for statement in node.body:
             result += self.indent() + self.generate_statement(statement) + "\n"
@@ -601,14 +545,6 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_statement(self, node):
-        """Generate CrossGL code for a statement
-
-        Args:
-            node: The AST node representing a statement
-
-        Returns:
-            str: The CrossGL statement
-        """
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node) + ";"
         elif isinstance(node, IfNode):
@@ -624,7 +560,6 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, VariableNode):
             return self.generate_variable_declaration(node) + ";"
         elif isinstance(node, FunctionCallNode):
-            # Function call as a statement
             return self.generate_function_call(node) + ";"
         elif isinstance(node, SwitchNode):
             return self.generate_switch_statement(node)
@@ -639,18 +574,9 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, PostfixOpNode):
             return self.generate_expression(node) + ";"
         else:
-            # Generic expression statement
             return self.generate_expression(node) + ";"
 
     def generate_assignment(self, node):
-        """Generate CrossGL code for an assignment
-
-        Args:
-            node: AssignmentNode representing a GLSL assignment
-
-        Returns:
-            str: The CrossGL assignment
-        """
         if hasattr(node, "left") and hasattr(node, "right"):
             lhs = node.left
             rhs = node.right
@@ -669,14 +595,6 @@ class GLSLToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate_if(self, node):
-        """Generate CrossGL code for an if statement
-
-        Args:
-            node: IfNode representing a GLSL if statement
-
-        Returns:
-            str: The CrossGL if statement
-        """
         condition_node = getattr(node, "condition", None)
         if condition_node is None:
             condition_node = getattr(node, "if_condition", None)
@@ -691,7 +609,6 @@ class GLSLToCrossGLConverter:
 
         result += self.indent() + "}"
 
-        # Generate else-if blocks (support multiple representations)
         else_if_chain = []
         if hasattr(node, "else_if_conditions") and hasattr(node, "else_if_bodies"):
             else_if_chain = list(zip(node.else_if_conditions, node.else_if_bodies))
@@ -709,7 +626,6 @@ class GLSLToCrossGLConverter:
 
             result += self.indent() + "}"
 
-        # Generate else block if present
         if node.else_body:
             result += " else {\n"
 
@@ -723,14 +639,6 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_for(self, node):
-        """Generate CrossGL code for a for loop
-
-        Args:
-            node: ForNode representing a GLSL for loop
-
-        Returns:
-            str: The CrossGL for loop
-        """
         init = self.generate_statement(node.init).rstrip(";") if node.init else ""
         condition = self.generate_expression(node.condition) if node.condition else ""
         update_node = getattr(node, "update", None) or getattr(node, "iteration", None)
@@ -781,40 +689,21 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_return(self, node):
-        """Generate CrossGL code for a return statement
-
-        Args:
-            node: ReturnNode representing a GLSL return statement
-
-        Returns:
-            str: The CrossGL return statement
-        """
         if node.value is None:
             return "return"
         return f"return {self.generate_expression(node.value)}"
 
     def generate_expression(self, node):
-        """Generate CrossGL code for an expression
-
-        Args:
-            node: The AST node representing a GLSL expression
-
-        Returns:
-            str: The CrossGL expression
-        """
         if node is None:
             return ""
 
         if isinstance(node, str):
-            # Literal string value
             return node
         elif isinstance(node, NumberNode):
             return str(node.value)
         elif isinstance(node, (int, float)):
-            # Numeric literal
             return str(node)
         elif isinstance(node, VariableNode):
-            # Variable reference
             if self.shader_type in (
                 "vertex",
                 "fragment",
@@ -832,13 +721,11 @@ class GLSLToCrossGLConverter:
                 return f"output.{node.name}"
             return node.name
         elif isinstance(node, BinaryOpNode):
-            # Binary operation
             left = self.generate_expression(node.left)
             right = self.generate_expression(node.right)
             operator = self.operator_map.get(node.op, node.op)
             return f"({left} {operator} {right})"
         elif isinstance(node, UnaryOpNode):
-            # Unary operation
             operand = self.generate_expression(node.operand)
             operator = self.operator_map.get(node.op, node.op)
             return f"({operator}{operand})"
@@ -848,38 +735,23 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
         elif isinstance(node, FunctionCallNode):
-            # Function call
             return self.generate_function_call(node)
         elif isinstance(node, MemberAccessNode):
-            # Member access (e.g., struct.field)
             return self.generate_member_access(node)
         elif isinstance(node, ArrayAccessNode):
-            # Array access (e.g., array[index])
             return self.generate_array_access(node)
         elif isinstance(node, TernaryOpNode):
-            # Ternary conditional (cond ? true_expr : false_expr)
             condition = self.generate_expression(node.condition)
             true_expr = self.generate_expression(node.true_expr)
             false_expr = self.generate_expression(node.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(node, VectorConstructorNode):
-            # Vector constructor (e.g., vec3(1.0, 2.0, 3.0))
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
             return f"{self.convert_type(node.type_name)}({args})"
         else:
-            # Generic expression
             return str(node)
 
     def generate_function_call(self, node):
-        """Generate CrossGL code for a function call
-
-        Args:
-            node: FunctionCallNode representing a GLSL function call
-
-        Returns:
-            str: The CrossGL function call
-        """
-        # Check if this is a vector constructor
         name = node.name
         if isinstance(name, MemberAccessNode):
             name = self.generate_member_access(name)
@@ -918,24 +790,13 @@ class GLSLToCrossGLConverter:
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
             return f"{self.convert_type(name)}({args})"
 
-        # Check if this is a built-in function that needs to be mapped
         mapped_name = self.function_map.get(name, name)
 
-        # Generate argument list
         args = ", ".join(self.generate_expression(arg) for arg in node.args)
 
         return f"{mapped_name}({args})"
 
     def generate_member_access(self, node):
-        """Generate CrossGL code for a member access expression
-
-        Args:
-            node: MemberAccessNode representing a GLSL member access
-
-        Returns:
-            str: The CrossGL member access expression
-        """
-        # Special case for vertex shader input/output access
         object_name = ""
         if isinstance(node.object, VariableNode):
             if self.shader_type in (

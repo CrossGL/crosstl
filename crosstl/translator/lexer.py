@@ -378,17 +378,7 @@ KEYWORDS = {
 
 
 class Lexer:
-    """
-    Production-ready lexer for CrossGL Universal IR.
-
-    Supports comprehensive tokenization for all language features including:
-    - Modern type systems (generics, traits, etc.)
-    - Async/await patterns
-    - Pattern matching
-    - GPU programming constructs
-    - Memory safety keywords
-    - Complete operator set
-    """
+    """Tokenizer for CrossGL Universal IR."""
 
     def __init__(self, code):
         self.code = code
@@ -398,21 +388,18 @@ class Lexer:
         self.tokenize()
 
     def _compile_patterns(self):
-        """Compile optimized regex with named groups for all tokens."""
         combined_pattern = "|".join(
             f"(?P<{name}>{pattern})" for name, pattern in TOKENS.items()
         )
         return re.compile(combined_pattern)
 
     def _get_cached_token(self, text, token_type):
-        """Return cached token tuple for performance."""
         cache_key = (text, token_type)
         if cache_key not in self.token_cache:
             self.token_cache[cache_key] = (token_type, text)
         return self.token_cache[cache_key]
 
     def tokenize(self):
-        """Tokenize the input code with comprehensive error handling."""
         pos = 0
         length = len(self.code)
 
@@ -422,25 +409,21 @@ class Lexer:
                 token_type = match.lastgroup
                 text = match.group(token_type)
 
-                # Handle keyword recognition
                 if token_type == "IDENTIFIER" and text in KEYWORDS:
                     token_type = KEYWORDS[text]
 
-                # Skip whitespace tokens
                 if token_type != "WHITESPACE":
                     token = self._get_cached_token(text, token_type)
                     self.tokens.append(token)
 
                 pos = match.end(0)
             else:
-                # Enhanced error reporting
                 bad_char = self.code[pos]
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
 
                 # Show context around error
-                line_start = self.code.rfind("\n", 0, pos) + 1
-                line_end = self.code.find("\n", pos)
+                line_start = self.code.rfind("\n", 0, pos) + 1                line_end = self.code.find("\n", pos)
                 if line_end == -1:
                     line_end = len(self.code)
                 line_content = self.code[line_start:line_end]
@@ -452,14 +435,11 @@ class Lexer:
                     f"{line_content}\n{error_pointer}"
                 )
 
-        # Add EOF token
         self.tokens.append(self._get_cached_token(None, "EOF"))
 
     def get_tokens(self):
-        """Return the list of tokens."""
         return self.tokens
 
     def debug_print(self):
-        """Print tokens for debugging purposes."""
         for i, (token_type, text) in enumerate(self.tokens):
             print(f"{i:3d}: {token_type:20s} '{text}'")

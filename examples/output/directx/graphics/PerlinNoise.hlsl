@@ -17,7 +17,8 @@ struct FragmentOutput
     float4 color;
 };
 // Vertex Shader
-VertexOutput main(VertexInput input)
+// Vertex Shader
+VertexOutput VSMain(VertexInput input)
 {
     VertexOutput output;
     output.uv = (input.position.xy * 10.0);
@@ -26,7 +27,8 @@ VertexOutput main(VertexInput input)
 }
 
 // Fragment Shader
-FragmentOutput main(FragmentInput input)
+// Fragment Shader
+FragmentOutput PSMain(FragmentInput input)
 {
     FragmentOutput output;
     float noise = perlinNoise(input.uv);

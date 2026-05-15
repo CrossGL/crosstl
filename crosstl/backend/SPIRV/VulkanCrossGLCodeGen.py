@@ -92,7 +92,6 @@ class VulkanToCrossGLConverter:
 
     def generate(self, ast):
         code = "shader main {\n"
-        # Generate layout definitions for uniforms, buffers, etc.
         for node in ast.functions:
             if isinstance(node, LayoutNode):
                 code += self.generate_layout(node)
@@ -102,7 +101,6 @@ class VulkanToCrossGLConverter:
                 # Determine if this is a vertex or fragment shader based on the function name
                 if node.name == "main":
                     pass
-                    # Check for gl_Position writes to identify a vertex shader
                     is_vertex_shader = False
                     for stmt in node.body:
                         if self.is_position_assignment(stmt):
@@ -120,7 +118,6 @@ class VulkanToCrossGLConverter:
                         code += self.generate_function(node)
                         code += "    }\n\n"
                 else:
-                    # Regular function
                     code += self.generate_function(node)
 
         code += "}\n"
@@ -140,17 +137,14 @@ class VulkanToCrossGLConverter:
         layout_type = node.layout_type.lower() if node.layout_type else ""
 
         if layout_type == "uniform":
-            # Handle uniform buffers
             if node.struct_fields:
                 code += f"    cbuffer {node.variable_name or 'UniformBuffer'} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    }\n\n"
             else:
-                # Single uniform
                 code += f"    {self.map_type(node.data_type)} {node.variable_name};\n"
         elif layout_type == "buffer":
-            # Handle storage buffers
             if node.struct_fields:
                 code += f"    struct {node.variable_name or 'StorageBuffer'}_t {{\n"
                 for field_type, field_name in node.struct_fields:
@@ -158,7 +152,6 @@ class VulkanToCrossGLConverter:
                 code += "    };\n\n"
                 code += f"    RWStructuredBuffer<{node.variable_name or 'StorageBuffer'}_t> {node.variable_name};\n\n"
         elif layout_type == "in" or layout_type == "out":
-            # Input/output variables are handled differently in HLSL - typically as function parameters or return values
             pass
 
         return code
@@ -186,7 +179,6 @@ class VulkanToCrossGLConverter:
 
     def generate_function_body(self, body, indent=1):
         code = ""
-        # Check if body is a list or a single node
         if not isinstance(body, list):
             body = [body]
 
@@ -220,7 +212,6 @@ class VulkanToCrossGLConverter:
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:
-                # For any unhandled statement type
                 code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
 
@@ -240,7 +231,6 @@ class VulkanToCrossGLConverter:
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
 
-            # Handle bitwise operations
             if expr.op in self.bitwise_op_map:
                 op = self.bitwise_op_map[expr.op]
                 return f"({left} {op} {right})"
@@ -262,7 +252,6 @@ class VulkanToCrossGLConverter:
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
         else:
-            # Handle any other expression type
             return str(expr)
 
     def generate_function_call(self, node):
@@ -307,7 +296,6 @@ class VulkanToCrossGLConverter:
         code += self.generate_function_body(node.if_body, indent=indent + 1)
         code += "    " * indent + "}"
 
-        # Handle else-if chains
         if hasattr(node, "else_if_conditions") and node.else_if_conditions:
             for i in range(len(node.else_if_conditions)):
                 else_if_condition = self.generate_expression(node.else_if_conditions[i])
@@ -317,7 +305,6 @@ class VulkanToCrossGLConverter:
                 )
                 code += "    " * indent + "}"
 
-        # Handle else block
         if node.else_body:
             code += " else {\n"
             code += self.generate_function_body(node.else_body, indent=indent + 1)
@@ -346,7 +333,6 @@ class VulkanToCrossGLConverter:
         return code
 
     def map_type(self, vulkan_type):
-        """Map Vulkan/GLSL types to HLSL/DirectX types"""
         if vulkan_type in self.type_map:
             return self.type_map[vulkan_type]
         return vulkan_type

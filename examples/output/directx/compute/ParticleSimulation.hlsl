@@ -99,7 +99,8 @@ VectorType(element_type = PrimitiveType(name = float, size_bits = None), size = 
 }
 
 // Compute Shader
-void spawn()
+// Compute Shader
+void CSMain()
 {
     if ((counters.active_count >= physics.max_particles))
     {

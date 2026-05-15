@@ -2,7 +2,6 @@ import re
 from typing import List
 
 
-# Token class for HIP lexer
 class Token:
     def __init__(self, token_type: str, value: str, line: int = 1, column: int = 1):
         self.type = token_type
@@ -14,7 +13,6 @@ class Token:
         return f"Token({self.type}, '{self.value}')"
 
 
-# Skip tokens that don't need processing
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
 # HIP token definitions - order matters for correct tokenization
@@ -244,7 +242,6 @@ class HipLexer:
         self.column = 1
 
     def tokenize(self) -> List[Token]:
-        """Tokenize the input code and return list of tokens"""
         tokens = []
         pos = 0
 
@@ -256,15 +253,12 @@ class HipLexer:
                 )
             new_pos, token_type, text = token
 
-            # Check if identifier is a reserved keyword
             if token_type == "IDENTIFIER" and text in self.reserved_keywords:
                 token_type = self.reserved_keywords[text]
 
-            # Skip whitespace and comments unless needed for debugging
             if token_type not in SKIP_TOKENS:
                 tokens.append(Token(token_type, text, self.line, self.column))
 
-            # Update line and column tracking
             if token_type == "NEWLINE":
                 self.line += 1
                 self.column = 1
@@ -276,7 +270,6 @@ class HipLexer:
         return tokens
 
     def _next_token(self, pos: int):
-        """Find the next token starting at the given position"""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -287,15 +280,7 @@ class HipLexer:
 
 # For compatibility with existing test expectations
 def parse_hip_code(code: str):
-    """
-    Parse HIP code and return the AST
-
-    Args:
-        code: HIP source code as string
-
-    Returns:
-        AST representing the parsed HIP code
-    """
+    """Parse HIP code and return the AST"""
     from .HipParser import HipParser
 
     lexer = HipLexer(code)

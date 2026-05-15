@@ -13,4 +13,3 @@ struct RenderState
 struct LightingModel
 {
 };
-

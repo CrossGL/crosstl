@@ -8,9 +8,8 @@ pub struct Matrix32 {
   pub data : vecLiteralNode(value = 32,
                             literal_type = PrimitiveType(name = int,
                                                          size_bits = None))
-                 LiteralNode(value = 32,
-                             literal_type = PrimitiveType(name = int,
-                                                          size_bits = None)),
+      LiteralNode(value = 32,
+                  literal_type = PrimitiveType(name = int, size_bits = None)),
 }
 
 #[repr(C)]
@@ -19,9 +18,8 @@ pub struct Matrix64 {
   pub data : vecLiteralNode(value = 64,
                             literal_type = PrimitiveType(name = int,
                                                          size_bits = None))
-                 LiteralNode(value = 64,
-                             literal_type = PrimitiveType(name = int,
-                                                          size_bits = None)),
+      LiteralNode(value = 64,
+                  literal_type = PrimitiveType(name = int, size_bits = None)),
 }
 
 #[repr(C)]
@@ -30,38 +28,28 @@ pub struct Matrix128 {
   pub data : vecLiteralNode(value = 128,
                             literal_type = PrimitiveType(name = int,
                                                          size_bits = None))
-                 LiteralNode(value = 128,
-                             literal_type = PrimitiveType(name = int,
-                                                          size_bits = None)),
+      LiteralNode(value = 128,
+                  literal_type = PrimitiveType(name = int, size_bits = None)),
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MatrixDimensions {
-  pub rows_A : i32,
-               pub cols_A : i32,
-                            pub rows_B : i32,
-                                         pub cols_B : i32,
-                                                      pub rows_C : i32,
-                                                                   pub cols_C
-      : i32,
+  pub rows_A : i32, pub cols_A : i32, pub rows_B : i32, pub cols_B : i32,
+      pub rows_C : i32, pub cols_C : i32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KernelParams {
-  pub block_size : i32,
-                   pub grid_size_x : i32,
-                                     pub grid_size_y : i32,
-                                                       pub alpha : f32,
-                                                                   pub beta
-      : f32,
+  pub block_size : i32, pub grid_size_x : i32, pub grid_size_y : i32,
+      pub alpha : f32, pub beta : f32,
 }
 
 // Constant Buffers
-pub fn
-getMatrixElement(matrix : buffer_PrimitiveType(name = float, size_bits = None),
-                 row : i32, col : i32, stride : i32) -> f32 {
+pub fn getMatrixElement(matrix : buffer_PrimitiveType(name = float,
+                                                      size_bits = None),
+                        row : i32, col : i32, stride : i32) -> f32 {
   return matrix[((row * stride) + col)];
 }
 

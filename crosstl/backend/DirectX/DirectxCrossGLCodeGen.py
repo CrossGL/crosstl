@@ -313,7 +313,6 @@ class HLSLToCrossGLConverter:
         return lines
 
     def visit(self, node):
-        # Special case for SwitchStatementNode and SwitchCaseNode
         if isinstance(node, SwitchStatementNode):
             return self.visit_SwitchStatementNode(node)
         elif isinstance(node, SwitchCaseNode):
@@ -325,7 +324,6 @@ class HLSLToCrossGLConverter:
         elif isinstance(node, UnaryOpNode):
             return self.visit_UnaryOpNode(node)
 
-        # For other node types, use existing methods
         if hasattr(self, f"generate_{type(node).__name__}"):
             method = getattr(self, f"generate_{type(node).__name__}")
             return method(node)
@@ -372,13 +370,11 @@ class HLSLToCrossGLConverter:
                 code += f"    #pragma {node.directive} {node.value};\n"
             elif isinstance(node, IncludeNode):
                 code += f"    #include {node.path}\n"
-        # Generate global variables
         for node in ast.global_variables:
             code += self.format_attributes(getattr(node, "attributes", []), 1)
             code += self.format_binding_attributes(node, 1)
             array_suffix = self.format_array_suffixes(node)
             code += f"    {self.map_type(node.vtype)} {node.name}{array_suffix};\n"
-        # Generate cbuffers
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -399,7 +395,6 @@ class HLSLToCrossGLConverter:
             "ray_any_hit": "ray_any_hit",
             "ray_callable": "ray_callable",
         }
-        # Generate custom functions
         for func in ast.functions:
             stage_name = stage_map.get(func.qualifier)
             if stage_name:
@@ -490,7 +485,6 @@ class HLSLToCrossGLConverter:
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:
-                # For any unhandled statement type
                 code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
 
@@ -694,7 +688,6 @@ class HLSLToCrossGLConverter:
         return f"@ {mapped}"
 
     def generate_switch_statement(self, node, indent=1, is_main=False):
-        # Support both 'condition' and 'expression' attributes for compatibility
         expression = getattr(node, "expression", None) or getattr(
             node, "condition", None
         )
@@ -708,11 +701,9 @@ class HLSLToCrossGLConverter:
                 "    " * (indent + 1)
                 + f"case {self.generate_expression(case.value, is_main)}:\n"
             )
-            # Support both 'body' and 'statements' attributes
             case_body = getattr(case, "body", None) or getattr(case, "statements", [])
             code += self.generate_function_body(case_body, indent + 2, is_main)
 
-        # Support multiple attribute names for default case
         default_body = (
             getattr(node, "default_body", None)
             or getattr(node, "default_case", None)
@@ -736,7 +727,6 @@ class HLSLToCrossGLConverter:
         else:
             right = self.generate_expression(node.right)
 
-        # Handle bitwise operations based on token value
         if hasattr(node.op, "token_type"):
             if node.op.token_type in ("BITWISE_AND", "AMPERSAND", "&"):
                 return f"({left} & {right})"
@@ -745,7 +735,6 @@ class HLSLToCrossGLConverter:
             elif node.op.token_type in ("BITWISE_XOR", "CARET", "^"):
                 return f"({left} ^ {right})"
         elif hasattr(node.op, "value"):
-            # Handle string values
             if node.op.value in ("&", "BITWISE_AND", "AMPERSAND"):
                 return f"({left} & {right})"
             elif node.op.value in ("|", "BITWISE_OR", "PIPE"):
@@ -753,7 +742,6 @@ class HLSLToCrossGLConverter:
             elif node.op.value in ("^", "BITWISE_XOR", "CARET"):
                 return f"({left} ^ {right})"
         elif isinstance(node.op, str):
-            # Direct string comparison
             if node.op in ("&", "BITWISE_AND", "AMPERSAND"):
                 return f"({left} & {right})"
             elif node.op in ("|", "BITWISE_OR", "PIPE"):
@@ -761,7 +749,6 @@ class HLSLToCrossGLConverter:
             elif node.op in ("^", "BITWISE_XOR", "CARET"):
                 return f"({left} ^ {right})"
 
-        # Falls back to string representation of the operator
         op_str = node.op.value if hasattr(node.op, "value") else str(node.op)
         return f"{left} {op_str} {right}"
 
@@ -776,7 +763,6 @@ class HLSLToCrossGLConverter:
         else:
             expr = self.generate_expression(expr_node)
 
-        # Handle bitwise NOT based on token type or value
         if hasattr(node.op, "token_type") and node.op.token_type in (
             "BITWISE_NOT",
             "TILDE",
@@ -792,22 +778,18 @@ class HLSLToCrossGLConverter:
         elif isinstance(node.op, str) and node.op in ("~", "BITWISE_NOT", "TILDE"):
             return f"(~{expr})"
 
-        # Falls back to string representation of the operator
         op_str = node.op.value if hasattr(node.op, "value") else str(node.op)
         if getattr(node, "is_postfix", False):
             return f"{expr}{op_str}"
         return f"{op_str}{expr}"
 
     def visit_SwitchStatementNode(self, node):
-        # Handle the alternative SwitchStatementNode type if needed
         return self.visit_SwitchNode(node)
 
     def visit_SwitchCaseNode(self, node):
-        # Handle the alternative SwitchCaseNode type if needed
         return self.visit_CaseNode(node)
 
     def visit_StructNode(self, node):
-        # Generate code for a struct definition
         code = f"struct {node.name} {{\n"
         self.indentation += 1
 
@@ -827,15 +809,12 @@ class HLSLToCrossGLConverter:
         return code
 
     def visit_SwitchNode(self, node):
-        # Generate the switch statement code
         condition = self.generate_expression(node.condition)
         code = f"switch ({condition}) {{\n"
 
-        # Generate case statements
         for case in node.cases:
             code += self.visit_CaseNode(case)
 
-        # Generate default case if exists
         if node.default_body:
             code += self.get_indent() + "default:\n"
             self.indentation += 1
@@ -847,11 +826,9 @@ class HLSLToCrossGLConverter:
         return code
 
     def visit_CaseNode(self, node):
-        # Generate a case statement
         value = self.generate_expression(node.value)
         code = self.get_indent() + f"case {value}:\n"
 
-        # Generate the case body
         self.indentation += 1
         for stmt in node.body:
             code += self.get_indent() + self.generate_statement(stmt) + "\n"
@@ -860,7 +837,6 @@ class HLSLToCrossGLConverter:
         return code
 
     def generate_statement(self, node):
-        """Generate a statement in CrossGL syntax"""
         if isinstance(node, str):
             return node
         if isinstance(node, BreakNode):

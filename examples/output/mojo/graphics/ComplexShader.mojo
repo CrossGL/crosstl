@@ -80,7 +80,7 @@ struct GlobalUniforms:
 fn distributionGGX(N: SIMD[DType.float32, 3], H: SIMD[DType.float32, 3], roughness: Float32) -> Float32:
     var a: Float32 = (roughness * roughness)
     var a2: Float32 = (a * a)
-    var NdotH: Float32 = max(dot_product(N, H), 0.0)
+    var NdotH: Float32 = max(dot(N, H), 0.0)
     var NdotH2: Float32 = (NdotH * NdotH)
     var num: Float32 = a2
     var denom: Float32 = ((NdotH2 * (a2 - 1.0)) + 1.0)
@@ -95,34 +95,34 @@ fn geometrySchlickGGX(NdotV: Float32, roughness: Float32) -> Float32:
     return (num / max(denom, EPSILON))
 
 fn geometrySmith(N: SIMD[DType.float32, 3], V: SIMD[DType.float32, 3], L: SIMD[DType.float32, 3], roughness: Float32) -> Float32:
-    var NdotV: Float32 = max(dot_product(N, V), 0.0)
-    var NdotL: Float32 = max(dot_product(N, L), 0.0)
+    var NdotV: Float32 = max(dot(N, V), 0.0)
+    var NdotL: Float32 = max(dot(N, L), 0.0)
     var ggx2: Float32 = geometrySchlickGGX(NdotV, roughness)
     var ggx1: Float32 = geometrySchlickGGX(NdotL, roughness)
     return (ggx1 * ggx2)
 
 fn fresnelSchlick(cosTheta: Float32, F0: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
-    return (F0 + ((1.0 - F0) * power(max((1.0 - cosTheta), 0.0), 5.0)))
+    return (F0 + ((1.0 - F0) * pow(max((1.0 - cosTheta), 0.0), 5.0)))
 
 fn noise3D(p: SIMD[DType.float32, 3]) -> Float32:
     var i: SIMD[DType.float32, 3] = floor(p)
     var f: SIMD[DType.float32, 3] = fract(p)
     var u: SIMD[DType.float32, 3] = (((f * f) * f) * ((f * ((f * 6.0) - 15.0)) + 10.0))
-    var n000: Float32 = fract((sin(dot_product(i, SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n001: Float32 = fract((sin(dot_product((i + SIMD[DType.float32, 3](0.0, 0.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n010: Float32 = fract((sin(dot_product((i + SIMD[DType.float32, 3](0.0, 1.0, 0.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n011: Float32 = fract((sin(dot_product((i + SIMD[DType.float32, 3](0.0, 1.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n100: Float32 = fract((sin(dot_product((i + SIMD[DType.float32, 3](1.0, 0.0, 0.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n101: Float32 = fract((sin(dot_product((i + SIMD[DType.float32, 3](1.0, 0.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n110: Float32 = fract((sin(dot_product((i + SIMD[DType.float32, 3](1.0, 1.0, 0.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n111: Float32 = fract((sin(dot_product((i + SIMD[DType.float32, 3](1.0, 1.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
-    var n00: Float32 = lerp(n000, n001, u.z)
-    var n01: Float32 = lerp(n010, n011, u.z)
-    var n10: Float32 = lerp(n100, n101, u.z)
-    var n11: Float32 = lerp(n110, n111, u.z)
-    var n0: Float32 = lerp(n00, n01, u.y)
-    var n1: Float32 = lerp(n10, n11, u.y)
-    return lerp(n0, n1, u.x)
+    var n000: Float32 = fract((sin(dot(i, SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n001: Float32 = fract((sin(dot((i + SIMD[DType.float32, 3](0.0, 0.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n010: Float32 = fract((sin(dot((i + SIMD[DType.float32, 3](0.0, 1.0, 0.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n011: Float32 = fract((sin(dot((i + SIMD[DType.float32, 3](0.0, 1.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n100: Float32 = fract((sin(dot((i + SIMD[DType.float32, 3](1.0, 0.0, 0.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n101: Float32 = fract((sin(dot((i + SIMD[DType.float32, 3](1.0, 0.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n110: Float32 = fract((sin(dot((i + SIMD[DType.float32, 3](1.0, 1.0, 0.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n111: Float32 = fract((sin(dot((i + SIMD[DType.float32, 3](1.0, 1.0, 1.0)), SIMD[DType.float32, 3](13.534, 43.5234, 243.32))) * 4453.0))
+    var n00: Float32 = mix(n000, n001, u.z)
+    var n01: Float32 = mix(n010, n011, u.z)
+    var n10: Float32 = mix(n100, n101, u.z)
+    var n11: Float32 = mix(n110, n111, u.z)
+    var n0: Float32 = mix(n00, n01, u.y)
+    var n1: Float32 = mix(n10, n11, u.y)
+    return mix(n0, n1, u.x)
 
 fn fbm(p: SIMD[DType.float32, 3], octaves: Int32, lacunarity: Float32, gain: Float32) -> Float32:
     var sum: Float32 = 0.0
@@ -151,7 +151,7 @@ fn samplePlanarProjection(tex: Texture2D, worldPos: SIMD[DType.float32, 3], norm
     else:
         uv = ((worldPos.xy * 0.5) + 0.5)
         if (normal.z < 0.0):
-    return sample(tex, uv)
+    return texture(tex, uv)
 
 # Vertex Shader
 @vertex_shader
@@ -172,7 +172,7 @@ fn main(input: VertexInput) -> VertexOutput:
     if (input.materialIndex > 0):
         worldPosition.xyz += (worldNormal * displacement)
     var viewDir: SIMD[DType.float32, 3] = normalize((globals.cameraPosition - worldPosition.xyz))
-    var fresnel: Float32 = power((1.0 - max(0.0, dot_product(worldNormal, viewDir))), 5.0)
+    var fresnel: Float32 = pow((1.0 - max(0.0, dot(worldNormal, viewDir))), 5.0)
     if (input.materialIndex < globals.scene.activeLightCount):
         output.color = (input.color * SIMD[DType.float32, 4](1.0, 1.0, 1.0, 1.0))
         var i: Int32 = 0
@@ -180,10 +180,10 @@ fn main(input: VertexInput) -> VertexOutput:
             if (i >= (globals.frameCount % 5)):
             var light: Light = globals.scene.lights[i]
             var lightDir: SIMD[DType.float32, 3] = normalize((light.position - worldPosition.xyz))
-            var lightDistance: Float32 = magnitude((light.position - worldPosition.xyz))
+            var lightDistance: Float32 = length((light.position - worldPosition.xyz))
             var attenuation: Float32 = (1.0 / (1.0 + (lightDistance * lightDistance)))
             var lightIntensity: Float32 = (light.intensity * attenuation)
-            output.color.rgb += (((light.color * lightIntensity) * max(0.0, dot_product(worldNormal, lightDir))) * 0.025)
+            output.color.rgb += (((light.color * lightIntensity) * max(0.0, dot(worldNormal, lightDir))) * 0.025)
             (++i)
     else:
         output.color = input.color
@@ -208,9 +208,9 @@ fn main(input: VertexInput) -> VertexOutput:
 fn main(input: VertexOutput) -> FragmentOutput:
     var output: FragmentOutput
     var material: Material = globals.scene.materials[input.materialIndex]
-    var albedoValue: SIMD[DType.float32, 4] = sample(material.albedoMap, input.texCoord0)
-    var normalValue: SIMD[DType.float32, 4] = sample(material.normalMap, input.texCoord0)
-    var metallicRoughnessValue: SIMD[DType.float32, 4] = sample(material.metallicRoughnessMap, input.texCoord0)
+    var albedoValue: SIMD[DType.float32, 4] = texture(material.albedoMap, input.texCoord0)
+    var normalValue: SIMD[DType.float32, 4] = texture(material.normalMap, input.texCoord0)
+    var metallicRoughnessValue: SIMD[DType.float32, 4] = texture(material.metallicRoughnessMap, input.texCoord0)
     var normal: SIMD[DType.float32, 3] = ((normalValue.xyz * 2.0) - 1.0)
     var worldNormal: SIMD[DType.float32, 3] = normalize((input.TBN * normal))
     var albedo: SIMD[DType.float32, 3] = (albedoValue.rgb * material.albedo)
@@ -218,7 +218,7 @@ fn main(input: VertexOutput) -> FragmentOutput:
     var roughness: Float32 = (metallicRoughnessValue.g * material.roughness)
     var ao: Float32 = metallicRoughnessValue.r
     var viewDir: SIMD[DType.float32, 3] = normalize((globals.cameraPosition - input.worldPosition))
-    var F0: SIMD[DType.float32, 3] = lerp(SIMD[DType.float32, 3](0.04), albedo, metallic)
+    var F0: SIMD[DType.float32, 3] = mix(SIMD[DType.float32, 3](0.04), albedo, metallic)
     var Lo: SIMD[DType.float32, 3] = SIMD[DType.float32, 3](0.0)
     var i: Int32 = 0
     while (i < globals.scene.activeLightCount):
@@ -226,19 +226,19 @@ fn main(input: VertexOutput) -> FragmentOutput:
         var light: Light = globals.scene.lights[i]
         var lightDir: SIMD[DType.float32, 3] = normalize((light.position - input.worldPosition))
         var halfway: SIMD[DType.float32, 3] = normalize((viewDir + lightDir))
-        var distance: Float32 = magnitude((light.position - input.worldPosition))
+        var distance: Float32 = length((light.position - input.worldPosition))
         var attenuation: Float32 = (1.0 / (distance * distance))
         var radiance: SIMD[DType.float32, 3] = ((light.color * light.intensity) * attenuation)
         var NDF: Float32 = distributionGGX(worldNormal, halfway, roughness)
         var G: Float32 = geometrySmith(worldNormal, viewDir, lightDir, roughness)
-        var F: SIMD[DType.float32, 3] = fresnelSchlick(max(dot_product(halfway, viewDir), 0.0), F0)
+        var F: SIMD[DType.float32, 3] = fresnelSchlick(max(dot(halfway, viewDir), 0.0), F0)
         var kS: SIMD[DType.float32, 3] = F
         var kD: SIMD[DType.float32, 3] = (SIMD[DType.float32, 3](1.0) - kS)
         kD *= (1.0 - metallic)
         var numerator: SIMD[DType.float32, 3] = ((NDF * G) * F)
-        var denominator: Float32 = (((4.0 * max(dot_product(worldNormal, viewDir), 0.0)) * max(dot_product(worldNormal, lightDir), 0.0)) + EPSILON)
+        var denominator: Float32 = (((4.0 * max(dot(worldNormal, viewDir), 0.0)) * max(dot(worldNormal, lightDir), 0.0)) + EPSILON)
         var specular: SIMD[DType.float32, 3] = (numerator / denominator)
-        var NdotL: Float32 = max(dot_product(worldNormal, lightDir), 0.0)
+        var NdotL: Float32 = max(dot(worldNormal, lightDir), 0.0)
         var shadow: Float32 = 0.0
         if light.castShadows:
             var fragPosLightSpace: SIMD[DType.float32, 4] = (light.viewProjection * SIMD[DType.float32, 4](input.worldPosition, 1.0))
@@ -254,7 +254,7 @@ fn main(input: VertexOutput) -> FragmentOutput:
     var ambient: SIMD[DType.float32, 3] = ((globals.scene.ambientLight * albedo) * ao)
     var color: SIMD[DType.float32, 3] = (ambient + Lo)
     color = (color / (color + SIMD[DType.float32, 3](1.0)))
-    color = power(color, SIMD[DType.float32, 3]((1.0 / 2.2)))
+    color = pow(color, SIMD[DType.float32, 3]((1.0 / 2.2)))
     output.color = SIMD[DType.float32, 4](color, (material.opacity * albedoValue.a))
     output.normalBuffer = SIMD[DType.float32, 4](((worldNormal * 0.5) + 0.5), 1.0)
     output.positionBuffer = SIMD[DType.float32, 4](input.worldPosition, 1.0)
@@ -268,9 +268,9 @@ fn shadowCalculation(fragPosLightSpace: SIMD[DType.float32, 4], iteration: Int32
     if (iteration > 3):
     var projCoords: SIMD[DType.float32, 3] = (fragPosLightSpace.xyz / fragPosLightSpace.w)
     projCoords = ((projCoords * 0.5) + 0.5)
-    var closestDepth: Float32 = sample(shadowMap, projCoords.xy).r
+    var closestDepth: Float32 = texture(shadowMap, projCoords.xy).r
     var currentDepth: Float32 = projCoords.z
-    var bias: Float32 = max((0.05 * (1.0 - dot_product(input.worldNormal, normalize((globals.cameraPosition - input.worldPosition))))), 0.005)
+    var bias: Float32 = max((0.05 * (1.0 - dot(input.worldNormal, normalize((globals.cameraPosition - input.worldPosition))))), 0.005)
     var shadow: Float32 = (1.0 if ((currentDepth - bias) > closestDepth) else 0.0)
     var pcfDepth: Float32 = 0.0
     var texelSize: SIMD[DType.float32, 2] = (1.0 / SIMD[DType.float32, 2](globals.screenSize))
@@ -279,7 +279,7 @@ fn shadowCalculation(fragPosLightSpace: SIMD[DType.float32, 4], iteration: Int32
     while (x <= 1):
         var y: Int32 = (-1)
         while (y <= 1):
-            var pcfDepth: Float32 = sample(shadowMap, ((projCoords.xy + (SIMD[DType.float32, 2](x, y) * texelSize)) + SIMD[DType.float32, 2](offset))).r
+            var pcfDepth: Float32 = texture(shadowMap, ((projCoords.xy + (SIMD[DType.float32, 2](x, y) * texelSize)) + SIMD[DType.float32, 2](offset))).r
             shadow += (1.0 if ((currentDepth - bias) > pcfDepth) else 0.0)
             (++y)
         (++x)
@@ -299,7 +299,7 @@ fn main() -> None:
     var color: SIMD[DType.float32, 4] = SIMD[DType.float32, 4](0.0)
     var totalWeight: Float32 = 0.0
     var direction: SIMD[DType.float32, 2] = (SIMD[DType.float32, 2](0.5) - uv)
-    var len: Float32 = magnitude(direction)
+    var len: Float32 = length(direction)
     direction = normalize(direction)
     var i: Int32 = 0
     while (i < 32):
@@ -316,7 +316,7 @@ fn main() -> None:
         (++i)
     color.rgb /= totalWeight
     color.a = 1.0
-    var vignette: Float32 = (1.0 - smoothstep(0.5, 1.0, (magnitude((uv - 0.5)) * 1.5)))
+    var vignette: Float32 = (1.0 - smoothstep(0.5, 1.0, (length((uv - 0.5)) * 1.5)))
     color.rgb *= vignette
     imageStore(outputImage, texCoord, color)
 

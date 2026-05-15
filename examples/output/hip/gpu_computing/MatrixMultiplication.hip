@@ -54,16 +54,13 @@ __device__ void setMatrixElement(buffer_PrimitiveType(name = float,
 }
 
 __global__ void matmul_warp_optimized() {
-  int warp_id = IdentifierNode(name = int)(gl_LocalInvocationID.x);
-  int global_id = IdentifierNode(name = int)(gl_GlobalInvocationID.x);
+  int warp_id = int(gl_LocalInvocationID.x);
+  int global_id = int(gl_GlobalInvocationID.x);
   int elements_per_warp =
-      ((matrix_size * matrix_size) /
-       (IdentifierNode(name = int)(gl_NumWorkGroups.x) * 32));
+      ((matrix_size * matrix_size) / (int(gl_NumWorkGroups.x) * 32));
   int elem = 0;
   for (; (elem < elements_per_warp); ++elem) {
-    int linear_id =
-        (global_id +
-         ((elem * IdentifierNode(name = int)(gl_NumWorkGroups.x)) * 32));
+    int linear_id = (global_id + ((elem * int(gl_NumWorkGroups.x)) * 32));
     if ((linear_id >= (matrix_size * matrix_size))) {
       break;
     }
@@ -81,8 +78,7 @@ __global__ void matmul_warp_optimized() {
       float partial_sum = (a_val * b_val);
       int offset = 16;
       for (; (offset > 0); offset = 2) {
-        partial_sum = IdentifierNode(name = __shfl_down_sync)(
-            4294967295, partial_sum, offset);
+        partial_sum = __shfl_down_sync(4294967295, partial_sum, offset);
       }
       if ((warp_id == 0)) {
         result = partial_sum;

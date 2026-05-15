@@ -135,50 +135,40 @@ class SlangToCrossGLConverter:
     def generate(self, ast):
         code = "shader main {\n"
         if ast.imports:
-            code += "    // Imports\n"
             for imp in ast.imports:
                 code += f"    import {imp.module_name};\n"
             code += "\n"
         if ast.exports:
-            code += "    // Exports\n"
             for exp in ast.exports:
                 code += f"    export {exp.item};\n"
             code += "\n"
-        # Generate custom types
         for node in ast.typedefs:
             code += (
                 f"    typedef {self.map_type(node.original_type)} {node.new_type};\n"
             )
-        # Generate custom structs
         for node in ast.structs:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
                     code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
                 code += "    }\n"
-        # Generate global variables
         for node in ast.global_vars:
             code += f"    {self.map_type(node.vtype)} {node.name};\n"
-        # Generate cbuffers
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        # Generate custom functions
         for func in ast.functions:
             if func.qualifier == "vertex":
-                code += "    // Vertex Shader\n"
                 code += "    vertex {\n"
                 code += self.generate_function(func)
                 code += "    }\n\n"
             elif func.qualifier == "fragment":
-                code += "    // Fragment Shader\n"
                 code += "    fragment {\n"
                 code += self.generate_function(func)
                 code += "    }\n\n"
 
             elif func.qualifier == "compute":
-                code += "    // Compute Shader\n"
                 code += "    compute {\n"
                 code += self.generate_function(func)
                 code += "    }\n\n"

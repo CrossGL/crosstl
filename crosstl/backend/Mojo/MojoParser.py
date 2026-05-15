@@ -112,7 +112,6 @@ class MojoParser:
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            # Handle the colon followed by the type
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 vtype = self.current_token[1]
@@ -197,7 +196,6 @@ class MojoParser:
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
 
-        # Consume the colon that starts the function body in Mojo syntax
         if self.current_token[0] == "COLON":
             self.eat("COLON")
 
@@ -218,12 +216,11 @@ class MojoParser:
                 vtype = self.current_token[1]
                 self.eat(self.current_token[0])
 
-                # Handle the case where there's a colon indicating a type annotation
                 if self.current_token[0] == "COLON":
                     self.eat("COLON")
                     vtype = self.current_token[
                         1
-                    ]  # Update the type to the one after colon
+                    ]
                     self.eat(self.current_token[0])
 
                 name = ""
@@ -279,16 +276,13 @@ class MojoParser:
                 self.eat("RBRACE")
             return statements
         else:
-            # Handle Mojo/Python-style blocks (statements follow after colon)
             statements = []
-            # Parse statements until we hit a dedent or EOF
             while (
                 self.current_token[0] != "EOF"
                 and self.current_token[0] not in ["ELSE", "ELIF", "CASE", "DEFAULT"]
                 and self.pos < len(self.tokens) - 1
             ):
                 statements.append(self.parse_statement())
-                # Break if we're at the end or hit something that looks like end of block
                 if self.current_token[0] in ["EOF", "FN", "STRUCT", "CLASS"]:
                     break
             return statements
@@ -355,7 +349,6 @@ class MojoParser:
                 self.eat("EQUALS")
                 initial_value = self.parse_expression()
 
-            # Only eat semicolon if it's actually present
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
 
@@ -378,12 +371,10 @@ class MojoParser:
             elif_condition = self.parse_expression()
             self.eat("COLON")
             elif_body = self.parse_block()
-            # Create nested if for elif
             elif_node = IfNode(elif_condition, elif_body, None)
             if else_body is None:
                 else_body = [elif_node]
             else:
-                # Find the deepest else and add the elif there
                 current = else_body[0]
                 while isinstance(current, IfNode) and current.else_body:
                     current = current.else_body[0]
@@ -396,7 +387,6 @@ class MojoParser:
             if else_body is None:
                 else_body = final_else_body
             else:
-                # Find the deepest else and add the final else there
                 current = else_body[0]
                 while isinstance(current, IfNode) and current.else_body:
                     current = current.else_body[0]
@@ -407,20 +397,14 @@ class MojoParser:
     def parse_for_statement(self):
         self.eat("FOR")
 
-        # Check if this is a C-style for loop (with semicolons) or Python-style
-        # Save current position to look ahead
         saved_pos = self.pos
         saved_token = self.current_token
 
-        # Try to parse as C-style for loop first
         try:
             init = self.parse_variable_declaration_or_assignment()
-            # The variable declaration may have already consumed the semicolon
-            # So we need to check if we're at the condition part
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
 
-            # Now parse the condition
             condition = self.parse_expression()
             self.eat("SEMICOLON")
             update = self.parse_expression()
@@ -429,11 +413,9 @@ class MojoParser:
             return ForNode(init, condition, update, body)
 
         except Exception:
-            # Restore position if C-style parsing failed
             self.pos = saved_pos
             self.current_token = saved_token
 
-        # Try Python-style for loop: for item in iterable:
         if self.current_token[0] == "IDENTIFIER":
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -442,10 +424,8 @@ class MojoParser:
                 iterable = self.parse_expression()
                 self.eat("COLON")
                 body = self.parse_block()
-                # Create a Python-style for loop node
                 return ForNode(VariableNode("", var_name), iterable, None, body)
 
-        # If neither worked, error out
         raise SyntaxError(
             f"Invalid for loop syntax. Expected C-style 'for init; condition; update:' or Python-style 'for var in iterable:'"
         )
@@ -659,7 +639,6 @@ class MojoParser:
                     return VariableNode(type_annotation, var_name)
                 return VariableNode(type_name, var_name)
             elif self.current_token[0] == "LPAREN":
-                # Handle vector constructors like float4(...)
                 return self.parse_vector_constructor(type_name)
             return type_name
         elif self.current_token[0] == "LPAREN":
@@ -667,7 +646,6 @@ class MojoParser:
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
-        # Handle top-level keywords
         elif self.current_token[0] in ["FN", "STRUCT", "CLASS", "LET", "VAR"]:
             raise SyntaxError(f"Unexpected top-level keyword: {self.current_token[0]}")
         else:
@@ -719,7 +697,7 @@ class MojoParser:
         while self.current_token[0] != "RPAREN":
             args.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
-                self.eat("COMMA")  # Continue parsing the next argument
+                self.eat("COMMA")
             elif self.current_token[0] != "RPAREN":
                 raise SyntaxError(
                     f"Expected COMMA or RPAREN, got {self.current_token[0]}"
@@ -768,17 +746,14 @@ class MojoParser:
         """Parse a type, which might be a generic type with square brackets"""
         type_name = ""
 
-        # Handle basic type name
         if self.current_token[0] in ["IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
 
-            # Handle generic types with square brackets like StaticTuple[Float32, 4]
             if self.current_token[0] == "LBRACKET":
                 type_name += "["
                 self.eat("LBRACKET")
 
-                # Parse type parameters
                 while self.current_token[0] != "RBRACKET":
                     if self.current_token[0] == "IDENTIFIER":
                         type_name += self.current_token[1]

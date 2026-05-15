@@ -20,7 +20,8 @@ struct FragmentOutput
 float values[4];
 float3 colors[2];
 // Vertex Shader
-VertexOutput main(VertexInput input)
+// Vertex Shader
+VertexOutput VSMain(VertexInput input)
 {
     VertexOutput output;
     output.uv = input.texCoord;
@@ -31,7 +32,8 @@ VertexOutput main(VertexInput input)
 }
 
 // Fragment Shader
-FragmentOutput main(FragmentInput input)
+// Fragment Shader
+FragmentOutput PSMain(FragmentInput input)
 {
     FragmentOutput output;
     float3 color = colors[0];

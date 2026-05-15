@@ -24,7 +24,7 @@ struct FragmentOutput {
 __device__ VertexOutput main(VertexInput input) {
   VertexOutput output;
   output.uv = input.texCoord;
-  output.position = IdentifierNode(name = vec4)(input.position, 1.0);
+  output.position = make_float4(input.position, 1.0);
   return output;
 }
 
@@ -33,6 +33,6 @@ __device__ FragmentOutput main(FragmentInput input) {
   float r = input.uv.x;
   float g = input.uv.y;
   float b = 0.5;
-  output.color = IdentifierNode(name = vec4)(r, g, b, 1.0);
+  output.color = make_float4(r, g, b, 1.0);
   return output;
 }

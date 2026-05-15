@@ -695,7 +695,6 @@ class GLSLParser:
                 self.eat("SEMICOLON")
             return DiscardNode()
 
-        # Variable declaration
         if (
             self.current_token[0] in QUALIFIER_TOKENS
             or self.current_token[0] in TYPE_TOKENS
@@ -707,7 +706,6 @@ class GLSLParser:
             type_name = self.parse_type()
             return self.parse_variable_declarations(type_name, qualifiers=[])
 
-        # Expression / assignment
         expr = self.parse_expression()
         if self.current_token[0] in ASSIGNMENT_TOKENS:
             op = ASSIGNMENT_TOKENS[self.current_token[0]]

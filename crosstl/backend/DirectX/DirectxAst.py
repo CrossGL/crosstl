@@ -35,8 +35,6 @@ from ..common_ast import (
 
 
 class CbufferNode(StructNode):
-    """Node representing a constant buffer (cbuffer)"""
-
     def __init__(self, name, members):
         super().__init__(name, members)
 
@@ -45,8 +43,6 @@ class CbufferNode(StructNode):
 
 
 class PragmaNode(ASTNode):
-    """Node representing a pragma directive"""
-
     def __init__(self, directive, value=None):
         self.directive = directive
         self.value = value
@@ -56,8 +52,6 @@ class PragmaNode(ASTNode):
 
 
 class IncludeNode(ASTNode):
-    """Node representing an include directive"""
-
     def __init__(self, path, is_system=False):
         self.path = path
         self.is_system = is_system
@@ -67,8 +61,6 @@ class IncludeNode(ASTNode):
 
 
 class SwitchStatementNode(ASTNode):
-    """Node representing a switch statement"""
-
     def __init__(self, expression, cases):
         self.expression = expression
         self.cases = cases
@@ -78,8 +70,6 @@ class SwitchStatementNode(ASTNode):
 
 
 class SwitchCaseNode(ASTNode):
-    """Node representing a case in a switch statement"""
-
     def __init__(self, case_value, statements, is_default=False):
         self.case_value = case_value
         self.statements = statements

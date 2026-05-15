@@ -5,7 +5,6 @@ from enum import Enum, auto
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
-# use tuple for immutable token types that won't change
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"//.*"),
@@ -358,11 +357,9 @@ class RustLexer:
         }
 
     def tokenize(self) -> List[Tuple[str, str]]:
-        # tokenize the input code and return list of tokens
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
-        # function that yields tokens one at a time
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -372,7 +369,6 @@ class RustLexer:
                 )
             new_pos, token_type, text = token
 
-            # Skip comments and whitespace
             if token_type == "IDENTIFIER" and text in self.reserved_keywords:
                 token_type = self.reserved_keywords[text]
 
@@ -384,7 +380,6 @@ class RustLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Tuple[int, str, str]:
-        # find the next token starting at the given position
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -393,7 +388,6 @@ class RustLexer:
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "RustLexer":
-        # create a lexer instance from a file, reading in chunks
         with open(filepath, "r") as f:
             return cls(f.read())
 

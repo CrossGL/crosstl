@@ -22,7 +22,7 @@ void main() {
   output.uv = input.texCoord;
   float scale = (values[0] + values[1]);
   vec3 position = (input.position * scale);
-  output.position = IdentifierNode(name = vec4)(position, 1.0);
+  output.position = vec4(position, 1.0);
   return output;
 }
 
@@ -33,6 +33,6 @@ void main() {
   if ((input.uv.x > 0.5)) {
     color = colors[1];
   }
-  output.color = IdentifierNode(name = vec4)(color, 1.0);
+  output.color = vec4(color, 1.0);
   return output;
 }

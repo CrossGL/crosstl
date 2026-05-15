@@ -77,7 +77,6 @@ class CudaParser:
         # Look ahead for function pattern: [qualifiers] type name (
         saved_index = self.current_index
 
-        # Skip qualifiers and type
         while saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
             "CONST",
             "STATIC",
@@ -86,7 +85,6 @@ class CudaParser:
         ]:
             saved_index += 1
 
-        # Skip type (could be multiple tokens)
         if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
             "VOID",
             "INT",
@@ -102,7 +100,6 @@ class CudaParser:
         ]:
             saved_index += 1
 
-        # Check for function name followed by parenthesis
         if (
             saved_index < len(self.tokens) - 1
             and self.tokens[saved_index][0] == "IDENTIFIER"
@@ -114,10 +111,8 @@ class CudaParser:
 
     def peek_variable(self):
         """Check if the next tokens form a variable declaration"""
-        # Look for type followed by identifier and semicolon or assignment
         saved_index = self.current_index
 
-        # Skip qualifiers
         while saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
             "CONST",
             "STATIC",
@@ -125,7 +120,6 @@ class CudaParser:
         ]:
             saved_index += 1
 
-        # Check for type
         if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
             "INT",
             "FLOAT",
@@ -142,13 +136,11 @@ class CudaParser:
             "FLOAT4",
         ]:
             saved_index += 1
-            # Check for identifier
             if (
                 saved_index < len(self.tokens)
                 and self.tokens[saved_index][0] == "IDENTIFIER"
             ):
                 saved_index += 1
-                # Check for semicolon or assignment
                 if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
                     "SEMICOLON",
                     "ASSIGN",
@@ -205,24 +197,15 @@ class CudaParser:
         """Parse function declaration including kernels"""
         qualifiers = []
 
-        # Parse CUDA qualifiers
         while self.current_token[0] in ["GLOBAL", "DEVICE", "HOST", "INLINE", "STATIC"]:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
 
-        # Parse return type
         return_type = self.parse_type()
-
-        # Parse function name
         name = self.eat("IDENTIFIER")[1]
-
-        # Parse parameters
         params = self.parse_parameters()
-
-        # Parse function body
         body = self.parse_block()
 
-        # Check if it's a kernel function
         if "__global__" in qualifiers:
             return KernelNode(return_type, name, params, body)
         else:
@@ -253,12 +236,10 @@ class CudaParser:
         """Parse type specification"""
         type_parts = []
 
-        # Handle qualifiers
         while self.current_token[0] in ["CONST", "VOLATILE", "UNSIGNED", "SIGNED"]:
             type_parts.append(self.current_token[1])
             self.eat(self.current_token[0])
 
-        # Handle basic types
         if self.current_token[0] in [
             "VOID",
             "CHAR",
@@ -285,12 +266,10 @@ class CudaParser:
             type_parts.append(self.current_token[1])
             self.eat("IDENTIFIER")
 
-        # Handle pointer/reference
         while self.current_token[0] == "MULTIPLY":
             type_parts.append("*")
             self.eat("MULTIPLY")
 
-        # Handle array brackets
         if self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
             if self.current_token[0] == "NUMBER":
@@ -306,7 +285,6 @@ class CudaParser:
         """Parse global variable declaration"""
         qualifiers = []
 
-        # Parse CUDA memory qualifiers
         while self.current_token[0] in ["CONSTANT", "SHARED", "DEVICE", "MANAGED"]:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
@@ -315,7 +293,6 @@ class CudaParser:
         var.qualifiers = qualifiers
         self.eat("SEMICOLON")
 
-        # Return specialized nodes for CUDA memory types
         if "__constant__" in qualifiers:
             return ConstantMemoryNode(var.vtype, var.name, var.value)
         elif "__shared__" in qualifiers:
@@ -327,7 +304,6 @@ class CudaParser:
         """Parse variable declaration"""
         qualifiers = []
 
-        # Parse CUDA memory qualifiers
         while self.current_token[0] in ["SHARED", "CONSTANT"]:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
@@ -335,7 +311,6 @@ class CudaParser:
         vtype = self.parse_type()
         name = self.eat("IDENTIFIER")[1]
 
-        # Handle array declarations
         if self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
             if self.current_token[0] == "NUMBER":
@@ -353,7 +328,6 @@ class CudaParser:
 
         var = VariableNode(vtype, name, value, qualifiers)
 
-        # Return specialized nodes for CUDA memory types
         if "__shared__" in qualifiers:
             return SharedMemoryNode(vtype, name)
         elif "__constant__" in qualifiers:
@@ -413,8 +387,7 @@ class CudaParser:
     def is_variable_declaration(self):
         """Check if current position is a variable declaration"""
         # Simple heuristic: type followed by identifier
-        if self.current_token[0] in [
-            "INT",
+        if self.current_token[0] in [            "INT",
             "FLOAT",
             "DOUBLE",
             "CHAR",
@@ -430,14 +403,12 @@ class CudaParser:
             # Look ahead for identifier
             saved_index = self.current_index
 
-            # Skip qualifiers
             while saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
                 "SHARED",
                 "CONSTANT",
             ]:
                 saved_index += 1
 
-            # Check for type
             if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
                 "INT",
                 "FLOAT",
@@ -452,7 +423,6 @@ class CudaParser:
             ]:
                 saved_index += 1
 
-                # Check for identifier
                 if (
                     saved_index < len(self.tokens)
                     and self.tokens[saved_index][0] == "IDENTIFIER"
@@ -481,7 +451,6 @@ class CudaParser:
         self.eat("FOR")
         self.eat("LPAREN")
 
-        # Parse initialization
         init = None
         if self.current_token[0] != "SEMICOLON":
             if self.is_variable_declaration():
@@ -490,19 +459,16 @@ class CudaParser:
                 init = self.parse_expression()
         self.eat("SEMICOLON")
 
-        # Parse condition
         condition = None
         if self.current_token[0] != "SEMICOLON":
             condition = self.parse_expression()
         self.eat("SEMICOLON")
 
-        # Parse update
         update = None
         if self.current_token[0] != "RPAREN":
             update = self.parse_expression()
         self.eat("RPAREN")
 
-        # Parse body
         body = self.parse_statement()
 
         return ForNode(init, condition, update, body)
@@ -717,7 +683,6 @@ class CudaParser:
                 self.eat("RBRACKET")
                 left = ArrayAccessNode(left, index)
             elif self.current_token[0] == "LPAREN":
-                # Function call
                 self.eat("LPAREN")
                 args = []
                 if self.current_token[0] != "RPAREN":
@@ -748,14 +713,11 @@ class CudaParser:
         """Parse CUDA kernel launch syntax"""
         self.eat("KERNEL_LAUNCH_START")
 
-        # Parse blocks
         blocks = self.parse_expression()
         self.eat("COMMA")
 
-        # Parse threads
         threads = self.parse_expression()
 
-        # Parse optional shared memory and stream
         shared_mem = None
         stream = None
 
@@ -769,7 +731,6 @@ class CudaParser:
 
         self.eat("KERNEL_LAUNCH_END")
 
-        # Parse arguments
         self.eat("LPAREN")
         args = []
         if self.current_token[0] != "RPAREN":
