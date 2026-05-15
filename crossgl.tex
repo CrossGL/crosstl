@@ -14,7 +14,7 @@
 \usepackage{tabularx}
 \usepackage{makecell}
 \usepackage{tikz}
-\usepackage{hyperref}
+\usepackage[hidelinks]{hyperref}
 \usetikzlibrary{arrows.meta,positioning,shapes.geometric}
 
 \setlength{\textfloatsep}{8pt plus 1pt minus 2pt}
@@ -68,7 +68,7 @@
 \authorrunning{N. Niketan et al.}
 \tocauthor{Nripesh Niketan, Vaatsalya Shrivastava, Bhushan Srivastav, Sushant Mishra}
 \institute{CrossGL, United States\\
-\email{\{nripesh, vaatsalya, bhushan, sushant\}@crossgl.net}}
+\email{\textnormal{\{}nripesh, vaatsalya, bhushan, sushant\textnormal{\}}@crossgl.net}}
 
 \maketitle
 
@@ -386,8 +386,8 @@ The system maintains two distinct AST layers, each optimized for a different pur
 \node[astbox] (hlslast) {HLSL AST};
 \node[astbox, below=of hlslast] (glslast) {GLSL AST};
 \node[astbox, below=of glslast] (metalast) {Metal AST};
-\node[astbox, right=28mm of glslast] (commonast) {Common AST\\(30 base nodes)};
-\node[unibox, right=28mm of commonast] (uniast) {Universal AST\\(60+ node types)};
+\node[astbox, right=22mm of glslast] (commonast) {Common AST\\(30 base nodes)};
+\node[unibox, right=22mm of commonast] (uniast) {Universal AST\\(60+ node types)};
 \draw[arrow] (hlslast) -- (commonast);
 \draw[arrow] (glslast) -- (commonast);
 \draw[arrow] (metalast) -- (commonast);
@@ -628,33 +628,17 @@ The implementation contains 70 Python files and approximately 26,589 non-comment
 
 \subsection{Limitations}
 
-The evaluation exposes three categories of limitations that bound the current system's applicability.
-
-\textbf{Uneven backend maturity.} GLSL, Metal, CUDA, HIP, Rust, and Mojo handled all compatible corpus examples, while Slang, HLSL, and SPIR-V exhibit gaps on generic pattern matching, enum lowering, or complex block traversal. This unevenness is inherent to the incremental development model: backends mature at different rates depending on the complexity of their target language semantics.
-
-\textbf{Semantic loss in two-hop translation.} Cross-translation between two non-CrossGL languages routes through CrossGL as a pivot, and this intermediate step may discard target-specific idioms. For instance, HLSL's precise semantics for resource binding slots or Metal's explicit address-space annotations may be approximated rather than preserved exactly when translating from a third language through the IR. However, any improvement to the CrossGL IR benefits all translation paths simultaneously.
-
-\textbf{Structural correctness without runtime equivalence.} The evaluation measures whether generated code is syntactically well-formed and structurally complete, but does not verify pixel-level equivalence of rendered output or bitwise identity of compute results. The SPIR-V backend illustrates this boundary: it emits assembly for six of seven compatible examples, but the generated modules do not yet pass \texttt{spirv-val}, indicating structural rather than semantic correctness at the binary interchange level.
+The evaluation exposes three limitations. First, backend maturity is uneven: GLSL, Metal, CUDA, HIP, Rust, and Mojo handled all compatible corpus examples, while Slang, HLSL, and SPIR-V still show gaps on generic pattern matching, enum lowering, or complex block traversal. Second, cross-translation through CrossGL may approximate source-specific idioms such as HLSL resource bindings or Metal address-space annotations, although improvements to the IR benefit all translation paths. Third, the current evaluation establishes structural correctness rather than runtime equivalence: generated textual outputs are syntactically complete in the corpus, but SPIR-V modules do not yet pass \texttt{spirv-val}.
 
 \subsection{Future Work}
 
-Several directions follow from the current results, guided by established principles of structured software design for parallel and heterogeneous systems~\cite{mccool2012structured}.
-
-\textbf{Runtime validation harness.} The highest priority is an automated pipeline that compiles generated GLSL, HLSL, Metal, and SPIR-V through platform toolchains (glslangValidator, fxc/dxc, metal compiler, spirv-val) and compares rendered images or compute buffers within numerical tolerances. This would elevate the evaluation from structural correctness to semantic equivalence.
-
-\textbf{Optimization passes.} The visitor pattern already present in the universal AST facilitates dead code elimination, constant folding, and common subexpression elimination as reusable passes that benefit all backends simultaneously.
-
-\textbf{Extended target coverage.} WGSL support for WebGPU, direct binary SPIR-V and DXIL emission, and extensions for heterogeneous AI accelerators (NPUs, TPUs) would broaden applicability to emerging compute platforms.
-
-\textbf{Developer tooling.} A Language Server Protocol (LSP) implementation for CrossGL would enable syntax highlighting, autocompletion, and error diagnostics in standard editors, lowering the barrier for direct authorship of cross-platform shaders.
+The highest priority is a runtime validation harness that compiles generated GLSL, HLSL, Metal, and SPIR-V with platform toolchains and compares rendered images or compute buffers within numerical tolerances. Additional directions include reusable optimization passes over the universal AST, WGSL and direct binary SPIR-V/DXIL output, broader support for heterogeneous accelerators such as NPUs and TPUs, and Language Server Protocol tooling for syntax highlighting, completion, and diagnostics. These directions follow established principles of structured software design for parallel and heterogeneous systems~\cite{mccool2012structured}.
 
 \section{Conclusion}
 
-This paper presented CrossGL, a compiler infrastructure that addresses GPU shading language fragmentation through a hub-and-spoke translation architecture centered on a purpose-built intermediate shader language.
+This paper presented CrossGL, a hub-and-spoke compiler infrastructure for shader language translation. CrossGL provides a human-readable intermediate representation spanning 16 GPU pipeline stages, modern graphics features, generics, pattern matching, and platform-agnostic semantic annotations. The architecture reduces converter growth from $O(N^2)$ to $O(N)$: each new language requires one import path and one export path rather than converters to every other language.
 
-The CrossGL language provides a human-readable, semantically rich IR that captures shader concepts across 16 GPU pipeline stages, including modern ray tracing and mesh shader stages, through a type system supporting generics, pattern matching, and platform-agnostic semantic annotations. The hub-and-spoke architecture reduces the number of required translators from $O(N^2)$ to $O(N)$, with each new language requiring only two converters regardless of how many languages are already supported. In the reference implementation, 767 unit tests passed and 56 of 60 compatible example translations succeeded across nine target backends, including a 489-line cross-platform PBR shader.
-
-The results support the practicality of the architecture while also clarifying its current limits: textual backends are substantially more mature than SPIR-V interchange generation, and advanced constructs such as enums and pattern matching require further backend-specific lowering. The extensible plugin architecture nevertheless gives the system a scalable path forward. As heterogeneous computing architectures proliferate---spanning GPUs, NPUs, TPUs, and specialized AI accelerators---the need for universal translation infrastructure will only grow. The hub-and-spoke model provides a principled foundation for bridging these platforms through a single, shared intermediate representation.
+The reference implementation includes nine target backends and native import paths, passes 767 unit tests, and successfully generated 56 of 60 compatible outputs across an eight-program corpus including a 489-line PBR shader. The results show that the architecture is practical while making its current limits explicit: textual backends are more mature than SPIR-V interchange generation, and advanced constructs still require backend-specific lowering. As heterogeneous computing architectures proliferate across GPUs, NPUs, TPUs, and specialized AI accelerators, the hub-and-spoke model provides a scalable foundation for bridging these platforms through a shared intermediate representation.
 
 \subsubsection{Acknowledgments.} The authors thank the anonymous reviewers for their constructive feedback, which improved the evaluation methodology and presentation of this work.
 
