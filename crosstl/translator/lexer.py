@@ -422,8 +422,8 @@ class Lexer:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
 
-                # Show context around error
-                line_start = self.code.rfind("\n", 0, pos) + 1                line_end = self.code.find("\n", pos)
+                line_start = self.code.rfind("\n", 0, pos) + 1
+                line_end = self.code.find("\n", pos)
                 if line_end == -1:
                     line_end = len(self.code)
                 line_content = self.code[line_start:line_end]
