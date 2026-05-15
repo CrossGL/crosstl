@@ -104,6 +104,7 @@ class EnumNode(ASTNode):
     def __init__(self, name, members):
         self.name = name
         self.members = members  # list of (name, value_or_None)
+
     def __repr__(self):
         return f"EnumNode(name={self.name}, members={self.members})"
 

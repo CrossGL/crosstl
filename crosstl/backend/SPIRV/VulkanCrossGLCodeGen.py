@@ -100,7 +100,6 @@ class VulkanToCrossGLConverter:
             elif isinstance(node, FunctionNode):
                 # Determine if this is a vertex or fragment shader based on the function name
                 if node.name == "main":
-                    pass
                     is_vertex_shader = False
                     for stmt in node.body:
                         if self.is_position_assignment(stmt):

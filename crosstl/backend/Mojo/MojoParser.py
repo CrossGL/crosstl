@@ -218,9 +218,7 @@ class MojoParser:
 
                 if self.current_token[0] == "COLON":
                     self.eat("COLON")
-                    vtype = self.current_token[
-                        1
-                    ]
+                    vtype = self.current_token[1]
                     self.eat(self.current_token[0])
 
                 name = ""

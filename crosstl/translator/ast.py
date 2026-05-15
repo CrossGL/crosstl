@@ -80,6 +80,7 @@ class ArrayType(TypeNode):
         super().__init__(**kwargs)
         self.element_type = element_type
         self.size = size  # None for dynamic arrays, int or expression for static
+
     def __repr__(self):
         return f"ArrayType(element_type={self.element_type}, size={self.size})"
 

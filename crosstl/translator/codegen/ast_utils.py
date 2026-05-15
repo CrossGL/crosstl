@@ -92,7 +92,8 @@ class ASTUtils:
     @staticmethod
     def _map_primitive_type(type_name: str, backend: str) -> str:
         """Map primitive type names to backend-specific types."""
-        type_mappings = {            "generic": {
+        type_mappings = {
+            "generic": {
                 "void": "void",
                 "bool": "bool",
                 "int": "int",

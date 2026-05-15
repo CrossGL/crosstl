@@ -387,7 +387,8 @@ class CudaParser:
     def is_variable_declaration(self):
         """Check if current position is a variable declaration"""
         # Simple heuristic: type followed by identifier
-        if self.current_token[0] in [            "INT",
+        if self.current_token[0] in [
+            "INT",
             "FLOAT",
             "DOUBLE",
             "CHAR",

@@ -395,14 +395,16 @@ class GLSLToCrossGLConverter:
             result += "\n"
 
         # Generate global constants
-        for const_var in getattr(node, "constant", []) or []:            result += (
+        for const_var in getattr(node, "constant", []) or []:
+            result += (
                 self.indent_str + self.generate_variable_declaration(const_var) + ";\n"
             )
         if getattr(node, "constant", []):
             result += "\n"
 
         # Generate global variables
-        for global_var in getattr(node, "global_variables", []) or []:            result += (
+        for global_var in getattr(node, "global_variables", []) or []:
+            result += (
                 self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
             )
         if getattr(node, "global_variables", []):
