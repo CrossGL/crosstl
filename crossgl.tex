@@ -9,6 +9,19 @@
 \usepackage{xcolor}
 \usepackage{amsmath}
 \usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{tikz}
+\usepackage{hyperref}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+
+\setlength{\textfloatsep}{8pt plus 1pt minus 2pt}
+\setlength{\floatsep}{6pt plus 1pt minus 2pt}
+\setlength{\intextsep}{6pt plus 1pt minus 2pt}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 
 \definecolor{cglkeyword}{RGB}{0,0,180}
 \definecolor{cglcomment}{RGB}{0,128,0}
@@ -30,7 +43,7 @@
 }
 
 \lstset{
-  basicstyle=\ttfamily\footnotesize,
+  basicstyle=\ttfamily\scriptsize,
   backgroundcolor=\color{codebg},
   frame=single,
   framerule=0.4pt,
@@ -44,25 +57,27 @@
 }
 
 \begin{document}
+\raggedbottom
 \mainmatter
 
 \title{CrossGL: A Hub-and-Spoke Compiler Infrastructure for Universal Shader Translation Across Heterogeneous GPU Architectures}
 
 \titlerunning{CrossGL: Universal Shader Translation Infrastructure}
 
-\author{Anonymous Author(s)}
-\authorrunning{Anonymous}
-\tocauthor{Anonymous}
-\institute{Withheld for Double-Blind Review}
+\author{Nripesh Niketan\thanks{ORCID: 0009-0008-2066-1937} \and Vaatsalya Shrivastava \and Bhushan Srivastav \and Sushant Mishra}
+\authorrunning{N. Niketan et al.}
+\tocauthor{Nripesh Niketan, Vaatsalya Shrivastava, Bhushan Srivastav, Sushant Mishra}
+\institute{CrossGL, United States\\
+\email{\{nripesh, vaatsalya, bhushan, sushant\}@crossgl.net}}
 
 \maketitle
 
 \begin{abstract}
-The modern GPU programming landscape is deeply fragmented across incompatible shading languages: GLSL for OpenGL, HLSL for DirectX, Metal Shading Language for Apple platforms, SPIR-V for Vulkan, and CUDA and HIP for general-purpose GPU computing. Developers targeting multiple platforms must maintain separate shader codebases, creating substantial engineering overhead and portability barriers. Existing translation tools such as SPIRV-Cross, Tint, and Naga address only subsets of this problem, each supporting a limited number of source and target languages and requiring pairwise converters that scale quadratically with the number of supported languages.
+The modern GPU programming landscape is fragmented across incompatible shading languages: GLSL for OpenGL, HLSL for DirectX, Metal Shading Language for Apple platforms, SPIR-V for Vulkan, and CUDA and HIP for general-purpose GPU computing. Developers targeting multiple platforms must therefore maintain separate shader codebases or depend on translation tools that cover only part of the language space.
 
-We present CrossGL, a compiler infrastructure employing a hub-and-spoke translation architecture centered on a purpose-built intermediate shader language. By routing all translations through a universal abstract syntax tree derived from the CrossGL language, the system reduces the complexity of supporting $N$ languages from $O(N^2)$ pairwise converters to $O(N)$. The CrossGL language captures shader semantics across 16 GPU pipeline stages, including modern ray tracing and mesh shader stages, through a rich type system supporting generics, pattern matching, and platform-agnostic semantic annotations.
+We present CrossGL, a compiler infrastructure based on a hub-and-spoke architecture centered on a purpose-built intermediate shader language. By routing translation through a universal abstract syntax tree derived from CrossGL, the system reduces the number of required converters for $N$ languages from $O(N^2)$ pairwise translators to $O(N)$ frontends and backends. CrossGL captures shader semantics across 16 GPU pipeline stages, including ray tracing and mesh stages, through a type system with vectors, matrices, textures, generics, pattern matching, and platform-agnostic semantic annotations.
 
-We demonstrate the approach through prototype backends for several diverse languages---including GLSL, HLSL, Metal, SPIR-V, CUDA, HIP, Rust, Mojo, and Slang---showing that adding a new target language requires only implementing a single code generator against the universal AST, rather than converters for every other language.
+We evaluate a reference implementation with nine forward code generators and native import frontends. On an eight-program example corpus covering graphics, compute, arrays, generic pattern matching, and a 489-line physically based rendering shader, CrossGL successfully generated 56 of 60 compatible target outputs, with a median translation time of 30.83 ms per translation on an Apple M2 Max. A 767-test unit suite validates the lexer, parser, backend contracts, and native import paths. The results show that the hub-and-spoke design is practical while also identifying the remaining gaps in SPIR-V validation and advanced backend completeness.
 
 \keywords{shader translation, cross-platform GPU computing, intermediate representation, compiler infrastructure, heterogeneous architectures}
 \end{abstract}
@@ -123,25 +138,27 @@ These languages share many fundamental concepts---vectors, matrices, textures, s
 
 \subsection{Existing Translation Tools}
 
-Several tools have been developed to bridge the gaps between GPU shading languages. Table~\ref{tab:tools} compares their capabilities.
+Several tools have been developed to bridge the gaps between GPU shading languages. Table~\ref{tab:tools} compares their public translation scope. The table is intentionally conservative: it distinguishes tools that accept one primary source language from tools that expose multiple source frontends, and it separates graphics-oriented outputs from compute-oriented outputs.
 
 \begin{table}
 \caption{Comparison of existing shader translation tools}
 \label{tab:tools}
-\begin{center}
-\begin{tabular}{r@{\quad}cccc}
-\hline
-\multicolumn{1}{l}{\rule{0pt}{12pt}\textbf{Tool}} & \textbf{Sources} & \textbf{Targets} & \textbf{Bidir.} & \textbf{Extensible} \\[2pt]
-\hline\rule{0pt}{12pt}
-SPIRV-Cross~\cite{khronos2023spirvcross} & 1 & 3 & No & No \\
-Tint~\cite{google2023tint} & 1 & 4 & No & No \\
-Naga~\cite{mozilla2023naga} & 3 & 4 & Partial & No \\
-DXC~\cite{microsoft2023dxc} & 1 & 2 & No & No \\
-Slang~\cite{he2018slang} & 1 & 3 & No & Yes \\
-\textbf{CrossGL} & \textbf{9+} & \textbf{9+} & \textbf{Yes} & \textbf{Yes} \\[2pt]
-\hline
-\end{tabular}
-\end{center}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabularx}{\textwidth}{@{}L{2.30cm}Y Y L{1.55cm}L{1.25cm}@{}}
+\toprule
+\textbf{Tool} & \textbf{Input model} & \textbf{Main outputs} & \textbf{Beyond graphics} & \textbf{Native bidir.} \\
+\midrule
+SPIRV-Cross~\cite{khronos2023spirvcross} & SPIR-V only & GLSL, HLSL, MSL & None & No \\
+Tint/Dawn~\cite{google2023tint} & WGSL; optional SPIR-V reader & WGSL, SPIR-V; WebGPU lowering & None & Partial \\
+Naga~\cite{mozilla2023naga} & WGSL, SPIR-V, GLSL & SPIR-V, WGSL, MSL, HLSL, GLSL & None & Partial \\
+DXC~\cite{microsoft2023dxc} & HLSL & DXIL, SPIR-V; Metal with converter & None & No \\
+Slang~\cite{he2018slang} & Slang/HLSL & HLSL, GLSL, SPIR-V, MSL, CUDA, C++ & CUDA, C++ & Partial \\
+\textbf{CrossGL} & \textbf{CrossGL plus native frontends} & \textbf{GLSL, HLSL, Metal, SPIR-V, CUDA, HIP, Rust, Mojo, Slang} & \textbf{CUDA, HIP, Rust, Mojo} & \textbf{Yes} \\
+\bottomrule
+\end{tabularx}
 \end{table}
 
 \textbf{SPIRV-Cross}~\cite{khronos2023spirvcross}, maintained by the Khronos Group, decompiles SPIR-V binary modules into GLSL, HLSL, and Metal source code. While widely used in game engines and graphics frameworks, it operates only in one direction (from SPIR-V) and cannot target compute-oriented languages such as CUDA, HIP, or Mojo.
@@ -168,7 +185,7 @@ The Cg language~\cite{mark2003cg}, developed by NVIDIA, was an early attempt at 
 
 The Vulkan Programming Guide~\cite{sellers2017vulkan} provides comprehensive documentation of the SPIR-V consumption model, and the GLSL specification~\cite{kessenich2018glsl} defines the textual source language from which many CrossGL type and operator conventions derive.
 
-CrossGL addresses the gap between these approaches by providing a human-readable, high-level IR that preserves shader-specific semantics---pipeline stages, vertex semantics, texture operations, wave intrinsics, and ray tracing constructs---while remaining amenable to bidirectional translation across both graphics and compute languages.
+CrossGL addresses this gap by providing a human-readable, high-level IR that preserves shader-specific semantics---pipeline stages, vertex semantics, texture operations, wave intrinsics, and ray tracing constructs---while remaining amenable to bidirectional translation across both graphics and compute languages. The following section describes this language in detail.
 \section{The CrossGL Language}
 
 CrossGL is a purpose-built intermediate shader language designed to serve as the universal hub in the translation architecture. This section describes its design goals, syntax and type system, and shader stage model.
@@ -245,15 +262,15 @@ Int/uint vectors & \texttt{ivec2}--\texttt{ivec4}, \texttt{uvec2}--\texttt{uvec4
 Bool vectors & \texttt{bvec2}, \texttt{bvec3}, \texttt{bvec4} \\
 Matrices & \texttt{mat2}--\texttt{mat4}, \texttt{mat2x3}, \texttt{mat4x2}, etc. \\
 Texture/sampler & \texttt{sampler2D}, \texttt{samplerCube}, \texttt{sampler3D} \\
-Generics & \texttt{generic\textless T\textgreater}, \texttt{generic\textless T: Numeric\textgreater} \\[2pt]
+Generics & \texttt{generic}$<$\texttt{T}$>$, \texttt{generic}$<$\texttt{T: Numeric}$>$ \\[2pt]
 \hline
 \end{tabular}
 \end{center}
 \end{table}
 
-Beyond the standard shader type vocabulary, CrossGL supports Rust-inspired features including \texttt{let}/\texttt{let mut} variable declarations, \texttt{match} expressions with pattern guards and destructuring, \texttt{generic<T>} parameterized types with trait constraints, and \texttt{for-in} range iteration. These features, while uncommon in traditional shading languages, enable expressive cross-platform abstractions and facilitate translation from languages like Rust and Mojo that employ similar constructs.
+CrossGL also supports Rust-inspired features beyond the core shader vocabulary: \texttt{let} and \texttt{let mut} declarations, \texttt{match} expressions with pattern guards, generic types with trait constraints, and \texttt{for-in} range iteration. These features, while uncommon in traditional shading languages, enable expressive cross-platform abstractions and facilitate translation from languages like Rust and Mojo that employ similar constructs.
 
-\textbf{Semantic annotations.} CrossGL uses \texttt{@semantic} attributes to annotate shader input/output variables with platform-agnostic semantics. During code generation, these annotations are mapped to platform-specific mechanisms: GLSL \texttt{layout(location=N)} qualifiers, HLSL \texttt{SV\_POSITION} semantics, or Metal \texttt{[[attribute(N)]]} annotations.
+\textbf{Semantic annotations.} CrossGL uses \texttt{@semantic} attributes to annotate shader input/output variables with platform-agnostic semantics. During code generation, these annotations map to each platform's mechanism: GLSL locations or built-ins, HLSL \texttt{SV\_} semantics, and Metal attribute annotations.
 
 \subsection{Shader Stage Model}
 
@@ -279,14 +296,45 @@ Ray Tracing & \texttt{ray\_generation}, \texttt{ray\_intersection}, \\
 \end{center}
 \end{table}
 
-Compute stages support \texttt{layout()} qualifiers for specifying workgroup dimensions and \texttt{shared} memory declarations for inter-thread communication. Ray tracing stages provide access to intrinsic operations including \texttt{TraceRay}, \texttt{ReportIntersection}, and \texttt{IgnoreHit}. Wave/subgroup operations (e.g., \texttt{WaveActiveSum}, \texttt{WaveBroadcast}) are represented as first-class intrinsic calls that map to HLSL wave intrinsics, Metal SIMD group functions, or GLSL subgroup operations during code generation.
+Compute stages support \texttt{layout()} qualifiers for workgroup dimensions and \texttt{shared} memory declarations for inter-thread communication. Ray tracing and wave operations are represented as first-class intrinsic calls, then mapped to HLSL wave intrinsics, Metal SIMD group functions, or GLSL subgroup operations during code generation.
+
 \section{System Architecture}
 
 CrossGL employs a hub-and-spoke architecture with the CrossGL language at the center and backend-specific modules at the periphery. This section describes the translation model, the dual-AST design, the compilation pipeline, and the plugin system.
 
 \subsection{Hub-and-Spoke Translation Model}
 
-The fundamental design principle of CrossGL is that all translations route through a single intermediate language. Rather than implementing direct converters between every pair of supported languages, the system decomposes each translation into at most two steps: conversion from a source language to CrossGL, and conversion from CrossGL to a target language.
+The fundamental design principle of CrossGL is that every translation routes through a single intermediate language. Instead of direct converters for every source-target pair, the system decomposes each translation into at most two steps: source language to CrossGL, then CrossGL to the target language.
+
+\begin{figure}
+\centering
+\begin{tikzpicture}[
+    node distance=7mm and 10mm,
+    box/.style={draw, rounded corners=2pt, align=center, minimum width=22mm, minimum height=7mm, font=\scriptsize},
+    hub/.style={draw, ellipse, thick, align=center, minimum width=34mm, minimum height=18mm, font=\scriptsize\bfseries},
+    arrow/.style={-{Stealth[length=2mm]}, thick}
+]
+\node[hub] (hub) {CrossGL\\Universal AST};
+\node[box, left=of hub, yshift=18mm] (glslin) {GLSL\\frontend};
+\node[box, left=of hub, yshift=6mm] (hlslin) {HLSL\\frontend};
+\node[box, left=of hub, yshift=-6mm] (metalin) {Metal\\frontend};
+\node[box, left=of hub, yshift=-18mm] (otherin) {CUDA/HIP/\\Rust/Mojo};
+\node[box, right=of hub, yshift=18mm] (glslout) {GLSL\\backend};
+\node[box, right=of hub, yshift=6mm] (hlslout) {HLSL\\backend};
+\node[box, right=of hub, yshift=-6mm] (metalout) {Metal\\backend};
+\node[box, right=of hub, yshift=-18mm] (otherout) {SPIR-V/CUDA/\\HIP/Rust/Mojo};
+\draw[arrow] (glslin) -- (hub);
+\draw[arrow] (hlslin) -- (hub);
+\draw[arrow] (metalin) -- (hub);
+\draw[arrow] (otherin) -- (hub);
+\draw[arrow] (hub) -- (glslout);
+\draw[arrow] (hub) -- (hlslout);
+\draw[arrow] (hub) -- (metalout);
+\draw[arrow] (hub) -- (otherout);
+\end{tikzpicture}
+\caption{Hub-and-spoke translation architecture. Each language contributes one import path to CrossGL and one export path from CrossGL, rather than direct converters to every other language.}
+\label{fig:hubspoke}
+\end{figure}
 
 This hub-and-spoke model supports three translation modes:
 
@@ -296,26 +344,60 @@ This hub-and-spoke model supports three translation modes:
 
 \textbf{Cross-translation} combines the reverse and forward paths to translate between two non-CrossGL languages. For example, translating an HLSL shader to Metal proceeds as: HLSL $\rightarrow$ HLSL lexer/parser $\rightarrow$ HLSL AST $\rightarrow$ reverse codegen $\rightarrow$ CrossGL source $\rightarrow$ CrossGL lexer/parser $\rightarrow$ universal AST $\rightarrow$ Metal codegen $\rightarrow$ Metal source.
 
-\textbf{Complexity analysis.} For $N$ supported languages, the hub-and-spoke model requires $N$ forward code generators (CrossGL to each target) and $N$ reverse converters (each source to CrossGL), totaling $2N$ converters. A direct pairwise approach would require $N(N-1)$ converters. With the current $N=10$ languages, CrossGL uses 20 converters instead of 90, a 4.5$\times$ reduction. Each additional language requires only 2 new converters rather than $2(N-1)$.
+\begin{figure}
+\centering
+\begin{tikzpicture}[
+    node distance=6mm,
+    stagebox/.style={draw, rounded corners=2pt, align=center, minimum width=23mm, minimum height=8mm, font=\scriptsize},
+    arrow/.style={-{Stealth[length=2mm]}, thick}
+]
+\node[stagebox] (src) {Native source\\or .cgl};
+\node[stagebox, right=of src] (lex) {Lexer};
+\node[stagebox, right=of lex] (parse) {Parser};
+\node[stagebox, right=of parse] (ast) {Backend AST\\or universal AST};
+\node[stagebox, below=of ast] (norm) {CrossGL\\normalization};
+\node[stagebox, left=of norm] (gen) {Target\\codegen};
+\node[stagebox, left=of gen] (out) {Target\\shader};
+\draw[arrow] (src) -- (lex);
+\draw[arrow] (lex) -- (parse);
+\draw[arrow] (parse) -- (ast);
+\draw[arrow] (ast) -- (norm);
+\draw[arrow] (norm) -- (gen);
+\draw[arrow] (gen) -- (out);
+\end{tikzpicture}
+\caption{Compilation pipeline for direct and cross-translation. Native inputs first pass through backend-specific parsers; CrossGL input enters directly at the universal AST path.}
+\label{fig:pipeline}
+\end{figure}
+
+\textbf{Complexity.} For $N$ supported languages, the hub-and-spoke model requires $N$ forward code generators and $N$ reverse converters, totaling $2N$ converters. A direct pairwise approach would require $N(N-1)$ converters. With the current $N=10$ languages, CrossGL uses 20 converters instead of 90, a 4.5$\times$ reduction. Each additional language requires only two new converters rather than $2(N-1)$.
 
 \subsection{Dual-AST Design}
 
-The system maintains two distinct AST layers, each optimized for a different purpose.
+The system maintains two distinct AST layers, each optimized for a different purpose (Fig.~\ref{fig:dualast}). \textbf{The universal AST} is the canonical representation for forward code generation. It contains over 60 node types covering type nodes, shader program structure, declarations, statements, expressions, and GPU-specific operations such as texture, atomic, wave, ray tracing, mesh, and buffer operations. Every universal AST node supports visitor dispatch through \texttt{accept()} and carries an \texttt{annotations} dictionary for backend-specific metadata.
 
-\textbf{The universal AST} serves as the canonical representation for forward code generation. It defines over 60 node types organized into six categories:
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+    node distance=5mm and 8mm,
+    astbox/.style={draw, rounded corners=2pt, align=center, minimum width=20mm, minimum height=7mm, font=\scriptsize},
+    unibox/.style={draw, rounded corners=2pt, align=center, minimum width=28mm, minimum height=7mm, font=\scriptsize, thick, fill=codebg},
+    arrow/.style={-{Stealth[length=2mm]}, thick}
+]
+\node[astbox] (hlslast) {HLSL AST};
+\node[astbox, below=of hlslast] (glslast) {GLSL AST};
+\node[astbox, below=of glslast] (metalast) {Metal AST};
+\node[astbox, right=28mm of glslast] (commonast) {Common AST\\(30 base nodes)};
+\node[unibox, right=28mm of commonast] (uniast) {Universal AST\\(60+ node types)};
+\draw[arrow] (hlslast) -- (commonast);
+\draw[arrow] (glslast) -- (commonast);
+\draw[arrow] (metalast) -- (commonast);
+\draw[arrow] (commonast) -- node[above, font=\scriptsize] {normalize} (uniast);
+\end{tikzpicture}
+\caption{Dual-AST architecture. Backend-specific ASTs preserve source language structure and extend a shared common AST. Normalization produces the universal AST used by all forward code generators.}
+\label{fig:dualast}
+\end{figure}
 
-\begin{enumerate}
-\item \textbf{Type system nodes} (10 types): \texttt{PrimitiveType}, \texttt{VectorType}, \texttt{MatrixType}, \texttt{ArrayType}, \texttt{PointerType}, \texttt{ReferenceType}, \texttt{FunctionType}, \texttt{GenericType}, \texttt{NamedType}, and the base \texttt{TypeNode}.
-\item \textbf{Program structure nodes}: \texttt{ShaderNode} (root), \texttt{StageNode} (per pipeline stage with entry point and local functions), \texttt{ImportNode}, \texttt{PreprocessorNode}.
-\item \textbf{Declaration nodes}: \texttt{StructNode}, \texttt{FunctionNode}, \texttt{VariableNode}, \texttt{ConstantNode}, \texttt{EnumNode}, \texttt{GenericParameterNode}, \texttt{AttributeNode}.
-\item \textbf{Statement nodes}: \texttt{BlockNode}, \texttt{AssignmentNode}, \texttt{IfNode}, \texttt{ForNode}, \texttt{WhileNode}, \texttt{MatchNode}, \texttt{SwitchNode}, \texttt{ReturnNode}, among others.
-\item \textbf{Expression nodes}: \texttt{BinaryOpNode}, \texttt{UnaryOpNode}, \texttt{FunctionCallNode}, \texttt{MemberAccessNode}, \texttt{ArrayAccessNode}, \texttt{SwizzleNode}, \texttt{CastNode}, \texttt{ConstructorNode}, \texttt{LambdaNode}.
-\item \textbf{GPU-specific nodes}: \texttt{TextureOpNode}, \texttt{AtomicOpNode}, \texttt{SyncNode}, \texttt{WaveOpNode}, \texttt{RayTracingOpNode}, \texttt{MeshOpNode}, \texttt{BufferOpNode}.
-\end{enumerate}
-
-Every AST node supports a visitor pattern via an \texttt{accept()} method that dispatches based on class name, and carries an \texttt{annotations} dictionary for backend-specific metadata.
-
-\textbf{The backend ASTs} (a shared common AST plus per-backend extensions) provide simpler, native-language-oriented representations used by the reverse translation path. Each backend parser produces an AST that faithfully mirrors the source language's structure---for example, the HLSL backend AST preserves HLSL-specific concepts such as constant buffer declarations and semantic annotations in their native form. The common base provides approximately 30 shared node types that all backends inherit.
+\textbf{The backend ASTs} provide native-language-oriented representations for reverse translation. Each backend parser preserves source-language structure before normalization---for example, HLSL constant buffers and semantic annotations remain explicit in the HLSL AST. The shared common AST supplies approximately 30 base node types that per-backend ASTs extend where the source language requires additional constructs.
 
 The rationale for two AST layers is separation of concerns: backend parsers need to capture source language semantics without loss, while the forward code generators need a normalized, feature-rich representation that abstracts over platform differences. The universal AST serves as this normalized form.
 
@@ -327,15 +409,16 @@ The forward translation pipeline consists of three stages: lexical analysis, par
 
 \textbf{Parsing.} The CrossGL parser is a hand-written recursive descent parser---a deliberate choice over parser generators to retain full control over error messages and recovery strategies. Expression parsing uses precedence climbing across 12 levels, from assignment (lowest) through ternary, logical, bitwise, comparison, shift, additive, multiplicative, and unary operators to postfix and primary expressions (highest). The parser employs speculative parsing with state save/restore for ambiguous constructs such as distinguishing function declarations from variable declarations. Dedicated recognition logic identifies GPU intrinsics during postfix expression parsing, including wave operations, ray tracing intrinsics, mesh shader operations, and ray query methods.
 
-\textbf{Code generation.} Each target backend provides a code generator class that traverses the universal AST and emits target language source code. All code generators follow a common pattern: a top-level \texttt{generate()} method iterates over the shader's structs, globals, constant buffers, functions, and pipeline stages, delegating to \texttt{generate\_function()}, \texttt{generate\_statement()}, and \texttt{generate\_expression()} methods. Type, semantic, and operator mappings are maintained as per-backend dictionaries.
+\textbf{Code generation.} Each target backend provides a code generator class that traverses the universal AST and emits target language source code. All code generators follow a common pattern: a top-level \texttt{generate()} method iterates over structs, globals, constant buffers, functions, and stages, then delegates to function, statement, and expression emitters. Type, semantic, and operator mappings are maintained as per-backend dictionaries.
 
 Two registries coordinate the pipeline. The \texttt{SourceRegistry} maps file extensions to source specifications (lexer, parser, and optional reverse code generator factories), determining how input files are parsed. The \texttt{BackendRegistry} maps backend names and aliases to code generator classes, determining how output is generated.
 
 \subsection{Plugin Architecture}
 
-CrossGL supports dynamic backend discovery through a plugin system (\texttt{translator/plugin\_loader.py}). At initialization, the system scans subdirectories of \texttt{crosstl/backend/} for \texttt{backend\_spec.py} or \texttt{source\_spec.py} modules, dynamically importing and registering them. This enables new backends to be added as drop-in packages without modifying core translation logic.
+CrossGL supports dynamic backend discovery through a plugin loader. At initialization, the system scans backend subdirectories for \texttt{backend\_spec.py} or \texttt{source\_spec.py} modules, dynamically importing and registering them. This enables new backends to be added as drop-in packages without modifying core translation logic.
 
 Each backend is described by a \texttt{BackendSpec} dataclass containing: a canonical name, a list of aliases (e.g., ``hlsl'' and ``dx'' for DirectX), supported file extensions, and a factory function for the code generator class. Both registries use lazy loading---backend modules are imported only when a translation targeting them is requested, keeping startup time minimal regardless of the number of installed backends.
+
 \section{Code Generation}
 
 This section details the type and semantic mapping mechanisms, the per-backend generation strategies, and the specialized SPIR-V assembly generator.
@@ -346,7 +429,7 @@ Each code generator maintains three lookup dictionaries that map CrossGL constru
 
 \textbf{Type mapping.} Table~\ref{tab:typemap} illustrates how representative CrossGL types map across five major backends. CrossGL's type names align with GLSL conventions, so GLSL mappings are largely identity transformations. Other backends require systematic renaming: for example, HLSL and Metal use the \texttt{floatN} convention for vectors, while Rust uses \texttt{fN} scalar types and explicit vector libraries. The centralized \texttt{ASTUtils} class provides a unified \texttt{map\_primitive\_type()} method with per-backend mappings for all nine backends.
 
-\begin{table}
+\begin{table}[H]
 \caption{Representative type mappings across backends}
 \label{tab:typemap}
 \begin{center}
@@ -367,9 +450,9 @@ Each code generator maintains three lookup dictionaries that map CrossGL constru
 \end{center}
 \end{table}
 
-\textbf{Semantic mapping.} Shader input/output semantics are mapped from CrossGL's unified names to platform-specific mechanisms. Table~\ref{tab:semanticmap} shows representative mappings. GLSL uses built-in variables (\texttt{gl\_Position}) and layout qualifiers. HLSL uses system-value semantics (\texttt{SV\_POSITION}). Metal uses C++ attributes (\texttt{[[position]]}).
+\textbf{Semantic mapping.} CrossGL maps shader I/O semantics from unified names to platform-specific mechanisms. Table~\ref{tab:semanticmap} shows representative mappings. GLSL uses built-in variables and layout qualifiers, HLSL uses system-value semantics, and Metal uses C++ attributes.
 
-\begin{table}
+\begin{table}[H]
 \caption{Representative semantic mappings across backends}
 \label{tab:semanticmap}
 \begin{center}
@@ -394,11 +477,11 @@ While all code generators follow the common traversal pattern described in Secti
 
 \textbf{GLSL} requires emitting a \texttt{\#version} directive, translating shader stages to \texttt{void main()} entry points, converting struct-based I/O to \texttt{layout(location=N) in/out} variable declarations, and mapping CrossGL's unified semantics to GLSL built-in variables.
 
-\textbf{HLSL} preserves semantic annotations on struct members (e.g., \texttt{float4 position : SV\_POSITION}), generates constant buffer declarations with register bindings, and handles the distinction between \texttt{Texture2D} resources and \texttt{SamplerState} objects.
+\textbf{HLSL} preserves semantic annotations on struct members, generates constant buffer declarations with register bindings, and handles the distinction between texture resources and sampler-state objects.
 
-\textbf{Metal} translates shader entry points to functions with Metal's stage attributes (\texttt{vertex}, \texttt{fragment}, \texttt{kernel}), introduces address space qualifiers (\texttt{device}, \texttt{constant}, \texttt{threadgroup}), and restructures function parameters to use Metal's argument buffer model with \texttt{[[buffer(N)]]} and \texttt{[[texture(N)]]} attributes.
+\textbf{Metal} translates shader entry points to functions with stage attributes such as \texttt{vertex}, \texttt{fragment}, and \texttt{kernel}. It adds device, constant, and threadgroup address-space qualifiers, then restructures parameters around Metal's argument buffer model.
 
-\textbf{CUDA and HIP} emit kernel functions with \texttt{\_\_global\_\_} qualifiers, translate compute thread indexing from CrossGL's \texttt{gl\_GlobalInvocationID} to \texttt{threadIdx}/\texttt{blockIdx}/\texttt{blockDim} expressions, and map shared memory declarations to \texttt{\_\_shared\_\_} variables. HIP generation closely mirrors CUDA, reflecting HIP's source-level compatibility design.
+\textbf{CUDA and HIP} emit kernel functions, map CrossGL global invocation IDs to CUDA/HIP thread and block indices, and translate shared memory declarations to target-specific shared memory variables. HIP generation closely mirrors CUDA, reflecting HIP's source-level compatibility design.
 
 \textbf{Rust} maps CrossGL types to Rust primitives (\texttt{float} $\rightarrow$ \texttt{f32}, \texttt{int} $\rightarrow$ \texttt{i32}, \texttt{void} $\rightarrow$ \texttt{()}), translates structs to Rust \texttt{struct} definitions with \texttt{pub} fields, and converts control flow constructs to Rust syntax including expression-based returns.
 
@@ -406,22 +489,11 @@ While all code generators follow the common traversal pattern described in Secti
 
 \subsection{SPIR-V Assembly Generation}
 
-The SPIR-V code generator is the most complex backend, as it targets a structured binary instruction format rather than a textual programming language. The generator emits textual SPIR-V assembly (human-readable form) that can be assembled into binary SPIR-V using the \texttt{spirv-as} tool from the SPIR-V Tools suite.
+The SPIR-V generator targets a structured assembly format rather than a textual source language. It allocates numeric IDs for every type, value, function, and label; deduplicates primitive, vector, matrix, pointer, function, struct, and array types; emits structured control-flow markers such as \texttt{OpSelectionMerge} and \texttt{OpLoopMerge}; and maps mathematical functions to GLSL.std.450 extended instructions. The backend can call \texttt{spirv-as}, \texttt{spirv-dis}, and \texttt{spirv-val} when those tools are available. This backend remains less mature than the textual backends, as the evaluation in the following section quantifies.
 
-Key implementation aspects include:
-
-\textbf{ID allocation.} Every SPIR-V entity (types, variables, functions, labels, instructions) requires a unique numeric ID. The generator maintains a monotonically increasing ID counter with bound tracking to produce valid \texttt{OpMemoryModel} headers.
-
-\textbf{Type registry.} SPIR-V requires explicit type declarations before use. The generator maintains registries for primitive types, vector types, matrix types, struct types, pointer types, function types, and array types, each indexed by a canonical key to ensure type deduplication.
-
-\textbf{Structured control flow.} SPIR-V mandates structured control flow using \texttt{OpSelectionMerge} and \texttt{OpLoopMerge} instructions that declare merge and continue blocks before branch instructions. The generator tracks merge points to ensure valid structured control flow.
-
-\textbf{Extended instructions.} Mathematical functions map to the GLSL.std.450 extended instruction set, requiring an \texttt{OpExtInstImport} declaration and \texttt{OpExtInst} calls with appropriate opcode numbers.
-
-The system optionally integrates with \texttt{spirv-val} for validation and \texttt{spirv-dis}/\texttt{spirv-as} for formatting, falling back gracefully when these external tools are unavailable.
 \section{Evaluation}
 
-We evaluate the CrossGL approach along three dimensions: the architectural scalability of the hub-and-spoke model, the ease with which new backends can be added to the system, and a case study demonstrating translation of a complex real-world shader.
+We evaluate CrossGL along four dimensions using the reference implementation in the public CrossTL repository at commit \texttt{445209d8}: (1)~architectural scaling properties, (2)~functional translation success across a diverse program corpus, (3)~output size and translation latency, and (4)~per-backend feature coverage. All experiments were conducted on macOS (Darwin~25.5.0) running on an Apple~M2~Max with 32~GB unified memory, using Python~3.14.4.
 
 \subsection{Architectural Scalability}
 
@@ -431,137 +503,168 @@ The central claim of the hub-and-spoke architecture is that it reduces the engin
 \caption{Scaling properties of hub-and-spoke vs. pairwise translation}
 \label{tab:complexity}
 \begin{center}
-\begin{tabular}{r@{\quad}ll}
+\begin{tabular}{r@{\quad}lll}
 \hline
-\multicolumn{1}{l}{\rule{0pt}{12pt}\textbf{Languages ($N$)}} & \textbf{Hub-and-spoke ($2N$)} & \textbf{Pairwise ($N(N-1)$)} \\[2pt]
+\multicolumn{1}{l}{\rule{0pt}{12pt}\textbf{Languages ($N$)}} & \textbf{Hub-and-spoke ($2N$)} & \textbf{Pairwise ($N(N-1)$)} & \textbf{Reduction} \\[2pt]
 \hline\rule{0pt}{12pt}
-5 & 10 converters & 20 converters \\
-10 & 20 converters & 90 converters \\
-15 & 30 converters & 210 converters \\
-20 & 40 converters & 380 converters \\[2pt]
+5 & 10 converters & 20 converters & 2.0$\times$ \\
+10 & 20 converters & 90 converters & 4.5$\times$ \\
+15 & 30 converters & 210 converters & 7.0$\times$ \\
+20 & 40 converters & 380 converters & 9.5$\times$ \\[2pt]
 \hline
 \end{tabular}
 \end{center}
 \end{table}
 
-The advantage grows superlinearly: at 10 languages the hub-and-spoke model requires 4.5$\times$ fewer converters; at 20 languages the reduction reaches 9.5$\times$. More importantly, the marginal cost of adding the $(N+1)$-th language is constant (2 converters) under the hub-and-spoke model, whereas pairwise translation requires $2N$ new converters. This property makes the approach increasingly attractive as the GPU language ecosystem continues to expand.
+The marginal cost of adding the $(N+1)$-th language is constant under the hub-and-spoke model: one importer and one exporter. Pairwise translation requires $2N$ additional converters. This property is independent of any particular implementation and follows directly from the topology shown in Fig.~\ref{fig:hubspoke}.
 
-The architecture also provides a structural guarantee: any two languages in the system can interoperate through CrossGL as a pivot, even if neither language's implementor was aware of the other. This emergent interoperability---a direct consequence of the shared IR---is impossible to achieve incrementally with pairwise converters.
+\subsection{Benchmark Corpus and Protocol}
 
-\subsection{Ease of Adding New Backends}
+The evaluation corpus consists of eight CrossGL programs from five categories, summarized in Table~\ref{tab:corpus}. A backend-specific compatibility matrix was used because not every output language is meaningful for every example: graphics shaders were translated to graphics and general-purpose backends, compute kernels to GPU-compute backends, and the PBR shader to the graphics-oriented and Rust backends.
 
-A key design goal of CrossGL is that adding support for a new target language should be straightforward and self-contained. To evaluate this, we examine the structure required for a new backend and illustrate through the backends implemented as proof-of-concept demonstrations.
+\begin{table}
+\caption{Example corpus used for translation evaluation}
+\label{tab:corpus}
+\begin{center}
+\scriptsize
+\begin{tabular}{r@{\quad}llrl}
+\hline
+\multicolumn{1}{l}{\rule{0pt}{12pt}\textbf{Category}} & \textbf{Program} & \textbf{Purpose} & \textbf{LOC} & \textbf{Targets} \\[2pt]
+\hline\rule{0pt}{12pt}
+Graphics & SimpleShader & Vertex/fragment baseline & 42 & 9 \\
+Graphics & PerlinNoise & Math-heavy procedural shader & 43 & 9 \\
+Graphics & ComplexShader & PBR-style material shader & 499 & 9 \\
+Advanced & ArrayTest & Arrays and composite access & 56 & 9 \\
+Advanced & GenericPatternMatching & Generics, enums, match constructs & 387 & 9 \\
+Compute & ParticleSimulation & Workgroup compute simulation & 287 & 6 \\
+Cross-platform & UniversalPBRShader & Full Cook-Torrance PBR case study & 489 & 5 \\
+GPU computing & MatrixMultiplication & CUDA/HIP-style compute kernel & 364 & 4 \\[2pt]
+\hline
+\end{tabular}
+\end{center}
+\end{table}
 
-\textbf{What a new backend requires.} To add a new target language, a developer implements a single code generator class that traverses the universal AST and emits target language source. The code generator follows a standard template:
+Each compatible source-target pair was translated five times without external formatting. We report the median wall-clock time per pair. A translation is counted as successful when it completes without exception and produces more than 100 bytes of target output. This criterion tests the CrossGL frontend, universal AST construction, target code generator, and file emission path; it does not claim runtime equivalence of the generated shaders.
 
-\begin{enumerate}
-\item Define a \textbf{type mapping} dictionary (CrossGL types $\rightarrow$ target types).
-\item Define a \textbf{semantic mapping} dictionary (CrossGL semantics $\rightarrow$ target annotations).
-\item Implement \texttt{generate()}, \texttt{generate\_function()}, \texttt{generate\_statement()}, and \texttt{generate\_expression()} methods that walk the AST and emit text.
-\item Register the backend via a \texttt{BackendSpec} descriptor with name, aliases, and file extension.
-\end{enumerate}
+\subsection{Functional Results}
 
-No changes to the core lexer, parser, or universal AST are required. The plugin architecture discovers new backends automatically through directory scanning.
+In the evaluated implementation snapshot, the full Python unit suite passed: 767 tests completed in 1.11 s. These tests cover lexers, parsers, backend contracts, code generation helpers, and native import paths. The end-to-end example harness attempted 60 compatible translations and produced 56 successful target outputs, for a success rate of 93.3\%. Across all outputs, CrossGL generated 245,225 bytes and 6,603 lines of target code, with a median translation time of 30.83 ms.
 
-\textbf{Demonstrated backends.} We have implemented prototype backends for nine diverse languages to validate that the architecture accommodates a wide range of target paradigms:
+\begin{table}[!ht]
+\caption{End-to-end translation results by backend}
+\label{tab:backendresults}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.0}
+\begin{tabularx}{\textwidth}{@{}L{1.45cm}cccrY@{}}
+\toprule
+\textbf{Backend} & \textbf{Success} & \textbf{Rate} & \textbf{Median ms} & \textbf{LOC} & \textbf{Observed gaps} \\
+\midrule
+CUDA & 7/7 & 100.0\% & 30.96 & 651 & None in corpus \\
+HLSL & 6/7 & 85.7\% & 30.44 & 924 & Generic pattern output too small \\
+HIP & 7/7 & 100.0\% & 30.97 & 802 & None in corpus \\
+Metal & 7/7 & 100.0\% & 30.32 & 909 & None in corpus \\
+Mojo & 6/6 & 100.0\% & 23.35 & 540 & None in corpus \\
+GLSL & 7/7 & 100.0\% & 31.27 & 895 & None in corpus \\
+Rust & 7/7 & 100.0\% & 42.47 & 1023 & None in corpus \\
+Slang & 3/5 & 60.0\% & 5.01 & 85 & Complex block traversal; generic output too small \\
+SPIR-V & 6/7 & 85.7\% & 30.70 & 774 & Enum member handling in generic pattern case \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
-\begin{itemize}
-\item \textbf{Graphics shaders} (GLSL, HLSL, Metal, Slang): These backends demonstrate translation of full graphics pipeline semantics including vertex/fragment stages, texture sampling, and semantic annotations. Each target uses fundamentally different mechanisms for the same concepts (GLSL's \texttt{layout} qualifiers vs. HLSL's \texttt{SV\_} semantics vs. Metal's C++ attributes).
-\item \textbf{GPU compute} (CUDA, HIP, SPIR-V): These backends demonstrate translation of compute kernels, shared memory, thread synchronization, and workgroup indexing. SPIR-V is particularly noteworthy as it targets a structured assembly format rather than a textual language.
-\item \textbf{General-purpose languages} (Rust, Mojo): These backends demonstrate that the architecture extends beyond traditional GPU languages, translating CrossGL constructs to general-purpose language idioms with fundamentally different type systems and syntax conventions.
-\end{itemize}
+Table~\ref{tab:backendresults} shows that the mature textual backends (GLSL, Metal, CUDA, HIP, Rust, and Mojo) handled all compatible examples in the corpus. The remaining failures are concentrated in advanced constructs: Slang generation fails on one complex block traversal and one generic/pattern-matching output, DirectX emits insufficient output for the generic pattern-matching example, and the SPIR-V backend does not yet support enum member lowering for that example.
 
-These backends are not all equally complete---some cover only core shader features while others handle advanced pipeline stages---but they collectively demonstrate that the hub-and-spoke architecture and the CrossGL IR are sufficiently general to accommodate languages across the graphics, compute, and general-purpose spectrum. The key observation is that each backend was implemented independently, against the same universal AST, without requiring changes to any other backend or to the core infrastructure.
+\subsection{Backend Feature Coverage}
 
-\textbf{Bidirectional translation.} For languages where reverse translation is implemented (source $\rightarrow$ CrossGL), a backend consists of an additional lexer, parser, backend-specific AST, and reverse code generator. This enables two-hop cross-translation between any pair of supported languages. The reverse path follows the same modular structure: each backend's reverse translator is self-contained and does not depend on other backends.
+\begin{table}[H]
+\caption{Per-backend feature coverage in the reference implementation}
+\label{tab:featurematrix}
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.06}
+\begin{tabularx}{\textwidth}{@{}L{1.25cm}L{1.85cm}L{1.25cm}Y Y@{}}
+\toprule
+\textbf{Backend} & \textbf{Export} & \textbf{Import} & \textbf{Best-supported area} & \textbf{Known gaps} \\
+\midrule
+GLSL & Full in corpus & Tested & Vertex/fragment graphics with partial compute support & Advanced arrays and generics remain partial \\
+HLSL & Partial & Tested & Graphics semantics and partial compute lowering & Generic pattern matching and enum lowering limited \\
+Metal & Full in corpus & Tested & Vertex/fragment graphics with Metal attributes & Advanced arrays and generics remain partial \\
+SPIR-V & Experimental & Parser tested & Assembly emission for graphics- and compute-shaped inputs & Validation and enum lowering incomplete \\
+CUDA & Full in corpus & Tested & Compute kernels and CUDA-style indexing & Graphics-shaped shaders are syntax-only lowering \\
+HIP & Full in corpus & Tested & Compute kernels and HIP-style indexing & Graphics-shaped shaders are syntax-only lowering \\
+Rust & Full in corpus & Tested & General-purpose output with the strongest advanced-construct coverage & GPU runtime semantics not fully modeled \\
+Mojo & Full in corpus & Tested & General-purpose and compute-shaped output & Advanced arrays and generics remain partial \\
+Slang & Partial & Tested & Basic shader output & Complex block traversal and generic output limited \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+A coarse count of supported backends does not convey implementation depth. Table~\ref{tab:featurematrix} therefore separates export/import status from the strongest supported area and the main implementation gaps observed in the evaluated snapshot.
+
+The matrix clarifies two points. First, the architecture supports nine export backends and corresponding native import modules, but backend maturity varies. Second, compute-oriented and general-purpose targets are not semantically equivalent to graphics APIs: CUDA and HIP can receive graphics-shaped programs as syntax, but their strongest support is for compute kernels.
+
+\subsection{Comparison with Existing Tools}
+
+A direct performance comparison with SPIRV-Cross~\cite{khronos2023spirvcross}, Tint~\cite{google2023tint}, Naga~\cite{mozilla2023naga}, and DXC~\cite{microsoft2023dxc} is not straightforward because these tools accept different input formats (SPIR-V, WGSL, GLSL, or HLSL respectively) and none accepts CrossGL source. Rewriting the corpus into each tool's input format would introduce confounds from manual translation quality. We therefore compare along two orthogonal axes: \emph{coverage breadth} and \emph{external interoperability}.
+
+\textbf{Coverage breadth.} Table~\ref{tab:tools} shows that existing tools support at most six output targets (Slang), while CrossGL reaches nine. More significantly, no existing tool provides bidirectional translation across the full graphics-and-compute spectrum: SPIRV-Cross is unidirectional from SPIR-V; Tint and DXC are single-source; Naga covers four inputs but excludes CUDA, HIP, Rust, and Mojo. CrossGL's hub-and-spoke model is the only architecture that provides native import paths for GLSL, HLSL, and Metal while simultaneously exporting to all nine targets.
+
+\textbf{SPIR-V interoperability.} We tested the experimental CrossGL SPIR-V assembly outputs with SPIR-V Tools and SPIRV-Cross. Five of seven generated SPIR-V assembly files assembled successfully with \texttt{spirv-as}; none passed \texttt{spirv-val}, primarily due to incomplete instruction layout and structured module emission. This localizes the main correctness gap: textual source generation is substantially more mature than binary-interchange generation, and closing this gap is a priority for future work.
 
 \subsection{Case Study: Cross-Platform PBR Shader}
 
-To demonstrate CrossGL on a realistic workload, we authored a Universal Physically Based Rendering (PBR) shader in CrossGL (488 lines). This shader implements a complete Cook-Torrance BRDF~\cite{cook1982reflectance} following the methodology of Pharr et al.~\cite{pharr2023pbr}, including:
+The Universal PBR shader is a 489-line CrossGL program implementing a Cook-Torrance BRDF~\cite{cook1982reflectance} following the methodology of Pharr et al.~\cite{pharr2023pbr}. It includes GGX/Trowbridge-Reitz normal distribution, Smith geometry with Schlick-GGX approximation, Schlick Fresnel, cascaded shadow mapping, image-based lighting with prefiltered environment maps, parallax occlusion mapping, and Reinhard tone mapping.
 
-\begin{itemize}
-\item GGX/Trowbridge-Reitz normal distribution function
-\item Smith's geometry function with Schlick-GGX approximation
-\item Schlick Fresnel approximation
-\item Cascaded shadow mapping with four cascade levels
-\item Image-based lighting with prefiltered environment maps
-\item Parallax occlusion mapping and Reinhard tone mapping
-\end{itemize}
+The PBR shader translated successfully to all five compatible targets in the corpus: GLSL (470 LOC), HLSL (444 LOC), Metal (456 LOC), Rust (408 LOC), and SPIR-V assembly (352 LOC). The generated GLSL output includes \texttt{\#version} directives, layout qualifiers, and uniform blocks; HLSL output uses \texttt{SV\_} semantic annotations and constant-buffer style declarations; Metal output uses stage-specific attributes and Metal-style resource types. This case study demonstrates that the CrossGL IR is expressive enough to preserve a substantial physically based lighting pipeline across target syntaxes, while the SPIR-V validation result above shows that interchange-level correctness still requires additional backend work.
 
-The shader defines 10 data structures and multiple helper functions, exercising a substantial portion of CrossGL's type system and control flow constructs. We translated this shader to the graphics-oriented backends (GLSL, HLSL, Metal) to verify that complex, real-world shader logic translates correctly through the hub-and-spoke pipeline.
+\subsection{Engineering Effort}
 
-The generated outputs use idiomatic constructs for each target platform: GLSL output includes appropriate \texttt{\#version} directives, \texttt{layout} qualifiers, and \texttt{uniform} blocks; HLSL output uses \texttt{SV\_} semantic annotations and \texttt{cbuffer} declarations; Metal output employs argument buffers with address space qualifiers and stage-specific attributes. The mathematical structure of the BRDF computations---including the GGX distribution function, Fresnel equations, and tone mapping operators---is preserved faithfully across all targets.
+The implementation contains 70 Python files and approximately 26,589 non-comment source lines. The reusable translator core accounts for 3,347 LOC, shared forward code generation for 6,622 LOC, and the nine native backend directories for approximately 15,864 LOC. New target support follows a standard template: type mapping, semantic mapping, expression/statement generation, and a \texttt{BackendSpec} registration descriptor. This structure is consistent with the theoretical scaling result: backend additions remain localized rather than requiring changes to every existing source-target pair.
 
-This case study demonstrates that the CrossGL IR is expressive enough to capture the semantics of a production-quality shader, and that the translation pipeline produces correct, readable output across platforms with fundamentally different shader models.
-
-\subsection{Engineering Effort Analysis}
-
-Table~\ref{tab:effort} characterizes the relative engineering effort for each component of the system.
-
-\begin{table}
-\caption{Engineering effort by component category}
-\label{tab:effort}
-\begin{center}
-\begin{tabular}{r@{\quad}l}
-\hline
-\multicolumn{1}{l}{\rule{0pt}{12pt}\textbf{Component}} & \textbf{Effort characterization} \\[2pt]
-\hline\rule{0pt}{12pt}
-CrossGL language (AST + Lexer + Parser) & One-time investment; shared by all backends \\
-Forward code generator (per backend) & Primary per-backend effort; follows template \\
-Reverse translator (per backend) & Optional; enables bidirectional translation \\
-Plugin registration & Minimal; single descriptor file \\
-Core infrastructure changes & None required for new backends \\[2pt]
-\hline
-\end{tabular}
-\end{center}
-\end{table}
-
-The one-time investment in the CrossGL language definition, lexer, and parser is amortized across all backends. Each new backend's primary effort is implementing the forward code generator, which consists largely of defining type/semantic mapping dictionaries and implementing the AST-to-text traversal. The standardized code generator interface means that existing backends serve as templates for new ones, further reducing the marginal effort of supporting additional languages.
 \section{Discussion}
 
 \subsection{Limitations}
 
-While the hub-and-spoke approach offers clear architectural advantages, several limitations should be acknowledged.
+The evaluation exposes three categories of limitations that bound the current system's applicability.
 
-\textbf{Translation fidelity vs. engineering cost.} The hub-and-spoke model trades potential translation fidelity for engineering scalability. Cross-translation between two non-CrossGL languages requires a two-hop path (source $\rightarrow$ CrossGL $\rightarrow$ target), and the intermediate representation may not preserve backend-specific optimizations or idioms. A dedicated pairwise converter between two specific languages could, in principle, produce more idiomatic output. However, we argue that for the vast majority of use cases, the linear scaling advantage outweighs this cost, particularly as the number of supported languages grows.
+\textbf{Uneven backend maturity.} GLSL, Metal, CUDA, HIP, Rust, and Mojo handled all compatible corpus examples, while Slang, HLSL, and SPIR-V exhibit gaps on generic pattern matching, enum lowering, or complex block traversal. This unevenness is inherent to the incremental development model: backends mature at different rates depending on the complexity of their target language semantics.
 
-\textbf{IR expressiveness bounds.} The CrossGL language, despite being designed as a superset of shader concepts, necessarily makes design choices that favor some languages over others. GLSL-derived naming conventions (e.g., \texttt{vec3}, \texttt{mat4}) are natural for graphics shader backends but less so for general-purpose languages like Rust or Mojo. Certain language-specific features---Rust's ownership semantics, CUDA's cooperative group primitives, Metal's address space model---do not map cleanly to the IR and require approximation or loss during translation.
+\textbf{Semantic loss in two-hop translation.} Cross-translation between two non-CrossGL languages routes through CrossGL as a pivot, and this intermediate step may discard target-specific idioms. For instance, HLSL's precise semantics for resource binding slots or Metal's explicit address-space annotations may be approximated rather than preserved exactly when translating from a third language through the IR. However, any improvement to the CrossGL IR benefits all translation paths simultaneously.
 
-\textbf{No optimization passes.} The current architecture performs direct AST-to-text translation without intermediate optimization. Dead code elimination, constant folding, and other standard compiler optimizations are not applied. In practice, the target platform's own compiler (e.g., the GPU driver's shader compiler) performs these optimizations, but the generated source may be less readable than hand-written code.
-
-\textbf{Correctness scope.} Our evaluation focuses on structural and syntactic correctness of generated code rather than runtime equivalence. Proving that translated shaders produce identical pixel output or compute results across all backends would require a formal semantics for CrossGL and each target language, which remains future work.
+\textbf{Structural correctness without runtime equivalence.} The evaluation measures whether generated code is syntactically well-formed and structurally complete, but does not verify pixel-level equivalence of rendered output or bitwise identity of compute results. The SPIR-V backend illustrates this boundary: it emits assembly for six of seven compatible examples, but the generated modules do not yet pass \texttt{spirv-val}, indicating structural rather than semantic correctness at the binary interchange level.
 
 \subsection{Future Work}
 
-The hub-and-spoke architecture opens several avenues for future research and development, building on established principles of structured software design for parallel and heterogeneous systems~\cite{mccool2012structured}.
+Several directions follow from the current results, guided by established principles of structured software design for parallel and heterogeneous systems~\cite{mccool2012structured}.
 
-\textbf{Optimization passes over the universal AST.} The visitor pattern already present in the AST design facilitates the introduction of optimization passes---dead code elimination, constant propagation, common subexpression elimination---that would benefit all backends simultaneously. This is a key advantage of the centralized IR approach: optimizations implemented once are shared across all translation paths.
+\textbf{Runtime validation harness.} The highest priority is an automated pipeline that compiles generated GLSL, HLSL, Metal, and SPIR-V through platform toolchains (glslangValidator, fxc/dxc, metal compiler, spirv-val) and compares rendered images or compute buffers within numerical tolerances. This would elevate the evaluation from structural correctness to semantic equivalence.
 
-\textbf{Formal translation semantics.} Developing formal semantics for CrossGL and proving translation equivalence between source and target programs would provide stronger correctness guarantees. The hub-and-spoke model simplifies this challenge: proving correctness for $2N$ individual converters is more tractable than $N(N-1)$ pairwise proofs.
+\textbf{Optimization passes.} The visitor pattern already present in the universal AST facilitates dead code elimination, constant folding, and common subexpression elimination as reusable passes that benefit all backends simultaneously.
 
-\textbf{Extending to heterogeneous accelerators.} The CrossGL IR could be extended with constructs for tensor operations, automatic differentiation, and ML-specific data types, positioning it as a universal translation layer for heterogeneous AI accelerators (GPUs, NPUs, TPUs). The modular backend architecture makes such extensions feasible without disrupting existing backends.
+\textbf{Extended target coverage.} WGSL support for WebGPU, direct binary SPIR-V and DXIL emission, and extensions for heterogeneous AI accelerators (NPUs, TPUs) would broaden applicability to emerging compute platforms.
 
-\textbf{Binary output formats.} Direct emission of binary SPIR-V and DXIL would eliminate dependencies on external assembler tools and enable tighter integration with graphics runtimes.
-
-\textbf{IDE and developer tooling.} A Language Server Protocol (LSP) implementation for CrossGL would enable syntax highlighting, autocompletion, and error diagnostics, improving the experience for developers who author cross-platform shaders directly in CrossGL.
-
-\textbf{Community-driven backend expansion.} The plugin architecture is designed to enable community-contributed backends. As new GPU languages emerge (e.g., WGSL for WebGPU), the constant marginal cost of integration makes it practical for the community to extend the system without centralized coordination.
+\textbf{Developer tooling.} A Language Server Protocol (LSP) implementation for CrossGL would enable syntax highlighting, autocompletion, and error diagnostics in standard editors, lowering the barrier for direct authorship of cross-platform shaders.
 
 \section{Conclusion}
 
-The fragmentation of GPU shading and compute languages imposes substantial engineering burden on developers targeting multiple platforms. This paper presented CrossGL, a compiler infrastructure that addresses this challenge through a hub-and-spoke translation architecture centered on a purpose-built intermediate shader language.
+This paper presented CrossGL, a compiler infrastructure that addresses GPU shading language fragmentation through a hub-and-spoke translation architecture centered on a purpose-built intermediate shader language.
 
-The CrossGL language provides a human-readable, semantically rich IR that captures shader concepts across 16 GPU pipeline stages, including modern ray tracing and mesh shader stages, through a type system supporting generics, pattern matching, and platform-agnostic semantic annotations. The hub-and-spoke architecture reduces the number of required translators from $O(N^2)$ to $O(N)$, with each new language requiring only two converters regardless of how many languages are already supported. We demonstrated the feasibility of this approach through prototype backends spanning graphics shaders (GLSL, HLSL, Metal, Slang), GPU compute (CUDA, HIP, SPIR-V), and general-purpose languages (Rust, Mojo), showing that each backend can be implemented independently against the universal AST without modifying the core infrastructure.
+The CrossGL language provides a human-readable, semantically rich IR that captures shader concepts across 16 GPU pipeline stages, including modern ray tracing and mesh shader stages, through a type system supporting generics, pattern matching, and platform-agnostic semantic annotations. The hub-and-spoke architecture reduces the number of required translators from $O(N^2)$ to $O(N)$, with each new language requiring only two converters regardless of how many languages are already supported. In the reference implementation, 767 unit tests passed and 56 of 60 compatible example translations succeeded across nine target backends, including a 489-line cross-platform PBR shader.
 
-The extensible plugin architecture ensures that the system can evolve alongside the GPU ecosystem: new backends are added as self-contained modules, discovered automatically, and immediately interoperable with all existing backends through the CrossGL pivot. As heterogeneous computing architectures proliferate---spanning GPUs, NPUs, TPUs, and specialized AI accelerators---the need for universal translation infrastructure will only grow. The hub-and-spoke model provides a principled, scalable foundation for bridging these diverse platforms through a single, shared intermediate representation.
+The results support the practicality of the architecture while also clarifying its current limits: textual backends are substantially more mature than SPIR-V interchange generation, and advanced constructs such as enums and pattern matching require further backend-specific lowering. The extensible plugin architecture nevertheless gives the system a scalable path forward. As heterogeneous computing architectures proliferate---spanning GPUs, NPUs, TPUs, and specialized AI accelerators---the need for universal translation infrastructure will only grow. The hub-and-spoke model provides a principled foundation for bridging these platforms through a single, shared intermediate representation.
 
-\subsubsection{Acknowledgments.} Details withheld for double-blind review.
+\subsubsection{Acknowledgments.} The authors thank the anonymous reviewers for their constructive feedback, which improved the evaluation methodology and presentation of this work.
+
+\subsubsection{Declaration on Generative AI.} Generative AI assistance was used during camera-ready preparation for language refinement and proofreading. The authors reviewed, edited, and take full responsibility for all technical claims, results, and final manuscript content.
+
 \begin{thebibliography}{23}
 
-\bibitem{khronos2022spirv}
-Khronos Group: SPIR-V Specification, Version 1.6, Revision 2.
-Khronos Group (2022).
-\url{https://registry.khronos.org/SPIR-V/}
+\bibitem{kessenich2016opengl}
+Kessenich, J., Sellers, G., Shreiner, D.: OpenGL Programming Guide: The Official Guide to Learning OpenGL, Version 4.5 with SPIR-V, 9th edn.
+Addison-Wesley, Boston (2016)
 
 \bibitem{microsoft2023hlsl}
 Microsoft Corporation: HLSL Programming Guide.
@@ -572,6 +675,31 @@ Microsoft Learn (2023).
 Apple Inc.: Metal Shading Language Specification, Version 3.1.
 Apple Inc. (2023).
 \url{https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf}
+
+\bibitem{khronos2022spirv}
+Khronos Group: SPIR-V Specification, Version 1.6, Revision 2.
+Khronos Group (2022).
+\url{https://registry.khronos.org/SPIR-V/}
+
+\bibitem{nickolls2008cuda}
+Nickolls, J., Buck, I., Garland, M., Skadron, K.: Scalable Parallel Programming with CUDA.
+ACM Queue \textbf{6}(2), 40--53 (2008).
+\url{https://doi.org/10.1145/1365490.1365500}
+
+\bibitem{amd2023hip}
+Advanced Micro Devices, Inc.: HIP Programming Guide.
+AMD ROCm Documentation (2023).
+\url{https://rocm.docs.amd.com/projects/HIP/}
+
+\bibitem{modular2023mojo}
+Modular Inc.: The Mojo Programming Language.
+Modular (2023).
+\url{https://www.modular.com/mojo}
+
+\bibitem{he2018slang}
+He, Y., Fatahalian, K., Foley, T.: Slang: Language Mechanisms for Extensible Real-Time Shading Systems.
+ACM Trans. Graph. \textbf{37}(4), Article 1 (2018).
+\url{https://doi.org/10.1145/3197517.3201380}
 
 \bibitem{khronos2023spirvcross}
 Khronos Group: SPIRV-Cross -- A Practical Tool for SPIR-V Reflection and Disassembly.
@@ -593,34 +721,15 @@ Microsoft Corporation: DirectX Shader Compiler (DXC).
 GitHub Repository (2023).
 \url{https://github.com/microsoft/DirectXShaderCompiler}
 
-\bibitem{nickolls2008cuda}
-Nickolls, J., Buck, I., Garland, M., Skadron, K.: Scalable Parallel Programming with CUDA.
-ACM Queue \textbf{6}(2), 40--53 (2008).
-\url{doi:10.1145/1365490.1365500}
-
-\bibitem{amd2023hip}
-Advanced Micro Devices, Inc.: HIP Programming Guide.
-AMD ROCm Documentation (2023).
-\url{https://rocm.docs.amd.com/projects/HIP/}
-
-\bibitem{modular2023mojo}
-Modular Inc.: The Mojo Programming Language.
-Modular (2023).
-\url{https://www.modular.com/mojo}
-
 \bibitem{embark2023rustgpu}
 Embark Studios: rust-gpu -- Making Rust a First-Class Language and Ecosystem for GPU Shaders.
 GitHub Repository (2023).
 \url{https://github.com/EmbarkStudios/rust-gpu}
 
-\bibitem{he2018slang}
-He, Y., Fatahalian, K., Foley, T.: Slang: Language Mechanisms for Extensible Real-Time Shading Systems.
-ACM Trans. Graph. \textbf{37}(4), Article 141 (2018).
-\url{doi:10.1145/3197517.3201362}
-
-\bibitem{kessenich2016opengl}
-Kessenich, J., Sellers, G., Shreiner, D.: OpenGL Programming Guide: The Official Guide to Learning OpenGL, Version 4.5 with SPIR-V, 9th edn.
-Addison-Wesley, Boston (2016)
+\bibitem{owens2008gpu}
+Owens, J.D., Houston, M., Luebke, D., Green, S., Stone, J.E., Phillips, J.C.: GPU Computing.
+Proceedings of the IEEE \textbf{96}(5), 879--899 (2008).
+\url{https://doi.org/10.1109/JPROC.2008.917757}
 
 \bibitem{aho2006compilers}
 Aho, A.V., Lam, M.S., Sethi, R., Ullman, J.D.: Compilers: Principles, Techniques, and Tools, 2nd edn.
@@ -630,23 +739,32 @@ Pearson/Addison-Wesley, Boston (2006)
 Lattner, C., Adve, V.: LLVM: A Compilation Framework for Lifelong Program Analysis \& Transformation.
 In: Proceedings of the International Symposium on Code Generation and Optimization (CGO), pp. 75--86.
 IEEE Computer Society (2004).
-\url{doi:10.1109/CGO.2004.1281665}
+\url{https://doi.org/10.1109/CGO.2004.1281665}
 
 \bibitem{lattner2021mlir}
 Lattner, C., Amini, M., Bondhugula, U., Cohen, A., Davis, A., Pienaar, J., Riddle, R., Shpeisman, T., Vasilache, N., Zinenko, O.: MLIR: Scaling Compiler Infrastructure for Domain Specific Computation.
 In: Proceedings of the International Symposium on Code Generation and Optimization (CGO), pp. 2--14.
 IEEE (2021).
-\url{doi:10.1109/CGO51591.2021.9370308}
+\url{https://doi.org/10.1109/CGO51591.2021.9370308}
 
 \bibitem{mark2003cg}
 Mark, W.R., Glanville, R.S., Akeley, K., Kilgard, M.J.: Cg: A System for Programming Graphics Hardware in a C-like Language.
 ACM Trans. Graph. \textbf{22}(3), 896--907 (2003).
-\url{doi:10.1145/882262.882362}
+\url{https://doi.org/10.1145/882262.882362}
+
+\bibitem{sellers2017vulkan}
+Sellers, G., Kessenich, J.: Vulkan Programming Guide: The Official Guide to Learning Vulkan.
+Addison-Wesley, Boston (2017)
+
+\bibitem{kessenich2018glsl}
+Kessenich, J., Baldwin, D., Rost, R.: The OpenGL Shading Language, Version 4.60.
+Khronos Group (2017).
+\url{https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.pdf}
 
 \bibitem{cook1982reflectance}
 Cook, R.L., Torrance, K.E.: A Reflectance Model for Computer Graphics.
 ACM Trans. Graph. \textbf{1}(1), 7--24 (1982).
-\url{doi:10.1145/357290.357293}
+\url{https://doi.org/10.1145/357290.357293}
 
 \bibitem{pharr2023pbr}
 Pharr, M., Jakob, W., Humphreys, G.: Physically Based Rendering: From Theory to Implementation, 4th edn.
@@ -655,20 +773,6 @@ MIT Press, Cambridge (2023)
 \bibitem{mccool2012structured}
 McCool, M., Reinders, J., Robison, A.: Structured Parallel Programming: Patterns for Efficient Computation.
 Morgan Kaufmann, San Francisco (2012)
-
-\bibitem{sellers2017vulkan}
-Sellers, G., Kessenich, J.: Vulkan Programming Guide: The Official Guide to Learning Vulkan.
-Addison-Wesley, Boston (2017)
-
-\bibitem{owens2008gpu}
-Owens, J.D., Houston, M., Luebke, D., Green, S., Stone, J.E., Phillips, J.C.: GPU Computing.
-Proceedings of the IEEE \textbf{96}(5), 879--899 (2008).
-\url{doi:10.1109/JPROC.2008.917757}
-
-\bibitem{kessenich2018glsl}
-Kessenich, J., Baldwin, D., Rost, R.: The OpenGL Shading Language, Version 4.60.
-Khronos Group (2018).
-\url{https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.pdf}
 
 \end{thebibliography}
 \end{document}
