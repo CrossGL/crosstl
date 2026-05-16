@@ -48,14 +48,16 @@ class VulkanParser:
         return module
 
     def parse_module(self):
-        statements = []
+        functions = []
+        structs = []
+        global_variables = []
         while self.current_token[0] != "EOF":
             if self.current_token[0] == "LAYOUT":
-                statements.append(self.parse_layout())
+                global_variables.append(self.parse_layout())
             elif self.current_token[0] == "STRUCT":
-                statements.append(self.parse_struct())
+                structs.append(self.parse_struct())
             elif self.current_token[0] == "UNIFORM":
-                statements.append(self.parse_uniform())
+                global_variables.append(self.parse_uniform())
             elif (
                 (
                     self.current_token[0]
@@ -77,7 +79,7 @@ class VulkanParser:
                 and self.peek(1) == "IDENTIFIER"
                 and self.peek(2) == "LPAREN"
             ):
-                statements.append(self.parse_function())
+                functions.append(self.parse_function())
             elif (
                 self.current_token[0] == "IDENTIFIER"
                 or self.current_token[0]
@@ -95,10 +97,14 @@ class VulkanParser:
                 ]
                 or self.current_token[1] in VALID_DATA_TYPES
             ):
-                statements.append(self.parse_variable(self.current_token[1]))
+                global_variables.append(self.parse_variable(self.current_token[1]))
             else:
                 self.eat(self.current_token[0])
-        return ShaderNode(None, None, None, statements)
+        return ShaderNode(
+            functions=functions,
+            structs=structs,
+            global_variables=global_variables,
+        )
 
     def parse_layout(self):
         self.eat("LAYOUT")
@@ -129,10 +135,12 @@ class VulkanParser:
         self.eat("RPAREN")
 
         layout_type = None
+        block_name = None
         if self.current_token[0] in ["IN", "OUT", "UNIFORM", "BUFFER"]:
             layout_type = self.current_token[0]
             self.eat(layout_type)
             if self.current_token[0] == "IDENTIFIER":
+                block_name = self.current_token[1]
                 self.eat(self.current_token[0])
 
         data_type = None
@@ -177,11 +185,12 @@ class VulkanParser:
         self.eat("SEMICOLON")
         return LayoutNode(
             bindings,
-            push_constant,
-            layout_type,
-            data_type,
-            variable_name,
-            struct_fields,
+            push_constant=push_constant,
+            layout_type=layout_type,
+            data_type=data_type,
+            variable_name=variable_name,
+            struct_fields=struct_fields,
+            block_name=block_name,
         )
 
     def parse_push_constant(self):
@@ -267,7 +276,7 @@ class VulkanParser:
         params = self.parse_parameters()
         self.eat("RPAREN")
         body = self.parse_block()
-        return FunctionNode(func_name, return_type, params, body)
+        return FunctionNode(return_type, func_name, params, body)
 
     def parse_parameters(self):
         params = []
@@ -317,10 +326,10 @@ class VulkanParser:
             self.eat("IDENTIFIER")
             if self.current_token[0] == "POST_INCREMENT":
                 self.eat("POST_INCREMENT")
-                return UnaryOpNode("POST_INCREMENT", VariableNode(name, ""))
+                return UnaryOpNode("POST_INCREMENT", VariableNode("", name))
             elif self.current_token[0] == "POST_DECREMENT":
                 self.eat("POST_DECREMENT")
-                return UnaryOpNode("POST_DECREMENT", VariableNode(name, ""))
+                return UnaryOpNode("POST_DECREMENT", VariableNode("", name))
             elif self.current_token[0] in [
                 "EQUALS",
                 "ASSIGN_ADD",
@@ -335,19 +344,19 @@ class VulkanParser:
                     return AssignmentNode(name, value)
                 elif op == "ASSIGN_ADD":
                     return AssignmentNode(
-                        name, BinaryOpNode(VariableNode(name, ""), "+", value)
+                        name, BinaryOpNode(VariableNode("", name), "+", value)
                     )
                 elif op == "ASSIGN_SUB":
                     return AssignmentNode(
-                        name, BinaryOpNode(VariableNode(name, ""), "-", value)
+                        name, BinaryOpNode(VariableNode("", name), "-", value)
                     )
                 elif op == "ASSIGN_MUL":
                     return AssignmentNode(
-                        name, BinaryOpNode(VariableNode(name, ""), "*", value)
+                        name, BinaryOpNode(VariableNode("", name), "*", value)
                     )
                 elif op == "ASSIGN_DIV":
                     return AssignmentNode(
-                        name, BinaryOpNode(VariableNode(name, ""), "/", value)
+                        name, BinaryOpNode(VariableNode("", name), "/", value)
                     )
                 else:
                     raise SyntaxError(
@@ -358,7 +367,7 @@ class VulkanParser:
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
-                return UnaryOpNode("PRE_INCREMENT", VariableNode(name, ""))
+                return UnaryOpNode("PRE_INCREMENT", VariableNode("", name))
             else:
                 raise SyntaxError(
                     f"Expected IDENTIFIER after PRE_INCREMENT, got {self.current_token[0]}"
@@ -368,7 +377,7 @@ class VulkanParser:
             if self.current_token[0] == "IDENTIFIER":
                 name = self.current_token[1]
                 self.eat("IDENTIFIER")
-                return UnaryOpNode("PRE_DECREMENT", VariableNode(name, ""))
+                return UnaryOpNode("PRE_DECREMENT", VariableNode("", name))
             else:
                 raise SyntaxError(
                     f"Expected IDENTIFIER after PRE_DECREMENT, got {self.current_token[0]}"
@@ -383,21 +392,23 @@ class VulkanParser:
         self.eat("RPAREN")
         if_body = self.parse_block()
         else_body = None
-        else_if_condition = []
-        else_if_body = []
+        else_if_chain = []
         while self.current_token[0] == "ELSE" and self.peek(1) == "IF":
             self.eat("ELSE")
             self.eat("IF")
             self.eat("LPAREN")
-            else_if_condition.append(self.parse_expression())
+            else_if_condition = self.parse_expression()
             self.eat("RPAREN")
-            self.eat("LBRACE")
-            else_if_body.append(self.parse_body())
-            self.eat("RBRACE")
+            else_if_chain.append((else_if_condition, self.parse_block()))
         if self.current_token[0] == "ELSE":
             self.eat("ELSE")
             else_body = self.parse_block()
-        return IfNode(if_condition, if_body, else_if_condition, else_if_body, else_body)
+        return IfNode(
+            if_condition,
+            if_body,
+            else_body,
+            else_if_chain=else_if_chain,
+        )
 
     def parse_for_statement(self):
         self.eat("FOR")
@@ -522,7 +533,7 @@ class VulkanParser:
             return self.parse_function_call(func_name)
         elif self.current_token[0] == "DOT":
             return self.parse_member_access(func_name)
-        return VariableNode(func_name, "")
+        return VariableNode("", func_name)
 
     def parse_primary(self):
         if self.current_token[0] == "MINUS":
@@ -571,8 +582,9 @@ class VulkanParser:
     def parse_additive(self):
         left = self.parse_multiplicative()
         while self.current_token[0] in ["PLUS", "MINUS"]:
-            op = self.current_token[0]
-            self.eat(op)
+            token_type = self.current_token[0]
+            op = self.current_token[1]
+            self.eat(token_type)
             right = self.parse_multiplicative()
             left = BinaryOpNode(left, op, right)
         return left
@@ -743,7 +755,7 @@ class VulkanParser:
         condition = self.parse_expression()
         self.eat("RPAREN")
         self.eat("SEMICOLON")
-        return DoWhileNode(condition, body)
+        return DoWhileNode(body, condition)
 
     def parse_switch_statement(self):
         self.eat("SWITCH")

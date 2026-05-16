@@ -1,21 +1,8 @@
-from setuptools import setup
+from setuptools import find_namespace_packages, setup
 
 setup(
     name="crosstl",
-    packages=[
-        "crosstl",
-        "crosstl/translator/",
-        "crosstl/translator/codegen/",
-        "crosstl/backend",
-        "crosstl/backend/DirectX",
-        "crosstl/backend/Metal",
-        "crosstl/backend/GLSL",
-        "crosstl/backend/SPIRV",
-        "crosstl/backend/Mojo",
-        "crosstl/backend/Rust",
-        "crosstl/backend/CUDA",
-        "crosstl/backend/HIP",
-    ],
+    packages=find_namespace_packages(include=["crosstl*"]),
     version="1.0.0",
     author="CrossGL team",
     author_email="nripesh@crossgl.net",

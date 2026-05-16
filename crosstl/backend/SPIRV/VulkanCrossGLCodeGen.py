@@ -92,7 +92,12 @@ class VulkanToCrossGLConverter:
 
     def generate(self, ast):
         code = "shader main {\n"
-        for node in ast.functions:
+        top_level_nodes = []
+        top_level_nodes.extend(getattr(ast, "structs", []))
+        top_level_nodes.extend(getattr(ast, "global_variables", []))
+        top_level_nodes.extend(getattr(ast, "functions", []))
+
+        for node in top_level_nodes:
             if isinstance(node, LayoutNode):
                 code += self.generate_layout(node)
             elif isinstance(node, StructNode):
@@ -125,11 +130,24 @@ class VulkanToCrossGLConverter:
     def is_position_assignment(self, stmt):
         """Check if a statement is assigning to gl_Position"""
         if isinstance(stmt, AssignmentNode):
-            if isinstance(stmt.name, str) and "gl_Position" in stmt.name:
+            lhs = self.assignment_left(stmt)
+            if isinstance(lhs, str) and "gl_Position" in lhs:
                 return True
-            elif hasattr(stmt.name, "name") and "gl_Position" in stmt.name.name:
+            elif hasattr(lhs, "name") and "gl_Position" in lhs.name:
                 return True
         return False
+
+    def variable_type(self, node):
+        return getattr(node, "vtype", getattr(node, "var_type", ""))
+
+    def function_params(self, node):
+        return getattr(node, "params", getattr(node, "parameters", []))
+
+    def assignment_left(self, node):
+        return getattr(node, "left", getattr(node, "name", None))
+
+    def assignment_right(self, node):
+        return getattr(node, "right", getattr(node, "value", None))
 
     def generate_layout(self, node):
         code = ""
@@ -137,7 +155,8 @@ class VulkanToCrossGLConverter:
 
         if layout_type == "uniform":
             if node.struct_fields:
-                code += f"    cbuffer {node.variable_name or 'UniformBuffer'} {{\n"
+                block_name = node.block_name or node.variable_name or "UniformBuffer"
+                code += f"    cbuffer {block_name} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    }\n\n"
@@ -145,13 +164,18 @@ class VulkanToCrossGLConverter:
                 code += f"    {self.map_type(node.data_type)} {node.variable_name};\n"
         elif layout_type == "buffer":
             if node.struct_fields:
-                code += f"    struct {node.variable_name or 'StorageBuffer'}_t {{\n"
+                block_name = node.block_name or node.variable_name or "StorageBuffer"
+                variable_name = (
+                    node.variable_name or block_name[0].lower() + block_name[1:]
+                )
+                code += f"    struct {block_name} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    };\n\n"
-                code += f"    RWStructuredBuffer<{node.variable_name or 'StorageBuffer'}_t> {node.variable_name};\n\n"
+                code += f"    RWStructuredBuffer<{block_name}> {variable_name};\n\n"
         elif layout_type == "in" or layout_type == "out":
-            pass
+            if node.data_type and node.variable_name:
+                code += f"    {self.map_type(node.data_type)} {node.variable_name};\n"
 
         return code
 
@@ -159,9 +183,12 @@ class VulkanToCrossGLConverter:
         code = f"    struct {node.name} {{\n"
         for member in node.members:
             if isinstance(member, VariableNode):
-                code += f"        {self.map_type(member.var_type)} {member.name};\n"
+                code += f"        {self.map_type(self.variable_type(member))} {member.name};\n"
             elif isinstance(member, AssignmentNode):
-                code += f"        {self.map_type(member.name.var_type)} {member.name.name};\n"
+                lhs = self.assignment_left(member)
+                code += (
+                    f"        {self.map_type(self.variable_type(lhs))} {lhs.name};\n"
+                )
         code += "    }\n\n"
         return code
 
@@ -169,7 +196,8 @@ class VulkanToCrossGLConverter:
         code = "  " * indent
         return_type = self.map_type(node.return_type)
         params = ", ".join(
-            f"{self.map_type(p.var_type)} {p.name}" for p in node.parameters
+            f"{self.map_type(self.variable_type(p))} {p.name}"
+            for p in self.function_params(node)
         )
         code += f"    {return_type} {node.name}({params}) {{\n"
         code += self.generate_function_body(node.body, indent=indent + 1)
@@ -184,7 +212,7 @@ class VulkanToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                code += f"{self.map_type(stmt.var_type)} {stmt.name};\n"
+                code += f"{self.map_type(self.variable_type(stmt))} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt) + ";\n"
             elif isinstance(stmt, BinaryOpNode):
@@ -215,9 +243,16 @@ class VulkanToCrossGLConverter:
         return code
 
     def generate_assignment(self, node):
-        lhs = self.generate_expression(node.name)
-        rhs = self.generate_expression(node.value)
-        return f"{lhs} = {rhs}"
+        lhs_node = self.assignment_left(node)
+        rhs = self.generate_expression(self.assignment_right(node))
+        operator = getattr(node, "operator", "=")
+
+        if isinstance(lhs_node, VariableNode) and self.variable_type(lhs_node):
+            lhs = f"{self.map_type(self.variable_type(lhs_node))} {lhs_node.name}"
+        else:
+            lhs = self.generate_expression(lhs_node)
+
+        return f"{lhs} {operator} {rhs}"
 
     def generate_expression(self, expr):
         if isinstance(expr, str):
@@ -226,6 +261,8 @@ class VulkanToCrossGLConverter:
             return str(expr)
         elif isinstance(expr, VariableNode):
             return f"{expr.name}"
+        elif isinstance(expr, AssignmentNode):
+            return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
@@ -239,6 +276,14 @@ class VulkanToCrossGLConverter:
             operand = self.generate_expression(expr.operand)
             if expr.op == "~":
                 return f"(~{operand})"
+            if expr.op == "POST_INCREMENT":
+                return f"{operand}++"
+            if expr.op == "POST_DECREMENT":
+                return f"{operand}--"
+            if expr.op == "PRE_INCREMENT":
+                return f"++{operand}"
+            if expr.op == "PRE_DECREMENT":
+                return f"--{operand}"
             return f"{expr.op}{operand}"
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_expression(expr.condition)
@@ -255,7 +300,7 @@ class VulkanToCrossGLConverter:
 
     def generate_function_call(self, node):
         args = ", ".join(self.generate_expression(arg) for arg in node.args)
-        return f"{node.name}({args})"
+        return f"{self.map_type(node.name)}({args})"
 
     def generate_for_loop(self, node, indent):
         init = (
@@ -289,11 +334,20 @@ class VulkanToCrossGLConverter:
         return code
 
     def generate_if_statement(self, node, indent):
-        condition = self.generate_expression(node.if_condition)
+        condition = self.generate_expression(
+            getattr(node, "condition", getattr(node, "if_condition", None))
+        )
 
         code = f"if ({condition}) {{\n"
         code += self.generate_function_body(node.if_body, indent=indent + 1)
         code += "    " * indent + "}"
+
+        else_if_chain = getattr(node, "else_if_chain", [])
+        if else_if_chain:
+            for else_if_condition, else_if_body in else_if_chain:
+                code += f" else if ({self.generate_expression(else_if_condition)}) {{\n"
+                code += self.generate_function_body(else_if_body, indent=indent + 1)
+                code += "    " * indent + "}"
 
         if hasattr(node, "else_if_conditions") and node.else_if_conditions:
             for i in range(len(node.else_if_conditions)):
@@ -319,6 +373,11 @@ class VulkanToCrossGLConverter:
 
         for case in node.cases:
             if isinstance(case, CaseNode):
+                if case.value is None:
+                    code += "    " * (indent + 1) + "default:\n"
+                    code += self.generate_function_body(case.body, indent=indent + 2)
+                    code += "    " * (indent + 2) + "break;\n"
+                    continue
                 value = self.generate_expression(case.value)
                 code += "    " * (indent + 1) + f"case {value}:\n"
                 code += self.generate_function_body(case.body, indent=indent + 2)

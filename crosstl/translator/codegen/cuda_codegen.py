@@ -25,6 +25,23 @@ class CudaCodeGen:
     def __init__(self):
         self.indent_level = 0
         self.output = []
+        self.builtin_map = {
+            "gl_LocalInvocationID.x": "threadIdx.x",
+            "gl_LocalInvocationID.y": "threadIdx.y",
+            "gl_LocalInvocationID.z": "threadIdx.z",
+            "gl_WorkGroupID.x": "blockIdx.x",
+            "gl_WorkGroupID.y": "blockIdx.y",
+            "gl_WorkGroupID.z": "blockIdx.z",
+            "gl_WorkGroupSize.x": "blockDim.x",
+            "gl_WorkGroupSize.y": "blockDim.y",
+            "gl_WorkGroupSize.z": "blockDim.z",
+            "gl_NumWorkGroups.x": "gridDim.x",
+            "gl_NumWorkGroups.y": "gridDim.y",
+            "gl_NumWorkGroups.z": "gridDim.z",
+            "gl_GlobalInvocationID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+            "gl_GlobalInvocationID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+            "gl_GlobalInvocationID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+        }
 
     def generate(self, ast_node):
         self.output = []
@@ -50,6 +67,24 @@ class CudaCodeGen:
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
+
+    def emit_statement(self, node):
+        if node is None:
+            return
+
+        result = self.visit(node)
+        if isinstance(result, str) and result.strip():
+            self.emit(f"{result};")
+
+    def emit_body(self, body):
+        if isinstance(body, list):
+            for stmt in body:
+                self.emit_statement(stmt)
+        elif hasattr(body, "statements"):
+            for stmt in body.statements:
+                self.emit_statement(stmt)
+        else:
+            self.emit_statement(body)
 
     def visit_ShaderNode(self, node):
         self.emit("#include <cuda_runtime.h>")
@@ -121,10 +156,7 @@ class CudaCodeGen:
             qualifiers.append("__device__")
 
         if hasattr(node, "return_type"):
-            if hasattr(node.return_type, "name"):
-                return_type = self.convert_crossgl_type_to_cuda(node.return_type.name)
-            else:
-                return_type = self.convert_crossgl_type_to_cuda(str(node.return_type))
+            return_type = self.convert_crossgl_type_to_cuda(node.return_type)
         else:
             return_type = "void"
 
@@ -135,42 +167,21 @@ class CudaCodeGen:
 
         for param in param_list:
             if hasattr(param, "param_type"):
-                if hasattr(param.param_type, "name"):
-                    param_type = self.convert_crossgl_type_to_cuda(
-                        param.param_type.name
-                    )
-                else:
-                    param_type = self.convert_crossgl_type_to_cuda(
-                        str(param.param_type)
-                    )
+                param_type = param.param_type
             elif hasattr(param, "vtype"):
-                param_type = self.convert_crossgl_type_to_cuda(param.vtype)
+                param_type = param.vtype
             else:
                 param_type = "void"
 
-            params.append(f"{param_type} {param.name}")
+            params.append(self.format_typed_declarator(param_type, param.name))
 
         param_str = ", ".join(params)
         self.emit(f"{qualifier_str} {return_type} {node.name}({param_str}) {{")
 
         self.indent_level += 1
 
-        # Add built-in variable mappings for kernels
-        if "__global__" in qualifiers:
-            self.emit("// CUDA built-in variables")
-            self.emit("int3 threadIdx = {threadIdx.x, threadIdx.y, threadIdx.z};")
-            self.emit("int3 blockIdx = {blockIdx.x, blockIdx.y, blockIdx.z};")
-            self.emit("int3 blockDim = {blockDim.x, blockDim.y, blockDim.z};")
-            self.emit("int3 gridDim = {gridDim.x, gridDim.y, gridDim.z};")
-            self.emit("")
-
         body = getattr(node, "body", [])
-        if hasattr(body, "statements"):
-            for stmt in body.statements:
-                self.visit(stmt)
-        elif isinstance(body, list):
-            for stmt in body:
-                self.visit(stmt)
+        self.emit_body(body)
 
         self.indent_level -= 1
         self.emit("}")
@@ -182,28 +193,24 @@ class CudaCodeGen:
         members = getattr(node, "members", [])
         for member in members:
             if hasattr(member, "member_type"):
-                member_type_str = self.convert_type_node_to_string(member.member_type)
-                member_type = self.convert_crossgl_type_to_cuda(member_type_str)
+                member_type = member.member_type
             elif hasattr(member, "vtype"):
-                member_type = self.convert_crossgl_type_to_cuda(member.vtype)
+                member_type = member.vtype
             else:
                 member_type = "float"
 
-            self.emit(f"{member_type} {member.name};")
+            self.emit(f"{self.format_typed_declarator(member_type, member.name)};")
 
         self.indent_level -= 1
         self.emit("};")
 
-    def visit_VariableNode(self, node):
+    def format_variable_declaration(self, node):
         var_type = None
 
         if hasattr(node, "var_type"):
-            if hasattr(node.var_type, "name"):
-                var_type = self.convert_crossgl_type_to_cuda(node.var_type.name)
-            else:
-                var_type = self.convert_crossgl_type_to_cuda(str(node.var_type))
+            var_type = node.var_type
         elif hasattr(node, "vtype"):
-            var_type = self.convert_crossgl_type_to_cuda(node.vtype)
+            var_type = node.vtype
 
         if var_type:
             # Check for special memory qualifiers
@@ -219,10 +226,50 @@ class CudaCodeGen:
             if qualifier_str:
                 qualifier_str += " "
 
-            self.emit(f"{qualifier_str}{var_type} {node.name};")
+            declaration = (
+                f"{qualifier_str}{self.format_typed_declarator(var_type, node.name)}"
+            )
+            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+            if initial_value is not None:
+                declaration += f" = {self.visit(initial_value)}"
+            return declaration
+
+        return node.name
+
+    def format_typed_declarator(self, type_name, name, dynamic_array_as_pointer=True):
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
         else:
-            # This might be a variable reference, just return the name
-            return node.name
+            type_name = str(type_name)
+
+        if "[" not in type_name or "]" not in type_name:
+            return f"{self.convert_crossgl_type_to_cuda(type_name)} {name}"
+
+        open_bracket = type_name.find("[")
+        base_type = type_name[:open_bracket]
+        array_suffix = type_name[open_bracket:]
+        mapped_base = self.convert_crossgl_type_to_cuda(base_type)
+
+        if dynamic_array_as_pointer and "[]" in array_suffix:
+            array_suffix = array_suffix.replace("[]", "")
+            return f"{mapped_base}* {name}{array_suffix}"
+
+        return f"{mapped_base} {name}{array_suffix}"
+
+    def format_array_size(self, size):
+        if size is None:
+            return ""
+        if isinstance(size, int):
+            return str(size)
+        return self.visit(size)
+
+    def visit_VariableNode(self, node):
+        declaration = self.format_variable_declaration(node)
+        if declaration != node.name:
+            self.emit(f"{declaration};")
+            return None
+
+        return node.name
 
     def visit_ExpressionStatementNode(self, node):
         expr = self.visit(node.expression)
@@ -230,10 +277,43 @@ class CudaCodeGen:
             self.emit(f"{expr};")
 
     def visit_IdentifierNode(self, node):
-        return node.name
+        name = getattr(node, "name", str(node))
+        return self.builtin_map.get(name, name)
+
+    def format_literal(self, value, literal_type=None):
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if literal_type == "bool" and isinstance(value, str):
+            lower_value = value.lower()
+            if lower_value in {"true", "false"}:
+                return lower_value
+        if literal_type == "char":
+            escaped = self.escape_literal(value, quote="'")
+            return f"'{escaped}'"
+        if isinstance(value, str):
+            escaped = self.escape_literal(value, quote='"')
+            return f'"{escaped}"'
+        return str(value)
+
+    def escape_literal(self, value, quote):
+        text = str(value)
+        escaped = []
+        for index, char in enumerate(text):
+            if char == "\n":
+                escaped.append("\\n")
+            elif char == "\r":
+                escaped.append("\\r")
+            elif char == "\t":
+                escaped.append("\\t")
+            elif char == quote and (index == 0 or text[index - 1] != "\\"):
+                escaped.append("\\" + char)
+            else:
+                escaped.append(char)
+        return "".join(escaped)
 
     def visit_LiteralNode(self, node):
-        return str(node.value)
+        literal_type = getattr(getattr(node, "literal_type", None), "name", None)
+        return self.format_literal(node.value, literal_type)
 
     def visit_AssignmentNode(self, node):
         target = self.visit(node.target)
@@ -250,7 +330,9 @@ class CudaCodeGen:
     def visit_UnaryOpNode(self, node):
         operand = self.visit(node.operand)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
-        return f"({operator}{operand})"
+        if getattr(node, "is_postfix", getattr(node, "postfix", False)):
+            return f"{operand}{operator}"
+        return f"{operator}{operand}"
 
     def visit_FunctionCallNode(self, node):
         """Visit function call"""
@@ -277,7 +359,8 @@ class CudaCodeGen:
             obj = self.visit(node.object_expr)
         else:
             obj = self.visit(node.object)
-        return f"{obj}.{node.member}"
+        member_access = f"{obj}.{node.member}"
+        return self.builtin_map.get(member_access, member_access)
 
     def visit_ArrayAccessNode(self, node):
         """Visit array access"""
@@ -302,14 +385,9 @@ class CudaCodeGen:
 
         # Handle then branch
         if hasattr(node, "then_branch"):
-            if hasattr(node.then_branch, "statements"):
-                for stmt in node.then_branch.statements:
-                    self.visit(stmt)
-            else:
-                self.visit(node.then_branch)
+            self.emit_body(node.then_branch)
         elif hasattr(node, "if_body"):
-            for stmt in node.if_body:
-                self.visit(stmt)
+            self.emit_body(node.if_body)
 
         self.indent_level -= 1
 
@@ -318,18 +396,13 @@ class CudaCodeGen:
             self.emit("} else {")
             self.indent_level += 1
 
-            if hasattr(node.else_branch, "statements"):
-                for stmt in node.else_branch.statements:
-                    self.visit(stmt)
-            else:
-                self.visit(node.else_branch)
+            self.emit_body(node.else_branch)
 
             self.indent_level -= 1
         elif hasattr(node, "else_body") and node.else_body:
             self.emit("} else {")
             self.indent_level += 1
-            for stmt in node.else_body:
-                self.visit(stmt)
+            self.emit_body(node.else_body)
             self.indent_level -= 1
 
         self.emit("}")
@@ -338,7 +411,9 @@ class CudaCodeGen:
         """Visit for loop"""
         init_str = ""
         if node.init:
-            if hasattr(node.init, "expression"):
+            if isinstance(node.init, VariableNode):
+                init_str = self.format_variable_declaration(node.init)
+            elif hasattr(node.init, "expression"):
                 init_str = self.visit(node.init.expression)
             else:
                 init_str = self.visit(node.init)
@@ -357,14 +432,48 @@ class CudaCodeGen:
 
         # Handle body
         if hasattr(node, "body"):
-            if hasattr(node.body, "statements"):
-                for stmt in node.body.statements:
-                    self.visit(stmt)
-            else:
-                self.visit(node.body)
+            self.emit_body(node.body)
 
         self.indent_level -= 1
         self.emit("}")
+
+    def visit_WhileNode(self, node):
+        """Visit while loop"""
+        condition = self.visit(node.condition) if node.condition else ""
+        self.emit(f"while ({condition}) {{")
+
+        self.indent_level += 1
+
+        if hasattr(node, "body"):
+            self.emit_body(node.body)
+
+        self.indent_level -= 1
+        self.emit("}")
+
+    def visit_SwitchNode(self, node):
+        """Visit switch statement"""
+        expression = self.visit(node.expression)
+        self.emit(f"switch ({expression}) {{")
+
+        self.indent_level += 1
+        for case in getattr(node, "cases", []):
+            self.visit(case)
+        self.indent_level -= 1
+
+        self.emit("}")
+
+    def visit_CaseNode(self, node):
+        """Visit switch case/default label"""
+        if getattr(node, "value", None) is None:
+            self.emit("default:")
+        else:
+            value = self.visit(node.value)
+            self.emit(f"case {value}:")
+
+        self.indent_level += 1
+        for stmt in getattr(node, "statements", []):
+            self.emit_statement(stmt)
+        self.indent_level -= 1
 
     def visit_ReturnNode(self, node):
         """Visit return statement"""
@@ -374,13 +483,25 @@ class CudaCodeGen:
         else:
             self.emit("return;")
 
+    def visit_BreakNode(self, node):
+        """Visit break statement"""
+        self.emit("break;")
+
+    def visit_ContinueNode(self, node):
+        """Visit continue statement"""
+        self.emit("continue;")
+
     def visit_BlockNode(self, node):
         """Visit block statement"""
-        for stmt in node.statements:
-            self.visit(stmt)
+        self.emit_body(node.statements)
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
+        if hasattr(crossgl_type, "name") or hasattr(crossgl_type, "element_type"):
+            crossgl_type = self.convert_type_node_to_string(crossgl_type)
+        else:
+            crossgl_type = str(crossgl_type)
+
         type_mapping = {
             # Basic types
             "void": "void",
@@ -415,16 +536,55 @@ class CudaCodeGen:
             "vec2": "float2",
             "vec3": "float3",
             "vec4": "float4",
+            "dvec2": "double2",
+            "dvec3": "double3",
+            "dvec4": "double4",
             "ivec2": "int2",
             "ivec3": "int3",
             "ivec4": "int4",
             "uvec2": "uint2",
             "uvec3": "uint3",
             "uvec4": "uint4",
+            "bvec2": "uchar2",
+            "bvec3": "uchar3",
+            "bvec4": "uchar4",
+            "vec2<bool>": "uchar2",
+            "vec3<bool>": "uchar3",
+            "vec4<bool>": "uchar4",
+            "bool2": "uchar2",
+            "bool3": "uchar3",
+            "bool4": "uchar4",
             # Matrix types
             "mat2": "float2x2",
             "mat3": "float3x3",
             "mat4": "float4x4",
+            "mat2x2": "float2x2",
+            "mat2x3": "float2x3",
+            "mat2x4": "float2x4",
+            "mat3x2": "float3x2",
+            "mat3x3": "float3x3",
+            "mat3x4": "float3x4",
+            "mat4x2": "float4x2",
+            "mat4x3": "float4x3",
+            "mat4x4": "float4x4",
+            "dmat2": "double2x2",
+            "dmat3": "double3x3",
+            "dmat4": "double4x4",
+            "dmat2x2": "double2x2",
+            "dmat2x3": "double2x3",
+            "dmat2x4": "double2x4",
+            "dmat3x2": "double3x2",
+            "dmat3x3": "double3x3",
+            "dmat3x4": "double3x4",
+            "dmat4x2": "double4x2",
+            "dmat4x3": "double4x3",
+            "dmat4x4": "double4x4",
+            # Texture types
+            "sampler2D": "texture<float4, 2>",
+            "sampler3D": "texture<float4, 3>",
+            "samplerCube": "textureCube<float4>",
+            "image2D": "surface<void, 2>",
+            "buffer": "CUdeviceptr",
         }
 
         # Handle arrays
@@ -458,20 +618,85 @@ class CudaCodeGen:
             "sin": "sinf",
             "cos": "cosf",
             "tan": "tanf",
+            "asin": "asinf",
+            "acos": "acosf",
+            "atan": "atanf",
+            "atan2": "atan2f",
+            "sinh": "sinhf",
+            "cosh": "coshf",
+            "tanh": "tanhf",
             "log": "logf",
+            "log2": "log2f",
             "exp": "expf",
+            "exp2": "exp2f",
+            "inversesqrt": "rsqrtf",
             "abs": "fabsf",
+            "round": "roundf",
+            "trunc": "truncf",
+            "mod": "fmodf",
             "min": "fminf",
             "max": "fmaxf",
             "floor": "floorf",
             "ceil": "ceilf",
             # Vector constructors
+            "vec2": "make_float2",
+            "vec3": "make_float3",
+            "vec4": "make_float4",
             "vec2<f32>": "make_float2",
             "vec3<f32>": "make_float3",
             "vec4<f32>": "make_float4",
+            "dvec2": "make_double2",
+            "dvec3": "make_double3",
+            "dvec4": "make_double4",
+            "vec2<f64>": "make_double2",
+            "vec3<f64>": "make_double3",
+            "vec4<f64>": "make_double4",
+            "ivec2": "make_int2",
+            "ivec3": "make_int3",
+            "ivec4": "make_int4",
             "vec2<i32>": "make_int2",
             "vec3<i32>": "make_int3",
             "vec4<i32>": "make_int4",
+            "uvec2": "make_uint2",
+            "uvec3": "make_uint3",
+            "uvec4": "make_uint4",
+            "vec2<u32>": "make_uint2",
+            "vec3<u32>": "make_uint3",
+            "vec4<u32>": "make_uint4",
+            "bvec2": "make_uchar2",
+            "bvec3": "make_uchar3",
+            "bvec4": "make_uchar4",
+            "vec2<bool>": "make_uchar2",
+            "vec3<bool>": "make_uchar3",
+            "vec4<bool>": "make_uchar4",
+            "bool2": "make_uchar2",
+            "bool3": "make_uchar3",
+            "bool4": "make_uchar4",
+            # Matrix constructors
+            "mat2": "float2x2",
+            "mat3": "float3x3",
+            "mat4": "float4x4",
+            "mat2x2": "float2x2",
+            "mat2x3": "float2x3",
+            "mat2x4": "float2x4",
+            "mat3x2": "float3x2",
+            "mat3x3": "float3x3",
+            "mat3x4": "float3x4",
+            "mat4x2": "float4x2",
+            "mat4x3": "float4x3",
+            "mat4x4": "float4x4",
+            "dmat2": "double2x2",
+            "dmat3": "double3x3",
+            "dmat4": "double4x4",
+            "dmat2x2": "double2x2",
+            "dmat2x3": "double2x3",
+            "dmat2x4": "double2x4",
+            "dmat3x2": "double3x2",
+            "dmat3x3": "double3x3",
+            "dmat3x4": "double3x4",
+            "dmat4x2": "double4x2",
+            "dmat4x3": "double4x3",
+            "dmat4x4": "double4x4",
             # Atomic operations
             "atomicAdd": "atomicAdd",
             "atomicSub": "atomicSub",
@@ -481,6 +706,10 @@ class CudaCodeGen:
             "atomicCompareExchange": "atomicCAS",
             # Synchronization
             "workgroupBarrier": "__syncthreads",
+            # Texture functions
+            "texture": "tex2D",
+            "textureLod": "tex2DLod",
+            "textureGrad": "tex2DGrad",
         }
 
         return function_mapping.get(func_name, func_name)
@@ -490,20 +719,23 @@ class CudaCodeGen:
         self.emit(f"// Constant buffer: {cbuffer.name}")
         for member in cbuffer.members:
             if hasattr(member, "member_type"):
-                member_type = self.convert_crossgl_type_to_cuda(str(member.member_type))
+                member_type = member.member_type
             else:
-                member_type = self.convert_crossgl_type_to_cuda(member.vtype)
-            self.emit(f"__constant__ {member_type} {member.name};")
+                member_type = member.vtype
+            declaration = self.format_typed_declarator(member_type, member.name)
+            self.emit(f"__constant__ {declaration};")
 
     def visit_ArrayNode(self, node):
         """Visit array declaration"""
         if hasattr(node, "element_type"):
-            element_type = self.convert_crossgl_type_to_cuda(str(node.element_type))
+            element_type = self.convert_crossgl_type_to_cuda(node.element_type)
         else:
             element_type = self.convert_crossgl_type_to_cuda(node.vtype)
 
         if node.size:
-            self.emit(f"{element_type} {node.name}[{node.size}];")
+            self.emit(
+                f"{element_type} {node.name}[{self.format_array_size(node.size)}];"
+            )
         else:
             # Dynamic array - use pointer in CUDA
             self.emit(f"{element_type}* {node.name};")
@@ -539,15 +771,24 @@ class CudaCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         if hasattr(type_node, "name"):
+            generic_args = getattr(type_node, "generic_args", [])
+            if generic_args:
+                args = ", ".join(
+                    self.convert_type_node_to_string(arg) for arg in generic_args
+                )
+                return f"{type_node.name}<{args}>"
             return type_node.name
-        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
+        elif hasattr(type_node, "element_type"):
             if hasattr(type_node, "rows"):
                 element_type = self.convert_type_node_to_string(type_node.element_type)
-                return f"mat{type_node.rows}x{type_node.cols}"
+                prefix = "dmat" if element_type == "double" else "mat"
+                return f"{prefix}{type_node.rows}x{type_node.cols}"
+            elif not hasattr(type_node, "size"):
+                return str(type_node)
             elif str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
-                    return f"{element_type}[{type_node.size}]"
+                    return f"{element_type}[{self.format_array_size(type_node.size)}]"
                 else:
                     return f"{element_type}[]"
             else:

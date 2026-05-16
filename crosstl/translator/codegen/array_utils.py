@@ -70,6 +70,35 @@ def format_array_type(
             return f"{base_type}[{size}]"
 
 
+def format_c_style_array_declaration(type_name: str, variable_name: str) -> str:
+    """Format a declaration when the type string includes C-style array suffixes.
+
+    Converts "float[4]", "vec3[]", or "float[3][4]" into
+    "float name[4]", "vec3 name[]", or "float name[3][4]".
+    Non-array type strings are returned as "type name".
+    """
+    if not type_name or "[" not in type_name:
+        return f"{type_name} {variable_name}"
+
+    open_bracket = type_name.find("[")
+    base_type = type_name[:open_bracket]
+    array_suffix = type_name[open_bracket:]
+    return f"{base_type} {variable_name}{array_suffix}"
+
+
+def split_array_type_suffix(type_name: str) -> Tuple[str, str]:
+    """Split an array type string while preserving the full array suffix.
+
+    Unlike parse_array_type(), this keeps non-literal sizes such as
+    "float[(2 + 1) * 2]" intact instead of treating them as unsized arrays.
+    """
+    if not type_name or "[" not in type_name:
+        return type_name, ""
+
+    open_bracket = type_name.find("[")
+    return type_name[:open_bracket], type_name[open_bracket:]
+
+
 def detect_array_element_type(
     array_type: str, type_mapping: Dict[str, Any] = None
 ) -> str:
@@ -109,3 +138,115 @@ def get_array_size_from_node(node) -> Optional[int]:
         return int(node.size)
     except (ValueError, TypeError):
         return None
+
+
+def evaluate_literal_int_expression(
+    expr, constants: Optional[Dict[str, int]] = None
+) -> Optional[int]:
+    """Evaluate a narrow integer-only AST expression.
+
+    This is used for declaration sizing hints where accepting dynamic values would
+    be unsafe. It intentionally supports only literals, unary signs, and basic
+    arithmetic over integer literals. Named constants are resolved only from the
+    explicit constants map supplied by the caller.
+    """
+    constants = constants or {}
+
+    if expr is None:
+        return None
+
+    if isinstance(expr, bool):
+        return None
+
+    if isinstance(expr, int):
+        return expr
+
+    if isinstance(expr, str):
+        parsed = _parse_decimal_int_literal(expr)
+        if parsed is not None:
+            return parsed
+        return constants.get(expr)
+
+    if hasattr(expr, "value"):
+        value = getattr(expr, "value")
+        parsed = evaluate_literal_int_expression(value, constants)
+        if parsed is not None:
+            return parsed
+
+    name = getattr(expr, "name", None)
+    if isinstance(name, str) and name in constants:
+        return constants[name]
+
+    class_name = expr.__class__.__name__
+    if "UnaryOp" in class_name:
+        operand = evaluate_literal_int_expression(
+            getattr(expr, "operand", None), constants
+        )
+        if operand is None:
+            return None
+        operator = getattr(expr, "operator", getattr(expr, "op", None))
+        if operator == "+":
+            return operand
+        if operator == "-":
+            return -operand
+        return None
+
+    if "BinaryOp" in class_name:
+        left = evaluate_literal_int_expression(getattr(expr, "left", None), constants)
+        right = evaluate_literal_int_expression(getattr(expr, "right", None), constants)
+        if left is None or right is None:
+            return None
+        operator = getattr(expr, "operator", getattr(expr, "op", None))
+        if operator == "+":
+            return left + right
+        if operator == "-":
+            return left - right
+        if operator == "*":
+            return left * right
+
+    return None
+
+
+def collect_literal_int_constants(constants) -> Dict[str, int]:
+    """Collect resolvable integer compile-time constants by name."""
+    resolved = {}
+    pending = list(constants or [])
+
+    changed = True
+    while changed:
+        changed = False
+        remaining = []
+        for const in pending:
+            name = getattr(const, "name", None)
+            if not name or name in resolved:
+                continue
+
+            value = evaluate_literal_int_expression(
+                getattr(const, "value", None), resolved
+            )
+            if value is None:
+                remaining.append(const)
+                continue
+
+            resolved[name] = value
+            changed = True
+        pending = remaining
+
+    return resolved
+
+
+def _parse_decimal_int_literal(value: str) -> Optional[int]:
+    value = value.strip()
+    if not value:
+        return None
+
+    sign = ""
+    digits = value
+    if value[0] in "+-":
+        sign = value[0]
+        digits = value[1:]
+
+    if not digits.isdigit():
+        return None
+
+    return int(f"{sign}{digits}")

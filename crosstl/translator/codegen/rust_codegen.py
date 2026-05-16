@@ -35,7 +35,24 @@ class RustCodeGen:
             "double": "f64",
             "half": "f16",
             "bool": "bool",
+            "string": "&'static str",
+            "char": "char",
             # Vector Types (using GPU-style vector types)
+            "vec2<f32>": "Vec2<f32>",
+            "vec3<f32>": "Vec3<f32>",
+            "vec4<f32>": "Vec4<f32>",
+            "vec2<f64>": "Vec2<f64>",
+            "vec3<f64>": "Vec3<f64>",
+            "vec4<f64>": "Vec4<f64>",
+            "vec2<i32>": "Vec2<i32>",
+            "vec3<i32>": "Vec3<i32>",
+            "vec4<i32>": "Vec4<i32>",
+            "vec2<u32>": "Vec2<u32>",
+            "vec3<u32>": "Vec3<u32>",
+            "vec4<u32>": "Vec4<u32>",
+            "vec2<bool>": "Vec2<bool>",
+            "vec3<bool>": "Vec3<bool>",
+            "vec4<bool>": "Vec4<bool>",
             "vec2": "Vec2<f32>",
             "vec3": "Vec3<f32>",
             "vec4": "Vec4<f32>",
@@ -45,13 +62,40 @@ class RustCodeGen:
             "uvec2": "Vec2<u32>",
             "uvec3": "Vec3<u32>",
             "uvec4": "Vec4<u32>",
+            "dvec2": "Vec2<f64>",
+            "dvec3": "Vec3<f64>",
+            "dvec4": "Vec4<f64>",
             "bvec2": "Vec2<bool>",
             "bvec3": "Vec3<bool>",
             "bvec4": "Vec4<bool>",
+            "bool2": "Vec2<bool>",
+            "bool3": "Vec3<bool>",
+            "bool4": "Vec4<bool>",
             # Matrix Types
             "mat2": "Mat2<f32>",
             "mat3": "Mat3<f32>",
             "mat4": "Mat4<f32>",
+            "mat2x2": "Mat2<f32>",
+            "mat2x3": "Mat2x3<f32>",
+            "mat2x4": "Mat2x4<f32>",
+            "mat3x2": "Mat3x2<f32>",
+            "mat3x3": "Mat3<f32>",
+            "mat3x4": "Mat3x4<f32>",
+            "mat4x2": "Mat4x2<f32>",
+            "mat4x3": "Mat4x3<f32>",
+            "mat4x4": "Mat4<f32>",
+            "dmat2": "Mat2<f64>",
+            "dmat3": "Mat3<f64>",
+            "dmat4": "Mat4<f64>",
+            "dmat2x2": "Mat2<f64>",
+            "dmat2x3": "Mat2x3<f64>",
+            "dmat2x4": "Mat2x4<f64>",
+            "dmat3x2": "Mat3x2<f64>",
+            "dmat3x3": "Mat3<f64>",
+            "dmat3x4": "Mat3x4<f64>",
+            "dmat4x2": "Mat4x2<f64>",
+            "dmat4x3": "Mat4x3<f64>",
+            "dmat4x4": "Mat4<f64>",
             # Texture Types
             "sampler2D": "Texture2D<f32>",
             "samplerCube": "TextureCube<f32>",
@@ -219,7 +263,19 @@ class RustCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if type_node.__class__.__name__ == "ArrayType":
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = self.format_array_size(type_node.size)
+            return (
+                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+            )
         if hasattr(type_node, "name"):
+            generic_args = getattr(type_node, "generic_args", [])
+            if generic_args:
+                args = ", ".join(
+                    self.convert_type_node_to_string(arg) for arg in generic_args
+                )
+                return f"{type_node.name}<{args}>"
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
@@ -230,13 +286,27 @@ class RustCodeGen:
                 return f"ivec{size}"
             elif element_type == "uint":
                 return f"uvec{size}"
+            elif element_type == "double":
+                return f"dvec{size}"
+            elif element_type == "bool":
+                return f"bvec{size}"
             else:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            return f"mat{type_node.rows}x{type_node.cols}"
+            prefix = "dmat" if element_type == "double" else "mat"
+            if type_node.rows == type_node.cols:
+                return f"{prefix}{type_node.rows}"
+            return f"{prefix}{type_node.rows}x{type_node.cols}"
         else:
             return str(type_node)
+
+    def format_array_size(self, size):
+        if size is None:
+            return None
+        if hasattr(size, "value"):
+            return size.value
+        return size
 
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
@@ -616,12 +686,10 @@ class RustCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
-                value = expr.value
-                if isinstance(value, str) and not (
-                    value.startswith('"') and value.endswith('"')
-                ):
-                    return f'"{value}"'
-                return str(value)
+                literal_type = getattr(
+                    getattr(expr, "literal_type", None), "name", None
+                )
+                return self.format_literal(expr.value, literal_type)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return getattr(expr, "name", str(expr))
@@ -640,7 +708,11 @@ class RustCodeGen:
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             operand = self.generate_expression(getattr(expr, "operand", ""))
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
-            return f"({self.map_operator(op)}{operand})"
+            op = self.map_operator(op)
+            if op in ["++", "--"]:
+                assignment_op = "+=" if op == "++" else "-="
+                return f"{operand} {assignment_op} 1"
+            return f"({op}{operand})"
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
@@ -666,12 +738,30 @@ class RustCodeGen:
                 "vec2",
                 "vec3",
                 "vec4",
+                "vec2<f32>",
+                "vec3<f32>",
+                "vec4<f32>",
+                "vec2<f64>",
+                "vec3<f64>",
+                "vec4<f64>",
+                "vec2<i32>",
+                "vec3<i32>",
+                "vec4<i32>",
+                "vec2<u32>",
+                "vec3<u32>",
+                "vec4<u32>",
+                "vec2<bool>",
+                "vec3<bool>",
+                "vec4<bool>",
                 "ivec2",
                 "ivec3",
                 "ivec4",
                 "uvec2",
                 "uvec3",
                 "uvec4",
+                "dvec2",
+                "dvec3",
+                "dvec4",
                 "bvec2",
                 "bvec3",
                 "bvec4",
@@ -680,7 +770,32 @@ class RustCodeGen:
                 args_str = ", ".join(self.generate_expression(arg) for arg in args)
                 return f"{rust_type}::new({args_str})"
 
-            if func_name in ["mat2", "mat3", "mat4"]:
+            if func_name in [
+                "mat2",
+                "mat3",
+                "mat4",
+                "mat2x2",
+                "mat2x3",
+                "mat2x4",
+                "mat3x2",
+                "mat3x3",
+                "mat3x4",
+                "mat4x2",
+                "mat4x3",
+                "mat4x4",
+                "dmat2",
+                "dmat3",
+                "dmat4",
+                "dmat2x2",
+                "dmat2x3",
+                "dmat2x4",
+                "dmat3x2",
+                "dmat3x3",
+                "dmat3x4",
+                "dmat4x2",
+                "dmat4x3",
+                "dmat4x4",
+            ]:
                 rust_type = self.map_type(func_name)
                 args_str = ", ".join(self.generate_expression(arg) for arg in args)
                 return f"{rust_type}::new({args_str})"
@@ -699,6 +814,37 @@ class RustCodeGen:
             return f"(if {condition} {{ {true_expr} }} else {{ {false_expr} }})"
         else:
             return str(expr)
+
+    def format_literal(self, value, literal_type=None):
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if literal_type == "bool" and isinstance(value, str):
+            lower_value = value.lower()
+            if lower_value in {"true", "false"}:
+                return lower_value
+        if literal_type == "char":
+            escaped = self.escape_literal(value, quote="'")
+            return f"'{escaped}'"
+        if isinstance(value, str):
+            escaped = self.escape_literal(value, quote='"')
+            return f'"{escaped}"'
+        return str(value)
+
+    def escape_literal(self, value, quote):
+        text = str(value)
+        escaped = []
+        for index, char in enumerate(text):
+            if char == "\n":
+                escaped.append("\\n")
+            elif char == "\r":
+                escaped.append("\\r")
+            elif char == "\t":
+                escaped.append("\\t")
+            elif char == quote and (index == 0 or text[index - 1] != "\\"):
+                escaped.append("\\" + char)
+            else:
+                escaped.append(char)
+        return "".join(escaped)
 
     def map_type(self, vtype):
         if vtype is None:

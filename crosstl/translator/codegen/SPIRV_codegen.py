@@ -9,7 +9,9 @@ from ..ast import (
     BinaryOpNode,
     ForNode,
     FunctionCallNode,
+    IdentifierNode,
     IfNode,
+    LiteralNode,
     MemberAccessNode,
     ReturnNode,
     ShaderNode,
@@ -52,6 +54,10 @@ class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     def __init__(self):
+        self.reset_generation_state()
+
+    def reset_generation_state(self):
+        """Reset per-module SPIR-V ids, declarations, and symbol caches."""
         self.next_id = 1
         self.code_lines = []
         self.decorations = []
@@ -63,14 +69,20 @@ class VulkanSPIRVCodeGen:
         self.pointer_types = {}
         self.function_types = {}
         self.array_types = {}
+        self.resource_types = {}
+        self.resource_image_types = {}
 
         self.global_variables = {}
         self.local_variables = {}
+        self.variable_value_types = {}
+        self.value_types = {}
         self.constants = {}
         self.vector_constants = {}
+        self.resource_type_metadata = {}
 
         self.functions = {}
         self.function_signatures = {}
+        self.function_resource_array_params = {}
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -82,6 +94,9 @@ class VulkanSPIRVCodeGen:
         self.inputs = []
         self.outputs = []
         self.uniform_buffers = []
+        self.next_input_location = 0
+        self.next_output_location = 0
+        self.next_resource_binding = 0
 
         self.is_vertex_shader = False
         self.bound_id = 0
@@ -100,6 +115,7 @@ class VulkanSPIRVCodeGen:
 
     def register_primitive_type(self, name: str) -> SpirvId:
         """Create and register a primitive type."""
+        name = self.normalize_primitive_name(name)
         if name in self.primitive_types:
             return self.primitive_types[name]
 
@@ -110,6 +126,8 @@ class VulkanSPIRVCodeGen:
             self.emit(f"%{id_value} = OpTypeBool")
         elif name == "float":
             self.emit(f"%{id_value} = OpTypeFloat 32")
+        elif name == "double":
+            self.emit(f"%{id_value} = OpTypeFloat 64")
         elif name == "int":
             self.emit(f"%{id_value} = OpTypeInt 32 1")
         elif name == "uint":
@@ -164,6 +182,118 @@ class VulkanSPIRVCodeGen:
         spirv_type = SpirvType(f"ptr_{pointed_type.type.base_type}", storage_class)
         spirv_id = SpirvId(id_value, spirv_type)
         self.pointer_types[key] = spirv_id
+        return spirv_id
+
+    def register_image_type(
+        self,
+        type_name: str,
+        component_type: SpirvId,
+        dim: str,
+        depth: int,
+        arrayed: int,
+        multisampled: int,
+        sampled: int,
+        image_format: str = "Unknown",
+    ) -> SpirvId:
+        key = (
+            component_type.id,
+            dim,
+            depth,
+            arrayed,
+            multisampled,
+            sampled,
+            image_format,
+        )
+        if key in self.resource_image_types:
+            return self.resource_image_types[key]
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpTypeImage %{component_type.id} {dim} "
+            f"{depth} {arrayed} {multisampled} {sampled} {image_format}"
+        )
+
+        spirv_type = SpirvType(type_name)
+        spirv_id = SpirvId(id_value, spirv_type, type_name)
+        self.resource_image_types[key] = spirv_id
+        return spirv_id
+
+    def register_resource_type(
+        self, type_name: str, image_format: Optional[str] = None
+    ) -> SpirvId:
+        if image_format is None and type_name in self.resource_types:
+            return self.resource_types[type_name]
+
+        info = self.resource_type_info(type_name)
+        if info is None:
+            raise ValueError(f"Unknown SPIR-V resource type {type_name}")
+
+        info = dict(info)
+        source_format = None
+        if info["kind"] == "storage_image" and image_format:
+            spirv_format = self.spirv_image_format_name(image_format)
+            if spirv_format:
+                source_format = str(image_format).lower()
+                info["format"] = spirv_format
+                info["component_type"] = self.image_format_component_type(image_format)
+
+        cache_key = (
+            type_name,
+            info.get("kind"),
+            info.get("component_type"),
+            info.get("format"),
+        )
+        if cache_key in self.resource_types:
+            return self.resource_types[cache_key]
+
+        if info["kind"] == "sampler":
+            id_value = self.get_id()
+            self.emit(f"%{id_value} = OpTypeSampler")
+            spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
+        else:
+            component_type = self.register_primitive_type(info["component_type"])
+            image_type = self.register_image_type(
+                f"{type_name}_image",
+                component_type,
+                info["dim"],
+                info["depth"],
+                info["arrayed"],
+                info["multisampled"],
+                info["sampled"],
+                info["format"],
+            )
+
+            if info["kind"] == "sampled_image":
+                id_value = self.get_id()
+                self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+                spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
+            else:
+                spirv_id = image_type
+                spirv_id.type = SpirvType(type_name)
+                spirv_id.name = type_name
+
+            metadata = dict(info)
+            metadata["type_name"] = type_name
+            metadata["source_format"] = source_format
+            metadata["image_type_id"] = image_type.id
+            metadata["component_count"] = self.image_format_component_count(
+                source_format
+            )
+            self.resource_type_metadata[image_type.id] = metadata
+
+        if info["kind"] == "sampler":
+            self.resource_type_metadata[spirv_id.id] = {
+                "kind": "sampler",
+                "type_name": type_name,
+                "component_type": "float",
+                "component_count": 0,
+            }
+        else:
+            self.resource_type_metadata[spirv_id.id] = metadata
+
+        self.resource_types[cache_key] = spirv_id
+        if image_format is None:
+            self.resource_types[type_name] = spirv_id
         return spirv_id
 
     def register_struct_type(
@@ -231,6 +361,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{id_value} = OpConstant %{type_id.id} {constant_value}")
 
         spirv_id = SpirvId(id_value, type_id.type, f"{type_name}_{value}")
+        self.value_types[id_value] = type_id
         self.constants[key] = spirv_id
         return spirv_id
 
@@ -250,6 +381,7 @@ class VulkanSPIRVCodeGen:
         )
 
         spirv_id = SpirvId(id_value, vector_type.type)
+        self.value_types[id_value] = vector_type
         self.vector_constants[key] = spirv_id
         return spirv_id
 
@@ -266,6 +398,7 @@ class VulkanSPIRVCodeGen:
             self.emit(f'OpName %{id_value} "{name}"')
 
         spirv_id = SpirvId(id_value, pointer_type.type, name)
+        self.variable_value_types[id_value] = type_id
         return spirv_id
 
     def store_to_variable(self, variable_id: SpirvId, value_id: SpirvId):
@@ -278,6 +411,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{id_value} = OpLoad %{result_type.id} %{variable_id.id}")
 
         spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
         return spirv_id
 
     def access_chain(
@@ -322,6 +456,7 @@ class VulkanSPIRVCodeGen:
             self.emit(f'OpName %{id_value} "{name}"')
 
         spirv_id = SpirvId(id_value, param_type.type, name)
+        self.value_types[id_value] = param_type
         return spirv_id
 
     def begin_block(self) -> SpirvId:
@@ -411,7 +546,504 @@ class VulkanSPIRVCodeGen:
         )
 
         spirv_id = SpirvId(id_value, return_type.type)
+        self.value_types[id_value] = return_type
         return spirv_id
+
+    def resource_function_names(self):
+        return {
+            "imageLoad",
+            "imageStore",
+            "texture",
+            "texture2D",
+            "textureCube",
+            "textureCompare",
+            "textureCompareLod",
+            "textureCompareGrad",
+            "textureCompareOffset",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "texelFetch",
+            "textureSize",
+            "imageSize",
+            "textureQueryLevels",
+            "textureQueryLod",
+        }
+
+    def resource_query_size_result_type(self, metadata) -> SpirvId:
+        dim = metadata.get("dim", "2D") if metadata else "2D"
+        component_count = {
+            "1D": 1,
+            "Buffer": 1,
+            "2D": 2,
+            "Rect": 2,
+            "Cube": 2,
+            "3D": 3,
+        }.get(dim, 2)
+
+        if metadata and metadata.get("arrayed"):
+            component_count += 1
+
+        component_count = min(max(component_count, 1), 4)
+        int_type = self.register_primitive_type("int")
+        if component_count <= 1:
+            return int_type
+        return self.register_vector_type(int_type, component_count)
+
+    def extract_image_from_sampled_image(
+        self, sampled_image_id: SpirvId, metadata
+    ) -> Optional[SpirvId]:
+        image_type_id = metadata.get("image_type_id") if metadata else None
+        image_type = (
+            self.find_registered_type_by_id(image_type_id)
+            if image_type_id is not None
+            else None
+        )
+        if image_type is None:
+            self.emit("; WARNING: Could not determine image type for sampled image")
+            return None
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpImage %{image_type.id} %{sampled_image_id.id}")
+        self.value_types[id_value] = image_type
+        return SpirvId(id_value, image_type.type)
+
+    def image_operand_for_query(
+        self, resource_id: SpirvId, metadata
+    ) -> Optional[SpirvId]:
+        if not metadata:
+            return None
+        if metadata.get("kind") == "sampled_image":
+            return self.extract_image_from_sampled_image(resource_id, metadata)
+        if metadata.get("kind") == "storage_image":
+            return resource_id
+        return None
+
+    def shadow_compare_operands(
+        self, function_name: str, args: List[SpirvId], extra_arg_count: int
+    ):
+        coord_index = 1
+        if len(args) > 1:
+            sampler_metadata = self.resource_metadata_for_value(args[1])
+            if sampler_metadata and sampler_metadata.get("kind") == "sampler":
+                coord_index = 2
+
+        required_arg_count = coord_index + 2 + extra_arg_count
+        if len(args) < required_arg_count:
+            self.emit(
+                f"; WARNING: {function_name} requires a shadow texture, "
+                "coordinate, depth, and operation operands"
+            )
+            return None
+
+        sampled_image_id = args[0]
+        coord_id = args[coord_index]
+        depth_id = args[coord_index + 1]
+        extra_args = args[coord_index + 2 : required_arg_count]
+        metadata = self.resource_metadata_for_value(sampled_image_id)
+        if (
+            not metadata
+            or metadata.get("kind") != "sampled_image"
+            or int(metadata.get("depth", 0)) != 1
+        ):
+            self.emit(
+                f"; WARNING: {function_name} requires a shadow sampled image operand"
+            )
+            return None
+
+        return sampled_image_id, coord_id, depth_id, extra_args
+
+    def sampled_texture_operands(
+        self, function_name: str, args: List[SpirvId], extra_arg_count: int = 0
+    ):
+        coord_index = 1
+        if len(args) > 1:
+            sampler_metadata = self.resource_metadata_for_value(args[1])
+            if sampler_metadata and sampler_metadata.get("kind") == "sampler":
+                coord_index = 2
+
+        required_arg_count = coord_index + 1 + extra_arg_count
+        if len(args) < required_arg_count:
+            self.emit(
+                f"; WARNING: {function_name} requires a texture, coordinate, "
+                "and operation operands"
+            )
+            return None
+
+        sampled_image_id = args[0]
+        coord_id = args[coord_index]
+        extra_args = args[coord_index + 1 :]
+        metadata = self.resource_metadata_for_value(sampled_image_id)
+        if not metadata or metadata.get("kind") != "sampled_image":
+            self.emit(f"; WARNING: {function_name} requires a sampled image operand")
+            return None
+
+        return sampled_image_id, coord_id, extra_args, metadata
+
+    def call_resource_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if function_name == "imageLoad":
+            if len(args) < 2:
+                self.emit("; WARNING: imageLoad requires image and coordinate operands")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            image_id, coord_id = args[0], args[1]
+            metadata = self.resource_metadata_for_value(image_id)
+            if not metadata or metadata.get("kind") != "storage_image":
+                self.emit("; WARNING: imageLoad requires a storage image operand")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            result_type = self.resource_access_result_type(metadata)
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageRead %{result_type.id} "
+                f"%{image_id.id} %{coord_id.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name == "imageStore":
+            if len(args) < 3:
+                self.emit(
+                    "; WARNING: imageStore requires image, coordinate, and value operands"
+                )
+                return None
+
+            image_id, coord_id, texel_id = args[0], args[1], args[2]
+            metadata = self.resource_metadata_for_value(image_id)
+            if not metadata or metadata.get("kind") != "storage_image":
+                self.emit("; WARNING: imageStore requires a storage image operand")
+                return None
+
+            self.emit(f"OpImageWrite %{image_id.id} %{coord_id.id} %{texel_id.id}")
+            return None
+
+        if function_name in {"texture", "texture2D", "textureCube"}:
+            sample_args = self.sampled_texture_operands(function_name, args)
+            if sample_args is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id, coord_id, _, metadata = sample_args
+
+            result_type = self.resource_access_result_type(metadata)
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageSampleImplicitLod %{result_type.id} "
+                f"%{sampled_image_id.id} %{coord_id.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name in {
+            "textureCompare",
+            "textureCompareLod",
+            "textureCompareGrad",
+            "textureCompareOffset",
+        }:
+            extra_arg_count = {
+                "textureCompare": 0,
+                "textureCompareLod": 1,
+                "textureCompareGrad": 2,
+                "textureCompareOffset": 1,
+            }[function_name]
+            compare_args = self.shadow_compare_operands(
+                function_name, args, extra_arg_count
+            )
+            if compare_args is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id, coord_id, depth_id, extra_args = compare_args
+            result_type = self.register_primitive_type("float")
+            id_value = self.get_id()
+
+            if function_name == "textureCompare":
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefImplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id}"
+                )
+            elif function_name == "textureCompareOffset":
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefImplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
+                    f"ConstOffset %{extra_args[0].id}"
+                )
+            elif function_name == "textureCompareLod":
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
+                    f"Lod %{extra_args[0].id}"
+                )
+            else:
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
+                    f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+                )
+
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
+            extra_arg_count = 1 if function_name == "textureGatherCompareOffset" else 0
+            compare_args = self.shadow_compare_operands(
+                function_name, args, extra_arg_count
+            )
+            if compare_args is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id, coord_id, depth_id, extra_args = compare_args
+            float_type = self.register_primitive_type("float")
+            result_type = self.register_vector_type(float_type, 4)
+            id_value = self.get_id()
+            image_operands = (
+                f" ConstOffset %{extra_args[0].id}"
+                if function_name == "textureGatherCompareOffset"
+                else ""
+            )
+            self.emit(
+                f"%{id_value} = OpImageDrefGather %{result_type.id} "
+                f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id}"
+                f"{image_operands}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name == "textureOffset":
+            sample_args = self.sampled_texture_operands(function_name, args, 1)
+            if sample_args is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id, coord_id, extra_args, metadata = sample_args
+            offset_id = extra_args[0]
+
+            result_type = self.resource_access_result_type(metadata)
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageSampleImplicitLod %{result_type.id} "
+                f"%{sampled_image_id.id} %{coord_id.id} ConstOffset %{offset_id.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name in {
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+        }:
+            required_extra_count = 0 if function_name == "textureGather" else 1
+            sample_args = self.sampled_texture_operands(
+                function_name, args, required_extra_count
+            )
+            if sample_args is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id, coord_id, extra_args, metadata = sample_args
+            int_type = self.register_primitive_type("int")
+            image_operands = ""
+            if function_name == "textureGather":
+                component_id = (
+                    extra_args[0] if extra_args else self.register_constant(0, int_type)
+                )
+            else:
+                offset_id = extra_args[0]
+                component_id = (
+                    extra_args[1]
+                    if len(extra_args) >= 2
+                    else self.register_constant(0, int_type)
+                )
+                image_operand = (
+                    "ConstOffsets"
+                    if function_name == "textureGatherOffsets"
+                    else "ConstOffset"
+                )
+                image_operands = f" {image_operand} %{offset_id.id}"
+
+            result_type = self.resource_access_result_type(metadata)
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageGather %{result_type.id} "
+                f"%{sampled_image_id.id} %{coord_id.id} %{component_id.id}"
+                f"{image_operands}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name == "texelFetch":
+            sample_args = self.sampled_texture_operands(function_name, args, 1)
+            if sample_args is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id, coord_id, extra_args, metadata = sample_args
+            lod_id = extra_args[0]
+
+            image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
+            if image_id is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            result_type = self.resource_access_result_type(metadata)
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageFetch %{result_type.id} "
+                f"%{image_id.id} %{coord_id.id} Lod %{lod_id.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name in {"textureSize", "imageSize"}:
+            if not args:
+                self.emit(f"; WARNING: {function_name} requires an image operand")
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            resource_id = args[0]
+            metadata = self.resource_metadata_for_value(resource_id)
+            expected_kind = (
+                "sampled_image" if function_name == "textureSize" else "storage_image"
+            )
+            if not metadata or metadata.get("kind") != expected_kind:
+                self.emit(
+                    f"; WARNING: {function_name} requires a {expected_kind} operand"
+                )
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            image_id = self.image_operand_for_query(resource_id, metadata)
+            if image_id is None:
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            result_type = self.resource_query_size_result_type(metadata)
+            id_value = self.get_id()
+            if function_name == "textureSize" and len(args) >= 2:
+                self.emit(
+                    f"%{id_value} = OpImageQuerySizeLod %{result_type.id} "
+                    f"%{image_id.id} %{args[1].id}"
+                )
+            else:
+                self.emit(
+                    f"%{id_value} = OpImageQuerySize %{result_type.id} "
+                    f"%{image_id.id}"
+                )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name == "textureQueryLevels":
+            if not args:
+                self.emit("; WARNING: textureQueryLevels requires a texture operand")
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            sampled_image_id = args[0]
+            metadata = self.resource_metadata_for_value(sampled_image_id)
+            if not metadata or metadata.get("kind") != "sampled_image":
+                self.emit(
+                    "; WARNING: textureQueryLevels requires a sampled image operand"
+                )
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
+            if image_id is None:
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            result_type = self.register_primitive_type("int")
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageQueryLevels %{result_type.id} " f"%{image_id.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name == "textureQueryLod":
+            if len(args) < 2:
+                self.emit(
+                    "; WARNING: textureQueryLod requires texture and coordinate operands"
+                )
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id = args[0]
+            coord_id = args[1]
+            if len(args) >= 3:
+                sampler_metadata = self.resource_metadata_for_value(args[1])
+                if sampler_metadata and sampler_metadata.get("kind") == "sampler":
+                    coord_id = args[2]
+
+            metadata = self.resource_metadata_for_value(sampled_image_id)
+            if not metadata or metadata.get("kind") != "sampled_image":
+                self.emit("; WARNING: textureQueryLod requires a sampled image operand")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            float_type = self.register_primitive_type("float")
+            result_type = self.register_vector_type(float_type, 2)
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageQueryLod %{result_type.id} "
+                f"%{sampled_image_id.id} %{coord_id.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name in {"textureLod", "textureGrad"}:
+            required_arg_count = 3 if function_name == "textureLod" else 4
+            extra_arg_count = required_arg_count - 2
+            sample_args = self.sampled_texture_operands(
+                function_name, args, extra_arg_count
+            )
+            if sample_args is None:
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            sampled_image_id, coord_id, extra_args, metadata = sample_args
+            if function_name == "textureLod":
+                image_operands = f"Lod %{extra_args[0].id}"
+            else:
+                image_operands = f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+
+            result_type = self.resource_access_result_type(metadata)
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpImageSampleExplicitLod %{result_type.id} "
+                f"%{sampled_image_id.id} %{coord_id.id} {image_operands}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        return None
+
+    def process_call_argument(self, function_name, arg, arg_index):
+        resource_array_params = self.function_resource_array_params.get(
+            function_name, set()
+        )
+        if arg_index in resource_array_params:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
+
+        return self.process_expression(arg)
 
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
@@ -421,23 +1053,34 @@ class VulkanSPIRVCodeGen:
             self.glsl_std450_id = self.get_id()
             self.emit(f'%{self.glsl_std450_id} = OpExtInstImport "GLSL.std.450"')
 
-        if function_name in ["vec2", "vec3", "vec4"]:
-            component_count = int(function_name[3:])
-            float_type = self.primitive_types["float"]
-            vector_type = self.register_vector_type(float_type, component_count)
+        vector_info = self.vector_component_type_and_count(function_name)
+        if vector_info:
+            component_type_name, component_count = vector_info
+            component_type = self.register_primitive_type(component_type_name)
+            vector_type = self.register_vector_type(component_type, component_count)
 
             id_value = self.get_id()
 
             # If no arguments are provided, construct a default vector
             if not args:
-                # Create a vector with first component 1.0 and others 0.0
-                float_zero = self.register_constant(0.0, float_type)
-                float_one = self.register_constant(1.0, float_type)
+                if component_type_name == "bool":
+                    zero_value = False
+                    one_value = True
+                elif component_type_name in {"int", "uint"}:
+                    zero_value = 0
+                    one_value = 1
+                else:
+                    zero_value = 0.0
+                    one_value = 1.0
+
+                # Preserve old defaults: first component one, rest zero.
+                component_zero = self.register_constant(zero_value, component_type)
+                component_one = self.register_constant(one_value, component_type)
 
                 # Create default vector components
-                default_args = [float_zero] * component_count
+                default_args = [component_zero] * component_count
                 if component_count > 0:
-                    default_args[0] = float_one
+                    default_args[0] = component_one
 
                 arg_list = " ".join([f"%{arg.id}" for arg in default_args])
             else:
@@ -460,7 +1103,7 @@ class VulkanSPIRVCodeGen:
                 match = re.match(r"mat(\d)", function_name)
                 cols = rows = int(match.group(1))
 
-            float_type = self.primitive_types["float"]
+            float_type = self.register_primitive_type("float")
             vector_type = self.register_vector_type(float_type, rows)
             matrix_type = self.register_matrix_type(vector_type, cols)
 
@@ -502,7 +1145,7 @@ class VulkanSPIRVCodeGen:
         # Special case for dot product - use OpDot instead of OpExtInst
         elif function_name == "dot" and len(args) == 2:
             # Get the result type (always float)
-            float_type = self.primitive_types["float"]
+            float_type = self.register_primitive_type("float")
             result_type_id = float_type.id
 
             # Generate a direct OpDot instruction
@@ -653,6 +1296,357 @@ class VulkanSPIRVCodeGen:
         """Create a return value instruction."""
         self.emit(f"OpReturnValue %{value.id}")
 
+    def normalize_primitive_name(self, type_name: str) -> str:
+        aliases = {
+            "f32": "float",
+            "f64": "double",
+            "i32": "int",
+            "u32": "uint",
+        }
+        return aliases.get(str(type_name), str(type_name))
+
+    def normalize_generic_vector_type(self, type_str: str) -> str:
+        compact = re.sub(r"\s+", "", str(type_str))
+        match = re.fullmatch(r"vec([234])<([^>]+)>", compact)
+        if not match:
+            return compact
+
+        size, element_type = match.groups()
+        element_type = self.normalize_primitive_name(element_type)
+        prefixes = {
+            "float": "vec",
+            "double": "dvec",
+            "int": "ivec",
+            "uint": "uvec",
+            "bool": "bvec",
+        }
+        return f"{prefixes.get(element_type, 'vec')}{size}"
+
+    def vector_component_type_and_count(
+        self, type_str: str
+    ) -> Optional[Tuple[str, int]]:
+        type_str = self.normalize_generic_vector_type(type_str)
+        internal_match = re.fullmatch(r"v([234])(float|double|int|uint|bool)", type_str)
+        if internal_match:
+            size, component_type = internal_match.groups()
+            return component_type, int(size)
+
+        vector_prefixes = (
+            ("dvec", "double"),
+            ("ivec", "int"),
+            ("uvec", "uint"),
+            ("bvec", "bool"),
+            ("vec", "float"),
+        )
+        for prefix, component_type in vector_prefixes:
+            if type_str.startswith(prefix) and type_str[len(prefix) :].isdigit():
+                return component_type, int(type_str[len(prefix) :])
+        return None
+
+    def resource_type_info(self, type_str: str):
+        sampler_info = {
+            "sampler": {"kind": "sampler"},
+            "sampler2D": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "samplerCube": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "sampler2DShadow": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 1,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "sampler2DArrayShadow": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 1,
+                "arrayed": 1,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "samplerCubeShadow": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 1,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "samplerCubeArray": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 0,
+                "arrayed": 1,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "samplerCubeArrayShadow": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 1,
+                "arrayed": 1,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "sampler2DMS": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 1,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "sampler2DMSArray": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 1,
+                "multisampled": 1,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+        }
+        if type_str in sampler_info:
+            return sampler_info[type_str]
+
+        image_match = re.fullmatch(r"([iu]?image)(2D|3D|Cube)(Array)?", type_str)
+        if image_match:
+            prefix, dim, array_suffix = image_match.groups()
+            component_type = {
+                "image": "float",
+                "iimage": "int",
+                "uimage": "uint",
+            }[prefix]
+            return {
+                "kind": "storage_image",
+                "component_type": component_type,
+                "dim": "Cube" if dim == "Cube" else dim,
+                "depth": 0,
+                "arrayed": 1 if array_suffix else 0,
+                "multisampled": 0,
+                "sampled": 2,
+                "format": "Unknown",
+            }
+
+        return None
+
+    def is_resource_type_name(self, type_str: str) -> bool:
+        return self.resource_type_info(type_str) is not None
+
+    def spirv_image_format_map(self):
+        return {
+            "r8": "R8",
+            "r8_snorm": "R8Snorm",
+            "r8i": "R8i",
+            "r8ui": "R8ui",
+            "r16": "R16",
+            "r16_snorm": "R16Snorm",
+            "r16f": "R16f",
+            "r16i": "R16i",
+            "r16ui": "R16ui",
+            "r32f": "R32f",
+            "r32i": "R32i",
+            "r32ui": "R32ui",
+            "rg8": "Rg8",
+            "rg8_snorm": "Rg8Snorm",
+            "rg8i": "Rg8i",
+            "rg8ui": "Rg8ui",
+            "rg16": "Rg16",
+            "rg16_snorm": "Rg16Snorm",
+            "rg16f": "Rg16f",
+            "rg16i": "Rg16i",
+            "rg16ui": "Rg16ui",
+            "rg32f": "Rg32f",
+            "rg32i": "Rg32i",
+            "rg32ui": "Rg32ui",
+            "rgba8": "Rgba8",
+            "rgba8_snorm": "Rgba8Snorm",
+            "rgba8i": "Rgba8i",
+            "rgba8ui": "Rgba8ui",
+            "rgba16": "Rgba16",
+            "rgba16_snorm": "Rgba16Snorm",
+            "rgba16f": "Rgba16f",
+            "rgba16i": "Rgba16i",
+            "rgba16ui": "Rgba16ui",
+            "rgba32f": "Rgba32f",
+            "rgba32i": "Rgba32i",
+            "rgba32ui": "Rgba32ui",
+        }
+
+    def spirv_image_format_name(self, image_format: Optional[str]) -> Optional[str]:
+        if image_format is None:
+            return None
+        return self.spirv_image_format_map().get(str(image_format).lower())
+
+    def image_format_component_type(self, image_format: str) -> str:
+        image_format = str(image_format).lower()
+        if image_format.endswith("ui"):
+            return "uint"
+        if image_format.endswith("i") and not image_format.endswith("_snorm"):
+            return "int"
+        return "float"
+
+    def image_format_component_count(self, image_format: Optional[str]) -> int:
+        if image_format is None:
+            return 4
+
+        image_format = str(image_format).lower()
+        if image_format.startswith("rgba"):
+            return 4
+        if image_format.startswith("rg"):
+            return 2
+        if image_format.startswith("r"):
+            return 1
+        return 4
+
+    def resource_access_result_type(self, metadata) -> SpirvId:
+        component_type = self.register_primitive_type(
+            metadata.get("component_type", "float")
+        )
+        component_count = int(metadata.get("component_count", 4))
+        if component_count <= 1:
+            return component_type
+        return self.register_vector_type(component_type, component_count)
+
+    def resource_metadata_for_value(self, value_id: SpirvId):
+        result_type = self.value_types.get(value_id.id)
+        if result_type is not None:
+            metadata = self.resource_type_metadata.get(result_type.id)
+            if metadata is not None:
+                return metadata
+
+        return self.resource_type_metadata.get(value_id.id)
+
+    def attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "name"):
+            return str(value.name)
+        if hasattr(value, "value"):
+            return str(value.value).strip('"')
+        return str(value)
+
+    def explicit_image_format(self, node) -> Optional[str]:
+        if not hasattr(node, "attributes"):
+            return None
+
+        supported_formats = self.spirv_image_format_map()
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+
+            attr_name = str(attr_name).lower()
+            if attr_name in supported_formats:
+                return attr_name
+
+            if attr_name != "format":
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+
+            format_name = self.attribute_value_to_string(arguments[0])
+            if format_name is None:
+                continue
+
+            format_name = str(format_name).lower()
+            if format_name in supported_formats:
+                return format_name
+
+        return None
+
+    def map_resource_type_with_format(self, type_name, node=None) -> SpirvId:
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_str = self.convert_type_node_to_string(type_name)
+        else:
+            type_str = str(type_name)
+
+        type_str = self.normalize_generic_vector_type(type_str)
+        explicit_format = self.explicit_image_format(node) if node is not None else None
+
+        if "[" in type_str and type_str.endswith("]"):
+            base_type, size = parse_array_type(type_str)
+            if self.is_resource_type_name(base_type):
+                element_type = self.register_resource_type(base_type, explicit_format)
+                return self.register_array_type(element_type, size)
+
+        if self.is_resource_type_name(type_str):
+            return self.register_resource_type(type_str, explicit_format)
+
+        return self.map_crossgl_type(type_name)
+
+    def format_array_size(self, size):
+        if size is None:
+            return None
+        if hasattr(size, "value"):
+            return size.value
+        return size
+
+    def find_registered_type_by_base(self, base_type: str) -> Optional[SpirvId]:
+        for type_dict in [
+            self.primitive_types,
+            self.vector_types,
+            self.matrix_types,
+            self.struct_types,
+            self.array_types,
+            self.resource_types,
+            self.resource_image_types,
+        ]:
+            for type_id in type_dict.values():
+                if type_id.type.base_type == base_type:
+                    return type_id
+        return None
+
+    def find_registered_type_by_id(self, id_value: int) -> Optional[SpirvId]:
+        for type_dict in [
+            self.primitive_types,
+            self.vector_types,
+            self.matrix_types,
+            self.struct_types,
+            self.array_types,
+            self.resource_types,
+            self.resource_image_types,
+        ]:
+            for type_id in type_dict.values():
+                if type_id.id == id_value:
+                    return type_id
+        return None
+
     def map_crossgl_type(self, type_name) -> SpirvId:
         """Map a CrossGL type name to a SPIR-V type ID."""
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
@@ -660,32 +1654,42 @@ class VulkanSPIRVCodeGen:
         else:
             type_str = str(type_name)
 
-        if type_str == "float":
-            return self.register_primitive_type("float")
-        elif type_str == "int":
-            return self.register_primitive_type("int")
-        elif type_name == "bool":
-            return self.register_primitive_type("bool")
-        elif type_str == "void":
-            return self.register_primitive_type("void")
-        elif type_str.startswith("vec"):
-            size = int(type_str[3:])
-            float_type = self.register_primitive_type("float")
-            return self.register_vector_type(float_type, size)
-        elif type_str.startswith("ivec"):
-            size = int(type_str[4:])
-            int_type = self.register_primitive_type("int")
-            return self.register_vector_type(int_type, size)
-        elif type_str.startswith("bvec"):
-            size = int(type_str[4:])
-            bool_type = self.register_primitive_type("bool")
-            return self.register_vector_type(bool_type, size)
-        elif type_str.startswith("mat"):
-            dim = int(type_str[3:])
-            float_type = self.register_primitive_type("float")
-            col_type = self.register_vector_type(float_type, dim)
-            return self.register_matrix_type(col_type, dim)
-        elif type_str in self.struct_types:
+        type_str = self.normalize_generic_vector_type(type_str)
+
+        if "[" in type_str and type_str.endswith("]"):
+            base_type, size = parse_array_type(type_str)
+            element_type = self.map_crossgl_type(base_type)
+            return self.register_array_type(element_type, size)
+
+        primitive_type = self.normalize_primitive_name(type_str)
+        if primitive_type in {"float", "double", "int", "uint", "bool", "void"}:
+            return self.register_primitive_type(primitive_type)
+
+        vector_info = self.vector_component_type_and_count(type_str)
+        if vector_info:
+            component_type, size = vector_info
+            component_type_id = self.register_primitive_type(component_type)
+            return self.register_vector_type(component_type_id, size)
+
+        matrix_match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", type_str)
+        if matrix_match:
+            is_double, cols, rows = matrix_match.groups()
+            component_type = self.register_primitive_type(
+                "double" if is_double else "float"
+            )
+            row_count = int(rows or cols)
+            col_count = int(cols)
+            col_type = self.register_vector_type(component_type, row_count)
+            return self.register_matrix_type(col_type, col_count)
+
+        registered_type = self.find_registered_type_by_base(type_str)
+        if registered_type:
+            return registered_type
+
+        if self.is_resource_type_name(type_str):
+            return self.register_resource_type(type_str)
+
+        if type_str in self.struct_types:
             # Struct type (reference to existing struct)
             return self.struct_types[type_str]
         else:
@@ -695,29 +1699,41 @@ class VulkanSPIRVCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if type_node.__class__.__name__ == "ArrayType":
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = self.format_array_size(type_node.size)
+            return (
+                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+            )
         if hasattr(type_node, "name"):
+            generic_args = getattr(type_node, "generic_args", [])
+            if generic_args:
+                args = ", ".join(
+                    self.convert_type_node_to_string(arg) for arg in generic_args
+                )
+                return f"{type_node.name}<{args}>"
             return type_node.name
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            prefix = "dmat" if element_type in {"double", "f64"} else "mat"
+            if type_node.rows == type_node.cols:
+                return f"{prefix}{type_node.rows}"
+            return f"{prefix}{type_node.rows}x{type_node.cols}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
-            if hasattr(type_node, "rows"):
-                element_type = self.convert_type_node_to_string(type_node.element_type)
-                return f"mat{type_node.rows}x{type_node.cols}"
-            elif str(type(type_node)).find("ArrayType") != -1:
-                element_type = self.convert_type_node_to_string(type_node.element_type)
-                if type_node.size is not None:
-                    return f"{element_type}[{type_node.size}]"
-                else:
-                    return f"{element_type}[]"
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = type_node.size
+            if element_type in {"float", "f32"}:
+                return f"vec{size}"
+            elif element_type in {"int", "i32"}:
+                return f"ivec{size}"
+            elif element_type in {"uint", "u32"}:
+                return f"uvec{size}"
+            elif element_type in {"double", "f64"}:
+                return f"dvec{size}"
+            elif element_type == "bool":
+                return f"bvec{size}"
             else:
-                element_type = self.convert_type_node_to_string(type_node.element_type)
-                size = type_node.size
-                if element_type == "float":
-                    return f"vec{size}"
-                elif element_type == "int":
-                    return f"ivec{size}"
-                elif element_type == "uint":
-                    return f"uvec{size}"
-                else:
-                    return f"{element_type}{size}"
+                return f"{element_type}{size}"
         else:
             return str(type_node)
 
@@ -729,78 +1745,26 @@ class VulkanSPIRVCodeGen:
             member_type = None
             member_name = member.name
 
-            if isinstance(member, VariableNode):
-                if hasattr(member, "var_type"):
-                    vtype_str = self.convert_type_node_to_string(member.var_type)
-                elif hasattr(member, "vtype"):
-                    if hasattr(member.vtype, "name") or hasattr(
-                        member.vtype, "element_type"
-                    ):
-                        vtype_str = self.convert_type_node_to_string(member.vtype)
-                    else:
-                        vtype_str = str(member.vtype)
-                else:
-                    vtype_str = "float"
-
-                if vtype_str == "float":
-                    member_type = self.register_primitive_type("float")
-                elif vtype_str == "int":
-                    member_type = self.register_primitive_type("int")
-                elif vtype_str == "bool":
-                    member_type = self.register_primitive_type("bool")
-                elif vtype_str.startswith("vec"):
-                    size = int(vtype_str[3:])
-                    float_type = self.register_primitive_type("float")
-                    member_type = self.register_vector_type(float_type, size)
-                elif vtype_str.startswith("mat"):
-                    dim = int(vtype_str[3:])
-                    float_type = self.register_primitive_type("float")
-                    col_type = self.register_vector_type(float_type, dim)
-                    member_type = self.register_matrix_type(col_type, dim)
-                else:
-                    # Struct type (reference to another struct)
-                    if vtype_str in self.struct_types:
-                        member_type = self.struct_types[vtype_str]
-                    else:
-                        # Use a default type if unknown
-                        self.emit(
-                            f"; WARNING: Unknown type {vtype_str} in struct {struct_node.name}"
-                        )
-                        member_type = self.register_primitive_type("float")
-
-            elif isinstance(member, ArrayNode):
-                if member.element_type == "float":
-                    base_type = self.register_primitive_type("float")
-                elif member.element_type == "int":
-                    base_type = self.register_primitive_type("int")
-                elif member.element_type == "bool":
-                    base_type = self.register_primitive_type("bool")
-                elif member.element_type.startswith("vec"):
-                    size = int(member.element_type[3:])
-                    float_type = self.register_primitive_type("float")
-                    base_type = self.register_vector_type(float_type, size)
-                elif member.element_type.startswith("mat"):
-                    dim = int(member.element_type[3:])
-                    float_type = self.register_primitive_type("float")
-                    col_type = self.register_vector_type(float_type, dim)
-                    base_type = self.register_matrix_type(col_type, dim)
-                else:
-                    self.emit(
-                        f"; WARNING: Unknown type {member.element_type} in array member of struct {struct_node.name}"
-                    )
-                    base_type = self.register_primitive_type("float")
-
-                if member.size:
-                    try:
-                        array_size = int(member.size)
-                        member_type = self.register_array_type(base_type, array_size)
-                    except ValueError:
-                        self.emit(
-                            f"; WARNING: Non-integer array size {member.size} in struct {struct_node.name}"
-                        )
-                        member_type = self.register_array_type(base_type)
-                else:
-                    member_type = self.register_array_type(base_type)
+            if isinstance(member, ArrayNode):
+                element_type = member.element_type
+                if hasattr(element_type, "name") or hasattr(
+                    element_type, "element_type"
+                ):
+                    element_type = self.convert_type_node_to_string(element_type)
+                size = self.format_array_size(member.size)
+                member_type = self.map_crossgl_type(
+                    f"{element_type}[{size}]"
+                    if size is not None
+                    else f"{element_type}[]"
+                )
+            else:
+                member_type_source = getattr(
+                    member,
+                    "member_type",
+                    getattr(member, "var_type", getattr(member, "vtype", None)),
+                )
+                if member_type_source is not None:
+                    member_type = self.map_crossgl_type(member_type_source)
 
             if member_type:
                 members.append((member_type, member_name))
@@ -812,18 +1776,33 @@ class VulkanSPIRVCodeGen:
         return_type = self.map_crossgl_type(function_node.return_type)
 
         param_types = []
+        param_value_types = []
+        resource_array_param_indices = set()
         for param in getattr(
             function_node, "parameters", getattr(function_node, "params", [])
         ):
-            if hasattr(param, "vtype"):
-                param_type = self.map_crossgl_type(param.vtype)
+            param_type_source = getattr(
+                param, "param_type", getattr(param, "vtype", None)
+            )
+            if param_type_source is not None:
+                param_type = self.map_resource_type_with_format(
+                    param_type_source, param
+                )
             else:
                 param_type = self.map_crossgl_type("float")
+
+            param_value_types.append(param_type)
+            if self.is_resource_array_type(param_type):
+                resource_array_param_indices.add(len(param_types))
+                param_type = self.register_pointer_type(param_type, "UniformConstant")
+
             param_types.append(param_type)
 
-        self.create_function(function_node.name, return_type, param_types)
+        function_id = self.create_function(function_node.name, return_type, param_types)
+        self.function_resource_array_params[function_node.name] = (
+            resource_array_param_indices
+        )
 
-        parameters = []
         for i, param in enumerate(
             getattr(function_node, "parameters", getattr(function_node, "params", []))
         ):
@@ -833,19 +1812,21 @@ class VulkanSPIRVCodeGen:
                 param_name = f"param{i}"
 
             param_id = self.create_function_parameter(param_types[i], param_name)
-            parameters.append(param_id)
             self.local_variables[param_name] = param_id
+            if i in resource_array_param_indices:
+                self.variable_value_types[param_id.id] = param_value_types[i]
 
         self.begin_block()
 
         self.process_statements(function_node.body)
 
-        if function_node.return_type == "void":
+        if self.convert_type_node_to_string(function_node.return_type) == "void":
             self.create_return()
 
         self.end_function()
 
         self.local_variables.clear()
+        return function_id
 
     def process_statements(self, statements):
         """Process a list of CrossGL statements."""
@@ -863,6 +1844,8 @@ class VulkanSPIRVCodeGen:
         """Process a single CrossGL statement."""
         if isinstance(stmt, AssignmentNode):
             self.process_assignment(stmt)
+        elif isinstance(stmt, VariableNode):
+            self.process_variable_declaration(stmt)
         elif isinstance(stmt, ReturnNode):
             self.process_return(stmt)
         elif isinstance(stmt, IfNode):
@@ -871,6 +1854,151 @@ class VulkanSPIRVCodeGen:
             self.process_for(stmt)
         elif isinstance(stmt, FunctionCallNode):
             self.process_expression(stmt)  # Just evaluate and discard result
+        elif hasattr(stmt, "expression"):
+            expression = stmt.expression
+            if isinstance(expression, AssignmentNode):
+                self.process_assignment(expression)
+            else:
+                self.process_expression(expression)
+
+    def process_variable_declaration(self, node: VariableNode):
+        """Process a local CrossGL variable declaration."""
+        var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        var_type = self.map_resource_type_with_format(var_type_source, node)
+        var_id = self.create_variable(var_type, "Function", node.name)
+        self.local_variables[node.name] = var_id
+
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is not None:
+            rhs_value = self.process_expression(initial_value)
+            if rhs_value is not None:
+                self.store_to_variable(var_id, rhs_value)
+
+    def process_global_variable_declaration(
+        self, node: VariableNode, default_storage_class: str = "Private"
+    ) -> SpirvId:
+        """Process a module-scope CrossGL variable declaration."""
+        var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        var_type_name = self.type_name_from_value(var_type_source)
+        var_type = self.map_resource_type_with_format(var_type_source, node)
+        storage_class = self.infer_global_storage_class(
+            node, default_storage_class, var_type_name
+        )
+
+        if storage_class == "Input":
+            location = self.next_input_location
+            self.next_input_location += 1
+            var_id = self.register_input(node.name, var_type, location, 0)
+        elif storage_class == "Output":
+            location = self.next_output_location
+            self.next_output_location += 1
+            var_id = self.register_output(node.name, var_type, location, 0)
+        else:
+            var_id = self.create_variable(var_type, storage_class, node.name)
+            if storage_class == "UniformConstant":
+                binding = self.next_resource_binding
+                self.next_resource_binding += 1
+                self.decorations.append(f"OpDecorate %{var_id.id} DescriptorSet 0")
+                self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        self.global_variables[node.name] = var_id
+        return var_id
+
+    def infer_global_storage_class(
+        self, node: VariableNode, default_storage_class: str, type_name: str = None
+    ) -> str:
+        attribute_names = {
+            getattr(attribute, "name", "").lower()
+            for attribute in getattr(node, "attributes", [])
+        }
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        }
+
+        if attribute_names & {"input", "in"} or qualifiers & {"input", "in"}:
+            return "Input"
+        if attribute_names & {"output", "out"} or qualifiers & {"output", "out"}:
+            return "Output"
+        if type_name:
+            base_type_name, _ = parse_array_type(type_name)
+            if self.is_resource_type_name(base_type_name):
+                return "UniformConstant"
+        return default_storage_class
+
+    def type_name_from_value(self, type_value) -> str:
+        if hasattr(type_value, "name") or hasattr(type_value, "element_type"):
+            return self.convert_type_node_to_string(type_value)
+        return str(type_value)
+
+    def get_variable_value(self, variable_id: SpirvId) -> SpirvId:
+        value_type = self.variable_value_types.get(variable_id.id)
+        if value_type:
+            return self.load_from_variable(variable_id, value_type)
+
+        if variable_id.type.storage_class:
+            base_type = variable_id.type.base_type.replace("ptr_", "", 1)
+            var_type = self.find_registered_type_by_base(base_type)
+            if var_type:
+                return self.load_from_variable(variable_id, var_type)
+        return variable_id
+
+    def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
+        if isinstance(expr, IdentifierNode):
+            name = expr.name
+        elif isinstance(expr, VariableNode):
+            name = expr.name
+        elif isinstance(expr, str):
+            name = expr
+        else:
+            return None
+
+        return self.local_variables.get(name) or self.global_variables.get(name)
+
+    def array_element_type_from_type(self, array_type: Optional[SpirvId]):
+        if array_type is None:
+            return None
+
+        for (element_type_id, _), arr_type_id in self.array_types.items():
+            if arr_type_id.id == array_type.id:
+                return self.find_registered_type_by_id(element_type_id)
+
+        return None
+
+    def is_resource_array_type(self, array_type: Optional[SpirvId]) -> bool:
+        element_type = self.array_element_type_from_type(array_type)
+        return (
+            element_type is not None and element_type.id in self.resource_type_metadata
+        )
+
+    def create_array_element_access(self, array_expr, index: SpirvId):
+        array_variable = self.variable_pointer_from_expression(array_expr)
+        if array_variable is not None:
+            array_type = self.variable_value_types.get(array_variable.id)
+            element_type = self.array_element_type_from_type(array_type)
+            if element_type is None:
+                element_type = self.determine_array_element_type(array_variable)
+            if element_type is None:
+                return None, None
+
+            storage_class = array_variable.type.storage_class or "Function"
+            ptr_type = self.register_pointer_type(element_type, storage_class)
+            access = self.access_chain(array_variable, [index], ptr_type)
+            self.variable_value_types[access.id] = element_type
+            return access, element_type
+
+        array = self.process_expression(array_expr)
+        if array is None:
+            return None, None
+
+        element_type = self.determine_array_element_type(array)
+        if element_type is None:
+            return None, None
+
+        storage_class = array.type.storage_class or "Function"
+        ptr_type = self.register_pointer_type(element_type, storage_class)
+        access = self.access_chain(array, [index], ptr_type)
+        self.variable_value_types[access.id] = element_type
+        return access, element_type
 
     def process_assignment(self, node: AssignmentNode):
         """Process a CrossGL assignment statement."""
@@ -878,36 +2006,37 @@ class VulkanSPIRVCodeGen:
         if rhs_value is None:
             return
 
-        if isinstance(node.name, str):
-            if node.name in self.local_variables:
-                var_id = self.local_variables[node.name]
-            elif node.name in self.global_variables:
-                var_id = self.global_variables[node.name]
+        target = getattr(
+            node, "name", getattr(node, "target", getattr(node, "left", None))
+        )
+
+        if isinstance(target, IdentifierNode):
+            target = target.name
+
+        if isinstance(target, str):
+            if target in self.local_variables:
+                var_id = self.local_variables[target]
+            elif target in self.global_variables:
+                var_id = self.global_variables[target]
             else:
                 var_type = self.primitive_types["float"]
                 if hasattr(rhs_value, "type"):
-                    for type_dict in [
-                        self.primitive_types,
-                        self.vector_types,
-                        self.matrix_types,
-                        self.struct_types,
-                    ]:
-                        for type_name, type_id in type_dict.items():
-                            if type_id.type.base_type == rhs_value.type.base_type:
-                                var_type = type_id
-                                break
+                    var_type = (
+                        self.find_registered_type_by_base(rhs_value.type.base_type)
+                        or var_type
+                    )
 
-                var_id = self.create_variable(var_type, "Function", node.name)
-                self.local_variables[node.name] = var_id
+                var_id = self.create_variable(var_type, "Function", target)
+                self.local_variables[target] = var_id
 
             self.store_to_variable(var_id, rhs_value)
 
-        elif isinstance(node.name, MemberAccessNode):
-            base = self.process_expression(node.name.object)
+        elif isinstance(target, MemberAccessNode):
+            base = self.process_expression(target.object)
             if base is None:
                 return
 
-            member_name = node.name.member
+            member_name = target.member
             struct_type = base.type.base_type
 
             if struct_type in self.current_struct_members:
@@ -930,30 +2059,25 @@ class VulkanSPIRVCodeGen:
                 f"; WARNING: Could not find member {member_name} in {struct_type}"
             )
 
-        elif isinstance(node.name, ArrayAccessNode):
-            array = self.process_expression(node.name.array)
-            index = self.process_expression(node.name.index)
+        elif isinstance(target, ArrayAccessNode):
+            index = self.process_expression(target.index)
 
-            if array is None or index is None:
+            if index is None:
                 self.emit(f"; WARNING: Failed to evaluate array in assignment")
                 return
 
-            element_type = self.determine_array_element_type(array)
+            access, element_type = self.create_array_element_access(target.array, index)
 
-            if element_type is None:
+            if access is None or element_type is None:
                 self.emit(
-                    f"; WARNING: Could not determine array element type for {node.name.array}"
+                    f"; WARNING: Could not determine array element type for {target.array}"
                 )
-                element_type = self.primitive_types["float"]
-
-            ptr_type = self.register_pointer_type(element_type, "Function")
-
-            access = self.access_chain(array, [index], ptr_type)
+                return
 
             self.store_to_variable(access, rhs_value)
         else:
             self.emit(
-                f"; WARNING: Unsupported LHS type in assignment: {type(node.name).__name__}"
+                f"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}"
             )
 
     def process_return(self, node: ReturnNode):
@@ -1056,26 +2180,9 @@ class VulkanSPIRVCodeGen:
         elif isinstance(expr, str):
             if expr in self.local_variables:
                 var_id = self.local_variables[expr]
-                if var_id.type.storage_class:
-                    # Load from variable
-                    var_type = None
-                    for type_dict in [
-                        self.primitive_types,
-                        self.vector_types,
-                        self.matrix_types,
-                        self.struct_types,
-                    ]:
-                        for type_name, type_id in type_dict.items():
-                            if type_id.type.base_type == var_id.type.base_type.replace(
-                                "ptr_", ""
-                            ):
-                                var_type = type_id
-                                break
-                    if var_type:
-                        return self.load_from_variable(var_id, var_type)
-                return var_id
+                return self.get_variable_value(var_id)
             elif expr in self.global_variables:
-                return self.global_variables[expr]
+                return self.get_variable_value(self.global_variables[expr])
             else:
                 # Create a default float constant for missing variables in examples
                 # This is to make the SPIR-V code valid even if we can't find the variable
@@ -1092,16 +2199,33 @@ class VulkanSPIRVCodeGen:
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
+        elif isinstance(expr, LiteralNode):
+            literal_type = self.convert_type_node_to_string(expr.literal_type)
+            primitive_type_name = self.normalize_primitive_name(literal_type)
+            if primitive_type_name in {"float", "double"}:
+                literal_type_id = self.register_primitive_type(primitive_type_name)
+                return self.register_constant(float(expr.value), literal_type_id)
+            if primitive_type_name in {"int", "uint"}:
+                literal_type_id = self.register_primitive_type(primitive_type_name)
+                return self.register_constant(int(expr.value), literal_type_id)
+            if primitive_type_name == "bool":
+                literal_type_id = self.register_primitive_type("bool")
+                if isinstance(expr.value, str):
+                    value = expr.value.lower() == "true"
+                else:
+                    value = bool(expr.value)
+                return self.register_constant(value, literal_type_id)
+            return self.process_expression(expr.value)
+
+        elif isinstance(expr, IdentifierNode):
+            return self.process_expression(expr.name)
+
         elif isinstance(expr, VariableNode):
             if expr.name in self.local_variables:
                 var_id = self.local_variables[expr.name]
-                if var_id.type.storage_class:
-                    # Load from variable
-                    var_type = self.map_crossgl_type(expr.vtype)
-                    return self.load_from_variable(var_id, var_type)
-                return var_id
+                return self.get_variable_value(var_id)
             elif expr.name in self.global_variables:
-                return self.global_variables[expr.name]
+                return self.get_variable_value(self.global_variables[expr.name])
             else:
                 self.emit(f"; WARNING: Unknown variable {expr.name}")
                 # Return a default value instead of None
@@ -1110,25 +2234,21 @@ class VulkanSPIRVCodeGen:
 
         # Array access
         elif isinstance(expr, ArrayAccessNode):
-            array = self.process_expression(expr.array)
             index = self.process_expression(expr.index)
 
-            if array is None or index is None:
+            if index is None:
                 self.emit(f"; WARNING: Failed to evaluate array access")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-            element_type = self.determine_array_element_type(array)
+            access, element_type = self.create_array_element_access(expr.array, index)
 
-            if element_type is None:
+            if access is None or element_type is None:
                 self.emit(
                     f"; WARNING: Could not determine array element type for {expr.array}"
                 )
                 element_type = self.primitive_types["float"]
-
-            ptr_type = self.register_pointer_type(element_type, "Function")
-
-            access = self.access_chain(array, [index], ptr_type)
+                return self.register_constant(0.0, element_type)
 
             return self.load_from_variable(access, element_type)
 
@@ -1168,8 +2288,8 @@ class VulkanSPIRVCodeGen:
             # Evaluate arguments
             args = []
             has_errors = False
-            for arg in expr.args:
-                arg_value = self.process_expression(arg)
+            for arg_index, arg in enumerate(expr.args):
+                arg_value = self.process_call_argument(callee_name, arg, arg_index)
                 if arg_value is None:
                     self.emit(
                         f"; WARNING: Failed to evaluate argument for {callee_name or callee_expr}"
@@ -1201,6 +2321,9 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: Unsupported callee expression in SPIR-V backend")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
+
+            if callee_name in self.resource_function_names():
+                return self.call_resource_function(callee_name, args)
 
             return self.call_function(callee_name, args)
 
@@ -1251,6 +2374,7 @@ class VulkanSPIRVCodeGen:
             self.emit(f'OpName %{id_value} "{name}"')
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
+        self.variable_value_types[id_value] = type_id
         return spirv_id
 
     def register_output(
@@ -1268,6 +2392,7 @@ class VulkanSPIRVCodeGen:
             self.emit(f'OpName %{id_value} "{name}"')
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
+        self.variable_value_types[id_value] = type_id
         return spirv_id
 
     def register_array_type(
@@ -1313,26 +2438,16 @@ class VulkanSPIRVCodeGen:
         array_type = array_id.type.base_type
 
         # Check if it's a known array type in our registry
-        for arr_type, arr_type_id in self.array_types.items():
+        for (element_type_id, _), arr_type_id in self.array_types.items():
             if arr_type_id.type.base_type == array_type:
-                # Extract the element type from the array type info
-                element_type_name = arr_type.split("_")[
-                    1
-                ]  # Format: "array_float_4" -> "float"
-
-                # Look up the element type ID
-                for type_dict in [
-                    self.primitive_types,
-                    self.vector_types,
-                    self.matrix_types,
-                ]:
-                    for type_name, type_id in type_dict.items():
-                        if type_name == element_type_name:
-                            return type_id
+                return self.find_registered_type_by_id(element_type_id)
 
         # If it's a pointer type, extract the base type
         if array_type.startswith("ptr_"):
             base_type = array_type.replace("ptr_", "", 1)
+            for (element_type_id, _), arr_type_id in self.array_types.items():
+                if arr_type_id.type.base_type == base_type:
+                    return self.find_registered_type_by_id(element_type_id)
 
             # Look for array type pattern in the base type
             match = re.search(r"array_([^_]+)_", base_type)
@@ -1345,8 +2460,8 @@ class VulkanSPIRVCodeGen:
                     self.vector_types,
                     self.matrix_types,
                 ]:
-                    for type_name, type_id in type_dict.items():
-                        if type_name == element_type_name:
+                    for type_id in type_dict.values():
+                        if type_id.type.base_type == element_type_name:
                             return type_id
 
         # Last resort: Try to parse from type name
@@ -1355,35 +2470,67 @@ class VulkanSPIRVCodeGen:
             self.vector_types,
             self.matrix_types,
         ]:
-            for type_name, type_id in type_dict.items():
+            for type_id in type_dict.values():
                 # Check if type name is a substring of the array type
-                if type_name in array_type:
+                if type_id.type.base_type in array_type:
                     return type_id
 
         # Default to float if we can't determine the element type
         return self.primitive_types["float"]
+
+    def get_function_qualifier(self, func) -> Optional[str]:
+        """Return the shader-stage qualifier from old or new function AST shapes."""
+        if hasattr(func, "qualifiers") and func.qualifiers:
+            return func.qualifiers[0] if func.qualifiers else None
+        if hasattr(func, "qualifier"):
+            return func.qualifier
+        return None
+
+    def stage_key(self, stage_type) -> str:
+        if hasattr(stage_type, "value"):
+            return stage_type.value
+        return str(stage_type).split(".")[-1].lower()
+
+    def spirv_execution_model(self, stage_name: Optional[str]) -> str:
+        stage_map = {
+            "vertex": "Vertex",
+            "fragment": "Fragment",
+            "compute": "GLCompute",
+            "geometry": "Geometry",
+            "tessellation_control": "TessellationControl",
+            "tessellation_evaluation": "TessellationEvaluation",
+        }
+        return stage_map.get(stage_name or "fragment", "Fragment")
+
+    def compute_local_size(self, stage) -> Tuple[int, int, int]:
+        config = getattr(stage, "execution_config", {}) or {}
+        for key in ("local_size", "workgroup_size", "numthreads"):
+            value = config.get(key)
+            if isinstance(value, (list, tuple)) and len(value) >= 3:
+                return int(value[0]), int(value[1]), int(value[2])
+
+        return (
+            int(config.get("local_size_x", 1)),
+            int(config.get("local_size_y", 1)),
+            int(config.get("local_size_z", 1)),
+        )
+
+    def emit_entry_point(
+        self, execution_model: str, function_id: SpirvId, name: str, stage=None
+    ):
+        self.emit(f'OpEntryPoint {execution_model} %{function_id.id} "{name}"')
+        if execution_model == "Fragment":
+            self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
+        elif execution_model == "GLCompute":
+            x, y, z = self.compute_local_size(stage)
+            self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
 
     def generate(self, ast):
         """Generate SPIR-V code from a CrossGL AST."""
         if not isinstance(ast, ShaderNode):
             return "; Error: Not a shader node"
 
-        # Initialize code
-        self.code_lines = []
-
-        # Shader preprocess - identify vertex/fragment shaders
-        for func in ast.functions:
-            # Handle both old and new AST structures
-            if hasattr(func, "qualifiers") and func.qualifiers:
-                qualifier = func.qualifiers[0] if func.qualifiers else None
-            elif hasattr(func, "qualifier"):
-                qualifier = func.qualifier
-            else:
-                qualifier = None
-
-            if qualifier == "vertex":
-                self.is_vertex_shader = True
-                break
+        self.reset_generation_state()
 
         self.emit("; SPIR-V")
         self.emit("; Version: 1.0")
@@ -1409,46 +2556,65 @@ class VulkanSPIRVCodeGen:
         for struct in ast.structs:
             self.process_crossgl_struct(struct)
 
-        for func in ast.functions:
-            # Handle both old and new AST structures for function qualifiers
-            if hasattr(func, "qualifiers") and func.qualifiers:
-                qualifier = func.qualifiers[0] if func.qualifiers else None
-            elif hasattr(func, "qualifier"):
-                qualifier = func.qualifier
-            else:
-                qualifier = None
+        for var in getattr(ast, "global_variables", []):
+            self.process_global_variable_declaration(var)
 
-            if func.name == "main" or qualifier in ["vertex", "fragment"]:
-                # Main shader function - save for later
-                if self.main_fn_id is None:
-                    self.main_fn_id = self.get_id()
+        top_level_entries = []
+        for func in ast.functions:
+            qualifier = self.get_function_qualifier(func)
+
+            if func.name == "main" or qualifier in [
+                "vertex",
+                "fragment",
+                "compute",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+            ]:
+                top_level_entries.append((func, qualifier))
             else:
                 # Helper function
                 self.process_function_node(func)
 
-        # Process main shader function last
-        for func in ast.functions:
-            # Handle both old and new AST structures for function qualifiers
-            if hasattr(func, "qualifiers") and func.qualifiers:
-                qualifier = func.qualifiers[0] if func.qualifiers else None
-            elif hasattr(func, "qualifier"):
-                qualifier = func.qualifier
-            else:
-                qualifier = None
+        entry_points = []
 
-            if qualifier in ["vertex", "fragment"]:
-                self.process_function_node(func)
+        if getattr(ast, "stages", None):
+            for stage in ast.stages.values():
+                for var in getattr(stage, "local_variables", []):
+                    if var.name not in self.global_variables:
+                        self.process_global_variable_declaration(var)
 
-        shader_stage = "Vertex" if self.is_vertex_shader else "Fragment"
-        if self.main_fn_id:
-            self.emit(f'OpEntryPoint {shader_stage} %{self.main_fn_id} "main"')
+            processed_local_functions = set()
+            for stage in ast.stages.values():
+                for func in getattr(stage, "local_functions", []):
+                    if id(func) not in processed_local_functions:
+                        self.process_function_node(func)
+                        processed_local_functions.add(id(func))
 
-        if not self.is_vertex_shader:
-            self.emit("OpExecutionMode %main OriginUpperLeft")
+            for stage_type, stage in ast.stages.items():
+                entry_function = stage.entry_point
+                function_id = self.process_function_node(entry_function)
+                stage_name = self.stage_key(stage_type)
+                execution_model = self.spirv_execution_model(stage_name)
+                entry_points.append(
+                    (execution_model, function_id, entry_function.name, stage)
+                )
+        else:
+            for func, qualifier in top_level_entries:
+                function_id = self.process_function_node(func)
+                execution_model = self.spirv_execution_model(qualifier)
+                entry_points.append((execution_model, function_id, func.name, None))
+
+        if entry_points:
+            self.main_fn_id = entry_points[0][1].id
+            for execution_model, function_id, entry_name, stage in entry_points:
+                self.emit_entry_point(execution_model, function_id, entry_name, stage)
 
         header_lines = self.code_lines[:3]
         bound_line = f"; Bound: {self.next_id}"
         rest_lines = self.code_lines[4:]
 
-        final_code = "\n".join(header_lines + [bound_line] + rest_lines)
+        final_code = "\n".join(
+            header_lines + [bound_line] + rest_lines + self.decorations
+        )
         return final_code

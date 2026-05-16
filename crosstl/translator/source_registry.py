@@ -210,6 +210,12 @@ def _reverse_slang():
     return SlangToCrossGLConverter()
 
 
+def _reverse_spirv():
+    from crosstl.backend.SPIRV.VulkanCrossGLCodeGen import VulkanToCrossGLConverter
+
+    return VulkanToCrossGLConverter()
+
+
 def _reverse_mojo():
     from crosstl.backend.Mojo.MojoCrossGLCodeGen import MojoToCrossGLConverter
 
@@ -290,6 +296,7 @@ def register_default_sources() -> None:
             name="vulkan",
             extensions=(".spv", ".spirv"),
             load_lexer_parser=_load_spirv,
+            reverse_codegen_factory=_reverse_spirv,
             aliases=("spirv", "spv"),
         )
     )

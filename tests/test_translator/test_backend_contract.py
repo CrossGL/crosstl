@@ -1,10 +1,13 @@
+import ast
 import os
 
 
+def _project_root():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
 def _backend_root():
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "crosstl", "backend")
-    )
+    return os.path.join(_project_root(), "crosstl", "backend")
 
 
 def _backend_dirs():
@@ -60,3 +63,37 @@ def test_backend_directories_follow_contract():
             )
 
     assert not missing, f"Backend contract violations: {missing}"
+
+
+def test_setup_uses_namespace_package_discovery_for_backends():
+    setup_py = os.path.join(_project_root(), "setup.py")
+    with open(setup_py, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+
+    setup_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "setup"
+    ]
+    assert setup_calls, "setup.py must call setup()"
+
+    packages = None
+    for keyword in setup_calls[0].keywords:
+        if keyword.arg == "packages":
+            packages = keyword.value
+            break
+
+    assert isinstance(packages, ast.Call), "setup.py packages must be discovered"
+    assert getattr(packages.func, "id", None) == "find_namespace_packages"
+
+    include = None
+    for keyword in packages.keywords:
+        if keyword.arg == "include":
+            include = keyword.value
+            break
+
+    assert isinstance(include, (ast.List, ast.Tuple))
+    assert any(
+        isinstance(item, ast.Constant) and item.value == "crosstl*"
+        for item in include.elts
+    )

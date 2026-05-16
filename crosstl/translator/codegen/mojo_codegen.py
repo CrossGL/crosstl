@@ -35,7 +35,24 @@ class MojoCodeGen:
             "double": "Float64",
             "half": "Float16",
             "bool": "Bool",
+            "string": "String",
+            "char": "String",
             # Vector Types
+            "vec2<f32>": "SIMD[DType.float32, 2]",
+            "vec3<f32>": "SIMD[DType.float32, 3]",
+            "vec4<f32>": "SIMD[DType.float32, 4]",
+            "vec2<f64>": "SIMD[DType.float64, 2]",
+            "vec3<f64>": "SIMD[DType.float64, 3]",
+            "vec4<f64>": "SIMD[DType.float64, 4]",
+            "vec2<i32>": "SIMD[DType.int32, 2]",
+            "vec3<i32>": "SIMD[DType.int32, 3]",
+            "vec4<i32>": "SIMD[DType.int32, 4]",
+            "vec2<u32>": "SIMD[DType.uint32, 2]",
+            "vec3<u32>": "SIMD[DType.uint32, 3]",
+            "vec4<u32>": "SIMD[DType.uint32, 4]",
+            "vec2<bool>": "SIMD[DType.bool, 2]",
+            "vec3<bool>": "SIMD[DType.bool, 3]",
+            "vec4<bool>": "SIMD[DType.bool, 4]",
             "vec2": "SIMD[DType.float32, 2]",
             "vec3": "SIMD[DType.float32, 3]",
             "vec4": "SIMD[DType.float32, 4]",
@@ -45,13 +62,40 @@ class MojoCodeGen:
             "uvec2": "SIMD[DType.uint32, 2]",
             "uvec3": "SIMD[DType.uint32, 3]",
             "uvec4": "SIMD[DType.uint32, 4]",
+            "dvec2": "SIMD[DType.float64, 2]",
+            "dvec3": "SIMD[DType.float64, 3]",
+            "dvec4": "SIMD[DType.float64, 4]",
             "bvec2": "SIMD[DType.bool, 2]",
             "bvec3": "SIMD[DType.bool, 3]",
             "bvec4": "SIMD[DType.bool, 4]",
+            "bool2": "SIMD[DType.bool, 2]",
+            "bool3": "SIMD[DType.bool, 3]",
+            "bool4": "SIMD[DType.bool, 4]",
             # Matrix Types
             "mat2": "Matrix[DType.float32, 2, 2]",
             "mat3": "Matrix[DType.float32, 3, 3]",
             "mat4": "Matrix[DType.float32, 4, 4]",
+            "mat2x2": "Matrix[DType.float32, 2, 2]",
+            "mat2x3": "Matrix[DType.float32, 2, 3]",
+            "mat2x4": "Matrix[DType.float32, 2, 4]",
+            "mat3x2": "Matrix[DType.float32, 3, 2]",
+            "mat3x3": "Matrix[DType.float32, 3, 3]",
+            "mat3x4": "Matrix[DType.float32, 3, 4]",
+            "mat4x2": "Matrix[DType.float32, 4, 2]",
+            "mat4x3": "Matrix[DType.float32, 4, 3]",
+            "mat4x4": "Matrix[DType.float32, 4, 4]",
+            "dmat2": "Matrix[DType.float64, 2, 2]",
+            "dmat3": "Matrix[DType.float64, 3, 3]",
+            "dmat4": "Matrix[DType.float64, 4, 4]",
+            "dmat2x2": "Matrix[DType.float64, 2, 2]",
+            "dmat2x3": "Matrix[DType.float64, 2, 3]",
+            "dmat2x4": "Matrix[DType.float64, 2, 4]",
+            "dmat3x2": "Matrix[DType.float64, 3, 2]",
+            "dmat3x3": "Matrix[DType.float64, 3, 3]",
+            "dmat3x4": "Matrix[DType.float64, 3, 4]",
+            "dmat4x2": "Matrix[DType.float64, 4, 2]",
+            "dmat4x3": "Matrix[DType.float64, 4, 3]",
+            "dmat4x4": "Matrix[DType.float64, 4, 4]",
             # Texture Types (Mojo equivalents)
             "sampler2D": "Texture2D",
             "samplerCube": "TextureCube",
@@ -131,10 +175,7 @@ class MojoCodeGen:
             else:
                 # Handle both old and new AST variable structures
                 if hasattr(node, "var_type"):
-                    if hasattr(node.var_type, "name"):
-                        vtype = node.var_type.name
-                    else:
-                        vtype = str(node.var_type)
+                    vtype = self.convert_type_node_to_string(node.var_type)
                 elif hasattr(node, "vtype"):
                     vtype = node.vtype
                 else:
@@ -185,7 +226,19 @@ class MojoCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if type_node.__class__.__name__ == "ArrayType":
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = self.format_array_size(type_node.size)
+            return (
+                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+            )
         if hasattr(type_node, "name"):
+            generic_args = getattr(type_node, "generic_args", [])
+            if generic_args:
+                args = ", ".join(
+                    self.convert_type_node_to_string(arg) for arg in generic_args
+                )
+                return f"{type_node.name}<{args}>"
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
@@ -196,13 +249,27 @@ class MojoCodeGen:
                 return f"ivec{size}"
             elif element_type == "uint":
                 return f"uvec{size}"
+            elif element_type == "double":
+                return f"dvec{size}"
+            elif element_type == "bool":
+                return f"bvec{size}"
             else:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            return f"mat{type_node.rows}x{type_node.cols}"
+            prefix = "dmat" if element_type == "double" else "mat"
+            if type_node.rows == type_node.cols:
+                return f"{prefix}{type_node.rows}"
+            return f"{prefix}{type_node.rows}x{type_node.cols}"
         else:
             return str(type_node)
+
+    def format_array_size(self, size):
+        if size is None:
+            return None
+        if hasattr(size, "value"):
+            return size.value
+        return size
 
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
@@ -544,7 +611,7 @@ class MojoCodeGen:
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, (int, float, bool)):
-            return str(expr)
+            return self.format_literal(expr)
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "vtype") and expr.vtype and expr.name:
                 return f"{expr.name}"
@@ -562,6 +629,9 @@ class MojoCodeGen:
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
+            if op in ["++", "--"]:
+                assignment_op = "+=" if op == "++" else "-="
+                return f"{operand} {assignment_op} 1"
             return f"({op}{operand})"
         elif isinstance(expr, ArrayAccessNode):
             # Handle array access properly
@@ -596,12 +666,63 @@ class MojoCodeGen:
                 "vec2",
                 "vec3",
                 "vec4",
+                "vec2<f32>",
+                "vec3<f32>",
+                "vec4<f32>",
+                "vec2<f64>",
+                "vec3<f64>",
+                "vec4<f64>",
+                "vec2<i32>",
+                "vec3<i32>",
+                "vec4<i32>",
+                "vec2<u32>",
+                "vec3<u32>",
+                "vec4<u32>",
+                "vec2<bool>",
+                "vec3<bool>",
+                "vec4<bool>",
                 "ivec2",
                 "ivec3",
                 "ivec4",
                 "uvec2",
                 "uvec3",
                 "uvec4",
+                "dvec2",
+                "dvec3",
+                "dvec4",
+                "bvec2",
+                "bvec3",
+                "bvec4",
+            ]:
+                mojo_type = self.map_type(func_name)
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{mojo_type}({args})"
+
+            if func_name in [
+                "mat2",
+                "mat3",
+                "mat4",
+                "mat2x2",
+                "mat2x3",
+                "mat2x4",
+                "mat3x2",
+                "mat3x3",
+                "mat3x4",
+                "mat4x2",
+                "mat4x3",
+                "mat4x4",
+                "dmat2",
+                "dmat3",
+                "dmat4",
+                "dmat2x2",
+                "dmat2x3",
+                "dmat2x4",
+                "dmat3x2",
+                "dmat3x3",
+                "dmat3x4",
+                "dmat4x2",
+                "dmat4x3",
+                "dmat4x4",
             ]:
                 mojo_type = self.map_type(func_name)
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
@@ -621,12 +742,10 @@ class MojoCodeGen:
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             # Handle LiteralNode
             if hasattr(expr, "value"):
-                value = expr.value
-                if isinstance(value, str) and not (
-                    value.startswith('"') and value.endswith('"')
-                ):
-                    return f'"{value}"'  # Add quotes for string literals
-                return str(value)
+                literal_type = getattr(
+                    getattr(expr, "literal_type", None), "name", None
+                )
+                return self.format_literal(expr.value, literal_type)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
@@ -657,6 +776,36 @@ class MojoCodeGen:
                     array_match.group(2)
                     return f"{array_name}"  # Just return the array name for now
             return expr_str
+
+    def format_literal(self, value, literal_type=None):
+        if isinstance(value, bool):
+            return "True" if value else "False"
+        if literal_type == "bool" and isinstance(value, str):
+            lower_value = value.lower()
+            if lower_value == "true":
+                return "True"
+            if lower_value == "false":
+                return "False"
+        if isinstance(value, str):
+            escaped = self.escape_literal(value)
+            return f'"{escaped}"'
+        return str(value)
+
+    def escape_literal(self, value):
+        text = str(value)
+        escaped = []
+        for index, char in enumerate(text):
+            if char == "\n":
+                escaped.append("\\n")
+            elif char == "\r":
+                escaped.append("\\r")
+            elif char == "\t":
+                escaped.append("\\t")
+            elif char == '"' and (index == 0 or text[index - 1] != "\\"):
+                escaped.append('\\"')
+            else:
+                escaped.append(char)
+        return "".join(escaped)
 
     def map_type(self, vtype):
         if vtype is None:

@@ -572,7 +572,7 @@ class Parser:
             member_type = ArrayType(member_type, size)
 
         attributes = []
-        if self.current_token[0] == "AT":
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes = self.parse_attributes()
 
         if self.current_token[0] != "SEMICOLON":
@@ -705,7 +705,7 @@ class Parser:
         self.eat("RPAREN")
 
         post_attributes = []
-        if self.current_token[0] == "AT":
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             post_attributes = self.parse_attributes()
 
         body = None
@@ -754,11 +754,16 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        if self.current_token[0] == "AT":
-            self.eat("AT")
-            semantic_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            attributes.append(AttributeNode(name=semantic_name, arguments=[]))
+        while self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            param_type = ArrayType(param_type, size)
+
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
+            attributes.extend(self.parse_attributes())
 
         default_value = None
         if self.current_token[0] == "EQUALS":
@@ -775,7 +780,7 @@ class Parser:
 
     def parse_variable_declaration(self):
         attributes = []
-        if self.current_token[0] == "AT":
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes = self.parse_attributes()
 
         qualifiers = []
@@ -795,7 +800,7 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        if self.current_token[0] == "AT":
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes.extend(self.parse_attributes())
 
         while self.current_token[0] == "LBRACKET":
@@ -831,7 +836,7 @@ class Parser:
         saved_token = self.current_token
 
         try:
-            if self.current_token[0] == "AT":
+            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 self.parse_attributes()
 
             while self.current_token[0] in [
@@ -973,18 +978,30 @@ class Parser:
             "UVEC2",
             "UVEC3",
             "UVEC4",
+            "DVEC2",
+            "DVEC3",
+            "DVEC4",
             "BVEC2",
             "BVEC3",
             "BVEC4",
         ]:
             vec_type = self.current_token[1]
             self.eat(self.current_token[0])
+            generic_args = []
+            if self.current_token[0] == "LESS_THAN":
+                generic_args = self.parse_generic_arguments()
 
-            if vec_type.startswith("ivec"):
+            if generic_args:
+                element_type = self.vector_element_type_from_generic(generic_args[0])
+                size = int(vec_type[-1])
+            elif vec_type.startswith("ivec"):
                 element_type = PrimitiveType("int")
                 size = int(vec_type[-1])
             elif vec_type.startswith("uvec"):
                 element_type = PrimitiveType("uint")
+                size = int(vec_type[-1])
+            elif vec_type.startswith("dvec"):
+                element_type = PrimitiveType("double")
                 size = int(vec_type[-1])
             elif vec_type.startswith("bvec"):
                 element_type = PrimitiveType("bool")
@@ -1008,17 +1025,86 @@ class Parser:
             "MAT4X2",
             "MAT4X3",
             "MAT4X4",
+            "DMAT2",
+            "DMAT3",
+            "DMAT4",
+            "DMAT2X2",
+            "DMAT2X3",
+            "DMAT2X4",
+            "DMAT3X2",
+            "DMAT3X3",
+            "DMAT3X4",
+            "DMAT4X2",
+            "DMAT4X3",
+            "DMAT4X4",
         ]:
             mat_type = self.current_token[1]
             self.eat(self.current_token[0])
 
-            if "x" in mat_type:
-                rows, cols = map(int, mat_type[3:].split("x"))
+            is_double_matrix = mat_type.startswith("dmat")
+            dimensions = mat_type[4:] if is_double_matrix else mat_type[3:]
+            if "x" in dimensions:
+                rows, cols = map(int, dimensions.split("x"))
             else:
-                size = int(mat_type[-1])
+                size = int(dimensions)
                 rows = cols = size
 
-            base_type = MatrixType(PrimitiveType("float"), rows, cols)
+            element_type = "double" if is_double_matrix else "float"
+            base_type = MatrixType(PrimitiveType(element_type), rows, cols)
+
+        elif self.current_token[0] in [
+            "SAMPLER",
+            "SAMPLER1D",
+            "SAMPLER2D",
+            "SAMPLER3D",
+            "SAMPLERCUBE",
+            "SAMPLER2DARRAY",
+            "SAMPLER2DSHADOW",
+            "SAMPLER2DARRAYSHADOW",
+            "SAMPLERCUBESHADOW",
+            "SAMPLERCUBEARRAY",
+            "SAMPLERCUBEARRAYSHADOW",
+            "SAMPLER2DMS",
+            "SAMPLER2DMSARRAY",
+            "IIMAGE2D",
+            "IIMAGE3D",
+            "IIMAGE2DARRAY",
+            "UIMAGE2D",
+            "UIMAGE3D",
+            "UIMAGE2DARRAY",
+            "IMAGE2D",
+            "IMAGE3D",
+            "IMAGECUBE",
+            "IMAGE2DARRAY",
+        ]:
+            sampler_types = {
+                "SAMPLER": "sampler",
+                "SAMPLER1D": "sampler1D",
+                "SAMPLER2D": "sampler2D",
+                "SAMPLER3D": "sampler3D",
+                "SAMPLERCUBE": "samplerCube",
+                "SAMPLER2DARRAY": "sampler2DArray",
+                "SAMPLER2DSHADOW": "sampler2DShadow",
+                "SAMPLER2DARRAYSHADOW": "sampler2DArrayShadow",
+                "SAMPLERCUBESHADOW": "samplerCubeShadow",
+                "SAMPLERCUBEARRAY": "samplerCubeArray",
+                "SAMPLERCUBEARRAYSHADOW": "samplerCubeArrayShadow",
+                "SAMPLER2DMS": "sampler2DMS",
+                "SAMPLER2DMSARRAY": "sampler2DMSArray",
+                "IIMAGE2D": "iimage2D",
+                "IIMAGE3D": "iimage3D",
+                "IIMAGE2DARRAY": "iimage2DArray",
+                "UIMAGE2D": "uimage2D",
+                "UIMAGE3D": "uimage3D",
+                "UIMAGE2DARRAY": "uimage2DArray",
+                "IMAGE2D": "image2D",
+                "IMAGE3D": "image3D",
+                "IMAGECUBE": "imageCube",
+                "IMAGE2DARRAY": "image2DArray",
+            }
+            token_type = self.current_token[0]
+            self.eat(token_type)
+            base_type = NamedType(sampler_types[token_type])
 
         elif self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
@@ -1103,13 +1189,54 @@ class Parser:
         self.eat("GREATER_THAN")
         return args
 
+    def vector_element_type_from_generic(self, type_node):
+        type_name = self.format_type_argument(type_node)
+        aliases = {
+            "f32": "float",
+            "float": "float",
+            "f64": "double",
+            "double": "double",
+            "i32": "int",
+            "int": "int",
+            "u32": "uint",
+            "uint": "uint",
+            "bool": "bool",
+        }
+        return PrimitiveType(aliases.get(type_name, type_name))
+
+    def format_type_argument(self, type_node):
+        if hasattr(type_node, "name"):
+            generic_args = getattr(type_node, "generic_args", [])
+            if generic_args:
+                args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
+                return f"{type_node.name}<{args}>"
+            return type_node.name
+        if hasattr(type_node, "element_type") and hasattr(type_node, "size"):
+            element_type = self.format_type_argument(type_node.element_type)
+            if element_type == "float":
+                return f"vec{type_node.size}"
+            if element_type == "int":
+                return f"ivec{type_node.size}"
+            if element_type == "uint":
+                return f"uvec{type_node.size}"
+            if element_type == "double":
+                return f"dvec{type_node.size}"
+            if element_type == "bool":
+                return f"bvec{type_node.size}"
+            return f"{element_type}{type_node.size}"
+        return str(type_node)
+
     def parse_attributes(self):
         attributes = []
 
-        while self.current_token[0] == "AT":
-            self.eat("AT")
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+        while self.current_token[0] in ["AT", "ATTRIBUTE"]:
+            if self.current_token[0] == "ATTRIBUTE":
+                name = self.current_token[1][1:]
+                self.eat("ATTRIBUTE")
+            else:
+                self.eat("AT")
+                name = self.current_token[1]
+                self.eat("IDENTIFIER")
 
             arguments = []
             if self.current_token[0] == "LPAREN":
@@ -1532,6 +1659,14 @@ class Parser:
                 index = self.parse_expression()
                 self.eat("RBRACKET")
                 left = ArrayAccessNode(left, index)
+            elif (
+                self.current_token[0] == "LESS_THAN"
+                and isinstance(left, IdentifierNode)
+                and left.name in {"vec2", "vec3", "vec4"}
+            ):
+                generic_args = self.parse_generic_arguments()
+                args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
+                left = IdentifierNode(f"{left.name}<{args}>")
             elif self.current_token[0] == "LPAREN":
                 self.eat("LPAREN")
                 arguments = []
@@ -1571,6 +1706,9 @@ class Parser:
             self.eat("IDENTIFIER")
             return IdentifierNode(name)
 
+        elif self.current_token[0] == "BOOLEAN_LITERAL":
+            return self.parse_literal()
+
         elif self.current_token[0] in [
             "NUMBER",
             "FLOAT_NUMBER",
@@ -1604,6 +1742,10 @@ class Parser:
         elif token_type == "FLOAT_NUMBER":
             self.eat("FLOAT_NUMBER")
             return LiteralNode(float(value.rstrip("fF")), PrimitiveType("float"))
+
+        elif token_type == "BOOLEAN_LITERAL":
+            self.eat("BOOLEAN_LITERAL")
+            return LiteralNode(value == "true", PrimitiveType("bool"))
 
         elif token_type == "HEX_NUMBER":
             self.eat("HEX_NUMBER")
@@ -1761,12 +1903,59 @@ class Parser:
             "UVEC2",
             "UVEC3",
             "UVEC4",
+            "DVEC2",
+            "DVEC3",
+            "DVEC4",
             "BVEC2",
             "BVEC3",
             "BVEC4",
             "MAT2",
             "MAT3",
             "MAT4",
+            "MAT2X2",
+            "MAT2X3",
+            "MAT2X4",
+            "MAT3X2",
+            "MAT3X3",
+            "MAT3X4",
+            "MAT4X2",
+            "MAT4X3",
+            "MAT4X4",
+            "DMAT2",
+            "DMAT3",
+            "DMAT4",
+            "DMAT2X2",
+            "DMAT2X3",
+            "DMAT2X4",
+            "DMAT3X2",
+            "DMAT3X3",
+            "DMAT3X4",
+            "DMAT4X2",
+            "DMAT4X3",
+            "DMAT4X4",
+            "SAMPLER",
+            "SAMPLER1D",
+            "SAMPLER2D",
+            "SAMPLER3D",
+            "SAMPLERCUBE",
+            "SAMPLER2DARRAY",
+            "SAMPLER2DSHADOW",
+            "SAMPLER2DARRAYSHADOW",
+            "SAMPLERCUBESHADOW",
+            "SAMPLERCUBEARRAY",
+            "SAMPLERCUBEARRAYSHADOW",
+            "SAMPLER2DMS",
+            "SAMPLER2DMSARRAY",
+            "IIMAGE2D",
+            "IIMAGE3D",
+            "IIMAGE2DARRAY",
+            "UIMAGE2D",
+            "UIMAGE3D",
+            "UIMAGE2DARRAY",
+            "IMAGE2D",
+            "IMAGE3D",
+            "IMAGECUBE",
+            "IMAGE2DARRAY",
             "IDENTIFIER",
         ]
 

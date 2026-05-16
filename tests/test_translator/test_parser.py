@@ -3,10 +3,15 @@ import pytest
 from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
+    ArrayType,
+    FunctionCallNode,
+    MatrixType,
     PreprocessorNode,
+    PrimitiveType,
     ShaderNode,
     ShaderStage,
     VariableNode,
+    VectorType,
     WaveOpNode,
     RayTracingOpNode,
     MeshOpNode,
@@ -769,6 +774,274 @@ def test_array_syntax():
         parse_code(tokens)
     except SyntaxError as e:
         pytest.fail(f"Array syntax parsing failed: {e}")
+
+
+def test_array_parameter_syntax():
+    code = """
+    shader ArrayParams {
+        float accumulate(float weights[4], vec3 colors[2]) {
+            return weights[0] + colors[1].x;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert isinstance(function.parameters[0].param_type, ArrayType)
+    assert isinstance(function.parameters[1].param_type, ArrayType)
+
+
+def test_double_vector_type_keywords_parse():
+    code = """
+    shader DoubleVectors {
+        compute {
+            void main() {
+                dvec2 precise = dvec2(1.0, 2.0);
+                dvec4 weights = dvec4(1.0, 2.0, 3.0, 4.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+
+    precise = statements[0]
+    assert isinstance(precise.var_type, VectorType)
+    assert isinstance(precise.var_type.element_type, PrimitiveType)
+    assert precise.var_type.element_type.name == "double"
+    assert precise.var_type.size == 2
+    assert isinstance(precise.initial_value, FunctionCallNode)
+    assert precise.initial_value.function.name == "dvec2"
+
+    weights = statements[1]
+    assert isinstance(weights.var_type, VectorType)
+    assert weights.var_type.element_type.name == "double"
+    assert weights.var_type.size == 4
+    assert weights.initial_value.function.name == "dvec4"
+
+
+def test_bool_vector_type_keywords_parse():
+    code = """
+    shader BoolVectors {
+        compute {
+            void main() {
+                bvec2 mask = bvec2(true, false);
+                bvec3 flags;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+
+    mask = statements[0]
+    assert isinstance(mask.var_type, VectorType)
+    assert isinstance(mask.var_type.element_type, PrimitiveType)
+    assert mask.var_type.element_type.name == "bool"
+    assert mask.var_type.size == 2
+    assert isinstance(mask.initial_value, FunctionCallNode)
+    assert mask.initial_value.function.name == "bvec2"
+
+    flags = statements[1]
+    assert isinstance(flags.var_type, VectorType)
+    assert flags.var_type.element_type.name == "bool"
+    assert flags.var_type.size == 3
+
+
+def test_generic_vector_type_keywords_parse():
+    code = """
+    shader GenericVectors {
+        compute {
+            void main() {
+                vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                vec3<i32> index = vec3<i32>(1, 2, 3);
+                vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
+                vec2<bool> flags = vec2<bool>(true, false);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+
+    expected = [
+        ("precise", "double", 2, "vec2<f64>"),
+        ("index", "int", 3, "vec3<i32>"),
+        ("mask", "uint", 4, "vec4<u32>"),
+        ("flags", "bool", 2, "vec2<bool>"),
+    ]
+    for statement, (name, element_type, size, constructor) in zip(statements, expected):
+        assert statement.name == name
+        assert isinstance(statement.var_type, VectorType)
+        assert statement.var_type.element_type.name == element_type
+        assert statement.var_type.size == size
+        assert isinstance(statement.initial_value, FunctionCallNode)
+        assert statement.initial_value.function.name == constructor
+
+
+def test_matrix_type_keywords_parse():
+    code = """
+    shader Matrices {
+        compute {
+            void main() {
+                mat3x4 affine;
+                dmat2 precise = dmat2(1.0, 0.0, 0.0, 1.0);
+                dmat4x3 jacobian;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+
+    affine = statements[0]
+    assert isinstance(affine.var_type, MatrixType)
+    assert affine.var_type.element_type.name == "float"
+    assert affine.var_type.rows == 3
+    assert affine.var_type.cols == 4
+
+    precise = statements[1]
+    assert isinstance(precise.var_type, MatrixType)
+    assert precise.var_type.element_type.name == "double"
+    assert precise.var_type.rows == 2
+    assert precise.var_type.cols == 2
+    assert isinstance(precise.initial_value, FunctionCallNode)
+    assert precise.initial_value.function.name == "dmat2"
+
+    jacobian = statements[2]
+    assert isinstance(jacobian.var_type, MatrixType)
+    assert jacobian.var_type.element_type.name == "double"
+    assert jacobian.var_type.rows == 4
+    assert jacobian.var_type.cols == 3
+
+
+def test_sampler_type_keywords_parse():
+    code = """
+    shader Resources {
+        sampler linearSampler;
+        sampler2d colorMap;
+        samplercube environmentMap;
+        sampler2dshadow shadowMap;
+        sampler2darrayshadow cascades;
+        samplercubeshadow pointShadowMap;
+        samplercubearray reflectionProbes;
+        samplercubearrayshadow shadowProbes;
+        sampler2dms colorMs;
+        sampler2dmsarray colorMsArray;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    resource_types = [var.var_type.name for var in ast.global_variables]
+
+    assert resource_types == [
+        "sampler",
+        "sampler2D",
+        "samplerCube",
+        "sampler2DShadow",
+        "sampler2DArrayShadow",
+        "samplerCubeShadow",
+        "samplerCubeArray",
+        "samplerCubeArrayShadow",
+        "sampler2DMS",
+        "sampler2DMSArray",
+    ]
+
+
+def test_image_type_keywords_parse():
+    code = """
+    shader Resources {
+        iimage2d signedImage;
+        iimage3d signedVolume;
+        iimage2darray signedLayers;
+        uimage2d unsignedImage;
+        uimage3d unsignedVolume;
+        uimage2darray unsignedLayers;
+        image2D outputImage;
+        image3D volumeImage;
+        imageCube cubeImage;
+        image2DArray layerImage;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    resource_types = [var.var_type.name for var in ast.global_variables]
+
+    assert resource_types == [
+        "iimage2D",
+        "iimage3D",
+        "iimage2DArray",
+        "uimage2D",
+        "uimage3D",
+        "uimage2DArray",
+        "image2D",
+        "image3D",
+        "imageCube",
+        "image2DArray",
+    ]
+
+
+def test_image_format_attributes_parse():
+    code = """
+    shader Resources {
+        image2D halfColor @rgba16f;
+        uimage2D counters @ r32ui;
+        image2D normalizedColor @format(rgba8);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert [var.name for var in ast.global_variables] == [
+        "halfColor",
+        "counters",
+        "normalizedColor",
+    ]
+    assert [attr.name for attr in ast.global_variables[0].attributes] == ["rgba16f"]
+    assert [attr.name for attr in ast.global_variables[1].attributes] == ["r32ui"]
+    assert [attr.name for attr in ast.global_variables[2].attributes] == ["format"]
+    assert ast.global_variables[2].attributes[0].arguments[0].name == "rgba8"
+
+
+def test_image_format_parameter_attributes_parse():
+    code = """
+    shader Resources {
+        float touchImages(
+            image2D scalarImage @r32f,
+            image3D signedImage @ r32i,
+            image2DArray unsignedImage @format(r32ui)
+        ) {
+            return 0.0;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    params = ast.functions[0].parameters
+
+    assert [param.name for param in params] == [
+        "scalarImage",
+        "signedImage",
+        "unsignedImage",
+    ]
+    assert [attr.name for attr in params[0].attributes] == ["r32f"]
+    assert [attr.name for attr in params[1].attributes] == ["r32i"]
+    assert [attr.name for attr in params[2].attributes] == ["format"]
+    assert params[2].attributes[0].arguments[0].name == "r32ui"
 
 
 def test_extended_shader_stages_parse():

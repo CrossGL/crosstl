@@ -62,6 +62,8 @@ TOKENS = tuple(
 KEYWORDS = {
     "struct": "STRUCT",
     "layout": "LAYOUT",
+    "buffer": "BUFFER",
+    "push_constant": "PUSH_CONSTANT",
     "uniform": "UNIFORM",
     "sampler2D": "SAMPLER2D",
     "samplerCube": "SAMPLERCUBE",

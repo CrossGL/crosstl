@@ -2,6 +2,7 @@ import pytest
 import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
+from crosstl.translator.ast import LiteralNode, PrimitiveType
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 from typing import List
 
@@ -173,6 +174,83 @@ def test_for_statement():
         print(generated_code)
     except SyntaxError:
         pytest.fail("For statement codegen not implemented.")
+
+
+def test_increment_and_decrement_emit_mojo_assignment_updates():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int i = 0;
+                i++;
+                ++i;
+                i--;
+                --i;
+                for (int j = 0; j < 2; j++) {
+                    i++;
+                }
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "i += 1" in generated_code
+    assert "i -= 1" in generated_code
+    assert "j += 1" in generated_code
+    assert "++i" not in generated_code
+    assert "i++" not in generated_code
+    assert "--i" not in generated_code
+    assert "i--" not in generated_code
+    assert "++j" not in generated_code
+
+
+def test_bool_string_and_char_literals_emit_mojo_syntax():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                bool enabled = true;
+                bool disabled = false;
+                string label = "debug";
+                char marker = 'x';
+                if (enabled && !disabled) {
+                    label = "active";
+                    marker = 'y';
+                }
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    entry_point = next(iter(ast.stages.values())).entry_point
+
+    assert entry_point.body.statements[0].initial_value.value is True
+    assert entry_point.body.statements[1].initial_value.value is False
+
+    generated_code = generate_code(ast)
+
+    assert "var enabled: Bool = True" in generated_code
+    assert "var disabled: Bool = False" in generated_code
+    assert 'var label: String = "debug"' in generated_code
+    assert 'var marker: String = "x"' in generated_code
+    assert 'label = "active"' in generated_code
+    assert 'marker = "y"' in generated_code
+
+
+def test_direct_literal_nodes_emit_mojo_escaping():
+    codegen = MojoCodeGen()
+
+    assert (
+        codegen.generate_expression(LiteralNode(True, PrimitiveType("bool"))) == "True"
+    )
+    assert (
+        codegen.generate_expression(LiteralNode('debug"name', PrimitiveType("string")))
+        == '"debug\\"name"'
+    )
 
 
 def test_else_if_statement():
@@ -542,6 +620,132 @@ def test_vector_constructor():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Vector constructor codegen not implemented")
+
+
+def test_double_vector_and_matrix_types_emit_mojo_names():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                dvec2 preciseUV = dvec2(1.0, 2.0);
+                bvec2 mask = bvec2(true, false);
+                bvec3 flags;
+                mat2 transform = mat2(1.0, 0.0, 0.0, 1.0);
+                mat3x4 affine;
+                dmat2 precise = dmat2(1.0, 0.0, 0.0, 1.0);
+                dmat4x3 jacobian;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "var preciseUV: SIMD[DType.float64, 2] = " "SIMD[DType.float64, 2](1.0, 2.0)"
+    ) in generated_code
+    assert (
+        "var mask: SIMD[DType.bool, 2] = " "SIMD[DType.bool, 2](True, False)"
+    ) in generated_code
+    assert "var flags: SIMD[DType.bool, 3]" in generated_code
+    assert (
+        "var transform: Matrix[DType.float32, 2, 2] = "
+        "Matrix[DType.float32, 2, 2](1.0, 0.0, 0.0, 1.0)"
+    ) in generated_code
+    assert "var affine: Matrix[DType.float32, 3, 4]" in generated_code
+    assert (
+        "var precise: Matrix[DType.float64, 2, 2] = "
+        "Matrix[DType.float64, 2, 2](1.0, 0.0, 0.0, 1.0)"
+    ) in generated_code
+    assert "var jacobian: Matrix[DType.float64, 4, 3]" in generated_code
+    assert "dvec2(" not in generated_code
+    assert "bvec2(" not in generated_code
+    assert "bool2" not in generated_code
+    assert "dmat2(" not in generated_code
+    assert "MatrixType(" not in generated_code
+
+
+def test_generic_vector_constructors_emit_mojo_names():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                vec3<i32> index = vec3<i32>(1, 2, 3);
+                vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
+                vec2<bool> flags = vec2<bool>(true, false);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "var precise: SIMD[DType.float64, 2] = " "SIMD[DType.float64, 2](1.0, 2.0)"
+    ) in generated_code
+    assert (
+        "var index: SIMD[DType.int32, 3] = " "SIMD[DType.int32, 3](1, 2, 3)"
+    ) in generated_code
+    assert (
+        "var mask: SIMD[DType.uint32, 4] = " "SIMD[DType.uint32, 4](1, 2, 3, 4)"
+    ) in generated_code
+    assert (
+        "var flags: SIMD[DType.bool, 2] = " "SIMD[DType.bool, 2](True, False)"
+    ) in generated_code
+    assert "vec2<" not in generated_code
+    assert "vec3<" not in generated_code
+    assert "vec4<" not in generated_code
+
+
+def test_generic_vector_composite_types_emit_mojo_names():
+    code = """
+    shader GenericComposite {
+        struct Packed {
+            vec2<f64> precise;
+            vec3<i32> index;
+            vec4<u32> mask;
+            vec2<bool> flags;
+        };
+
+        vec2<f64> passthrough(vec2<f64> value, vec3<i32> index, vec4<u32> mask, vec2<bool> flags) {
+            vec2<f64> localValues[2];
+            localValues[0] = value;
+            return localValues[0];
+        }
+
+        compute {
+            void main() {
+                Packed p;
+                vec2<f64> values[2];
+                values[0] = vec2<f64>(1.0, 2.0);
+                vec2<f64> result = passthrough(values[0], vec3<i32>(1, 2, 3), vec4<u32>(1, 2, 3, 4), vec2<bool>(true, false));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var precise: SIMD[DType.float64, 2]" in generated_code
+    assert "var index: SIMD[DType.int32, 3]" in generated_code
+    assert "var mask: SIMD[DType.uint32, 4]" in generated_code
+    assert "var flags: SIMD[DType.bool, 2]" in generated_code
+    assert (
+        "fn passthrough(value: SIMD[DType.float64, 2], "
+        "index: SIMD[DType.int32, 3], mask: SIMD[DType.uint32, 4], "
+        "flags: SIMD[DType.bool, 2]) -> SIMD[DType.float64, 2]:"
+    ) in generated_code
+    assert "var localValues: StaticTuple[SIMD[DType.float64, 2], 2]" in generated_code
+    assert "var values: StaticTuple[SIMD[DType.float64, 2], 2]" in generated_code
+    assert "LiteralNode(" not in generated_code
+    assert "vec2<" not in generated_code
 
 
 def test_array_access():

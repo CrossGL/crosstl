@@ -63,13 +63,33 @@ class DescriptorSetNode(ASTNode):
 class LayoutNode(ASTNode):
     """Node representing layout qualifiers"""
 
-    def __init__(self, qualifiers, declaration=None):
+    def __init__(
+        self,
+        qualifiers,
+        declaration=None,
+        *,
+        push_constant=False,
+        layout_type=None,
+        data_type=None,
+        variable_name=None,
+        struct_fields=None,
+        block_name=None,
+    ):
         self.qualifiers = qualifiers
         self.declaration = declaration
+        self.push_constant = push_constant
+        self.layout_type = layout_type
+        self.data_type = data_type
+        self.variable_name = variable_name
+        self.struct_fields = struct_fields or []
+        self.block_name = block_name
 
     def __repr__(self):
         return (
-            f"LayoutNode(qualifiers={self.qualifiers}, declaration={self.declaration})"
+            "LayoutNode("
+            f"qualifiers={self.qualifiers}, layout_type={self.layout_type}, "
+            f"data_type={self.data_type}, variable_name={self.variable_name}, "
+            f"block_name={self.block_name})"
         )
 
 

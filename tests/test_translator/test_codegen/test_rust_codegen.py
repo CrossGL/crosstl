@@ -2,6 +2,7 @@ import pytest
 import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
+from crosstl.translator.ast import LiteralNode, PrimitiveType
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
 from typing import List
 
@@ -176,6 +177,88 @@ def test_for_statement():
         print(generated_code)
     except SyntaxError:
         pytest.fail("For statement codegen not implemented.")
+
+
+def test_increment_and_decrement_emit_rust_assignment_updates():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int i = 0;
+                i++;
+                ++i;
+                i--;
+                --i;
+                for (int j = 0; j < 2; j++) {
+                    i++;
+                }
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "i += 1;" in generated_code
+    assert "i -= 1;" in generated_code
+    assert "j += 1;" in generated_code
+    assert "++i" not in generated_code
+    assert "i++" not in generated_code
+    assert "--i" not in generated_code
+    assert "i--" not in generated_code
+    assert "++j" not in generated_code
+
+
+def test_bool_string_and_char_literals_emit_rust_syntax():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                bool enabled = true;
+                bool disabled = false;
+                string label = "debug";
+                char marker = 'x';
+                if (enabled && !disabled) {
+                    label = "active";
+                    marker = 'y';
+                }
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    entry_point = next(iter(ast.stages.values())).entry_point
+
+    assert entry_point.body.statements[0].initial_value.value is True
+    assert entry_point.body.statements[1].initial_value.value is False
+
+    generated_code = generate_code(ast)
+
+    assert "let mut enabled: bool = true;" in generated_code
+    assert "let mut disabled: bool = false;" in generated_code
+    assert 'let mut label: &\'static str = "debug";' in generated_code
+    assert "let mut marker: char = 'x';" in generated_code
+    assert 'label = "active";' in generated_code
+    assert "marker = 'y';" in generated_code
+    assert "True" not in generated_code
+    assert "False" not in generated_code
+
+
+def test_direct_literal_nodes_emit_rust_escaping():
+    codegen = RustCodeGen()
+
+    assert (
+        codegen.generate_expression(LiteralNode(True, PrimitiveType("bool"))) == "true"
+    )
+    assert (
+        codegen.generate_expression(LiteralNode('debug"name', PrimitiveType("string")))
+        == '"debug\\"name"'
+    )
+    assert (
+        codegen.generate_expression(LiteralNode("'", PrimitiveType("char"))) == "'\\''"
+    )
 
 
 def test_else_if_statement():
@@ -569,6 +652,117 @@ def test_vector_constructor():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Vector constructor codegen not implemented")
+
+
+def test_double_vector_and_matrix_types_emit_rust_names():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                dvec2 preciseUV = dvec2(1.0, 2.0);
+                bvec2 mask = bvec2(true, false);
+                bvec3 flags;
+                mat2 transform = mat2(1.0, 0.0, 0.0, 1.0);
+                mat3x4 affine;
+                dmat2 precise = dmat2(1.0, 0.0, 0.0, 1.0);
+                dmat4x3 jacobian;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let mut preciseUV: Vec2<f64> = Vec2<f64>::new(1.0, 2.0);" in generated_code
+    assert "let mut mask: Vec2<bool> = Vec2<bool>::new(true, false);" in generated_code
+    assert "let mut flags: Vec3<bool>;" in generated_code
+    assert (
+        "let mut transform: Mat2<f32> = " "Mat2<f32>::new(1.0, 0.0, 0.0, 1.0);"
+    ) in generated_code
+    assert "let mut affine: Mat3x4<f32>;" in generated_code
+    assert (
+        "let mut precise: Mat2<f64> = " "Mat2<f64>::new(1.0, 0.0, 0.0, 1.0);"
+    ) in generated_code
+    assert "let mut jacobian: Mat4x3<f64>;" in generated_code
+    assert "dvec2(" not in generated_code
+    assert "bvec2(" not in generated_code
+    assert "bool2" not in generated_code
+    assert "dmat2(" not in generated_code
+    assert "MatrixType(" not in generated_code
+
+
+def test_generic_vector_constructors_emit_rust_names():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                vec3<i32> index = vec3<i32>(1, 2, 3);
+                vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
+                vec2<bool> flags = vec2<bool>(true, false);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let mut precise: Vec2<f64> = Vec2<f64>::new(1.0, 2.0);" in generated_code
+    assert "let mut index: Vec3<i32> = Vec3<i32>::new(1, 2, 3);" in generated_code
+    assert "let mut mask: Vec4<u32> = Vec4<u32>::new(1, 2, 3, 4);" in generated_code
+    assert "let mut flags: Vec2<bool> = Vec2<bool>::new(true, false);" in generated_code
+    assert "vec2<" not in generated_code
+    assert "vec3<" not in generated_code
+    assert "vec4<" not in generated_code
+
+
+def test_generic_vector_composite_types_emit_rust_names():
+    code = """
+    shader GenericComposite {
+        struct Packed {
+            vec2<f64> precise;
+            vec3<i32> index;
+            vec4<u32> mask;
+            vec2<bool> flags;
+        };
+
+        vec2<f64> passthrough(vec2<f64> value, vec3<i32> index, vec4<u32> mask, vec2<bool> flags) {
+            vec2<f64> localValues[2];
+            localValues[0] = value;
+            return localValues[0];
+        }
+
+        compute {
+            void main() {
+                Packed p;
+                vec2<f64> values[2];
+                values[0] = vec2<f64>(1.0, 2.0);
+                vec2<f64> result = passthrough(values[0], vec3<i32>(1, 2, 3), vec4<u32>(1, 2, 3, 4), vec2<bool>(true, false));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub precise: Vec2<f64>," in generated_code
+    assert "pub index: Vec3<i32>," in generated_code
+    assert "pub mask: Vec4<u32>," in generated_code
+    assert "pub flags: Vec2<bool>," in generated_code
+    assert (
+        "pub fn passthrough(value: Vec2<f64>, index: Vec3<i32>, "
+        "mask: Vec4<u32>, flags: Vec2<bool>) -> Vec2<f64>"
+    ) in generated_code
+    assert "let mut localValues: [Vec2<f64>; 2];" in generated_code
+    assert "let mut values: [Vec2<f64>; 2];" in generated_code
+    assert "LiteralNode(" not in generated_code
+    assert "vec2<" not in generated_code
 
 
 def test_array_access():
