@@ -1,20 +1,30 @@
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
+    BreakNode,
+    ContinueNode,
+    ForInNode,
     ForNode,
     FunctionCallNode,
     IfNode,
+    LiteralPatternNode,
+    LoopNode,
+    MatchNode,
     MemberAccessNode,
     MeshOpNode,
     PreprocessorNode,
     RayQueryOpNode,
     RayTracingOpNode,
+    RangeNode,
     ReturnNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     WaveOpNode,
+    WhileNode,
+    WildcardPatternNode,
     ArrayAccessNode,
     ArrayNode,
 )
@@ -627,6 +637,7 @@ class HLSLCodeGen:
             declaration = format_c_style_array_declaration(
                 self.map_type(vtype), stmt.name
             )
+            declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
                 init_expr = self.generate_expression(stmt.initial_value)
                 return f"{indent_str}{declaration} = {init_expr};\n"
@@ -648,11 +659,32 @@ class HLSLCodeGen:
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
 
+        elif isinstance(stmt, BreakNode):
+            return f"{indent_str}break;\n"
+
+        elif isinstance(stmt, ContinueNode):
+            return f"{indent_str}continue;\n"
+
         elif isinstance(stmt, IfNode):
             return self.generate_if(stmt, indent)
 
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
+
+        elif isinstance(stmt, ForInNode):
+            return self.generate_for_in(stmt, indent)
+
+        elif isinstance(stmt, WhileNode):
+            return self.generate_while(stmt, indent)
+
+        elif isinstance(stmt, LoopNode):
+            return self.generate_loop(stmt, indent)
+
+        elif isinstance(stmt, SwitchNode):
+            return self.generate_switch(stmt, indent)
+
+        elif isinstance(stmt, MatchNode):
+            return self.generate_match(stmt, indent)
 
         elif isinstance(stmt, ReturnNode):
             if hasattr(stmt, "value") and stmt.value is not None:
@@ -686,6 +718,9 @@ class HLSLCodeGen:
         else:
             # Try to generate as expression
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
+    def local_variable_qualifier(self, node):
+        return "const " if "const" in getattr(node, "qualifiers", []) else ""
 
     def generate_assignment(self, node):
         # Handle both old and new AST assignment structures
@@ -757,7 +792,7 @@ class HLSLCodeGen:
             if isinstance(node.init, str):
                 init = node.init
             else:
-                init = self.generate_expression(node.init).strip().rstrip(";")
+                init = self.generate_for_initializer(node.init)
 
         if hasattr(node, "condition") and node.condition:
             if isinstance(node.condition, str):
@@ -785,6 +820,141 @@ class HLSLCodeGen:
 
         code += f"{indent_str}}}\n"
         return code
+
+    def generate_for_in(self, node, indent):
+        indent_str = "    " * indent
+        pattern = getattr(node, "pattern", "item")
+        iterable_node = getattr(node, "iterable", "")
+
+        if isinstance(iterable_node, RangeNode):
+            start = self.generate_expression(iterable_node.start)
+            end = self.generate_expression(iterable_node.end)
+            comparator = "<=" if iterable_node.inclusive else "<"
+            code = (
+                f"{indent_str}for (int {pattern} = {start}; "
+                f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
+            )
+        else:
+            iterable = self.generate_expression(iterable_node)
+            code = (
+                f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
+                f"++{pattern}) {{\n"
+            )
+
+        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_while(self, node, indent):
+        indent_str = "    " * indent
+        condition = self.generate_expression(getattr(node, "condition", ""))
+
+        code = f"{indent_str}while ({condition}) {{\n"
+        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_loop(self, node, indent):
+        indent_str = "    " * indent
+
+        code = f"{indent_str}while (true) {{\n"
+        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_switch(self, node, indent):
+        indent_str = "    " * indent
+        expression = self.generate_expression(getattr(node, "expression", ""))
+
+        code = f"{indent_str}switch ({expression}) {{\n"
+        for case in getattr(node, "cases", []) or []:
+            value = getattr(case, "value", None)
+            if value is None:
+                code += f"{indent_str}    default:\n"
+            else:
+                code += f"{indent_str}    case {self.generate_expression(value)}:\n"
+            code += self.generate_statement_body(
+                getattr(case, "statements", []), indent + 2
+            )
+
+        default_case = getattr(node, "default_case", None)
+        if default_case is not None:
+            code += f"{indent_str}    default:\n"
+            code += self.generate_statement_body(default_case, indent + 2)
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_match(self, node, indent):
+        indent_str = "    " * indent
+        expression = self.generate_expression(getattr(node, "expression", ""))
+
+        code = f"{indent_str}switch ({expression}) {{\n"
+        for arm in getattr(node, "arms", []) or []:
+            pattern = getattr(arm, "pattern", None)
+            if not self.is_supported_switch_match_arm(arm):
+                raise ValueError(
+                    "Unsupported match arm for HLSL codegen; only unguarded "
+                    "literal and wildcard patterns can be lowered to switch"
+                )
+
+            if isinstance(pattern, WildcardPatternNode):
+                code += f"{indent_str}    default:\n"
+            else:
+                code += (
+                    f"{indent_str}    case "
+                    f"{self.generate_expression(pattern.literal)}:\n"
+                )
+            body = getattr(arm, "body", [])
+            code += self.generate_statement_body(body, indent + 2)
+            if not self.statement_body_terminates(body):
+                code += f"{indent_str}        break;\n"
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def is_supported_switch_match_arm(self, arm):
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
+    def statement_body_terminates(self, body):
+        if hasattr(body, "statements"):
+            statements = body.statements
+        elif isinstance(body, list):
+            statements = body
+        elif body is None:
+            statements = []
+        else:
+            statements = [body]
+
+        return bool(statements) and isinstance(
+            statements[-1], (BreakNode, ContinueNode, ReturnNode)
+        )
+
+    def generate_statement_body(self, body, indent):
+        code = ""
+        if hasattr(body, "statements"):
+            for stmt in body.statements:
+                code += self.generate_statement(stmt, indent)
+        elif isinstance(body, list):
+            for stmt in body:
+                code += self.generate_statement(stmt, indent)
+        elif body is not None:
+            code += self.generate_statement(body, indent)
+        return code
+
+    def generate_for_initializer(self, init):
+        if init is None:
+            return ""
+        if isinstance(init, str):
+            return init
+        if isinstance(init, VariableNode) or (
+            hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__)
+        ):
+            return self.generate_statement(init, 0).strip().rstrip(";")
+        return self.generate_expression(init).strip().rstrip(";")
 
     def generate_expression(self, expr):
         if expr is None:
@@ -1695,25 +1865,28 @@ class HLSLCodeGen:
         return evaluate_literal_int_expression(expr, constants)
 
     def visible_literal_int_constants(self, func):
-        if not self.literal_int_constants:
-            return {}
+        visible_constants = dict(self.literal_int_constants)
 
-        shadowed = {
-            getattr(param, "name", None)
-            for param in getattr(func, "parameters", []) or []
-        }
+        for param in getattr(func, "parameters", []) or []:
+            visible_constants.pop(getattr(param, "name", None), None)
+
         for node in self.walk_ast(getattr(func, "body", [])):
             if isinstance(node, VariableNode):
-                shadowed.add(getattr(node, "name", None))
+                name = getattr(node, "name", None)
+                if not name:
+                    continue
 
-        shadowed.discard(None)
-        if not shadowed:
-            return self.literal_int_constants
-        return {
-            name: value
-            for name, value in self.literal_int_constants.items()
-            if name not in shadowed
-        }
+                visible_constants.pop(name, None)
+                if "const" not in getattr(node, "qualifiers", []):
+                    continue
+
+                value = self.literal_int_value(
+                    getattr(node, "initial_value", None), visible_constants
+                )
+                if value is not None:
+                    visible_constants[name] = value
+
+        return visible_constants
 
     def function_call_name(self, call):
         func_expr = getattr(call, "function", None)

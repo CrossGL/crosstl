@@ -780,6 +780,26 @@ class IdentifierNode(ExpressionNode):
         return f"IdentifierNode(name={self.identifier})"
 
 
+class RangeNode(ExpressionNode):
+    """Integer range expression."""
+
+    def __init__(
+        self,
+        start: ExpressionNode,
+        end: ExpressionNode,
+        inclusive: bool = False,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.start = start
+        self.end = end
+        self.inclusive = inclusive
+
+    def __repr__(self):
+        operator = "..=" if self.inclusive else ".."
+        return f"RangeNode(start={self.start}, operator={operator}, end={self.end})"
+
+
 class BinaryOpNode(ExpressionNode):
     """Binary operations."""
 

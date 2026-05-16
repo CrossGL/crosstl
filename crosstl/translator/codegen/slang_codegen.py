@@ -34,20 +34,29 @@ class SlangCodeGen:
     def __init__(self):
         self.indent_level = 0
         self.indent_str = "    "
+        self.variable_types = {}
+        self.helper_functions = {}
+        self._generating = False
 
     def indent(self):
         return self.indent_str * self.indent_level
 
     def generate(self, ast):
+        outermost = not self._generating
+        if outermost:
+            self._generating = True
+            self.variable_types = {}
+            self.helper_functions = {}
+
         if isinstance(ast, list):
             result = ""
             for node in ast:
                 result += self.generate(node) + "\n"
-            return result
+            return self.finish_generation(result, outermost)
         elif isinstance(ast, ShaderNode):
-            return self.generate_shader(ast)
+            return self.finish_generation(self.generate_shader(ast), outermost)
         elif isinstance(ast, StructNode):
-            return self.generate_struct(ast)
+            return self.finish_generation(self.generate_struct(ast), outermost)
         else:
             # Handle new AST structure
             result = ""
@@ -100,7 +109,22 @@ class SlangCodeGen:
                 for stage_type, stage in ast.stages.items():
                     result += self.generate_stage(stage_type, stage)
 
+            return self.finish_generation(result, outermost)
+
+    def finish_generation(self, result, outermost):
+        if not outermost:
             return result
+
+        helpers = self.emit_helper_functions()
+        self._generating = False
+        if helpers:
+            return helpers + result
+        return result
+
+    def emit_helper_functions(self):
+        if not self.helper_functions:
+            return ""
+        return "\n\n".join(self.helper_functions.values()) + "\n\n"
 
     def generate_shader(self, node):
         result = ""
@@ -219,8 +243,16 @@ class SlangCodeGen:
             return node.vtype
         return "float"
 
+    def register_variable_type(self, name, type_name):
+        if not name or type_name is None:
+            return
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        self.variable_types[name] = type_name
+
     def generate_global_variable(self, node):
         if isinstance(node, ArrayNode):
+            self.register_variable_type(node.name, node.element_type)
             element_type = self.convert_type(node.element_type)
             size = get_array_size_from_node(node)
             if size is None:
@@ -228,6 +260,7 @@ class SlangCodeGen:
             return f"{element_type} {node.name}[{size}];\n"
 
         vtype = self.get_variable_type(node)
+        self.register_variable_type(node.name, vtype)
         return f"{self.format_declaration(vtype, node.name)};\n"
 
     def generate_struct(self, node):
@@ -282,6 +315,7 @@ class SlangCodeGen:
         return result
 
     def generate_function(self, node, shader_type=None):
+        saved_variable_types = self.variable_types.copy()
         if hasattr(node, "return_type"):
             ret_type = self.convert_type(
                 self.convert_type_node_to_string(node.return_type)
@@ -307,16 +341,21 @@ class SlangCodeGen:
                 params = []
                 for param in param_list:
                     if hasattr(param, "param_type"):
-                        param_type = self.convert_type(
-                            self.convert_type_node_to_string(param.param_type)
+                        param_type_name = self.convert_type_node_to_string(
+                            param.param_type
                         )
+                        self.register_variable_type(param.name, param_type_name)
+                        param_type = self.convert_type(param_type_name)
                     elif hasattr(param, "vtype"):
+                        self.register_variable_type(param.name, param.vtype)
                         param_type = self.convert_type(param.vtype)
                     else:
                         param_type = "float"
                     params.append(self.format_declaration(param_type, param.name))
                 params_str = ", ".join(params)
             else:
+                for param_type, param_name in param_list:
+                    self.register_variable_type(param_name, param_type)
                 params_str = ", ".join(
                     [
                         f"{self.convert_type(param_type)} {param_name}"
@@ -340,6 +379,7 @@ class SlangCodeGen:
 
         self.indent_level -= 1
         result += "}"
+        self.variable_types = saved_variable_types
         return result
 
     def emit_statement(self, node):
@@ -361,6 +401,7 @@ class SlangCodeGen:
             return self.generate_expression(node.expression) + ";"
         elif isinstance(node, VariableNode):
             var_type = self.get_variable_type(node)
+            self.register_variable_type(node.name, var_type)
             declaration = self.format_declaration(var_type, node.name)
             initial_value = getattr(node, "initial_value", getattr(node, "value", None))
             if initial_value is not None:
@@ -456,6 +497,9 @@ class SlangCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            resource_call = self.generate_resource_call(callee, node.args)
+            if resource_call is not None:
+                return resource_call
             args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
             return f"{callee}({args})"
@@ -620,6 +664,270 @@ class SlangCodeGen:
             "uint": "uint",
             "bool": "bool",
             "void": "void",
+            "sampler": "SamplerState",
+            "sampler1D": "Sampler1D<float4>",
+            "sampler2D": "Sampler2D<float4>",
+            "sampler3D": "Sampler3D<float4>",
+            "samplerCube": "SamplerCube<float4>",
+            "sampler2DArray": "Sampler2DArray<float4>",
+            "samplerCubeArray": "SamplerCubeArray<float4>",
+            "sampler2DMS": "Sampler2DMS<float4>",
+            "sampler2DMSArray": "Sampler2DMSArray<float4>",
+            "sampler2DShadow": "Sampler2DShadow",
+            "sampler2DArrayShadow": "Sampler2DArrayShadow",
+            "samplerCubeShadow": "SamplerCubeShadow",
+            "samplerCubeArrayShadow": "SamplerCubeArrayShadow",
+            "iimage2D": "RWTexture2D<int>",
+            "iimage3D": "RWTexture3D<int>",
+            "iimage2DArray": "RWTexture2DArray<int>",
+            "iimage2DMS": "RWTexture2DMS<int>",
+            "iimage2DMSArray": "RWTexture2DMSArray<int>",
+            "uimage2D": "RWTexture2D<uint>",
+            "uimage3D": "RWTexture3D<uint>",
+            "uimage2DArray": "RWTexture2DArray<uint>",
+            "uimage2DMS": "RWTexture2DMS<uint>",
+            "uimage2DMSArray": "RWTexture2DMSArray<uint>",
+            "image2D": "RWTexture2D<float4>",
+            "image3D": "RWTexture3D<float4>",
+            "image2DArray": "RWTexture2DArray<float4>",
+            "image2DMS": "RWTexture2DMS<float4>",
+            "image2DMSArray": "RWTexture2DMSArray<float4>",
         }
 
         return type_map.get(type_name, type_name)
+
+    def generate_resource_call(self, func_name, args):
+        if func_name == "imageLoad" and len(args) >= 2:
+            image_name = self.generate_expression(args[0])
+            coord = self.generate_expression(args[1])
+            if len(args) >= 3:
+                sample = self.generate_expression(args[2])
+                return f"{image_name}[{coord}, {sample}]"
+            return f"{image_name}[{coord}]"
+
+        if func_name == "imageStore" and len(args) >= 3:
+            image_name = self.generate_expression(args[0])
+            coord = self.generate_expression(args[1])
+            if len(args) >= 4:
+                sample = self.generate_expression(args[2])
+                value = self.generate_expression(args[3])
+                return f"{image_name}[{coord}, {sample}] = {value}"
+            value = self.generate_expression(args[2])
+            return f"{image_name}[{coord}] = {value}"
+
+        if func_name == "texture" and len(args) >= 2:
+            texture_name = self.generate_expression(args[0])
+            coord = self.generate_expression(args[1])
+            if len(args) >= 3:
+                bias = self.generate_expression(args[2])
+                return f"{texture_name}.SampleBias({coord}, {bias})"
+            return f"{texture_name}.Sample({coord})"
+
+        if func_name == "textureLod" and len(args) >= 3:
+            texture_name = self.generate_expression(args[0])
+            coord = self.generate_expression(args[1])
+            lod = self.generate_expression(args[2])
+            return f"{texture_name}.SampleLevel({coord}, {lod})"
+
+        if func_name == "textureGrad" and len(args) >= 4:
+            texture_name = self.generate_expression(args[0])
+            coord = self.generate_expression(args[1])
+            ddx = self.generate_expression(args[2])
+            ddy = self.generate_expression(args[3])
+            return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy})"
+
+        if func_name == "texelFetch" and len(args) >= 3:
+            texture_name = self.generate_expression(args[0])
+            coord = self.generate_expression(args[1])
+            lod_or_sample = self.generate_expression(args[2])
+            texture_type = self.get_expression_type(args[0])
+            if self.is_multisample_sampler_type(texture_type):
+                return f"{texture_name}[{coord}, {lod_or_sample}]"
+            coord_constructor = self.texel_fetch_coord_constructor(texture_type)
+            return f"{texture_name}.Load({coord_constructor}({coord}, {lod_or_sample}))"
+
+        if func_name in {"textureSize", "imageSize"}:
+            return self.generate_dimension_query(func_name, args)
+
+        if func_name in {"textureSamples", "imageSamples"}:
+            return self.generate_sample_count_query(func_name, args)
+
+        return None
+
+    def generate_dimension_query(self, func_name, args):
+        if not args:
+            return None
+
+        resource_name = self.generate_expression(args[0])
+        resource_type = self.resource_base_type(self.get_expression_type(args[0]))
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+
+        helper_name = f"cgl_{func_name}_{resource_type}"
+        self.register_helper_function(
+            helper_name,
+            self.build_dimension_query_helper(helper_name, resource_type, spec),
+        )
+
+        if spec["mip"]:
+            lod = self.generate_expression(args[1]) if len(args) > 1 else "0"
+            return f"{helper_name}({resource_name}, {lod})"
+        return f"{helper_name}({resource_name})"
+
+    def generate_sample_count_query(self, func_name, args):
+        if not args:
+            return None
+
+        resource_name = self.generate_expression(args[0])
+        resource_type = self.resource_base_type(self.get_expression_type(args[0]))
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None or not spec["samples"]:
+            return None
+
+        helper_name = f"cgl_{func_name}_{resource_type}"
+        self.register_helper_function(
+            helper_name,
+            self.build_sample_count_query_helper(helper_name, resource_type, spec),
+        )
+        return f"{helper_name}({resource_name})"
+
+    def register_helper_function(self, name, source):
+        if name not in self.helper_functions:
+            self.helper_functions[name] = source
+
+    def build_dimension_query_helper(self, helper_name, resource_type, spec):
+        resource_slang_type = self.convert_type(resource_type)
+        return_type = self.query_return_type(spec["dimensions"])
+        params = f"{resource_slang_type} tex"
+        if spec["mip"]:
+            params += ", uint mipLevel"
+
+        declarations = self.query_local_declarations(spec)
+        get_dimensions_args = self.get_dimensions_args(spec)
+        dimensions = ", ".join(spec["dimensions"])
+        if len(spec["dimensions"]) == 1:
+            return_value = spec["dimensions"][0]
+        else:
+            return_value = f"{return_type}({dimensions})"
+
+        return (
+            f"{return_type} {helper_name}({params})\n"
+            "{\n"
+            f"{declarations}"
+            f"    tex.GetDimensions({get_dimensions_args});\n"
+            f"    return {return_value};\n"
+            "}"
+        )
+
+    def build_sample_count_query_helper(self, helper_name, resource_type, spec):
+        resource_slang_type = self.convert_type(resource_type)
+        declarations = self.query_local_declarations(spec)
+        get_dimensions_args = self.get_dimensions_args(spec)
+        return (
+            f"int {helper_name}({resource_slang_type} tex)\n"
+            "{\n"
+            f"{declarations}"
+            f"    tex.GetDimensions({get_dimensions_args});\n"
+            "    return samples;\n"
+            "}"
+        )
+
+    def query_return_type(self, dimensions):
+        if len(dimensions) == 1:
+            return "int"
+        return f"int{len(dimensions)}"
+
+    def query_local_declarations(self, spec):
+        names = list(spec["dimensions"])
+        if spec["samples"]:
+            names.append("samples")
+        if spec["mip"]:
+            names.append("levels")
+        return "".join(f"    int {name};\n" for name in names)
+
+    def get_dimensions_args(self, spec):
+        args = []
+        if spec["mip"]:
+            args.append("mipLevel")
+        args.extend(spec["dimensions"])
+        if spec["samples"]:
+            args.append("samples")
+        if spec["mip"]:
+            args.append("levels")
+        return ", ".join(args)
+
+    def dimension_query_spec(self, type_name):
+        specs = {
+            "sampler1D": (("width",), True, False),
+            "sampler1DArray": (("width", "elements"), True, False),
+            "sampler2D": (("width", "height"), True, False),
+            "sampler2DArray": (("width", "height", "elements"), True, False),
+            "sampler3D": (("width", "height", "depth"), True, False),
+            "samplerCube": (("width", "height"), True, False),
+            "samplerCubeArray": (("width", "height", "elements"), True, False),
+            "sampler2DMS": (("width", "height"), False, True),
+            "sampler2DMSArray": (("width", "height", "elements"), False, True),
+            "image2D": (("width", "height"), False, False),
+            "iimage2D": (("width", "height"), False, False),
+            "uimage2D": (("width", "height"), False, False),
+            "image2DArray": (("width", "height", "elements"), False, False),
+            "iimage2DArray": (("width", "height", "elements"), False, False),
+            "uimage2DArray": (("width", "height", "elements"), False, False),
+            "image3D": (("width", "height", "depth"), False, False),
+            "iimage3D": (("width", "height", "depth"), False, False),
+            "uimage3D": (("width", "height", "depth"), False, False),
+            "image2DMS": (("width", "height"), False, True),
+            "iimage2DMS": (("width", "height"), False, True),
+            "uimage2DMS": (("width", "height"), False, True),
+            "image2DMSArray": (("width", "height", "elements"), False, True),
+            "iimage2DMSArray": (("width", "height", "elements"), False, True),
+            "uimage2DMSArray": (("width", "height", "elements"), False, True),
+        }
+        spec = specs.get(type_name)
+        if spec is None:
+            return None
+        dimensions, mip, samples = spec
+        return {
+            "dimensions": dimensions,
+            "mip": mip,
+            "samples": samples,
+        }
+
+    def get_expression_type(self, node):
+        name = self.get_expression_name(node)
+        if name is None:
+            return None
+        return self.variable_types.get(name)
+
+    def get_expression_name(self, node):
+        if isinstance(node, IdentifierNode):
+            return node.name
+        if isinstance(node, VariableNode):
+            return node.name
+        if isinstance(node, str):
+            return node
+        if isinstance(node, ArrayAccessNode):
+            return self.get_expression_name(
+                getattr(node, "array", getattr(node, "array_expr", None))
+            )
+        return None
+
+    def resource_base_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        return type_name.split("[", 1)[0]
+
+    def is_multisample_sampler_type(self, type_name):
+        return self.resource_base_type(type_name) in {
+            "sampler2DMS",
+            "sampler2DMSArray",
+        }
+
+    def texel_fetch_coord_constructor(self, type_name):
+        base_type = self.resource_base_type(type_name)
+        if base_type in {"sampler1D", "sampler1DArray"}:
+            return "int2" if base_type == "sampler1D" else "int3"
+        if base_type in {"sampler3D", "sampler2DArray"}:
+            return "int4"
+        return "int3"

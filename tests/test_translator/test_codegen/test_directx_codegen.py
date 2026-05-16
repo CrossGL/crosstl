@@ -152,6 +152,284 @@ def test_for_statement():
         pytest.fail("for statement codegen not implemented.")
 
 
+def test_for_statement_preserves_declaration_initializers():
+    shader = """
+    shader LoopDeclarationInitializers {
+        float helper() {
+            const float weights[2];
+            int i = 0;
+            float total = 0.0;
+            for (int i = 0; i < 2; i++) {
+                total = total + weights[0];
+            }
+            for (i = 0; i < 4; i++) {
+                if (i == 0) {
+                    continue;
+                }
+                break;
+            }
+            for (const int fixed = 0; fixed < 0;) {
+                total = total + 1.0;
+            }
+            for (;;) {
+                break;
+            }
+            return total;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const float weights[2];" in generated_code
+    assert "for (int i = 0; (i < 2); ++i)" in generated_code
+    assert "for (i = 0; (i < 4); ++i)" in generated_code
+    assert "for (const int fixed = 0; (fixed < 0); )" in generated_code
+    assert "for (; ; )" in generated_code
+    assert "continue;" in generated_code
+    assert "break;" in generated_code
+    assert "for (i; (i < 2); ++i)" not in generated_code
+    assert "for (fixed; (fixed < 0); )" not in generated_code
+    assert "BreakNode(" not in generated_code
+    assert "ContinueNode(" not in generated_code
+
+
+def test_loop_statement_lowers_to_while_true():
+    shader = """
+    shader LoopNodeSmoke {
+        int helper(int limit) {
+            int i = 0;
+            loop {
+                i = i + 1;
+                if (i >= limit) {
+                    break;
+                }
+            }
+            return i;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "while (true)" in generated_code
+    assert "i = (i + 1);" in generated_code
+    assert "if ((i >= limit))" in generated_code
+    assert "break;" in generated_code
+    assert "return i;" in generated_code
+    assert "LoopNode(" not in generated_code
+
+
+def test_for_in_statement_lowers_to_counted_loop():
+    shader = """
+    shader ForInNodeSmoke {
+        int helper(int limit) {
+            int total = 0;
+            for i in limit {
+                total = total + i;
+            }
+            return total;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "for (int i = 0; i < limit; ++i)" in generated_code
+    assert "total = (total + i);" in generated_code
+    assert "return total;" in generated_code
+    assert "ForInNode(" not in generated_code
+
+
+def test_for_in_range_statement_lowers_to_counted_loop():
+    shader = """
+    shader ForInRangeNodeSmoke {
+        int helper(int limit) {
+            int total = 0;
+            for i in 2..5 {
+                total = total + i;
+            }
+            for j in 1..=limit {
+                total = total + j;
+            }
+            return total;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "for (int i = 2; i < 5; ++i)" in generated_code
+    assert "for (int j = 1; j <= limit; ++j)" in generated_code
+    assert "total = (total + i);" in generated_code
+    assert "total = (total + j);" in generated_code
+    assert "return total;" in generated_code
+    assert "RangeNode(" not in generated_code
+    assert "ForInNode(" not in generated_code
+
+
+def test_while_switch_and_void_return_emit_c_style_syntax():
+    shader = """
+    shader StatementLeakSmoke {
+        void helper() {
+            int i = 0;
+            while (i < 4) {
+                switch (i) {
+                    case 0:
+                        i = i + 1;
+                        continue;
+                    default:
+                        break;
+                }
+            }
+            return;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "while ((i < 4))" in generated_code
+    assert "switch (i)" in generated_code
+    assert "case 0:" in generated_code
+    assert "default:" in generated_code
+    assert "i = (i + 1);" in generated_code
+    assert "continue;" in generated_code
+    assert "break;" in generated_code
+    assert "return;" in generated_code
+    assert "WhileNode(" not in generated_code
+    assert "SwitchNode(" not in generated_code
+    assert "return ;" not in generated_code
+    assert "return None;" not in generated_code
+
+
+def test_switch_fallthrough_and_nested_switch_emit_c_style_syntax():
+    shader = """
+    shader SwitchEdgeSmoke {
+        int helper(int mode, int submode) {
+            int value = 0;
+            switch (mode) {
+                case 0:
+                case 1:
+                    value = value + 1;
+                    break;
+                case 2:
+                    switch (submode) {
+                        case 0:
+                            value = value + 2;
+                            break;
+                        default:
+                            value = value + 3;
+                            break;
+                    }
+                    break;
+                default:
+                    value = value + 4;
+                    break;
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:\n        case 1:" in generated_code
+    assert "case 2:\n            switch (submode)" in generated_code
+    assert generated_code.count("default:") == 2
+    assert "value = (value + 1);" in generated_code
+    assert "value = (value + 2);" in generated_code
+    assert "value = (value + 3);" in generated_code
+    assert "value = (value + 4);" in generated_code
+    assert "return value;" in generated_code
+    assert "SwitchNode(" not in generated_code
+    assert "CaseNode(" not in generated_code
+
+
+def test_match_literal_and_wildcard_arms_lower_to_switch():
+    shader = """
+    shader MatchLeakSmoke {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 => { value = 1; }
+                1 => { value = 2; }
+                _ => { value = 3; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:" in generated_code
+    assert "case 1:" in generated_code
+    assert "default:" in generated_code
+    assert "value = 1;" in generated_code
+    assert "value = 2;" in generated_code
+    assert "value = 3;" in generated_code
+    assert generated_code.count("break;") == 3
+    assert "return value;" in generated_code
+    assert "MatchNode(" not in generated_code
+    assert "MatchArmNode(" not in generated_code
+
+
+def test_match_return_arms_do_not_emit_extra_breaks():
+    shader = """
+    shader MatchReturnArms {
+        int helper(int mode) {
+            match mode {
+                0 => { return 1; }
+                _ => { return 2; }
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:" in generated_code
+    assert "default:" in generated_code
+    assert "return 1;" in generated_code
+    assert "return 2;" in generated_code
+    assert "break;" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_unsupported_binding_or_guarded_arm_raises():
+    binding_shader = """
+    shader MatchBindingPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                other => { value = other; }
+            }
+            return value;
+        }
+    }
+    """
+    guarded_shader = """
+    shader MatchGuardPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 if mode > 0 => { value = 1; }
+                _ => { value = 2; }
+            }
+            return value;
+        }
+    }
+    """
+
+    for shader in (binding_shader, guarded_shader):
+        with pytest.raises(ValueError, match="Unsupported match arm"):
+            HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_ray_payload_semantics():
     code = """
     shader rt {
@@ -1707,6 +1985,160 @@ def test_directx_formatted_image_arrays_infer_transitive_helper_size():
     assert "RWTexture2D<uint> afterCounters : register(u2);" not in generated_code
     assert "RWTexture2D<float4> counters" not in generated_code
     assert "RWTexture2D<float4> rgPairs" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_directx_formatted_image_arrays_ignore_unsupported_indices():
+    dynamic_shader = """
+    shader DynamicOnlyFormattedImageArrays {
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        uint touchCounters(image2D images[] @r32ui, int layer, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[layer], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, 0, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+    negative_shader = """
+    shader NegativeIndexedFormattedImageArrays {
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        uint touchCounters(image2D images[] @r32ui, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[-1], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+
+    dynamic_code = HLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    negative_code = HLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
+
+    assert "RWTexture2D<uint> counters[] : register(u0);" in dynamic_code
+    assert "RWTexture2D<uint> afterCounters : register(u1);" in dynamic_code
+    assert (
+        "uint touchCounters(RWTexture2D<uint> images[], int layer, int2 pixel, uint value)"
+        in dynamic_code
+    )
+    assert "uint oldValue = images[layer][pixel];" in dynamic_code
+    assert "images[0][pixel] = (oldValue + value);" in dynamic_code
+    assert "uint a = touchCounters(counters, 0, int2(1, 2), 3);" in dynamic_code
+    assert "RWTexture2D<uint> counters[2] : register(u0);" not in dynamic_code
+    assert "RWTexture2D<uint> afterCounters : register(u2);" not in dynamic_code
+    assert "imageLoad(" not in dynamic_code
+    assert "imageStore(" not in dynamic_code
+
+    assert "RWTexture2D<uint> counters[] : register(u0);" in negative_code
+    assert "RWTexture2D<uint> afterCounters : register(u1);" in negative_code
+    assert (
+        "uint touchCounters(RWTexture2D<uint> images[], int2 pixel, uint value)"
+        in negative_code
+    )
+    assert "uint oldValue = images[-1][pixel];" in negative_code
+    assert "images[0][pixel] = (oldValue + value);" in negative_code
+    assert "uint a = touchCounters(counters, int2(1, 2), 3);" in negative_code
+    assert "RWTexture2D<uint> counters[0] : register(u0);" not in negative_code
+    assert "RWTexture2D<uint> afterCounters : register(u0);" not in negative_code
+    assert "imageLoad(" not in negative_code
+    assert "imageStore(" not in negative_code
+
+
+def test_directx_formatted_image_arrays_ignore_function_call_indices():
+    shader = """
+    shader FunctionIndexedFormattedImageArrays {
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        int getLayer() {
+            return 0;
+        }
+
+        uint touchCounters(image2D images[] @r32ui, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[getLayer()], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "RWTexture2D<uint> counters[] : register(u0);" in generated_code
+    assert "RWTexture2D<uint> afterCounters : register(u1);" in generated_code
+    assert "int getLayer()" in generated_code
+    assert (
+        "uint touchCounters(RWTexture2D<uint> images[], int2 pixel, uint value)"
+        in generated_code
+    )
+    assert "uint oldValue = images[getLayer()][pixel];" in generated_code
+    assert "images[0][pixel] = (oldValue + value);" in generated_code
+    assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
+    assert "RWTexture2D<uint> counters[1] : register(u0);" not in generated_code
+    assert "RWTexture2D<uint> afterCounters : register(u2);" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_directx_formatted_image_arrays_infer_local_constant_alias_size():
+    shader = """
+    shader LocalConstAliasFormattedImageArrays {
+        const int GLOBAL = 2;
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        uint touchCounters(image2D images[] @r32ui, ivec2 pixel, uint value) {
+            const int LOCAL = GLOBAL + 1;
+            uint oldValue = imageLoad(images[LOCAL], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "static const int GLOBAL = 2;" in generated_code
+    assert "RWTexture2D<uint> counters[4] : register(u0);" in generated_code
+    assert "RWTexture2D<uint> afterCounters : register(u4);" in generated_code
+    assert (
+        "uint touchCounters(RWTexture2D<uint> images[4], int2 pixel, uint value)"
+        in generated_code
+    )
+    assert "const int LOCAL = (GLOBAL + 1);" in generated_code
+    assert "uint oldValue = images[LOCAL][pixel];" in generated_code
+    assert "images[0][pixel] = (oldValue + value);" in generated_code
+    assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
+    assert "RWTexture2D<uint> counters[] : register(u0);" not in generated_code
+    assert "RWTexture2D<uint> afterCounters : register(u1);" not in generated_code
+    assert "    int LOCAL = (GLOBAL + 1);" not in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 

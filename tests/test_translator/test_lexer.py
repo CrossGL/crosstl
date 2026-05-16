@@ -56,6 +56,32 @@ def test_for_statement_tokenization():
         pytest.fail("for tokenization not implemented.")
 
 
+def test_range_tokenization():
+    code = """
+    for i in 0..4 {
+        sum += i;
+    }
+    for j in 1..=limit {
+        sum += j;
+    }
+    float trailingDot = 1.;
+    """
+
+    tokens = tokenize_code(code)
+    token_types = [token[0] for token in tokens]
+
+    assert ("NUMBER", "0") in tokens
+    assert ("RANGE", "..") in tokens
+    assert ("NUMBER", "4") in tokens
+    assert ("NUMBER", "1") in tokens
+    assert ("RANGE_INCLUSIVE", "..=") in tokens
+    assert ("IDENTIFIER", "limit") in tokens
+    assert ("FLOAT_NUMBER", "0.") not in tokens
+    assert ("FLOAT_NUMBER", ".4") not in tokens
+    assert ("FLOAT_NUMBER", "1.") in tokens
+    assert token_types.index("RANGE_INCLUSIVE") > token_types.index("RANGE")
+
+
 def test_else_statement_tokenization():
     code = """
     if (a > b) {

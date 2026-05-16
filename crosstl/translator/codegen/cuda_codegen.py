@@ -25,6 +25,7 @@ class CudaCodeGen:
     def __init__(self):
         self.indent_level = 0
         self.output = []
+        self.variable_types = {}
         self.builtin_map = {
             "gl_LocalInvocationID.x": "threadIdx.x",
             "gl_LocalInvocationID.y": "threadIdx.y",
@@ -46,6 +47,7 @@ class CudaCodeGen:
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.variable_types = {}
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -135,6 +137,7 @@ class CudaCodeGen:
                     self.emit("")
 
     def visit_FunctionNode(self, node):
+        saved_variable_types = self.variable_types.copy()
         qualifiers = []
 
         if hasattr(node, "qualifiers") and node.qualifiers:
@@ -173,6 +176,7 @@ class CudaCodeGen:
             else:
                 param_type = "void"
 
+            self.register_variable_type(param.name, param_type)
             params.append(self.format_typed_declarator(param_type, param.name))
 
         param_str = ", ".join(params)
@@ -185,6 +189,7 @@ class CudaCodeGen:
 
         self.indent_level -= 1
         self.emit("}")
+        self.variable_types = saved_variable_types
 
     def visit_StructNode(self, node):
         self.emit(f"struct {node.name} {{")
@@ -213,6 +218,7 @@ class CudaCodeGen:
             var_type = node.vtype
 
         if var_type:
+            self.register_variable_type(node.name, var_type)
             # Check for special memory qualifiers
             qualifiers = []
             if hasattr(node, "qualifiers"):
@@ -341,11 +347,17 @@ class CudaCodeGen:
         else:
             func_name = getattr(node, "name", "unknown")
 
-        args = []
+        raw_args = []
         if hasattr(node, "arguments"):
-            args = [self.visit(arg) for arg in node.arguments]
+            raw_args = node.arguments
         elif hasattr(node, "args"):
-            args = [self.visit(arg) for arg in node.args]
+            raw_args = node.args
+
+        args = [self.visit(arg) for arg in raw_args]
+
+        resource_call = self.generate_resource_call(func_name, raw_args, args)
+        if resource_call is not None:
+            return resource_call
 
         args_str = ", ".join(args)
 
@@ -579,11 +591,36 @@ class CudaCodeGen:
             "dmat4x2": "double4x2",
             "dmat4x3": "double4x3",
             "dmat4x4": "double4x4",
-            # Texture types
+            # Texture/resource types
+            "sampler": "cudaTextureObject_t",
+            "sampler1D": "texture<float4, 1>",
             "sampler2D": "texture<float4, 2>",
             "sampler3D": "texture<float4, 3>",
             "samplerCube": "textureCube<float4>",
-            "image2D": "surface<void, 2>",
+            "sampler2DArray": "cudaTextureObject_t",
+            "sampler2DShadow": "cudaTextureObject_t",
+            "sampler2DArrayShadow": "cudaTextureObject_t",
+            "samplerCubeShadow": "cudaTextureObject_t",
+            "samplerCubeArray": "cudaTextureObject_t",
+            "samplerCubeArrayShadow": "cudaTextureObject_t",
+            "sampler2DMS": "cudaTextureObject_t",
+            "sampler2DMSArray": "cudaTextureObject_t",
+            "image2D": "cudaSurfaceObject_t",
+            "image3D": "cudaSurfaceObject_t",
+            "imageCube": "cudaSurfaceObject_t",
+            "image2DArray": "cudaSurfaceObject_t",
+            "image2DMS": "cudaSurfaceObject_t",
+            "image2DMSArray": "cudaSurfaceObject_t",
+            "iimage2D": "cudaSurfaceObject_t",
+            "iimage3D": "cudaSurfaceObject_t",
+            "iimage2DArray": "cudaSurfaceObject_t",
+            "iimage2DMS": "cudaSurfaceObject_t",
+            "iimage2DMSArray": "cudaSurfaceObject_t",
+            "uimage2D": "cudaSurfaceObject_t",
+            "uimage3D": "cudaSurfaceObject_t",
+            "uimage2DArray": "cudaSurfaceObject_t",
+            "uimage2DMS": "cudaSurfaceObject_t",
+            "uimage2DMSArray": "cudaSurfaceObject_t",
             "buffer": "CUdeviceptr",
         }
 
@@ -713,6 +750,230 @@ class CudaCodeGen:
         }
 
         return function_mapping.get(func_name, func_name)
+
+    def register_variable_type(self, name, type_name):
+        if not name or type_name is None:
+            return
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        self.variable_types[name] = type_name
+
+    def get_expression_name(self, node):
+        if isinstance(node, IdentifierNode):
+            return node.name
+        if isinstance(node, VariableNode):
+            return node.name
+        if isinstance(node, str):
+            return node
+        if isinstance(node, ArrayAccessNode):
+            array_node = getattr(node, "array", getattr(node, "array_expr", None))
+            return self.get_expression_name(array_node)
+        return None
+
+    def get_expression_type(self, node):
+        name = self.get_expression_name(node)
+        if name is None:
+            return None
+        return self.variable_types.get(name)
+
+    def resource_base_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        return type_name.split("[", 1)[0]
+
+    def is_multisample_resource_type(self, type_name):
+        base_type = self.resource_base_type(type_name)
+        return isinstance(base_type, str) and "MS" in base_type
+
+    def image_value_type(self, image_type):
+        base_type = self.resource_base_type(image_type)
+        if isinstance(base_type, str) and base_type.startswith("iimage"):
+            return "int"
+        if isinstance(base_type, str) and base_type.startswith("uimage"):
+            return "uint"
+        return "float4"
+
+    def coord_component(self, coord, component):
+        return f"{coord}.{component}"
+
+    def surface_x_offset(self, coord, value_type):
+        return f"{self.coord_component(coord, 'x')} * sizeof({value_type})"
+
+    def unsupported_multisample_resource_call(self, func_name, resource_type, args):
+        args_str = ", ".join(args)
+        return (
+            f"/* unsupported CUDA multisample resource call: "
+            f"{func_name} on {resource_type} */ {func_name}({args_str})"
+        )
+
+    def generate_resource_call(self, func_name, raw_args, args):
+        if func_name in {"texture", "textureLod", "textureGrad"} and len(args) >= 2:
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if self.is_multisample_resource_type(texture_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, texture_type, args
+                )
+
+            texture_name = args[0]
+            coord = args[1]
+            if texture_type == "sampler1D":
+                if func_name == "texture":
+                    return f"tex1D({texture_name}, {coord})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex1DLod({texture_name}, {coord}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return f"tex1DGrad({texture_name}, {coord}, {args[2]}, {args[3]})"
+
+            if texture_type == "sampler2DArray":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}"
+                )
+                if func_name == "texture":
+                    return f"tex2DLayered<float4>({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex2DLayeredLod<float4>({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return (
+                        f"tex2DLayeredGrad<float4>"
+                        f"({coord_args}, {args[2]}, {args[3]})"
+                    )
+
+            if texture_type == "sampler3D":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}"
+                )
+                if func_name == "texture":
+                    return f"tex3D({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex3DLod({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return f"tex3DGrad({coord_args}, {args[2]}, {args[3]})"
+
+            if texture_type == "samplerCube":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}"
+                )
+                if func_name == "texture":
+                    return f"texCubemap({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"texCubemapLod({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return f"texCubemapGrad({coord_args}, {args[2]}, {args[3]})"
+
+            if texture_type == "samplerCubeArray":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}, "
+                    f"{self.coord_component(coord, 'w')}"
+                )
+                if func_name == "texture":
+                    return f"texCubemapLayered<float4>({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"texCubemapLayeredLod<float4>({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return (
+                        f"texCubemapLayeredGrad<float4>"
+                        f"({coord_args}, {args[2]}, {args[3]})"
+                    )
+
+        if func_name == "texelFetch" and len(args) >= 3:
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if self.is_multisample_resource_type(texture_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, texture_type, args
+                )
+
+            texture_name = args[0]
+            coord = args[1]
+            if texture_type == "sampler2D":
+                return (
+                    f"tex2D({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')})"
+                )
+            if texture_type == "sampler2DArray":
+                return (
+                    f"tex2DLayered<float4>({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')})"
+                )
+            if texture_type == "sampler3D":
+                return (
+                    f"tex3D({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')})"
+                )
+
+        if func_name == "imageLoad" and len(args) >= 2:
+            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            if image_type is None:
+                return None
+            if self.is_multisample_resource_type(image_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, image_type, args
+                )
+
+            image_name = args[0]
+            coord = args[1]
+            value_type = self.image_value_type(image_type)
+            x = self.surface_x_offset(coord, value_type)
+            y = self.coord_component(coord, "y")
+
+            if "3D" in image_type:
+                z = self.coord_component(coord, "z")
+                return f"surf3Dread<{value_type}>({image_name}, {x}, {y}, {z})"
+            if "Array" in image_type:
+                layer = self.coord_component(coord, "z")
+                return (
+                    f"surf2DLayeredread<{value_type}>"
+                    f"({image_name}, {x}, {y}, {layer})"
+                )
+            if "2D" in image_type:
+                return f"surf2Dread<{value_type}>({image_name}, {x}, {y})"
+
+        if func_name == "imageStore" and len(args) >= 3:
+            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            if image_type is None:
+                return None
+            if self.is_multisample_resource_type(image_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, image_type, args
+                )
+
+            image_name = args[0]
+            coord = args[1]
+            value = args[2]
+            value_type = self.image_value_type(image_type)
+            x = self.surface_x_offset(coord, value_type)
+            y = self.coord_component(coord, "y")
+
+            if "3D" in image_type:
+                z = self.coord_component(coord, "z")
+                return f"surf3Dwrite({value}, {image_name}, {x}, {y}, {z})"
+            if "Array" in image_type:
+                layer = self.coord_component(coord, "z")
+                return f"surf2DLayeredwrite({value}, {image_name}, {x}, {y}, {layer})"
+            if "2D" in image_type:
+                return f"surf2Dwrite({value}, {image_name}, {x}, {y})"
+
+        return None
 
     def visit_cbuffer(self, cbuffer):
         """Visit constant buffer (convert to CUDA constant memory)"""

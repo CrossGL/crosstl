@@ -8,8 +8,10 @@ for GPU programming.
 
 from ..ast import (
     ASTNode,
+    ArrayAccessNode,
     CbufferNode,
     FunctionNode,
+    IdentifierNode,
     ShaderNode,
     StructNode,
     VariableNode,
@@ -22,6 +24,8 @@ class HipCodeGen:
         self.code_lines = []
         self.current_function = None
         self.variable_counter = 0
+        self.variable_types = {}
+        self.helper_functions = {}
 
         # CrossGL to HIP type mapping
         self.type_map = {
@@ -91,11 +95,36 @@ class HipCodeGen:
             "dmat4x2": "double4x2",
             "dmat4x3": "double4x3",
             "dmat4x4": "double4x4",
-            # Texture types
+            # Texture/resource types
+            "sampler": "hipTextureObject_t",
+            "sampler1D": "texture<float4, 1>",
             "sampler2D": "texture<float4, 2>",
             "sampler3D": "texture<float4, 3>",
             "samplerCube": "textureCube<float4>",
-            "image2D": "surface<void, 2>",
+            "sampler2DArray": "hipTextureObject_t",
+            "sampler2DShadow": "hipTextureObject_t",
+            "sampler2DArrayShadow": "hipTextureObject_t",
+            "samplerCubeShadow": "hipTextureObject_t",
+            "samplerCubeArray": "hipTextureObject_t",
+            "samplerCubeArrayShadow": "hipTextureObject_t",
+            "sampler2DMS": "hipTextureObject_t",
+            "sampler2DMSArray": "hipTextureObject_t",
+            "image2D": "hipSurfaceObject_t",
+            "image3D": "hipSurfaceObject_t",
+            "imageCube": "hipSurfaceObject_t",
+            "image2DArray": "hipSurfaceObject_t",
+            "image2DMS": "hipSurfaceObject_t",
+            "image2DMSArray": "hipSurfaceObject_t",
+            "iimage2D": "hipSurfaceObject_t",
+            "iimage3D": "hipSurfaceObject_t",
+            "iimage2DArray": "hipSurfaceObject_t",
+            "iimage2DMS": "hipSurfaceObject_t",
+            "iimage2DMSArray": "hipSurfaceObject_t",
+            "uimage2D": "hipSurfaceObject_t",
+            "uimage3D": "hipSurfaceObject_t",
+            "uimage2DArray": "hipSurfaceObject_t",
+            "uimage2DMS": "hipSurfaceObject_t",
+            "uimage2DMSArray": "hipSurfaceObject_t",
             "buffer": "hipDeviceptr_t",
         }
 
@@ -229,9 +258,12 @@ class HipCodeGen:
     def generate(self, node: ASTNode) -> str:
         self.code_lines = []
         self.indent_level = 0
+        self.variable_types = {}
+        self.helper_functions = {}
 
         self.add_includes()
         self.visit(node)
+        self.insert_helper_functions()
 
         return "\n".join(self.code_lines)
 
@@ -310,6 +342,7 @@ class HipCodeGen:
         return ""
 
     def visit_FunctionNode(self, node: FunctionNode) -> str:
+        saved_variable_types = self.variable_types.copy()
         self.current_function = node.name
 
         qualifiers = []
@@ -357,6 +390,7 @@ class HipCodeGen:
 
         self.add_line()
         self.current_function = None
+        self.variable_types = saved_variable_types
         return ""
 
     def visit_parameter(self, param) -> str:
@@ -373,6 +407,7 @@ class HipCodeGen:
 
             param_name = getattr(param, "name", "param")
 
+        self.register_variable_type(param_name, param_type)
         return self.format_typed_declarator(param_type, param_name)
 
     def visit_StructNode(self, node: StructNode) -> str:
@@ -410,6 +445,7 @@ class HipCodeGen:
         else:
             var_type = "int"
 
+        self.register_variable_type(node.name, var_type)
         declaration = self.format_typed_declarator(var_type, node.name)
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
         if initial_value is not None:
@@ -574,7 +610,9 @@ class HipCodeGen:
             return f"{node.op}{operand}"
 
     def visit_FunctionCallNode(self, node) -> str:
-        func_expr = getattr(node, "function", node.name)
+        func_expr = (
+            node.function if hasattr(node, "function") else getattr(node, "name", None)
+        )
         func_name = None
         if hasattr(func_expr, "name"):
             func_name = func_expr.name
@@ -584,7 +622,12 @@ class HipCodeGen:
             callee = func_expr
         else:
             callee = self.visit(func_expr)
-        args = [self.visit(arg) for arg in node.args]
+        raw_args = getattr(node, "args", getattr(node, "arguments", []))
+        args = [self.visit(arg) for arg in raw_args]
+
+        resource_call = self.generate_resource_call(func_name, raw_args, args)
+        if resource_call is not None:
+            return resource_call
 
         # Map function name
         mapped_name = self.function_map.get(func_name, func_name)
@@ -605,6 +648,277 @@ class HipCodeGen:
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def insert_helper_functions(self):
+        if not self.helper_functions:
+            return
+        helpers = []
+        for helper in self.helper_functions.values():
+            helpers.extend(helper.splitlines())
+            helpers.append("")
+        self.code_lines[5:5] = helpers
+
+    def require_helper_function(self, name, body):
+        self.helper_functions.setdefault(name, body)
+
+    def register_variable_type(self, name, type_name):
+        if not name or type_name is None:
+            return
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        self.variable_types[name] = type_name
+
+    def get_expression_name(self, node):
+        if isinstance(node, IdentifierNode):
+            return node.name
+        if isinstance(node, VariableNode):
+            return node.name
+        if isinstance(node, str):
+            return node
+        if isinstance(node, ArrayAccessNode):
+            array_node = getattr(node, "array", getattr(node, "array_expr", None))
+            return self.get_expression_name(array_node)
+        return None
+
+    def get_expression_type(self, node):
+        name = self.get_expression_name(node)
+        if name is None:
+            return None
+        return self.variable_types.get(name)
+
+    def resource_base_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        return type_name.split("[", 1)[0]
+
+    def is_multisample_resource_type(self, type_name):
+        base_type = self.resource_base_type(type_name)
+        return isinstance(base_type, str) and "MS" in base_type
+
+    def image_value_type(self, image_type):
+        base_type = self.resource_base_type(image_type)
+        if isinstance(base_type, str) and base_type.startswith("iimage"):
+            return "int"
+        if isinstance(base_type, str) and base_type.startswith("uimage"):
+            return "uint"
+        return "float4"
+
+    def coord_component(self, coord, component):
+        return f"{coord}.{component}"
+
+    def surface_x_offset(self, coord, value_type):
+        return f"{self.coord_component(coord, 'x')} * sizeof({value_type})"
+
+    def unsupported_multisample_resource_call(self, func_name, resource_type, args):
+        args_str = ", ".join(args)
+        return (
+            f"/* unsupported HIP multisample resource call: "
+            f"{func_name} on {resource_type} */ {func_name}({args_str})"
+        )
+
+    def require_surface_read_helper(self, helper_name):
+        helpers = {
+            "cgl_surf2Dread": (
+                "template <typename T>\n"
+                "__device__ T cgl_surf2Dread(hipSurfaceObject_t surfObj, int x, int y)\n"
+                "{\n"
+                "    T value;\n"
+                "    surf2Dread(&value, surfObj, x, y);\n"
+                "    return value;\n"
+                "}"
+            ),
+            "cgl_surf3Dread": (
+                "template <typename T>\n"
+                "__device__ T cgl_surf3Dread(hipSurfaceObject_t surfObj, int x, int y, int z)\n"
+                "{\n"
+                "    T value;\n"
+                "    surf3Dread(&value, surfObj, x, y, z);\n"
+                "    return value;\n"
+                "}"
+            ),
+            "cgl_surf2DLayeredread": (
+                "template <typename T>\n"
+                "__device__ T cgl_surf2DLayeredread(hipSurfaceObject_t surfObj, int x, int y, int layer)\n"
+                "{\n"
+                "    T value;\n"
+                "    surf2DLayeredread(&value, surfObj, x, y, layer);\n"
+                "    return value;\n"
+                "}"
+            ),
+        }
+        self.require_helper_function(helper_name, helpers[helper_name])
+
+    def generate_resource_call(self, func_name, raw_args, args):
+        if func_name in {"texture", "textureLod", "textureGrad"} and len(args) >= 2:
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if self.is_multisample_resource_type(texture_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, texture_type, args
+                )
+
+            texture_name = args[0]
+            coord = args[1]
+            if texture_type == "sampler1D":
+                if func_name == "texture":
+                    return f"tex1D({texture_name}, {coord})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex1DLod({texture_name}, {coord}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return f"tex1DGrad({texture_name}, {coord}, {args[2]}, {args[3]})"
+
+            if texture_type == "sampler2DArray":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}"
+                )
+                if func_name == "texture":
+                    return f"tex2DLayered<float4>({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex2DLayeredLod<float4>({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return (
+                        f"tex2DLayeredGrad<float4>"
+                        f"({coord_args}, {args[2]}, {args[3]})"
+                    )
+
+            if texture_type == "sampler3D":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}"
+                )
+                if func_name == "texture":
+                    return f"tex3D({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex3DLod({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return f"tex3DGrad({coord_args}, {args[2]}, {args[3]})"
+
+            if texture_type == "samplerCube":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}"
+                )
+                if func_name == "texture":
+                    return f"texCubemap({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"texCubemapLod({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return f"texCubemapGrad({coord_args}, {args[2]}, {args[3]})"
+
+            if texture_type == "samplerCubeArray":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')}, "
+                    f"{self.coord_component(coord, 'w')}"
+                )
+                if func_name == "texture":
+                    return f"texCubemapLayered<float4>({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"texCubemapLayeredLod<float4>({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return (
+                        f"texCubemapLayeredGrad<float4>"
+                        f"({coord_args}, {args[2]}, {args[3]})"
+                    )
+
+        if func_name == "texelFetch" and len(args) >= 3:
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if self.is_multisample_resource_type(texture_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, texture_type, args
+                )
+
+            texture_name = args[0]
+            coord = args[1]
+            if texture_type == "sampler2D":
+                return (
+                    f"tex2D({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')})"
+                )
+            if texture_type == "sampler2DArray":
+                return (
+                    f"tex2DLayered<float4>({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')})"
+                )
+            if texture_type == "sampler3D":
+                return (
+                    f"tex3D({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}, "
+                    f"{self.coord_component(coord, 'z')})"
+                )
+
+        if func_name == "imageLoad" and len(args) >= 2:
+            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            if image_type is None:
+                return None
+            if self.is_multisample_resource_type(image_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, image_type, args
+                )
+
+            image_name = args[0]
+            coord = args[1]
+            value_type = self.image_value_type(image_type)
+            x = self.surface_x_offset(coord, value_type)
+            y = self.coord_component(coord, "y")
+
+            if "3D" in image_type:
+                self.require_surface_read_helper("cgl_surf3Dread")
+                z = self.coord_component(coord, "z")
+                return f"cgl_surf3Dread<{value_type}>({image_name}, {x}, {y}, {z})"
+            if "Array" in image_type:
+                self.require_surface_read_helper("cgl_surf2DLayeredread")
+                layer = self.coord_component(coord, "z")
+                return (
+                    f"cgl_surf2DLayeredread<{value_type}>"
+                    f"({image_name}, {x}, {y}, {layer})"
+                )
+            if "2D" in image_type:
+                self.require_surface_read_helper("cgl_surf2Dread")
+                return f"cgl_surf2Dread<{value_type}>({image_name}, {x}, {y})"
+
+        if func_name == "imageStore" and len(args) >= 3:
+            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            if image_type is None:
+                return None
+            if self.is_multisample_resource_type(image_type):
+                return self.unsupported_multisample_resource_call(
+                    func_name, image_type, args
+                )
+
+            image_name = args[0]
+            coord = args[1]
+            value = args[2]
+            value_type = self.image_value_type(image_type)
+            x = self.surface_x_offset(coord, value_type)
+            y = self.coord_component(coord, "y")
+
+            if "3D" in image_type:
+                z = self.coord_component(coord, "z")
+                return f"surf3Dwrite({value}, {image_name}, {x}, {y}, {z})"
+            if "Array" in image_type:
+                layer = self.coord_component(coord, "z")
+                return f"surf2DLayeredwrite({value}, {image_name}, {x}, {y}, {layer})"
+            if "2D" in image_type:
+                return f"surf2Dwrite({value}, {image_name}, {x}, {y})"
+
+        return None
 
     def visit_str(self, node) -> str:
         return str(node)

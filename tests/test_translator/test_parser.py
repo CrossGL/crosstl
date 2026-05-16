@@ -4,10 +4,13 @@ from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
     ArrayType,
+    ForInNode,
     FunctionCallNode,
+    LoopNode,
     MatrixType,
     PreprocessorNode,
     PrimitiveType,
+    RangeNode,
     ShaderNode,
     ShaderStage,
     VariableNode,
@@ -149,6 +152,101 @@ def test_for_statement():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("for parsing not implemented.")
+
+
+def test_loop_statement_parses_to_loop_node():
+    code = """
+    shader main {
+        int helper(int limit) {
+            int i = 0;
+            loop {
+                i = i + 1;
+                if (i >= limit) {
+                    break;
+                }
+            }
+            return i;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    helper = ast.functions[0]
+
+    assert any(isinstance(stmt, LoopNode) for stmt in helper.body.statements)
+
+
+def test_for_in_statement_parses_to_for_in_node():
+    code = """
+    shader main {
+        int helper(int limit) {
+            int total = 0;
+            for i in limit {
+                total = total + i;
+            }
+            return total;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    helper = ast.functions[0]
+
+    assert any(isinstance(stmt, ForInNode) for stmt in helper.body.statements)
+
+
+def test_for_in_range_statement_parses_to_range_node():
+    code = """
+    shader main {
+        int helper(int limit) {
+            int total = 0;
+            for i in 2..5 {
+                total = total + i;
+            }
+            for j in 1..=limit {
+                total = total + j;
+            }
+            return total;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    helper = ast.functions[0]
+    ranges = [
+        stmt.iterable for stmt in helper.body.statements if isinstance(stmt, ForInNode)
+    ]
+
+    assert len(ranges) == 2
+    assert isinstance(ranges[0], RangeNode)
+    assert ranges[0].start.value == 2
+    assert ranges[0].end.value == 5
+    assert not ranges[0].inclusive
+    assert isinstance(ranges[1], RangeNode)
+    assert ranges[1].start.value == 1
+    assert ranges[1].end.name == "limit"
+    assert ranges[1].inclusive
+
+
+def test_range_expression_preserves_assignment_rhs():
+    code = """
+    shader main {
+        int helper() {
+            int total = 0;
+            total = 2..5;
+            return total;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    helper = ast.functions[0]
+    assignment = helper.body.statements[1].expression
+
+    assert isinstance(assignment.value, RangeNode)
+    assert assignment.value.start.value == 2
+    assert assignment.value.end.value == 5
+    assert not isinstance(assignment.target, RangeNode)
 
 
 def test_preprocessor_and_precision_parsing():
@@ -930,6 +1028,7 @@ def test_sampler_type_keywords_parse():
     shader Resources {
         sampler linearSampler;
         sampler2d colorMap;
+        sampler2darray colorArray;
         samplercube environmentMap;
         sampler2dshadow shadowMap;
         sampler2darrayshadow cascades;
@@ -948,6 +1047,7 @@ def test_sampler_type_keywords_parse():
     assert resource_types == [
         "sampler",
         "sampler2D",
+        "sampler2DArray",
         "samplerCube",
         "sampler2DShadow",
         "sampler2DArrayShadow",
@@ -965,13 +1065,19 @@ def test_image_type_keywords_parse():
         iimage2d signedImage;
         iimage3d signedVolume;
         iimage2darray signedLayers;
+        iimage2dms signedMs;
+        iimage2dmsarray signedMsLayers;
         uimage2d unsignedImage;
         uimage3d unsignedVolume;
         uimage2darray unsignedLayers;
+        uimage2dms unsignedMs;
+        uimage2dmsarray unsignedMsLayers;
         image2D outputImage;
         image3D volumeImage;
         imageCube cubeImage;
         image2DArray layerImage;
+        image2DMS outputMs;
+        image2DMSArray layerMs;
     }
     """
 
@@ -983,13 +1089,19 @@ def test_image_type_keywords_parse():
         "iimage2D",
         "iimage3D",
         "iimage2DArray",
+        "iimage2DMS",
+        "iimage2DMSArray",
         "uimage2D",
         "uimage3D",
         "uimage2DArray",
+        "uimage2DMS",
+        "uimage2DMSArray",
         "image2D",
         "image3D",
         "imageCube",
         "image2DArray",
+        "image2DMS",
+        "image2DMSArray",
     ]
 
 

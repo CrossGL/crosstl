@@ -700,6 +700,76 @@ class TestVulkanSPIRVCodeGen:
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_multisample_image_load_store_use_sample_operand(self):
+        source_code = """
+        shader Resources {
+            image2DMS msColor @rgba16f;
+            image2DMSArray msLayers @format(rgba8);
+            uimage2DMS counters @r32ui;
+            iimage2DMSArray signedLayers @r32i;
+
+            compute {
+                void main() {
+                    int sampleIndex = 2;
+                    ivec2 pixel = ivec2(4, 8);
+                    ivec3 pixelLayer = ivec3(4, 8, 1);
+                    vec4 color = imageLoad(msColor, pixel, sampleIndex);
+                    imageStore(msColor, pixel, sampleIndex, color);
+                    vec4 layer = imageLoad(msLayers, pixelLayer, sampleIndex);
+                    imageStore(msLayers, pixelLayer, sampleIndex, layer);
+                    uint count = imageLoad(counters, pixel, sampleIndex);
+                    imageStore(counters, pixel, sampleIndex, count);
+                    int signedValue = imageLoad(
+                        signedLayers,
+                        pixelLayer,
+                        sampleIndex
+                    );
+                    imageStore(
+                        signedLayers,
+                        pixelLayer,
+                        sampleIndex,
+                        signedValue
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert int_type is not None
+        assert uint_type is not None
+        assert vec4_type is not None
+        assert spv_code.count("OpCapability StorageImageMultisample") == 1
+        assert spv_code.count("OpCapability ImageMSArray") == 1
+        assert " 2D 0 0 1 2 Rgba16f" in spv_code
+        assert " 2D 0 1 1 2 Rgba8" in spv_code
+        assert " 2D 0 0 1 2 R32ui" in spv_code
+        assert " 2D 0 1 1 2 R32i" in spv_code
+        assert spv_code.count("OpImageRead") == 4
+        assert spv_code.count("OpImageWrite") == 4
+        assert f"OpImageRead {vec4_type.group(1)}" in spv_code
+        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert f"OpImageRead {int_type.group(1)}" in spv_code
+
+        image_access_lines = [
+            line
+            for line in spv_code.splitlines()
+            if "OpImageRead" in line or "OpImageWrite" in line
+        ]
+        assert len(image_access_lines) == 8
+        assert all(" Sample " in line for line in image_access_lines)
+        assert all(" Lod " not in line for line in image_access_lines)
+        assert "OpFunctionCall" not in spv_code
+        assert "imageLoad" not in spv_code
+        assert "imageStore" not in spv_code
+        assert "WARNING" not in spv_code
+
     def test_texture_lod_and_grad_emit_explicit_lod_sampling(self):
         source_code = """
         shader Resources {
@@ -789,6 +859,65 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "textureOffset" not in spv_code
         assert "textureGather" not in spv_code
+        assert "texelFetch" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_multisample_texel_fetch_uses_sample_operand(self):
+        source_code = """
+        shader Resources {
+            sampler2dms colorMs;
+            sampler2dmsarray arrayMs;
+            sampler linearSampler;
+            sampler samplers[2];
+
+            compute {
+                void main() {
+                    int sampleIndex = 2;
+                    ivec2 pixel = ivec2(4, 8);
+                    ivec3 pixelLayer = ivec3(4, 8, 1);
+                    vec4 direct = texelFetch(colorMs, pixel, sampleIndex);
+                    vec4 arrayFetch = texelFetch(arrayMs, pixelLayer, sampleIndex);
+                    vec4 explicitSampler = texelFetch(
+                        colorMs,
+                        linearSampler,
+                        pixel,
+                        sampleIndex
+                    );
+                    vec4 indexedSampler = texelFetch(
+                        arrayMs,
+                        samplers[1],
+                        pixelLayer,
+                        sampleIndex
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        sampler_type = re.search(r"(%\d+) = OpTypeSampler", spv_code)
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert sampler_type is not None
+        assert vec4_type is not None
+        sampler_array_type = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(sampler_type.group(1))} %\d+",
+            spv_code,
+        )
+
+        fetch_lines = [line for line in spv_code.splitlines() if "OpImageFetch" in line]
+        assert len(fetch_lines) == 4
+        assert sampler_array_type is not None
+        assert " 2D 0 0 1 1 Unknown" in spv_code
+        assert " 2D 0 1 1 1 Unknown" in spv_code
+        assert all(f"OpImageFetch {vec4_type.group(1)}" in line for line in fetch_lines)
+        assert all(" Sample " in line for line in fetch_lines)
+        assert all(" Lod " not in line for line in fetch_lines)
+        assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 4
+        assert f"OpLoad {sampler_array_type.group(1)}" not in spv_code
+        assert "OpFunctionCall" not in spv_code
         assert "texelFetch" not in spv_code
         assert "WARNING" not in spv_code
 
@@ -964,6 +1093,160 @@ class TestVulkanSPIRVCodeGen:
         assert "imageSize" not in spv_code
         assert "textureQueryLevels" not in spv_code
         assert "textureQueryLod" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_texture_query_shapes_for_array_cube_and_multisample_samplers(self):
+        source_code = """
+        shader Resources {
+            sampler2darray arrayTex;
+            samplercube cubeTex;
+            samplercubearray cubeArrayTex;
+            sampler2dms msTex;
+            sampler2dmsarray msArrayTex;
+            sampler samplers[2];
+
+            compute {
+                void main() {
+                    int layer = 1;
+                    vec3 uvLayer = vec3(0.25, 0.75, 1.0);
+                    vec3 direction = vec3(1.0, 0.0, 0.0);
+                    ivec3 arraySize = textureSize(arrayTex, 1);
+                    ivec2 cubeSize = textureSize(cubeTex, 0);
+                    ivec3 cubeArraySize = textureSize(cubeArrayTex, 0);
+                    ivec2 msSize = textureSize(msTex, 0);
+                    ivec3 msArraySize = textureSize(msArrayTex, 0);
+                    vec2 arrayLod = textureQueryLod(
+                        arrayTex,
+                        samplers[layer],
+                        uvLayer
+                    );
+                    vec2 cubeLod = textureQueryLod(cubeTex, direction);
+                    int cubeLevels = textureQueryLevels(cubeTex);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        sampler_type = re.search(r"(%\d+) = OpTypeSampler", spv_code)
+        assert int_type is not None
+        assert float_type is not None
+        assert sampler_type is not None
+
+        ivec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 2",
+            spv_code,
+        )
+        ivec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 3",
+            spv_code,
+        )
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+        sampler_array_type = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(sampler_type.group(1))} %\d+",
+            spv_code,
+        )
+
+        assert ivec2_type is not None
+        assert ivec3_type is not None
+        assert vec2_type is not None
+        assert sampler_array_type is not None
+        assert "OpTypeImage" in spv_code
+        assert " 2D 0 1 0 1 Unknown" in spv_code
+        assert " Cube 0 1 0 1 Unknown" in spv_code
+        assert " 2D 0 0 1 1 Unknown" in spv_code
+        assert " 2D 0 1 1 1 Unknown" in spv_code
+        assert spv_code.count("OpImageQuerySizeLod") == 3
+        assert len(re.findall(r"OpImageQuerySize %\d+ %\d+", spv_code)) == 2
+        assert spv_code.count("OpImageQueryLod") == 2
+        assert spv_code.count("OpImageQueryLevels") == 1
+        assert f"OpImageQuerySizeLod {ivec2_type.group(1)}" in spv_code
+        assert f"OpImageQuerySizeLod {ivec3_type.group(1)}" in spv_code
+        assert f"OpImageQuerySize {ivec2_type.group(1)}" in spv_code
+        assert f"OpImageQuerySize {ivec3_type.group(1)}" in spv_code
+        assert f"OpImageQueryLod {vec2_type.group(1)}" in spv_code
+        assert f"OpImageQueryLevels {int_type.group(1)}" in spv_code
+        assert f"OpLoad {sampler_array_type.group(1)}" not in spv_code
+        assert "textureSize" not in spv_code
+        assert "textureQueryLod" not in spv_code
+        assert "textureQueryLevels" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_multisample_texture_samples_query_emits_image_query_samples(self):
+        source_code = """
+        shader Resources {
+            sampler2dms colorMs;
+            sampler2dmsarray arrayMs;
+
+            compute {
+                void main() {
+                    int samples = textureSamples(colorMs);
+                    int arraySamples = textureSamples(arrayMs);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert int_type is not None
+        assert spv_code.count("OpCapability ImageQuery") == 1
+        assert " 2D 0 0 1 1 Unknown" in spv_code
+        assert " 2D 0 1 1 1 Unknown" in spv_code
+        assert spv_code.count("OpImageQuerySamples") == 2
+        assert f"OpImageQuerySamples {int_type.group(1)}" in spv_code
+        assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 2
+        assert "OpFunctionCall" not in spv_code
+        assert "textureSamples" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_multisample_storage_image_samples_query_emits_image_query_samples(self):
+        source_code = """
+        shader Resources {
+            image2DMS msColor @rgba16f;
+            image2DMSArray msLayers @format(rgba8);
+            uimage2DMS counters @r32ui;
+            iimage2DMSArray signedLayers @r32i;
+
+            compute {
+                void main() {
+                    int colorSamples = imageSamples(msColor);
+                    int layerSamples = imageSamples(msLayers);
+                    int counterSamples = imageSamples(counters);
+                    int signedSamples = imageSamples(signedLayers);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert int_type is not None
+        assert spv_code.count("OpCapability ImageQuery") == 1
+        assert " 2D 0 0 1 2 Rgba16f" in spv_code
+        assert " 2D 0 1 1 2 Rgba8" in spv_code
+        assert " 2D 0 0 1 2 R32ui" in spv_code
+        assert " 2D 0 1 1 2 R32i" in spv_code
+        assert "OpTypeInt 32 0" in spv_code
+        assert spv_code.count("OpImageQuerySamples") == 4
+        assert f"OpImageQuerySamples {int_type.group(1)}" in spv_code
+        assert "OpTypeSampledImage" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "imageSamples" not in spv_code
         assert "WARNING" not in spv_code
 
     def test_shadow_texture_compare_emits_dref_sampling(self):

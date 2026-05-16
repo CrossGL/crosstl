@@ -3,20 +3,30 @@ from ..ast import (
     ArrayNode,
     ArrayAccessNode,
     BinaryOpNode,
+    BreakNode,
+    ContinueNode,
+    ForInNode,
     ForNode,
     FunctionCallNode,
     IfNode,
+    LiteralPatternNode,
+    LoopNode,
+    MatchNode,
     MemberAccessNode,
     MeshOpNode,
     PreprocessorNode,
     RayQueryOpNode,
     RayTracingOpNode,
+    RangeNode,
     ReturnNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     WaveOpNode,
+    WhileNode,
+    WildcardPatternNode,
 )
 from .array_utils import (
     parse_array_type,
@@ -41,6 +51,15 @@ class GLSLCodeGen:
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
+        self.current_stage_output = None
+        self.current_stage_inputs = {}
+        self.current_stage_outputs = {}
+        self.flattened_stage_variables = set()
+        self.structs_by_name = {}
+        self.vertex_input_struct_names = set()
+        self.vertex_output_struct_names = set()
+        self.fragment_input_struct_names = set()
+        self.vertex_input_member_names = set()
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
@@ -205,6 +224,15 @@ class GLSLCodeGen:
         }
 
     def generate(self, ast):
+        return self.generate_program(ast)
+
+    def generate_stage(self, ast, shader_type):
+        return self.generate_program(ast, target_stage=shader_type)
+
+    def generate_program(self, ast, target_stage=None):
+        if target_stage is not None:
+            target_stage = str(target_stage).split(".")[-1].lower()
+
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
@@ -217,6 +245,10 @@ class GLSLCodeGen:
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        self.current_stage_output = None
+        self.current_stage_inputs = {}
+        self.current_stage_outputs = {}
+        self.flattened_stage_variables = set()
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -249,50 +281,58 @@ class GLSLCodeGen:
         code += self.generate_constants(ast)
 
         structs = getattr(ast, "structs", [])
+        self.structs_by_name = {
+            node.name: node for node in structs if isinstance(node, StructNode)
+        }
+        self.vertex_input_struct_names = self.stage_parameter_struct_names(
+            ast, "vertex"
+        )
+        self.vertex_output_struct_names = self.stage_return_struct_names(ast, "vertex")
+        self.fragment_input_struct_names = self.stage_parameter_struct_names(
+            ast, "fragment"
+        )
+        self.vertex_input_member_names = self.struct_member_names(
+            self.vertex_input_struct_names
+        )
+        emit_vertex_io = target_stage in {None, "vertex"}
+        emit_fragment_io = target_stage in {None, "fragment"}
         for node in structs:
             if isinstance(node, StructNode):
-                if node.name == "VSInput":
-                    members = getattr(node, "members", [])
-                    for member in members:
-                        # Handle both old and new AST member structures
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(member.member_type)
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-
-                        # Handle semantic
-                        semantic = None
-                        if hasattr(member, "semantic"):
-                            semantic = member.semantic
-                        elif hasattr(member, "attributes"):
-                            for attr in member.attributes:
-                                if hasattr(attr, "name"):
-                                    semantic = attr.name
-                                    break
-
-                        code += f"{self.map_semantic(semantic)} in {member_type} {member.name};\n"
+                if (
+                    node.name == "VSInput"
+                    or node.name in self.vertex_input_struct_names
+                ):
+                    if emit_vertex_io:
+                        code += self.generate_stage_input_declarations(node)
                 elif node.name == "VSOutput":
-                    members = getattr(node, "members", [])
-                    for member in members:
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(member.member_type)
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        code += f"out {member_type} {member.name};\n"
+                    emitted_io = False
+                    if node.name in self.vertex_output_struct_names and emit_vertex_io:
+                        code += self.generate_vertex_output_declarations(node)
+                        emitted_io = True
+                    if (
+                        node.name in self.fragment_input_struct_names
+                        and emit_fragment_io
+                    ):
+                        code += self.generate_fragment_input_declarations(node)
+                        emitted_io = True
+                    if not emitted_io:
+                        code += self.generate_legacy_output_declarations(node)
+                elif node.name in self.vertex_output_struct_names:
+                    if emit_vertex_io:
+                        code += self.generate_vertex_output_declarations(node)
+                    if (
+                        node.name in self.fragment_input_struct_names
+                        and emit_fragment_io
+                    ):
+                        code += self.generate_fragment_input_declarations(node)
+                    code += self.generate_struct(node)
                 elif node.name == "PSInput":
-                    members = getattr(node, "members", [])
-                    for member in members:
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(member.member_type)
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        code += f"in {member_type} {member.name};\n"
+                    if emit_fragment_io:
+                        code += self.generate_fragment_input_declarations(node)
+                elif node.name in self.fragment_input_struct_names:
+                    if emit_fragment_io:
+                        code += self.generate_fragment_input_declarations(node)
+                    code += self.generate_struct(node)
                 elif node.name == "PSOutput":
                     members = getattr(node, "members", [])
                     for member in members:
@@ -403,6 +443,18 @@ class GLSLCodeGen:
             else:
                 qualifier = getattr(func, "qualifier", None)
 
+            if (
+                target_stage is not None
+                and qualifier
+                in {
+                    "vertex",
+                    "fragment",
+                    "compute",
+                }
+                and qualifier != target_stage
+            ):
+                continue
+
             if qualifier == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
@@ -422,11 +474,16 @@ class GLSLCodeGen:
                     stage_name = (
                         str(stage_type).split(".")[-1].lower()
                     )  # Extract stage name from enum
+                    if target_stage is not None and stage_name != target_stage:
+                        continue
                     code += f"// {stage_name.title()} Shader\n"
                     code += self.generate_function(
                         stage.entry_point, shader_type=stage_name
                     )
                 if hasattr(stage, "local_functions"):
+                    stage_name = str(stage_type).split(".")[-1].lower()
+                    if target_stage is not None and stage_name != target_stage:
+                        continue
                     for func in stage.local_functions:
                         code += self.generate_function(func)
 
@@ -573,25 +630,30 @@ class GLSLCodeGen:
             "ray_callable",
         }
 
+        stage_output = self.fragment_stage_output(func, shader_type)
+        if stage_output and stage_output["declaration"]:
+            code += f"{stage_output['declaration']}\n"
+
         if shader_type in stage_entry_types:
             code += "void main() {\n"
         else:
-            if hasattr(func, "return_type"):
-                if hasattr(func.return_type, "name"):
-                    return_type = self.map_type(func.return_type.name)
-                else:
-                    return_type = self.map_type(func.return_type)
-            else:
-                return_type = "void"
-
+            return_type = self.function_return_type(func)
             code += f"{return_type} {func.name}({params_str}) {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
         previous_image_format_parameters = self.current_image_format_parameters
+        previous_stage_output = self.current_stage_output
+        previous_stage_inputs = self.current_stage_inputs
+        previous_stage_outputs = self.current_stage_outputs
+        previous_flattened_stage_variables = self.flattened_stage_variables
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = texture_parameters
         self.current_image_format_parameters = image_format_parameters
+        self.current_stage_output = stage_output
+        self.current_stage_inputs = self.stage_input_member_maps(func, shader_type)
+        self.current_stage_outputs = self.stage_output_member_maps(func, shader_type)
+        self.flattened_stage_variables = set(self.current_stage_outputs)
         body = getattr(func, "body", [])
         if hasattr(body, "statements"):
             for stmt in body.statements:
@@ -602,14 +664,222 @@ class GLSLCodeGen:
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_format_parameters = previous_image_format_parameters
+        self.current_stage_output = previous_stage_output
+        self.current_stage_inputs = previous_stage_inputs
+        self.current_stage_outputs = previous_stage_outputs
+        self.flattened_stage_variables = previous_flattened_stage_variables
 
         code += "}\n\n"
         return code
+
+    def stage_functions(self, ast, stage_name):
+        functions = []
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifiers = getattr(func, "qualifiers", []) or []
+            qualifier = (
+                qualifiers[0] if qualifiers else getattr(func, "qualifier", None)
+            )
+            if qualifier == stage_name:
+                functions.append(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            current_stage = str(stage_type).split(".")[-1].lower()
+            if current_stage == stage_name and hasattr(stage, "entry_point"):
+                functions.append(stage.entry_point)
+
+        return functions
+
+    def stage_parameter_struct_names(self, ast, stage_name):
+        struct_names = set()
+        for func in self.stage_functions(ast, stage_name):
+            parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+            for param in parameters:
+                type_name = self.type_node_name(getattr(param, "param_type", None))
+                if type_name in self.structs_by_name:
+                    struct_names.add(type_name)
+        return struct_names
+
+    def stage_return_struct_names(self, ast, stage_name):
+        struct_names = set()
+        for func in self.stage_functions(ast, stage_name):
+            type_name = self.type_node_name(getattr(func, "return_type", None))
+            if type_name in self.structs_by_name:
+                struct_names.add(type_name)
+        return struct_names
+
+    def struct_member_names(self, struct_names):
+        names = set()
+        for struct_name in struct_names:
+            struct = self.structs_by_name.get(struct_name)
+            for member in getattr(struct, "members", []) or []:
+                names.add(member.name)
+        return names
+
+    def type_node_name(self, type_node):
+        if type_node is None:
+            return None
+        if hasattr(type_node, "name"):
+            return type_node.name
+        return str(type_node)
+
+    def generate_stage_input_declarations(self, node):
+        code = ""
+        for member in getattr(node, "members", []) or []:
+            member_type = self.member_type_name(member)
+            semantic = self.semantic_from_node(member)
+            layout = self.map_semantic(semantic)
+            prefix = f"{layout} " if layout.startswith("layout(") else ""
+            code += f"{prefix}in {member_type} {member.name};\n"
+        return code
+
+    def generate_legacy_output_declarations(self, node):
+        code = ""
+        for member in getattr(node, "members", []) or []:
+            code += f"out {self.member_type_name(member)} {member.name};\n"
+        return code
+
+    def generate_vertex_output_declarations(self, node):
+        code = ""
+        for member in getattr(node, "members", []) or []:
+            output_name = self.vertex_output_member_name(member)
+            if self.is_vertex_builtin_output(output_name):
+                continue
+
+            semantic = self.semantic_from_node(member)
+            layout = self.map_semantic(semantic)
+            prefix = f"{layout} " if layout.startswith("layout(") else ""
+            code += f"{prefix}out {self.member_type_name(member)} {output_name};\n"
+        return code
+
+    def generate_fragment_input_declarations(self, node):
+        code = ""
+        for member in getattr(node, "members", []) or []:
+            input_name = self.fragment_input_member_name(member, node.name)
+            if input_name is None:
+                continue
+
+            semantic = self.semantic_from_node(member)
+            layout = self.map_semantic(semantic)
+            prefix = f"{layout} " if layout.startswith("layout(") else ""
+            code += f"{prefix}in {self.member_type_name(member)} {input_name};\n"
+        return code
+
+    def member_type_name(self, member):
+        if hasattr(member, "member_type"):
+            return self.map_type(member.member_type)
+        return self.map_type(getattr(member, "vtype", "float"))
+
+    def vertex_output_member_name(self, member):
+        semantic = self.semantic_from_node(member)
+        mapped_semantic = self.map_semantic(semantic)
+        if self.is_vertex_builtin_output(mapped_semantic):
+            return mapped_semantic
+        if member.name in self.vertex_input_member_names:
+            return f"out_{member.name}"
+        return member.name
+
+    def fragment_input_member_name(self, member, struct_name):
+        if struct_name in self.vertex_output_struct_names:
+            output_name = self.vertex_output_member_name(member)
+            if self.is_vertex_builtin_output(output_name):
+                return None
+            return output_name
+        return member.name
+
+    def is_vertex_builtin_output(self, name):
+        return name in {"gl_Position", "gl_PointSize", "gl_ClipDistance"}
+
+    def stage_input_member_maps(self, func, shader_type):
+        if shader_type not in {"vertex", "fragment"}:
+            return {}
+
+        maps = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            type_name = self.type_node_name(getattr(param, "param_type", None))
+            struct = self.structs_by_name.get(type_name)
+            if struct is None:
+                continue
+            if shader_type == "fragment":
+                member_map = {}
+                for member in getattr(struct, "members", []) or []:
+                    input_name = self.fragment_input_member_name(member, type_name)
+                    if input_name is not None:
+                        member_map[member.name] = input_name
+                maps[param.name] = member_map
+            else:
+                maps[param.name] = {
+                    member.name: member.name
+                    for member in getattr(struct, "members", [])
+                }
+        return maps
+
+    def stage_output_member_maps(self, func, shader_type):
+        if shader_type != "vertex":
+            return {}
+
+        type_name = self.type_node_name(getattr(func, "return_type", None))
+        struct = self.structs_by_name.get(type_name)
+        if struct is None:
+            return {}
+
+        member_map = {
+            member.name: self.vertex_output_member_name(member)
+            for member in getattr(struct, "members", []) or []
+        }
+        maps = {}
+        body = getattr(func, "body", [])
+        statements = getattr(body, "statements", body if isinstance(body, list) else [])
+        for stmt in statements:
+            if not isinstance(stmt, VariableNode):
+                continue
+            if self.type_node_name(getattr(stmt, "var_type", None)) == type_name:
+                maps[stmt.name] = member_map
+        return maps
+
+    def function_return_type(self, func):
+        return_type = getattr(func, "return_type", None)
+        if return_type is None:
+            return "void"
+        return self.map_type(return_type)
+
+    def fragment_stage_output(self, func, shader_type):
+        if shader_type != "fragment":
+            return None
+
+        output_type = self.function_return_type(func)
+        if output_type == "void":
+            return None
+
+        semantic = self.semantic_from_node(func) or "gl_FragColor"
+        if semantic == "gl_FragDepth":
+            return {
+                "name": "gl_FragDepth",
+                "declaration": "",
+            }
+
+        layout = self.map_semantic(semantic)
+        if not layout.startswith("layout("):
+            layout = "layout(location = 0)"
+
+        output_name = self.fragment_output_name(semantic)
+        return {
+            "name": output_name,
+            "declaration": f"{layout} out {output_type} {output_name};",
+        }
+
+    def fragment_output_name(self, semantic):
+        if semantic and semantic.startswith("gl_FragColor"):
+            suffix = semantic.removeprefix("gl_FragColor")
+            return f"fragColor{suffix}"
+        return "fragColor"
 
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
+            if stmt.name in self.flattened_stage_variables:
+                return ""
             if hasattr(stmt, "var_type"):
                 var_type = self.convert_type_node_to_string(stmt.var_type)
             elif hasattr(stmt, "vtype"):
@@ -620,6 +890,7 @@ class GLSLCodeGen:
             declaration = format_c_style_array_declaration(
                 self.map_type(var_type), stmt.name
             )
+            declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
                 init_expr = self.generate_expression(stmt.initial_value)
                 return f"{indent_str}{declaration} = {init_expr};\n"
@@ -629,11 +900,42 @@ class GLSLCodeGen:
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
+        elif isinstance(stmt, BreakNode):
+            return f"{indent_str}break;\n"
+        elif isinstance(stmt, ContinueNode):
+            return f"{indent_str}continue;\n"
         elif isinstance(stmt, IfNode):
             return self.generate_if(stmt, indent)
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
+        elif isinstance(stmt, ForInNode):
+            return self.generate_for_in(stmt, indent)
+        elif isinstance(stmt, WhileNode):
+            return self.generate_while(stmt, indent)
+        elif isinstance(stmt, LoopNode):
+            return self.generate_loop(stmt, indent)
+        elif isinstance(stmt, SwitchNode):
+            return self.generate_switch(stmt, indent)
+        elif isinstance(stmt, MatchNode):
+            return self.generate_match(stmt, indent)
         elif isinstance(stmt, ReturnNode):
+            if getattr(stmt, "value", None) is None:
+                return f"{indent_str}return;\n"
+            return_value_name = self.expression_name(stmt.value)
+            if return_value_name in self.flattened_stage_variables:
+                return f"{indent_str}return;\n"
+            if self.current_stage_output is not None:
+                if isinstance(stmt.value, list):
+                    values = ", ".join(
+                        self.generate_expression(val) for val in stmt.value
+                    )
+                    value = values
+                else:
+                    value = self.generate_expression(stmt.value)
+                return (
+                    f"{indent_str}{self.current_stage_output['name']} = {value};\n"
+                    f"{indent_str}return;\n"
+                )
             if isinstance(stmt.value, list):
                 # Multiple return values
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)
@@ -653,6 +955,9 @@ class GLSLCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def local_variable_qualifier(self, node):
+        return "const " if "const" in getattr(node, "qualifiers", []) else ""
 
     def generate_assignment(self, node, is_main=False):
         left = self.generate_expression(node.left)
@@ -708,9 +1013,17 @@ class GLSLCodeGen:
     def generate_for(self, node, indent, is_main=False):
         indent_str = "    " * indent
 
-        init = self.generate_statement(node.init, 0).strip()
-        condition = self.generate_expression(node.condition)
-        update = self.generate_expression(node.update)
+        init = self.generate_for_initializer(getattr(node, "init", None))
+        condition = (
+            self.generate_expression(node.condition)
+            if getattr(node, "condition", None)
+            else ""
+        )
+        update = (
+            self.generate_expression(node.update)
+            if getattr(node, "update", None)
+            else ""
+        )
 
         code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
 
@@ -726,7 +1039,144 @@ class GLSLCodeGen:
 
         return code
 
+    def generate_for_in(self, node, indent):
+        indent_str = "    " * indent
+        pattern = getattr(node, "pattern", "item")
+        iterable_node = getattr(node, "iterable", "")
+
+        if isinstance(iterable_node, RangeNode):
+            start = self.generate_expression(iterable_node.start)
+            end = self.generate_expression(iterable_node.end)
+            comparator = "<=" if iterable_node.inclusive else "<"
+            code = (
+                f"{indent_str}for (int {pattern} = {start}; "
+                f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
+            )
+        else:
+            iterable = self.generate_expression(iterable_node)
+            code = (
+                f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
+                f"++{pattern}) {{\n"
+            )
+
+        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_while(self, node, indent):
+        indent_str = "    " * indent
+        condition = self.generate_expression(getattr(node, "condition", ""))
+
+        code = f"{indent_str}while ({condition}) {{\n"
+        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_loop(self, node, indent):
+        indent_str = "    " * indent
+
+        code = f"{indent_str}while (true) {{\n"
+        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_switch(self, node, indent):
+        indent_str = "    " * indent
+        expression = self.generate_expression(getattr(node, "expression", ""))
+
+        code = f"{indent_str}switch ({expression}) {{\n"
+        for case in getattr(node, "cases", []) or []:
+            value = getattr(case, "value", None)
+            if value is None:
+                code += f"{indent_str}    default:\n"
+            else:
+                code += f"{indent_str}    case {self.generate_expression(value)}:\n"
+            code += self.generate_statement_body(
+                getattr(case, "statements", []), indent + 2
+            )
+
+        default_case = getattr(node, "default_case", None)
+        if default_case is not None:
+            code += f"{indent_str}    default:\n"
+            code += self.generate_statement_body(default_case, indent + 2)
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_match(self, node, indent):
+        indent_str = "    " * indent
+        expression = self.generate_expression(getattr(node, "expression", ""))
+
+        code = f"{indent_str}switch ({expression}) {{\n"
+        for arm in getattr(node, "arms", []) or []:
+            pattern = getattr(arm, "pattern", None)
+            if not self.is_supported_switch_match_arm(arm):
+                raise ValueError(
+                    "Unsupported match arm for GLSL codegen; only unguarded "
+                    "literal and wildcard patterns can be lowered to switch"
+                )
+
+            if isinstance(pattern, WildcardPatternNode):
+                code += f"{indent_str}    default:\n"
+            else:
+                code += (
+                    f"{indent_str}    case "
+                    f"{self.generate_expression(pattern.literal)}:\n"
+                )
+            body = getattr(arm, "body", [])
+            code += self.generate_statement_body(body, indent + 2)
+            if not self.statement_body_terminates(body):
+                code += f"{indent_str}        break;\n"
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def is_supported_switch_match_arm(self, arm):
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
+    def statement_body_terminates(self, body):
+        if hasattr(body, "statements"):
+            statements = body.statements
+        elif isinstance(body, list):
+            statements = body
+        elif body is None:
+            statements = []
+        else:
+            statements = [body]
+
+        return bool(statements) and isinstance(
+            statements[-1], (BreakNode, ContinueNode, ReturnNode)
+        )
+
+    def generate_statement_body(self, body, indent):
+        code = ""
+        if hasattr(body, "statements"):
+            for stmt in body.statements:
+                code += self.generate_statement(stmt, indent)
+        elif isinstance(body, list):
+            for stmt in body:
+                code += self.generate_statement(stmt, indent)
+        elif body is not None:
+            code += self.generate_statement(body, indent)
+        return code
+
+    def generate_for_initializer(self, init):
+        if init is None:
+            return ""
+        if isinstance(init, str):
+            return init
+        if isinstance(init, VariableNode) or (
+            hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__)
+        ):
+            return self.generate_statement(init, 0).strip().rstrip(";")
+        return self.generate_expression(init).strip().rstrip(";")
+
     def generate_expression(self, expr, is_main=False):
+        if expr is None:
+            return ""
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, (int, float, bool)):
@@ -826,6 +1276,9 @@ class GLSLCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in call_args)
             return f"{func_name or callee}({args})"
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
+            flattened_member = self.flattened_stage_member_name(expr)
+            if flattened_member is not None:
+                return flattened_member
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
@@ -835,6 +1288,14 @@ class GLSLCodeGen:
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def flattened_stage_member_name(self, expr):
+        object_name = self.expression_name(getattr(expr, "object", None))
+        if object_name in self.current_stage_inputs:
+            return self.current_stage_inputs[object_name].get(expr.member)
+        if object_name in self.current_stage_outputs:
+            return self.current_stage_outputs[object_name].get(expr.member)
+        return None
 
     def expression_name(self, expr):
         if isinstance(expr, str):
@@ -1322,25 +1783,28 @@ class GLSLCodeGen:
         return evaluate_literal_int_expression(expr, constants)
 
     def visible_literal_int_constants(self, func):
-        if not self.literal_int_constants:
-            return {}
+        visible_constants = dict(self.literal_int_constants)
 
-        shadowed = {
-            getattr(param, "name", None)
-            for param in getattr(func, "parameters", []) or []
-        }
+        for param in getattr(func, "parameters", []) or []:
+            visible_constants.pop(getattr(param, "name", None), None)
+
         for node in self.walk_ast(getattr(func, "body", [])):
             if isinstance(node, VariableNode):
-                shadowed.add(getattr(node, "name", None))
+                name = getattr(node, "name", None)
+                if not name:
+                    continue
 
-        shadowed.discard(None)
-        if not shadowed:
-            return self.literal_int_constants
-        return {
-            name: value
-            for name, value in self.literal_int_constants.items()
-            if name not in shadowed
-        }
+                visible_constants.pop(name, None)
+                if "const" not in getattr(node, "qualifiers", []):
+                    continue
+
+                value = self.literal_int_value(
+                    getattr(node, "initial_value", None), visible_constants
+                )
+                if value is not None:
+                    visible_constants[name] = value
+
+        return visible_constants
 
     def function_call_name(self, call):
         func_expr = getattr(call, "function", None)

@@ -43,6 +43,7 @@ from .ast import (
     ExpressionNode,
     LiteralNode,
     IdentifierNode,
+    RangeNode,
     BinaryOpNode,
     UnaryOpNode,
     TernaryOpNode,
@@ -1069,13 +1070,19 @@ class Parser:
             "IIMAGE2D",
             "IIMAGE3D",
             "IIMAGE2DARRAY",
+            "IIMAGE2DMS",
+            "IIMAGE2DMSARRAY",
             "UIMAGE2D",
             "UIMAGE3D",
             "UIMAGE2DARRAY",
+            "UIMAGE2DMS",
+            "UIMAGE2DMSARRAY",
             "IMAGE2D",
             "IMAGE3D",
             "IMAGECUBE",
             "IMAGE2DARRAY",
+            "IMAGE2DMS",
+            "IMAGE2DMSARRAY",
         ]:
             sampler_types = {
                 "SAMPLER": "sampler",
@@ -1094,13 +1101,19 @@ class Parser:
                 "IIMAGE2D": "iimage2D",
                 "IIMAGE3D": "iimage3D",
                 "IIMAGE2DARRAY": "iimage2DArray",
+                "IIMAGE2DMS": "iimage2DMS",
+                "IIMAGE2DMSARRAY": "iimage2DMSArray",
                 "UIMAGE2D": "uimage2D",
                 "UIMAGE3D": "uimage3D",
                 "UIMAGE2DARRAY": "uimage2DArray",
+                "UIMAGE2DMS": "uimage2DMS",
+                "UIMAGE2DMSARRAY": "uimage2DMSArray",
                 "IMAGE2D": "image2D",
                 "IMAGE3D": "image3D",
                 "IMAGECUBE": "imageCube",
                 "IMAGE2DARRAY": "image2DArray",
+                "IMAGE2DMS": "image2DMS",
+                "IMAGE2DMSARRAY": "image2DMSArray",
             }
             token_type = self.current_token[0]
             self.eat(token_type)
@@ -1270,6 +1283,8 @@ class Parser:
             return self.parse_for_statement()
         elif self.current_token[0] == "WHILE":
             return self.parse_while_statement()
+        elif self.current_token[0] == "LOOP":
+            return self.parse_loop_statement()
         elif self.current_token[0] == "MATCH":
             return self.parse_match_statement()
         elif self.current_token[0] == "SWITCH":
@@ -1348,6 +1363,9 @@ class Parser:
 
     def parse_for_statement(self):
         self.eat("FOR")
+        if self.current_token[0] != "LPAREN":
+            return self.parse_for_in_statement_after_for()
+
         self.eat("LPAREN")
 
         init = None
@@ -1373,6 +1391,15 @@ class Parser:
         body = self.parse_statement()
 
         return ForNode(init=init, condition=condition, update=update, body=body)
+
+    def parse_for_in_statement_after_for(self):
+        pattern = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("IN")
+        iterable = self.parse_expression()
+        body = self.parse_statement()
+
+        return ForInNode(pattern=pattern, iterable=iterable, body=body)
 
     def parse_for_loop_variable_declaration(self):
         """Parse variable declarations in for loops (without consuming semicolon)."""
@@ -1422,6 +1449,12 @@ class Parser:
         body = self.parse_statement()
 
         return WhileNode(condition=condition, body=body)
+
+    def parse_loop_statement(self):
+        self.eat("LOOP")
+        body = self.parse_statement()
+
+        return LoopNode(body=body)
 
     def parse_match_statement(self):
         self.eat("MATCH")
@@ -1479,8 +1512,19 @@ class Parser:
     def parse_expression(self):
         return self.parse_assignment_expression()
 
-    def parse_assignment_expression(self):
+    def parse_range_expression(self):
         left = self.parse_ternary_expression()
+
+        if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
+            inclusive = self.current_token[0] == "RANGE_INCLUSIVE"
+            self.eat(self.current_token[0])
+            right = self.parse_ternary_expression()
+            return RangeNode(left, right, inclusive=inclusive)
+
+        return left
+
+    def parse_assignment_expression(self):
+        left = self.parse_range_expression()
 
         if self.current_token[0] in [
             "EQUALS",
@@ -1949,13 +1993,19 @@ class Parser:
             "IIMAGE2D",
             "IIMAGE3D",
             "IIMAGE2DARRAY",
+            "IIMAGE2DMS",
+            "IIMAGE2DMSARRAY",
             "UIMAGE2D",
             "UIMAGE3D",
             "UIMAGE2DARRAY",
+            "UIMAGE2DMS",
+            "UIMAGE2DMSARRAY",
             "IMAGE2D",
             "IMAGE3D",
             "IMAGECUBE",
             "IMAGE2DARRAY",
+            "IMAGE2DMS",
+            "IMAGE2DMSARRAY",
             "IDENTIFIER",
         ]
 

@@ -173,6 +173,430 @@ def test_for_statement():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_for_statement_preserves_declaration_initializers():
+    shader = """
+    shader LoopDeclarationInitializers {
+        float helper() {
+            const float weights[2];
+            int i = 0;
+            float total = 0.0;
+            for (int i = 0; i < 2; i++) {
+                total = total + weights[0];
+            }
+            for (i = 0; i < 4; i++) {
+                if (i == 0) {
+                    continue;
+                }
+                break;
+            }
+            for (const int fixed = 0; fixed < 0;) {
+                total = total + 1.0;
+            }
+            for (;;) {
+                break;
+            }
+            return total;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const float weights[2];" in generated_code
+    assert "for (int i = 0; (i < 2); (++i))" in generated_code
+    assert "for (i = 0; (i < 4); (++i))" in generated_code
+    assert "for (const int fixed = 0; (fixed < 0); )" in generated_code
+    assert "for (; ; )" in generated_code
+    assert "continue;" in generated_code
+    assert "break;" in generated_code
+    assert "for (int i = 0;;" not in generated_code
+    assert "for (const int fixed = 0;;" not in generated_code
+    assert "BreakNode(" not in generated_code
+    assert "ContinueNode(" not in generated_code
+    assert "None" not in generated_code
+
+
+def test_loop_statement_lowers_to_while_true():
+    shader = """
+    shader LoopNodeSmoke {
+        int helper(int limit) {
+            int i = 0;
+            loop {
+                i = i + 1;
+                if (i >= limit) {
+                    break;
+                }
+            }
+            return i;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "while (true)" in generated_code
+    assert "i = (i + 1);" in generated_code
+    assert "if ((i >= limit))" in generated_code
+    assert "break;" in generated_code
+    assert "return i;" in generated_code
+    assert "LoopNode(" not in generated_code
+
+
+def test_for_in_statement_lowers_to_counted_loop():
+    shader = """
+    shader ForInNodeSmoke {
+        int helper(int limit) {
+            int total = 0;
+            for i in limit {
+                total = total + i;
+            }
+            return total;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "for (int i = 0; i < limit; ++i)" in generated_code
+    assert "total = (total + i);" in generated_code
+    assert "return total;" in generated_code
+    assert "ForInNode(" not in generated_code
+
+
+def test_for_in_range_statement_lowers_to_counted_loop():
+    shader = """
+    shader ForInRangeNodeSmoke {
+        int helper(int limit) {
+            int total = 0;
+            for i in 2..5 {
+                total = total + i;
+            }
+            for j in 1..=limit {
+                total = total + j;
+            }
+            return total;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "for (int i = 2; i < 5; ++i)" in generated_code
+    assert "for (int j = 1; j <= limit; ++j)" in generated_code
+    assert "total = (total + i);" in generated_code
+    assert "total = (total + j);" in generated_code
+    assert "return total;" in generated_code
+    assert "RangeNode(" not in generated_code
+    assert "ForInNode(" not in generated_code
+
+
+def test_fragment_return_semantic_writes_output_variable():
+    shader = """
+    shader FragmentReturnSemanticSmoke {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                int total = 0;
+                for i in 1..=3 {
+                    total = total + i;
+                }
+                return vec4(float(total), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(location = 0) out vec4 fragColor;" in generated_code
+    assert "void main()" in generated_code
+    assert "for (int i = 1; i <= 3; ++i)" in generated_code
+    assert "fragColor = vec4(float(total), 0.0, 0.0, 1.0);" in generated_code
+    assert "return;" in generated_code
+    assert "return vec4" not in generated_code
+    assert "RangeNode(" not in generated_code
+
+
+def test_vertex_struct_io_lowers_to_flattened_stage_variables():
+    shader = """
+    shader VertexStructIOSmoke {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(location = 0) in vec3 position;" in generated_code
+    assert "layout(location = 5) in vec2 uv;" in generated_code
+    assert "layout(location = 5) out vec2 out_uv;" in generated_code
+    assert "gl_Position = vec4(position, 1.0);" in generated_code
+    assert "out_uv = uv;" in generated_code
+    assert "return;" in generated_code
+    assert "VSOutput output;" not in generated_code
+    assert "input." not in generated_code
+    assert "output." not in generated_code
+    assert "return output;" not in generated_code
+    assert "out vec4 position;" not in generated_code
+
+
+def test_fragment_struct_input_lowers_to_flattened_stage_variables():
+    shader = """
+    shader FragmentStructInputSmoke {
+        struct VSOutput {
+            vec2 uv @ TEXCOORD0;
+            vec3 normal @ NORMAL;
+        };
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.uv, input.normal.x, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(location = 5) in vec2 uv;" in generated_code
+    assert "layout(location = 1) in vec3 normal;" in generated_code
+    assert "layout(location = 0) out vec4 fragColor;" in generated_code
+    assert "fragColor = vec4(uv, normal.x, 1.0);" in generated_code
+    assert "return;" in generated_code
+    assert "input." not in generated_code
+    assert "out vec2 uv;" not in generated_code
+    assert "return vec4" not in generated_code
+
+
+def test_generate_stage_splits_combined_vertex_fragment_units():
+    shader = """
+    shader CombinedStageIOSmoke {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv;
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.uv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generator = GLSLCodeGen()
+    vertex_code = generator.generate_stage(ast, "vertex")
+    fragment_code = generator.generate_stage(ast, "fragment")
+
+    assert "layout(location = 0) in vec3 position;" in vertex_code
+    assert "layout(location = 5) in vec2 uv;" in vertex_code
+    assert "layout(location = 5) out vec2 out_uv;" in vertex_code
+    assert "gl_Position = vec4(position, 1.0);" in vertex_code
+    assert "out_uv = uv;" in vertex_code
+    assert "fragColor" not in vertex_code
+    assert "layout(location = 5) in vec2 out_uv;" not in vertex_code
+
+    assert "layout(location = 5) in vec2 out_uv;" in fragment_code
+    assert "layout(location = 0) out vec4 fragColor;" in fragment_code
+    assert "fragColor = vec4(out_uv, 0.0, 1.0);" in fragment_code
+    assert "layout(location = 0) in vec3 position;" not in fragment_code
+    assert "layout(location = 5) out vec2 out_uv;" not in fragment_code
+    assert "gl_Position" not in fragment_code
+    assert "input." not in fragment_code
+
+
+def test_while_switch_and_void_return_emit_c_style_syntax():
+    shader = """
+    shader StatementLeakSmoke {
+        void helper() {
+            int i = 0;
+            while (i < 4) {
+                switch (i) {
+                    case 0:
+                        i = i + 1;
+                        continue;
+                    default:
+                        break;
+                }
+            }
+            return;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "while ((i < 4))" in generated_code
+    assert "switch (i)" in generated_code
+    assert "case 0:" in generated_code
+    assert "default:" in generated_code
+    assert "i = (i + 1);" in generated_code
+    assert "continue;" in generated_code
+    assert "break;" in generated_code
+    assert "return;" in generated_code
+    assert "WhileNode(" not in generated_code
+    assert "SwitchNode(" not in generated_code
+    assert "return ;" not in generated_code
+    assert "return None;" not in generated_code
+
+
+def test_switch_fallthrough_and_nested_switch_emit_c_style_syntax():
+    shader = """
+    shader SwitchEdgeSmoke {
+        int helper(int mode, int submode) {
+            int value = 0;
+            switch (mode) {
+                case 0:
+                case 1:
+                    value = value + 1;
+                    break;
+                case 2:
+                    switch (submode) {
+                        case 0:
+                            value = value + 2;
+                            break;
+                        default:
+                            value = value + 3;
+                            break;
+                    }
+                    break;
+                default:
+                    value = value + 4;
+                    break;
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:\n        case 1:" in generated_code
+    assert "case 2:\n            switch (submode)" in generated_code
+    assert generated_code.count("default:") == 2
+    assert "value = (value + 1);" in generated_code
+    assert "value = (value + 2);" in generated_code
+    assert "value = (value + 3);" in generated_code
+    assert "value = (value + 4);" in generated_code
+    assert "return value;" in generated_code
+    assert "SwitchNode(" not in generated_code
+    assert "CaseNode(" not in generated_code
+
+
+def test_match_literal_and_wildcard_arms_lower_to_switch():
+    shader = """
+    shader MatchLeakSmoke {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 => { value = 1; }
+                1 => { value = 2; }
+                _ => { value = 3; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:" in generated_code
+    assert "case 1:" in generated_code
+    assert "default:" in generated_code
+    assert "value = 1;" in generated_code
+    assert "value = 2;" in generated_code
+    assert "value = 3;" in generated_code
+    assert generated_code.count("break;") == 3
+    assert "return value;" in generated_code
+    assert "MatchNode(" not in generated_code
+    assert "MatchArmNode(" not in generated_code
+
+
+def test_match_return_arms_do_not_emit_extra_breaks():
+    shader = """
+    shader MatchReturnArms {
+        int helper(int mode) {
+            match mode {
+                0 => { return 1; }
+                _ => { return 2; }
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:" in generated_code
+    assert "default:" in generated_code
+    assert "return 1;" in generated_code
+    assert "return 2;" in generated_code
+    assert "break;" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_unsupported_binding_or_guarded_arm_raises():
+    binding_shader = """
+    shader MatchBindingPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                other => { value = other; }
+            }
+            return value;
+        }
+    }
+    """
+    guarded_shader = """
+    shader MatchGuardPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 if mode > 0 => { value = 1; }
+                _ => { value = 2; }
+            }
+            return value;
+        }
+    }
+    """
+
+    for shader in (binding_shader, guarded_shader):
+        with pytest.raises(ValueError, match="Unsupported match arm"):
+            GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_else_statement():
     code = """
     shader main {
@@ -727,8 +1151,8 @@ def test_opengl_sampler_globals_are_uniform_resources():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                vec4 color = texture(colorMap, input.uv);
-                vec4 env = texture(envMap, input.normal);
+                vec4 color = texture(colorMap, uv);
+                vec4 env = texture(envMap, normal);
                 return color + env;
             }
         }
@@ -741,8 +1165,8 @@ def test_opengl_sampler_globals_are_uniform_resources():
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCube envMap;" in generated_code
     assert "layout(std140, binding = 0) sampler2D" not in generated_code
-    assert "out vec2 uv;" in generated_code
-    assert "out vec3 normal;" in generated_code
+    assert "in vec2 uv;" in generated_code
+    assert "in vec3 normal;" in generated_code
     assert "VectorType(" not in generated_code
 
 
@@ -760,8 +1184,8 @@ def test_opengl_texture_array_resources_and_indexed_sampling():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                vec4 color = texture(textures[input.layer], input.uv);
-                vec4 env = texture(envMap, input.normal);
+                vec4 color = texture(textures[layer], uv);
+                vec4 env = texture(envMap, normal);
                 return color + env;
             }
         }
@@ -773,8 +1197,8 @@ def test_opengl_texture_array_resources_and_indexed_sampling():
 
     assert "layout(binding = 0) uniform sampler2D textures[4];" in generated_code
     assert "layout(binding = 4) uniform samplerCube envMap;" in generated_code
-    assert "texture(textures[input.layer], input.uv)" in generated_code
-    assert "texture(envMap, input.normal)" in generated_code
+    assert "texture(textures[layer], uv)" in generated_code
+    assert "texture(envMap, normal)" in generated_code
 
 
 def test_opengl_fixed_texture_array_keeps_declared_size_with_constant_indices():
@@ -795,7 +1219,7 @@ def test_opengl_fixed_texture_array_keeps_declared_size_with_constant_indices():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -809,7 +1233,7 @@ def test_opengl_fixed_texture_array_keeps_declared_size_with_constant_indices():
     assert "vec4 sampleLayer(sampler2D textures[6], vec2 uv)" in generated_code
     assert "texture(textures[LAYER], uv)" in generated_code
     assert "texture(textures[(1 + 2)], uv)" in generated_code
-    assert "sampleLayer(textures, input.uv)" in generated_code
+    assert "sampleLayer(textures, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[4];" not in generated_code
     assert "layout(binding = 4) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -836,7 +1260,7 @@ def test_opengl_fixed_texture_array_resolves_constant_declared_size_for_bindings
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -855,7 +1279,7 @@ def test_opengl_fixed_texture_array_resolves_constant_declared_size_for_bindings
         "vec4 sampleLayer(sampler2D textures[TEXTURE_COUNT], vec2 uv)" in generated_code
     )
     assert "texture(textures[2], uv)" in generated_code
-    assert "sampleLayer(textures, input.uv)" in generated_code
+    assert "sampleLayer(textures, uv)" in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
 
@@ -877,7 +1301,7 @@ def test_opengl_fixed_texture_array_resolves_inline_declared_size_expression_for
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -889,7 +1313,7 @@ def test_opengl_fixed_texture_array_resolves_inline_declared_size_expression_for
     assert "layout(binding = 6) uniform sampler2D afterTexture;" in generated_code
     assert "vec4 sampleLayer(sampler2D textures[(2 * 3)], vec2 uv)" in generated_code
     assert "texture(textures[2], uv)" in generated_code
-    assert "sampleLayer(textures, input.uv)" in generated_code
+    assert "sampleLayer(textures, uv)" in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
     assert "[None]" not in generated_code
@@ -913,7 +1337,7 @@ def test_opengl_fixed_texture_arrays_preserve_parenthesized_and_unary_declared_s
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, unaryTextures, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, unaryTextures, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -933,7 +1357,7 @@ def test_opengl_fixed_texture_arrays_preserve_parenthesized_and_unary_declared_s
         "vec4 sampleLayer(sampler2D textures[((2 + 1) * 2)], sampler2D unaryTextures[(+6)], vec2 uv)"
         in generated_code
     )
-    assert "sampleLayer(textures, unaryTextures, input.uv)" in generated_code
+    assert "sampleLayer(textures, unaryTextures, uv)" in generated_code
     assert "texture(textures[2], uv)" in generated_code
     assert "texture(unaryTextures[2], uv)" in generated_code
     assert "layout(binding = 6) uniform sampler2D afterTexture;" not in generated_code
@@ -957,7 +1381,7 @@ def test_opengl_texture_array_helper_parameter_keeps_sampler_array():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, input.layer, input.uv);
+                return sampleLayer(textures, layer, uv);
             }
         }
     }
@@ -970,7 +1394,7 @@ def test_opengl_texture_array_helper_parameter_keeps_sampler_array():
         "vec4 sampleLayer(sampler2D textures[4], int layer, vec2 uv)" in generated_code
     )
     assert "texture(textures[layer], uv)" in generated_code
-    assert "sampleLayer(textures, input.layer, input.uv)" in generated_code
+    assert "sampleLayer(textures, layer, uv)" in generated_code
 
 
 def test_opengl_texture_array_helper_parameter_filters_indexed_sampler_array():
@@ -990,7 +1414,7 @@ def test_opengl_texture_array_helper_parameter_filters_indexed_sampler_array():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv);
+                return sampleLayer(textures, samplers, layer, uv);
             }
         }
     }
@@ -1004,7 +1428,7 @@ def test_opengl_texture_array_helper_parameter_filters_indexed_sampler_array():
         "vec4 sampleLayer(sampler2D textures[4], int layer, vec2 uv)" in generated_code
     )
     assert "texture(textures[layer], uv)" in generated_code
-    assert "sampleLayer(textures, input.layer, input.uv)" in generated_code
+    assert "sampleLayer(textures, layer, uv)" in generated_code
     assert "sampler samplers" not in generated_code
     assert "samplers[layer]" not in generated_code
 
@@ -1028,7 +1452,7 @@ def test_opengl_unsized_texture_array_infers_helper_size_and_filters_sampler_arr
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1042,7 +1466,7 @@ def test_opengl_unsized_texture_array_infers_helper_size_and_filters_sampler_arr
     assert "vec4 sampleLayer(sampler2D textures[3], vec2 uv)" in generated_code
     assert "texture(textures[2], uv)" in generated_code
     assert "texture(textures[1], uv)" in generated_code
-    assert "sampleLayer(textures, input.uv)" in generated_code
+    assert "sampleLayer(textures, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -1072,7 +1496,7 @@ def test_opengl_unsized_texture_array_infers_transitive_helper_size():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleMid(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleMid(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1088,7 +1512,7 @@ def test_opengl_unsized_texture_array_infers_transitive_helper_size():
     assert "texture(textures[4], uv)" in generated_code
     assert "texture(textures[1], uv)" in generated_code
     assert "sampleDeep(textures, uv)" in generated_code
-    assert "sampleMid(textures, input.uv)" in generated_code
+    assert "sampleMid(textures, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -1115,7 +1539,7 @@ def test_opengl_unsized_texture_array_preserves_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, layer, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1131,7 +1555,7 @@ def test_opengl_unsized_texture_array_preserves_dynamic_indexing():
     )
     assert "texture(textures[layer], uv)" in generated_code
     assert "texture(textures[3], uv)" in generated_code
-    assert "sampleLayer(textures, input.layer, input.uv)" in generated_code
+    assert "sampleLayer(textures, layer, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -1156,7 +1580,7 @@ def test_opengl_unsized_texture_array_ignores_unsupported_indices():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, layer, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1177,7 +1601,7 @@ def test_opengl_unsized_texture_array_ignores_unsupported_indices():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1221,7 +1645,7 @@ def test_opengl_unsized_texture_array_infers_constant_expression_size():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1233,7 +1657,7 @@ def test_opengl_unsized_texture_array_infers_constant_expression_size():
     assert "layout(binding = 4) uniform sampler2D afterTexture;" in generated_code
     assert "vec4 sampleLayer(sampler2D textures[4], vec2 uv)" in generated_code
     assert "texture(textures[(1 + 2)], uv)" in generated_code
-    assert "sampleLayer(textures, input.uv)" in generated_code
+    assert "sampleLayer(textures, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "sampler samplers" not in generated_code
     assert "samplers[(1 + 2)]" not in generated_code
@@ -1258,7 +1682,7 @@ def test_opengl_unsized_texture_array_infers_named_constant_size():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1272,7 +1696,7 @@ def test_opengl_unsized_texture_array_infers_named_constant_size():
     assert "layout(binding = 4) uniform sampler2D afterTexture;" in generated_code
     assert "vec4 sampleLayer(sampler2D textures[4], vec2 uv)" in generated_code
     assert "texture(textures[LAYER], uv)" in generated_code
-    assert "sampleLayer(textures, input.uv)" in generated_code
+    assert "sampleLayer(textures, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "sampler samplers" not in generated_code
     assert "samplers[LAYER]" not in generated_code
@@ -1297,7 +1721,7 @@ def test_opengl_unsized_texture_array_ignores_shadowed_constant_name():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, layer, uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -1312,7 +1736,7 @@ def test_opengl_unsized_texture_array_ignores_shadowed_constant_name():
         "vec4 sampleLayer(sampler2D textures[], int LAYER, vec2 uv)" in generated_code
     )
     assert "texture(textures[LAYER], uv)" in generated_code
-    assert "sampleLayer(textures, input.layer, input.uv)" in generated_code
+    assert "sampleLayer(textures, layer, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[4];" not in generated_code
     assert "layout(binding = 4) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -1341,7 +1765,7 @@ def test_opengl_texture_array_helper_operation_variants_filter_sampler_array():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleOps(textures, samplers, input.layer, input.uv, input.pixel);
+                return sampleOps(textures, samplers, layer, uv, pixel);
             }
         }
     }
@@ -1359,7 +1783,7 @@ def test_opengl_texture_array_helper_operation_variants_filter_sampler_array():
     assert "textureGrad(textures[layer], uv, vec2(0.1), vec2(0.2))" in generated_code
     assert "textureGather(textures[layer], uv)" in generated_code
     assert "texelFetch(textures[layer], pixel, 0)" in generated_code
-    assert "sampleOps(textures, input.layer, input.uv, input.pixel)" in generated_code
+    assert "sampleOps(textures, layer, uv, pixel)" in generated_code
     assert "sampler samplers" not in generated_code
     assert "samplers[layer]" not in generated_code
 
@@ -1399,9 +1823,9 @@ def test_opengl_array_texture_types_and_shadow_compare_coordinates():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float shadow = sampleShadowArray(shadowArray, shadowSampler, input.uvLayer, input.depth);
-                float cube = sampleCubeShadow(cubeShadow, shadowSampler, input.direction, input.depth);
-                return sampleArray(colorArray, arraySampler, input.uvLayer, input.pixelLayer) * shadow * cube;
+                float shadow = sampleShadowArray(shadowArray, shadowSampler, uvLayer, depth);
+                float cube = sampleCubeShadow(cubeShadow, shadowSampler, direction, depth);
+                return sampleArray(colorArray, arraySampler, uvLayer, pixelLayer) * shadow * cube;
             }
         }
     }
@@ -1474,8 +1898,8 @@ def test_opengl_cube_array_and_multisample_texture_types():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float shadow = sampleCubeArrayShadow(cubeArrayShadow, shadowSampler, input.cubeLayer, input.depth);
-                return sampleCubeArray(cubeArray, cubeSampler, input.cubeLayer) * shadow + fetchMs(msTex, msArray, input.pixel, input.pixelLayer, input.sampleIndex);
+                float shadow = sampleCubeArrayShadow(cubeArrayShadow, shadowSampler, cubeLayer, depth);
+                return sampleCubeArray(cubeArray, cubeSampler, cubeLayer) * shadow + fetchMs(msTex, msArray, pixel, pixelLayer, sampleIndex);
             }
         }
     }
@@ -2304,6 +2728,179 @@ def test_opengl_formatted_image_arrays_infer_transitive_helper_size():
     assert "vec2 oldValue = imageLoad(images[2], pixel).x;" not in generated_code
 
 
+def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
+    dynamic_shader = """
+    shader DynamicOnlyFormattedImageArrays {
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        uint touchCounters(image2D images[] @r32ui, int layer, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[layer], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, 0, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+    negative_shader = """
+    shader NegativeIndexedFormattedImageArrays {
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        uint touchCounters(image2D images[] @r32ui, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[-1], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+
+    dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in dynamic_code
+    assert "layout(r32ui, binding = 1) uniform uimage2D afterCounters;" in dynamic_code
+    assert (
+        "uint touchCounters(uimage2D images[], int layer, ivec2 pixel, uint value)"
+        in dynamic_code
+    )
+    assert "uint oldValue = imageLoad(images[layer], pixel).x;" in dynamic_code
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in dynamic_code
+    assert "uint a = touchCounters(counters, 0, ivec2(1, 2), 3);" in dynamic_code
+    assert (
+        "layout(r32ui, binding = 0) uniform uimage2D counters[2];" not in dynamic_code
+    )
+    assert (
+        "layout(r32ui, binding = 2) uniform uimage2D afterCounters;" not in dynamic_code
+    )
+    assert "uint oldValue = imageLoad(images[layer], pixel);" not in dynamic_code
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in negative_code
+    assert "layout(r32ui, binding = 1) uniform uimage2D afterCounters;" in negative_code
+    assert (
+        "uint touchCounters(uimage2D images[], ivec2 pixel, uint value)"
+        in negative_code
+    )
+    assert "uint oldValue = imageLoad(images[(-1)], pixel).x;" in negative_code
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in negative_code
+    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in negative_code
+    assert (
+        "layout(r32ui, binding = 0) uniform uimage2D counters[0];" not in negative_code
+    )
+    assert (
+        "layout(r32ui, binding = 0) uniform uimage2D afterCounters;"
+        not in negative_code
+    )
+    assert "uint oldValue = imageLoad(images[(-1)], pixel);" not in negative_code
+
+
+def test_opengl_formatted_image_arrays_ignore_function_call_indices():
+    shader = """
+    shader FunctionIndexedFormattedImageArrays {
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        int getLayer() {
+            return 0;
+        }
+
+        uint touchCounters(image2D images[] @r32ui, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[getLayer()], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in generated_code
+    assert (
+        "layout(r32ui, binding = 1) uniform uimage2D afterCounters;" in generated_code
+    )
+    assert "int getLayer()" in generated_code
+    assert (
+        "uint touchCounters(uimage2D images[], ivec2 pixel, uint value)"
+        in generated_code
+    )
+    assert "uint oldValue = imageLoad(images[getLayer()], pixel).x;" in generated_code
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
+    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "layout(r32ui, binding = 0) uniform uimage2D counters[1];" not in generated_code
+    )
+    assert (
+        "layout(r32ui, binding = 2) uniform uimage2D afterCounters;"
+        not in generated_code
+    )
+    assert "uint oldValue = imageLoad(images[getLayer()], pixel);" not in generated_code
+
+
+def test_opengl_formatted_image_arrays_infer_local_constant_alias_size():
+    shader = """
+    shader LocalConstAliasFormattedImageArrays {
+        const int GLOBAL = 2;
+        image2D counters @r32ui[];
+        image2D afterCounters @r32ui;
+
+        uint touchCounters(image2D images[] @r32ui, ivec2 pixel, uint value) {
+            const int LOCAL = GLOBAL + 1;
+            uint oldValue = imageLoad(images[LOCAL], pixel);
+            imageStore(images[0], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, ivec2(1, 2), 3);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int GLOBAL = 2;" in generated_code
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[4];" in generated_code
+    assert (
+        "layout(r32ui, binding = 4) uniform uimage2D afterCounters;" in generated_code
+    )
+    assert (
+        "uint touchCounters(uimage2D images[4], ivec2 pixel, uint value)"
+        in generated_code
+    )
+    assert "const int LOCAL = (GLOBAL + 1);" in generated_code
+    assert "uint oldValue = imageLoad(images[LOCAL], pixel).x;" in generated_code
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
+    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
+    )
+    assert (
+        "layout(r32ui, binding = 1) uniform uimage2D afterCounters;"
+        not in generated_code
+    )
+    assert "    int LOCAL = (GLOBAL + 1);" not in generated_code
+    assert "uint oldValue = imageLoad(images[LOCAL], pixel);" not in generated_code
+
+
 def test_opengl_explicit_scalar_float_image_formats():
     shader = """
     shader ExplicitScalarFloatFormats {
@@ -2840,7 +3437,7 @@ def test_opengl_texture_query_functions():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                ivec2 q = query2D(colorMap, linearSampler, input.uv);
+                ivec2 q = query2D(colorMap, linearSampler, uv);
                 ivec3 qa = queryArray(layerMap);
                 ivec2 qm = queryMs(msMap);
                 return vec4(q.x + qa.z + qm.x);
@@ -2879,10 +3476,10 @@ def test_opengl_texture_operation_variants_passthrough():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                vec4 lodColor = textureLod(colorMap, input.uv, 1.0);
-                vec4 gradColor = textureGrad(colorMap, input.uv, vec2(0.1), vec2(0.2));
-                vec4 fetched = texelFetch(colorMap, input.pixel, 0);
-                vec4 gathered = textureGather(colorMap, input.uv);
+                vec4 lodColor = textureLod(colorMap, uv, 1.0);
+                vec4 gradColor = textureGrad(colorMap, uv, vec2(0.1), vec2(0.2));
+                vec4 fetched = texelFetch(colorMap, pixel, 0);
+                vec4 gathered = textureGather(colorMap, uv);
                 return lodColor + gradColor + fetched + gathered;
             }
         }
@@ -2892,10 +3489,10 @@ def test_opengl_texture_operation_variants_passthrough():
     ast = crosstl.translator.parse(shader)
     generated_code = GLSLCodeGen().generate(ast)
 
-    assert "textureLod(colorMap, input.uv, 1.0)" in generated_code
-    assert "textureGrad(colorMap, input.uv, vec2(0.1), vec2(0.2))" in generated_code
-    assert "texelFetch(colorMap, input.pixel, 0)" in generated_code
-    assert "textureGather(colorMap, input.uv)" in generated_code
+    assert "textureLod(colorMap, uv, 1.0)" in generated_code
+    assert "textureGrad(colorMap, uv, vec2(0.1), vec2(0.2))" in generated_code
+    assert "texelFetch(colorMap, pixel, 0)" in generated_code
+    assert "textureGather(colorMap, uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
 
 
@@ -2934,7 +3531,7 @@ def test_opengl_explicit_sampler_argument_is_dropped():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return texture(colorMap, linearSampler, input.uv);
+                return texture(colorMap, linearSampler, uv);
             }
         }
     }
@@ -2946,7 +3543,7 @@ def test_opengl_explicit_sampler_argument_is_dropped():
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCube envMap;" in generated_code
     assert "linearSampler" not in generated_code
-    assert "texture(colorMap, input.uv)" in generated_code
+    assert "texture(colorMap, uv)" in generated_code
 
 
 def test_opengl_sampler_parameter_is_dropped():
@@ -2965,7 +3562,7 @@ def test_opengl_sampler_parameter_is_dropped():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleColor(linearSampler, input.uv);
+                return sampleColor(linearSampler, uv);
             }
         }
     }
@@ -2976,7 +3573,7 @@ def test_opengl_sampler_parameter_is_dropped():
 
     assert "vec4 sampleColor(vec2 uv)" in generated_code
     assert "texture(colorMap, uv)" in generated_code
-    assert "sampleColor(input.uv)" in generated_code
+    assert "sampleColor(uv)" in generated_code
     assert "linearSampler" not in generated_code
     assert "sampleState" not in generated_code
 
@@ -2997,7 +3594,7 @@ def test_opengl_texture_parameter_keeps_combined_sampler():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleColor(colorMap, linearSampler, input.uv);
+                return sampleColor(colorMap, linearSampler, uv);
             }
         }
     }
@@ -3009,7 +3606,7 @@ def test_opengl_texture_parameter_keeps_combined_sampler():
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "vec4 sampleColor(sampler2D tex, vec2 uv)" in generated_code
     assert "texture(tex, uv)" in generated_code
-    assert "sampleColor(colorMap, input.uv)" in generated_code
+    assert "sampleColor(colorMap, uv)" in generated_code
     assert "linearSampler" not in generated_code
     assert "sampleState" not in generated_code
 
@@ -3029,7 +3626,7 @@ def test_opengl_implicit_sampler_for_texture_parameter():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleColor(colorMap, input.uv);
+                return sampleColor(colorMap, uv);
             }
         }
     }
@@ -3041,7 +3638,7 @@ def test_opengl_implicit_sampler_for_texture_parameter():
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "vec4 sampleColor(sampler2D tex, vec2 uv)" in generated_code
     assert "texture(tex, uv)" in generated_code
-    assert "sampleColor(colorMap, input.uv)" in generated_code
+    assert "sampleColor(colorMap, uv)" in generated_code
 
 
 def test_opengl_shadow_texture_compare():
@@ -3056,7 +3653,7 @@ def test_opengl_shadow_texture_compare():
 
         fragment {
             float main(VSOutput input) @ gl_FragDepth {
-                return textureCompare(shadowMap, input.uv, input.depth);
+                return textureCompare(shadowMap, uv, depth);
             }
         }
     }
@@ -3066,7 +3663,7 @@ def test_opengl_shadow_texture_compare():
     generated_code = GLSLCodeGen().generate(ast)
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
-    assert "texture(shadowMap, vec3(input.uv, input.depth))" in generated_code
+    assert "texture(shadowMap, vec3(uv, depth))" in generated_code
     assert "textureCompare(" not in generated_code
 
 
@@ -3083,7 +3680,7 @@ def test_opengl_shadow_texture_array_compare():
 
         fragment {
             float main(VSOutput input) @ gl_FragDepth {
-                return textureCompare(shadowMaps[input.layer], input.uv, input.depth);
+                return textureCompare(shadowMaps[layer], uv, depth);
             }
         }
     }
@@ -3095,10 +3692,7 @@ def test_opengl_shadow_texture_array_compare():
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[4];" in generated_code
     )
-    assert (
-        "texture(shadowMaps[input.layer], vec3(input.uv, input.depth))"
-        in generated_code
-    )
+    assert "texture(shadowMaps[layer], vec3(uv, depth))" in generated_code
     assert "textureCompare(" not in generated_code
 
 
@@ -3120,7 +3714,7 @@ def test_opengl_shadow_texture_array_compare_filters_indexed_sampler_array():
 
         fragment {
             float main(VSOutput input) @ gl_FragDepth {
-                return shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth);
+                return shadowLayer(shadowMaps, shadowSamplers, layer, uv, depth);
             }
         }
     }
@@ -3137,9 +3731,7 @@ def test_opengl_shadow_texture_array_compare_filters_indexed_sampler_array():
         in generated_code
     )
     assert "texture(shadowMaps[layer], vec3(uv, depth))" in generated_code
-    assert (
-        "shadowLayer(shadowMaps, input.layer, input.uv, input.depth)" in generated_code
-    )
+    assert "shadowLayer(shadowMaps, layer, uv, depth)" in generated_code
     assert "sampler shadowSamplers" not in generated_code
     assert "shadowSamplers[layer]" not in generated_code
     assert "textureCompare(" not in generated_code
@@ -3165,8 +3757,8 @@ def test_opengl_fixed_shadow_texture_array_keeps_declared_size_with_constant_ind
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3186,7 +3778,7 @@ def test_opengl_fixed_shadow_texture_array_keeps_declared_size_with_constant_ind
     )
     assert "texture(shadowMaps[LAYER], vec3(uv, depth))" in generated_code
     assert "texture(shadowMaps[(1 + 2)], vec3(uv, depth))" in generated_code
-    assert "shadowLayer(shadowMaps, input.uv, input.depth)" in generated_code
+    assert "shadowLayer(shadowMaps, uv, depth)" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[4];"
         not in generated_code
@@ -3221,8 +3813,8 @@ def test_opengl_fixed_shadow_texture_array_resolves_constant_declared_size_for_b
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3243,7 +3835,7 @@ def test_opengl_fixed_shadow_texture_array_resolves_constant_declared_size_for_b
         in generated_code
     )
     assert "texture(shadowMaps[2], vec3(uv, depth))" in generated_code
-    assert "shadowLayer(shadowMaps, input.uv, input.depth)" in generated_code
+    assert "shadowLayer(shadowMaps, uv, depth)" in generated_code
     assert (
         "layout(binding = 1) uniform sampler2DShadow afterShadow;" not in generated_code
     )
@@ -3271,8 +3863,8 @@ def test_opengl_fixed_shadow_texture_array_resolves_inline_declared_size_express
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3291,7 +3883,7 @@ def test_opengl_fixed_shadow_texture_array_resolves_inline_declared_size_express
         in generated_code
     )
     assert "texture(shadowMaps[2], vec3(uv, depth))" in generated_code
-    assert "shadowLayer(shadowMaps, input.uv, input.depth)" in generated_code
+    assert "shadowLayer(shadowMaps, uv, depth)" in generated_code
     assert (
         "layout(binding = 1) uniform sampler2DShadow afterShadow;" not in generated_code
     )
@@ -3321,8 +3913,8 @@ def test_opengl_fixed_shadow_texture_arrays_preserve_parenthesized_and_unary_dec
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, unaryShadowMaps, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, unaryShadowMaps, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3344,10 +3936,7 @@ def test_opengl_fixed_shadow_texture_arrays_preserve_parenthesized_and_unary_dec
         "float shadowLayer(sampler2DShadow shadowMaps[((2 + 1) * 2)], sampler2DShadow unaryShadowMaps[(+6)], vec2 uv, float depth)"
         in generated_code
     )
-    assert (
-        "shadowLayer(shadowMaps, unaryShadowMaps, input.uv, input.depth)"
-        in generated_code
-    )
+    assert "shadowLayer(shadowMaps, unaryShadowMaps, uv, depth)" in generated_code
     assert "texture(shadowMaps[2], vec3(uv, depth))" in generated_code
     assert "texture(unaryShadowMaps[2], vec3(uv, depth))" in generated_code
     assert (
@@ -3380,8 +3969,8 @@ def test_opengl_unsized_shadow_texture_array_infers_helper_size_and_filters_samp
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3401,8 +3990,8 @@ def test_opengl_unsized_shadow_texture_array_infers_helper_size_and_filters_samp
     )
     assert "texture(shadowMaps[3], vec3(uv, depth))" in generated_code
     assert "texture(shadowMaps[1], vec3(uv, depth))" in generated_code
-    assert "texture(afterShadow, vec3(input.uv, input.depth))" in generated_code
-    assert "shadowLayer(shadowMaps, input.uv, input.depth)" in generated_code
+    assert "texture(afterShadow, vec3(uv, depth))" in generated_code
+    assert "shadowLayer(shadowMaps, uv, depth)" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[];"
         not in generated_code
@@ -3441,8 +4030,8 @@ def test_opengl_unsized_shadow_texture_array_infers_transitive_helper_size():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowMid(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowMid(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3467,8 +4056,8 @@ def test_opengl_unsized_shadow_texture_array_infers_transitive_helper_size():
     assert "texture(shadowMaps[4], vec3(uv, depth))" in generated_code
     assert "texture(shadowMaps[1], vec3(uv, depth))" in generated_code
     assert "shadowDeep(shadowMaps, uv, depth)" in generated_code
-    assert "shadowMid(shadowMaps, input.uv, input.depth)" in generated_code
-    assert "texture(afterShadow, vec3(input.uv, input.depth))" in generated_code
+    assert "shadowMid(shadowMaps, uv, depth)" in generated_code
+    assert "texture(afterShadow, vec3(uv, depth))" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[];"
         not in generated_code
@@ -3504,8 +4093,8 @@ def test_opengl_unsized_shadow_texture_array_preserves_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, layer, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3525,10 +4114,8 @@ def test_opengl_unsized_shadow_texture_array_preserves_dynamic_indexing():
     )
     assert "texture(shadowMaps[layer], vec3(uv, depth))" in generated_code
     assert "texture(shadowMaps[3], vec3(uv, depth))" in generated_code
-    assert (
-        "shadowLayer(shadowMaps, input.layer, input.uv, input.depth)" in generated_code
-    )
-    assert "texture(afterShadow, vec3(input.uv, input.depth))" in generated_code
+    assert "shadowLayer(shadowMaps, layer, uv, depth)" in generated_code
+    assert "texture(afterShadow, vec3(uv, depth))" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[];"
         not in generated_code
@@ -3562,8 +4149,8 @@ def test_opengl_unsized_shadow_texture_array_ignores_unsupported_indices():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, layer, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3587,8 +4174,8 @@ def test_opengl_unsized_shadow_texture_array_ignores_unsupported_indices():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3652,8 +4239,8 @@ def test_opengl_unsized_shadow_texture_array_infers_constant_expression_size():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3671,8 +4258,8 @@ def test_opengl_unsized_shadow_texture_array_infers_constant_expression_size():
         in generated_code
     )
     assert "texture(shadowMaps[(2 * 2)], vec3(uv, depth))" in generated_code
-    assert "texture(afterShadow, vec3(input.uv, input.depth))" in generated_code
-    assert "shadowLayer(shadowMaps, input.uv, input.depth)" in generated_code
+    assert "texture(afterShadow, vec3(uv, depth))" in generated_code
+    assert "shadowLayer(shadowMaps, uv, depth)" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[];"
         not in generated_code
@@ -3703,8 +4290,8 @@ def test_opengl_unsized_shadow_texture_array_infers_named_constant_size():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.uv, input.depth);
-                float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, uv, depth);
+                float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
         }
@@ -3724,8 +4311,8 @@ def test_opengl_unsized_shadow_texture_array_infers_named_constant_size():
         in generated_code
     )
     assert "texture(shadowMaps[LAYER], vec3(uv, depth))" in generated_code
-    assert "texture(afterShadow, vec3(input.uv, input.depth))" in generated_code
-    assert "shadowLayer(shadowMaps, input.uv, input.depth)" in generated_code
+    assert "texture(afterShadow, vec3(uv, depth))" in generated_code
+    assert "shadowLayer(shadowMaps, uv, depth)" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[];"
         not in generated_code
@@ -3751,7 +4338,7 @@ def test_opengl_implicit_sampler_for_shadow_texture_parameter():
 
         fragment {
             float main(VSOutput input) @ gl_FragDepth {
-                return sampleShadow(shadowMap, input.uv, input.depth);
+                return sampleShadow(shadowMap, uv, depth);
             }
         }
     }
@@ -3766,7 +4353,7 @@ def test_opengl_implicit_sampler_for_shadow_texture_parameter():
         in generated_code
     )
     assert "texture(tex, vec3(uv, depth))" in generated_code
-    assert "sampleShadow(shadowMap, input.uv, input.depth)" in generated_code
+    assert "sampleShadow(shadowMap, uv, depth)" in generated_code
     assert "textureCompare(" not in generated_code
 
 
@@ -3787,7 +4374,7 @@ def test_opengl_shadow_texture_parameter_keeps_combined_sampler():
 
         fragment {
             float main(VSOutput input) @ gl_FragDepth {
-                return sampleShadow(shadowMap, shadowSampler, input.uv, input.depth);
+                return sampleShadow(shadowMap, shadowSampler, uv, depth);
             }
         }
     }
@@ -3802,7 +4389,7 @@ def test_opengl_shadow_texture_parameter_keeps_combined_sampler():
         in generated_code
     )
     assert "texture(tex, vec3(uv, depth))" in generated_code
-    assert "sampleShadow(shadowMap, input.uv, input.depth)" in generated_code
+    assert "sampleShadow(shadowMap, uv, depth)" in generated_code
     assert "shadowSampler" not in generated_code
     assert "compareSampler" not in generated_code
     assert "textureCompare(" not in generated_code
@@ -3825,7 +4412,7 @@ def test_opengl_shadow_compare_sampler_parameter_is_dropped():
 
         fragment {
             float main(VSOutput input) @ gl_FragDepth {
-                return sampleShadow(shadowSampler, input.uv, input.depth);
+                return sampleShadow(shadowSampler, uv, depth);
             }
         }
     }
@@ -3837,7 +4424,7 @@ def test_opengl_shadow_compare_sampler_parameter_is_dropped():
     assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
     assert "float sampleShadow(vec2 uv, float depth)" in generated_code
     assert "texture(shadowMap, vec3(uv, depth))" in generated_code
-    assert "sampleShadow(input.uv, input.depth)" in generated_code
+    assert "sampleShadow(uv, depth)" in generated_code
     assert "shadowSampler" not in generated_code
     assert "compareSampler" not in generated_code
     assert "textureCompare(" not in generated_code

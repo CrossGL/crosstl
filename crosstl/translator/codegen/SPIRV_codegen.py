@@ -72,6 +72,7 @@ class VulkanSPIRVCodeGen:
         self.resource_types = {}
         self.resource_image_types = {}
 
+        self.required_capabilities = set()
         self.global_variables = {}
         self.local_variables = {}
         self.variable_value_types = {}
@@ -112,6 +113,11 @@ class VulkanSPIRVCodeGen:
     def emit(self, instruction: str):
         """Add a SPIR-V instruction to the code."""
         self.code_lines.append(instruction)
+
+    def require_capability(self, capability: str):
+        """Request a SPIR-V capability for instructions emitted later."""
+        if capability != "Shader":
+            self.required_capabilities.add(capability)
 
     def register_primitive_type(self, name: str) -> SpirvId:
         """Create and register a primitive type."""
@@ -206,6 +212,11 @@ class VulkanSPIRVCodeGen:
         )
         if key in self.resource_image_types:
             return self.resource_image_types[key]
+
+        if sampled == 2 and multisampled:
+            self.require_capability("StorageImageMultisample")
+            if arrayed:
+                self.require_capability("ImageMSArray")
 
         id_value = self.get_id()
         self.emit(
@@ -571,6 +582,8 @@ class VulkanSPIRVCodeGen:
             "texelFetch",
             "textureSize",
             "imageSize",
+            "textureSamples",
+            "imageSamples",
             "textureQueryLevels",
             "textureQueryLod",
         }
@@ -703,11 +716,20 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
+            image_operands = ""
+            if metadata.get("multisampled"):
+                if len(args) < 3:
+                    self.emit("; WARNING: imageLoad requires a sample operand")
+                    return self.register_constant(
+                        0.0, self.register_primitive_type("float")
+                    )
+                image_operands = f" Sample %{args[2].id}"
+
             result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
             self.emit(
                 f"%{id_value} = OpImageRead %{result_type.id} "
-                f"%{image_id.id} %{coord_id.id}"
+                f"%{image_id.id} %{coord_id.id}{image_operands}"
             )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -725,7 +747,18 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: imageStore requires a storage image operand")
                 return None
 
-            self.emit(f"OpImageWrite %{image_id.id} %{coord_id.id} %{texel_id.id}")
+            image_operands = ""
+            if metadata.get("multisampled"):
+                if len(args) < 4:
+                    self.emit("; WARNING: imageStore requires a sample operand")
+                    return None
+                sample_id, texel_id = args[2], args[3]
+                image_operands = f" Sample %{sample_id.id}"
+
+            self.emit(
+                f"OpImageWrite %{image_id.id} %{coord_id.id} %{texel_id.id}"
+                f"{image_operands}"
+            )
             return None
 
         if function_name in {"texture", "texture2D", "textureCube"}:
@@ -896,7 +929,7 @@ class VulkanSPIRVCodeGen:
                 )
 
             sampled_image_id, coord_id, extra_args, metadata = sample_args
-            lod_id = extra_args[0]
+            operand_id = extra_args[0]
 
             image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
             if image_id is None:
@@ -906,9 +939,10 @@ class VulkanSPIRVCodeGen:
 
             result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
+            image_operand = "Sample" if metadata.get("multisampled") else "Lod"
             self.emit(
                 f"%{id_value} = OpImageFetch %{result_type.id} "
-                f"%{image_id.id} %{coord_id.id} Lod %{lod_id.id}"
+                f"%{image_id.id} %{coord_id.id} {image_operand} %{operand_id.id}"
             )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -935,7 +969,12 @@ class VulkanSPIRVCodeGen:
 
             result_type = self.resource_query_size_result_type(metadata)
             id_value = self.get_id()
-            if function_name == "textureSize" and len(args) >= 2:
+            self.require_capability("ImageQuery")
+            if (
+                function_name == "textureSize"
+                and len(args) >= 2
+                and not metadata.get("multisampled")
+            ):
                 self.emit(
                     f"%{id_value} = OpImageQuerySizeLod %{result_type.id} "
                     f"%{image_id.id} %{args[1].id}"
@@ -945,6 +984,42 @@ class VulkanSPIRVCodeGen:
                     f"%{id_value} = OpImageQuerySize %{result_type.id} "
                     f"%{image_id.id}"
                 )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if function_name in {"textureSamples", "imageSamples"}:
+            if not args:
+                self.emit(f"; WARNING: {function_name} requires an image operand")
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            resource_id = args[0]
+            metadata = self.resource_metadata_for_value(resource_id)
+            expected_kind = (
+                "sampled_image"
+                if function_name == "textureSamples"
+                else "storage_image"
+            )
+            if not metadata or metadata.get("kind") != expected_kind:
+                self.emit(
+                    f"; WARNING: {function_name} requires a {expected_kind} operand"
+                )
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            if metadata.get("dim") != "2D" or not metadata.get("multisampled"):
+                self.emit(f"; WARNING: {function_name} requires a multisample 2D image")
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            image_id = self.image_operand_for_query(resource_id, metadata)
+            if image_id is None:
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            result_type = self.register_primitive_type("int")
+            id_value = self.get_id()
+            self.require_capability("ImageQuery")
+            self.emit(
+                f"%{id_value} = OpImageQuerySamples %{result_type.id} "
+                f"%{image_id.id}"
+            )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
 
@@ -967,6 +1042,7 @@ class VulkanSPIRVCodeGen:
 
             result_type = self.register_primitive_type("int")
             id_value = self.get_id()
+            self.require_capability("ImageQuery")
             self.emit(
                 f"%{id_value} = OpImageQueryLevels %{result_type.id} " f"%{image_id.id}"
             )
@@ -999,6 +1075,7 @@ class VulkanSPIRVCodeGen:
             float_type = self.register_primitive_type("float")
             result_type = self.register_vector_type(float_type, 2)
             id_value = self.get_id()
+            self.require_capability("ImageQuery")
             self.emit(
                 f"%{id_value} = OpImageQueryLod %{result_type.id} "
                 f"%{sampled_image_id.id} %{coord_id.id}"
@@ -1346,10 +1423,30 @@ class VulkanSPIRVCodeGen:
     def resource_type_info(self, type_str: str):
         sampler_info = {
             "sampler": {"kind": "sampler"},
+            "sampler1D": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "1D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
             "sampler2D": {
                 "kind": "sampled_image",
                 "component_type": "float",
                 "dim": "2D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "sampler3D": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "3D",
                 "depth": 0,
                 "arrayed": 0,
                 "multisampled": 0,
@@ -1362,6 +1459,16 @@ class VulkanSPIRVCodeGen:
                 "dim": "Cube",
                 "depth": 0,
                 "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "sampler2DArray": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 1,
                 "multisampled": 0,
                 "sampled": 1,
                 "format": "Unknown",
@@ -1440,9 +1547,11 @@ class VulkanSPIRVCodeGen:
         if type_str in sampler_info:
             return sampler_info[type_str]
 
-        image_match = re.fullmatch(r"([iu]?image)(2D|3D|Cube)(Array)?", type_str)
+        image_match = re.fullmatch(r"([iu]?image)(2D|3D|Cube)(MS)?(Array)?", type_str)
         if image_match:
-            prefix, dim, array_suffix = image_match.groups()
+            prefix, dim, ms_suffix, array_suffix = image_match.groups()
+            if ms_suffix and dim != "2D":
+                return None
             component_type = {
                 "image": "float",
                 "iimage": "int",
@@ -1454,7 +1563,7 @@ class VulkanSPIRVCodeGen:
                 "dim": "Cube" if dim == "Cube" else dim,
                 "depth": 0,
                 "arrayed": 1 if array_suffix else 0,
-                "multisampled": 0,
+                "multisampled": 1 if ms_suffix else 0,
                 "sampled": 2,
                 "format": "Unknown",
             }
@@ -2613,6 +2722,12 @@ class VulkanSPIRVCodeGen:
         header_lines = self.code_lines[:3]
         bound_line = f"; Bound: {self.next_id}"
         rest_lines = self.code_lines[4:]
+        capability_lines = [
+            f"OpCapability {capability}"
+            for capability in sorted(self.required_capabilities)
+        ]
+        if capability_lines:
+            rest_lines = rest_lines[:1] + capability_lines + rest_lines[1:]
 
         final_code = "\n".join(
             header_lines + [bound_line] + rest_lines + self.decorations
