@@ -1781,7 +1781,8 @@ class Parser:
 
         if token_type == "NUMBER":
             self.eat("NUMBER")
-            return LiteralNode(int(value), PrimitiveType("int"))
+            digits, literal_type = self.parse_integer_literal_parts(value)
+            return LiteralNode(int(digits), literal_type)
 
         elif token_type == "FLOAT_NUMBER":
             self.eat("FLOAT_NUMBER")
@@ -1793,15 +1794,18 @@ class Parser:
 
         elif token_type == "HEX_NUMBER":
             self.eat("HEX_NUMBER")
-            return LiteralNode(int(value, 16), PrimitiveType("int"))
+            digits, literal_type = self.parse_integer_literal_parts(value)
+            return LiteralNode(int(digits, 16), literal_type)
 
         elif token_type == "BIN_NUMBER":
             self.eat("BIN_NUMBER")
-            return LiteralNode(int(value, 2), PrimitiveType("int"))
+            digits, literal_type = self.parse_integer_literal_parts(value)
+            return LiteralNode(int(digits, 2), literal_type)
 
         elif token_type == "OCT_NUMBER":
             self.eat("OCT_NUMBER")
-            return LiteralNode(int(value, 8), PrimitiveType("int"))
+            digits, literal_type = self.parse_integer_literal_parts(value)
+            return LiteralNode(int(digits, 8), literal_type)
 
         elif token_type == "STRING_LITERAL":
             self.eat("STRING_LITERAL")
@@ -1814,6 +1818,12 @@ class Parser:
         else:
             self.eat(token_type)
             return LiteralNode(value, PrimitiveType("unknown"))
+
+    def parse_integer_literal_parts(self, value):
+        value = str(value)
+        if value.endswith(("u", "U")):
+            return value[:-1], PrimitiveType("uint")
+        return value, PrimitiveType("int")
 
     # Legacy compatibility methods
     def parse_legacy_shader(self):

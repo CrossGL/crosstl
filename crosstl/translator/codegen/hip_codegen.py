@@ -16,9 +16,14 @@ from ..ast import (
     StructNode,
     VariableNode,
 )
+from .resource_diagnostics import ResourceDiagnosticMixin
+from .resource_query import ResourceQueryMixin
+from .resource_arrays import format_array_declarator
 
 
-class HipCodeGen:
+class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
+    resource_diagnostic_backend = "HIP"
+
     def __init__(self):
         self.indent_level = 0
         self.code_lines = []
@@ -26,6 +31,11 @@ class HipCodeGen:
         self.variable_counter = 0
         self.variable_types = {}
         self.helper_functions = {}
+        self.query_resource_names = set()
+        self.query_metadata_function_params = {}
+        self.query_functions_by_name = {}
+        self.current_function_name = None
+        self.resource_query_info_required = False
 
         # CrossGL to HIP type mapping
         self.type_map = {
@@ -260,6 +270,18 @@ class HipCodeGen:
         self.indent_level = 0
         self.variable_types = {}
         self.helper_functions = {}
+        self.resource_query_info_required = False
+        (
+            self.query_resource_names,
+            self.query_metadata_function_params,
+        ) = self.collect_resource_query_requirements(node)
+        self.query_functions_by_name = {
+            getattr(func, "name", None): func
+            for func in self.query_collect_functions(node)
+        }
+        self.query_functions_by_name = {
+            name: func for name, func in self.query_functions_by_name.items() if name
+        }
 
         self.add_includes()
         self.visit(node)
@@ -344,6 +366,8 @@ class HipCodeGen:
     def visit_FunctionNode(self, node: FunctionNode) -> str:
         saved_variable_types = self.variable_types.copy()
         self.current_function = node.name
+        saved_current_function_name = self.current_function_name
+        self.current_function_name = node.name
 
         qualifiers = []
         if hasattr(node, "qualifiers") and node.qualifiers:
@@ -370,7 +394,15 @@ class HipCodeGen:
             return_type = "void"
 
         param_list = getattr(node, "parameters", getattr(node, "params", []))
-        params = ", ".join(self.visit_parameter(param) for param in param_list)
+        param_declarations = []
+        for param in param_list:
+            param_declarations.append(self.visit_parameter(param))
+            param_type = self.get_parameter_type(param)
+            param_name = getattr(param, "name", getattr(param, "param_name", None))
+            metadata_param = self.query_metadata_parameter(param_name, param_type)
+            if metadata_param:
+                param_declarations.append(metadata_param)
+        params = ", ".join(param_declarations)
 
         qualifier_str = " ".join(qualifiers)
         signature = f"{qualifier_str} {return_type} {node.name}({params})"
@@ -391,6 +423,7 @@ class HipCodeGen:
         self.add_line()
         self.current_function = None
         self.variable_types = saved_variable_types
+        self.current_function_name = saved_current_function_name
         return ""
 
     def visit_parameter(self, param) -> str:
@@ -434,7 +467,11 @@ class HipCodeGen:
         return ""
 
     def visit_VariableNode(self, node: VariableNode) -> str:
+        var_type = self.get_variable_node_type(node)
         self.add_line(f"{self.format_variable_declaration(node)};")
+        metadata_declaration = self.query_metadata_declaration(node.name, var_type)
+        if metadata_declaration:
+            self.add_line(f"{metadata_declaration};")
         return ""
 
     def format_variable_declaration(self, node: VariableNode) -> str:
@@ -629,6 +666,8 @@ class HipCodeGen:
         if resource_call is not None:
             return resource_call
 
+        args = self.query_metadata_call_arguments(func_name, raw_args, args)
+
         # Map function name
         mapped_name = self.function_map.get(func_name, func_name)
 
@@ -653,13 +692,24 @@ class HipCodeGen:
         if not self.helper_functions:
             return
         helpers = []
+        if self.resource_query_info_required:
+            helpers.extend(
+                [
+                    "struct CglResourceQueryInfo {",
+                    "    int width;",
+                    "    int height;",
+                    "    int depth;",
+                    "    int elements;",
+                    "    int levels;",
+                    "    int samples;",
+                    "};",
+                    "",
+                ]
+            )
         for helper in self.helper_functions.values():
             helpers.extend(helper.splitlines())
             helpers.append("")
         self.code_lines[5:5] = helpers
-
-    def require_helper_function(self, name, body):
-        self.helper_functions.setdefault(name, body)
 
     def register_variable_type(self, name, type_name):
         if not name or type_name is None:
@@ -685,36 +735,6 @@ class HipCodeGen:
         if name is None:
             return None
         return self.variable_types.get(name)
-
-    def resource_base_type(self, type_name):
-        if not isinstance(type_name, str):
-            return None
-        return type_name.split("[", 1)[0]
-
-    def is_multisample_resource_type(self, type_name):
-        base_type = self.resource_base_type(type_name)
-        return isinstance(base_type, str) and "MS" in base_type
-
-    def image_value_type(self, image_type):
-        base_type = self.resource_base_type(image_type)
-        if isinstance(base_type, str) and base_type.startswith("iimage"):
-            return "int"
-        if isinstance(base_type, str) and base_type.startswith("uimage"):
-            return "uint"
-        return "float4"
-
-    def coord_component(self, coord, component):
-        return f"{coord}.{component}"
-
-    def surface_x_offset(self, coord, value_type):
-        return f"{self.coord_component(coord, 'x')} * sizeof({value_type})"
-
-    def unsupported_multisample_resource_call(self, func_name, resource_type, args):
-        args_str = ", ".join(args)
-        return (
-            f"/* unsupported HIP multisample resource call: "
-            f"{func_name} on {resource_type} */ {func_name}({args_str})"
-        )
 
     def require_surface_read_helper(self, helper_name):
         helpers = {
@@ -749,6 +769,84 @@ class HipCodeGen:
         self.require_helper_function(helper_name, helpers[helper_name])
 
     def generate_resource_call(self, func_name, raw_args, args):
+        if func_name in {"textureSize", "imageSize"}:
+            return self.generate_dimension_query(func_name, raw_args, args)
+
+        if func_name in {"textureSamples", "imageSamples"}:
+            return self.generate_sample_count_query(func_name, raw_args, args)
+
+        if func_name == "textureQueryLevels":
+            return self.generate_texture_query_levels(raw_args)
+
+        if func_name == "textureQueryLod" and len(args) >= 2:
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if texture_type is not None:
+                return self.unsupported_resource_query_call(
+                    func_name, texture_type, args
+                )
+
+        if (
+            func_name
+            in {
+                "texture",
+                "textureLod",
+                "textureGrad",
+                "textureGather",
+                "textureCompare",
+                "textureCompareLod",
+                "textureCompareGrad",
+                "textureCompareOffset",
+                "textureGatherCompare",
+                "textureGatherCompareOffset",
+            }
+            and len(args) >= 2
+        ):
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if self.is_shadow_resource_type(texture_type):
+                return self.unsupported_shadow_resource_call(
+                    func_name, texture_type, args
+                )
+
+        if (
+            func_name
+            in {
+                "textureGather",
+                "textureGatherOffset",
+                "textureGatherOffsets",
+            }
+            and len(args) >= 2
+        ):
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if texture_type is not None:
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+
+        if func_name in {
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+        }:
+            image_type = None
+            if raw_args:
+                image_type = self.resource_base_type(
+                    self.get_expression_type(raw_args[0])
+                )
+            return self.unsupported_image_atomic_resource_call(
+                func_name, image_type, args
+            )
+
         if func_name in {"texture", "textureLod", "textureGrad"} and len(args) >= 2:
             texture_type = self.resource_base_type(
                 self.get_expression_type(raw_args[0])
@@ -965,6 +1063,12 @@ class HipCodeGen:
         if literal_type == "char":
             escaped = self.escape_literal(value, quote="'")
             return f"'{escaped}'"
+        if (
+            literal_type == "uint"
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        ):
+            return f"{value}u"
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
@@ -1101,11 +1205,12 @@ class HipCodeGen:
         array_suffix = type_name[open_bracket:]
         mapped_base = self.map_type(base_type)
 
-        if dynamic_array_as_pointer and "[]" in array_suffix:
-            array_suffix = array_suffix.replace("[]", "")
-            return f"{mapped_base}* {name}{array_suffix}"
-
-        return f"{mapped_base} {name}{array_suffix}"
+        return format_array_declarator(
+            mapped_base,
+            name,
+            array_suffix,
+            dynamic_array_as_pointer=dynamic_array_as_pointer,
+        )
 
     def format_array_size(self, size):
         if size is None:

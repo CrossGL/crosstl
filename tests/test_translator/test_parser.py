@@ -6,6 +6,7 @@ from crosstl.translator.ast import (
     ArrayType,
     ForInNode,
     FunctionCallNode,
+    LiteralNode,
     LoopNode,
     MatrixType,
     PreprocessorNode,
@@ -1262,6 +1263,29 @@ def test_rayquery_method_parses_to_node():
     body = stage.entry_point.body.statements
     var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
     assert isinstance(var_decl.initial_value, RayQueryOpNode)
+
+
+def test_unsigned_integer_literals_parse_as_uint_nodes():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                uint value = pack(7u, 0xFu, 0b101U, 0o17u);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    stage = ast.stages[ShaderStage.COMPUTE]
+    body = stage.entry_point.body.statements
+    var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
+    args = var_decl.initial_value.args
+
+    assert len(args) == 4
+    assert [arg.value for arg in args] == [7, 15, 5, 15]
+    assert all(isinstance(arg, LiteralNode) for arg in args)
+    assert all(arg.literal_type.name == "uint" for arg in args)
 
 
 if __name__ == "__main__":

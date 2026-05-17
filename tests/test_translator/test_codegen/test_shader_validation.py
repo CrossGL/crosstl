@@ -8,7 +8,6 @@ from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 
-
 HELPER_RANGE_SHADER = """
 shader RangeForInValidation {
     int helper(int limit) {
@@ -47,6 +46,531 @@ shader FragmentStructInputValidation {
     fragment {
         vec4 main(VSOutput input) @ gl_FragColor {
             return vec4(input.uv, input.normal.x, 1.0);
+        }
+    }
+}
+"""
+
+
+SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER = """
+shader SampledTextureArrayValidation {
+    sampler2D textures[4];
+    sampler samplers[4];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+    };
+
+    vec4 sampleUnsized(sampler2D textures[], sampler samplers[], vec2 uv) {
+        return texture(textures[2], samplers[2], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleUnsized(textures, samplers, input.uv);
+        }
+    }
+}
+"""
+
+
+SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER = """
+shader SampledTextureArrayConstIndexValidation {
+    const int COUNT = 4;
+    sampler2D textures[4];
+    sampler samplers[4];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+    };
+
+    vec4 sampleConst(sampler2D textures[4], sampler samplers[4], vec2 uv) {
+        return texture(textures[COUNT - 1], samplers[COUNT - 1], uv);
+    }
+
+    vec4 sampleShadowed(sampler2D textures[4], sampler samplers[4], vec2 uv) {
+        int COUNT = 0;
+        return texture(textures[COUNT], samplers[COUNT], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            int COUNT = 0;
+            vec4 direct = texture(textures[COUNT], samplers[COUNT], input.uv);
+            return direct + sampleConst(textures, samplers, input.uv) + sampleShadowed(textures, samplers, input.uv);
+        }
+    }
+}
+"""
+
+
+SAMPLED_TEXTURE_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER = """
+shader TransitiveSampledShadowedConstIndexValidation {
+    const int COUNT = 4;
+    sampler2D textures[4];
+    sampler samplers[4];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+    };
+
+    vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv) {
+        int COUNT = 0;
+        return texture(textures[COUNT], samplers[COUNT], uv);
+    }
+
+    vec4 passThrough(sampler2D textures[], sampler samplers[], vec2 uv) {
+        int COUNT = 0;
+        vec4 sampled = texture(textures[COUNT], samplers[COUNT], uv);
+        return sampled + leaf(textures, samplers, uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return passThrough(textures, samplers, input.uv);
+        }
+    }
+}
+"""
+
+
+SHADOW_SAMPLER_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER = """
+shader TransitiveShadowSamplerShadowedConstIndexValidation {
+    const int COUNT = 4;
+    sampler2DShadow shadowMaps[4];
+    sampler shadowSamplers[4];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        float depth;
+    };
+
+    float leaf(sampler2DShadow shadowMaps[], sampler shadowSamplers[], vec2 uv, float depth) {
+        int COUNT = 0;
+        return textureCompare(shadowMaps[COUNT], shadowSamplers[COUNT], uv, depth);
+    }
+
+    float passThrough(sampler2DShadow shadowMaps[], sampler shadowSamplers[], vec2 uv, float depth) {
+        int COUNT = 0;
+        float sampled = textureCompare(shadowMaps[COUNT], shadowSamplers[COUNT], uv, depth);
+        return sampled + leaf(shadowMaps, shadowSamplers, uv, depth);
+    }
+
+    fragment {
+        float main(FSInput input) @ gl_FragDepth {
+            return passThrough(shadowMaps, shadowSamplers, input.uv, input.depth);
+        }
+    }
+}
+"""
+
+
+ARRAY_SHADOW_TEXTURE_RESOURCE_ARRAY_FRAGMENT_SHADER = """
+shader ArrayShadowTextureResourceArrayValidation {
+    sampler2DArrayShadow shadowArrays[4];
+    samplerCubeArrayShadow cubeShadowArrays[4];
+    sampler shadowSamplers[4];
+
+    struct FSInput {
+        vec3 uvLayer @ TEXCOORD0;
+        vec4 cubeLayer @ TEXCOORD1;
+        float depth;
+    };
+
+    float sampleArrayLayer(sampler2DArrayShadow shadowArrays[], sampler shadowSamplers[], vec3 uvLayer, float depth) {
+        return textureCompare(shadowArrays[2], shadowSamplers[2], uvLayer, depth);
+    }
+
+    float sampleCubeLayer(samplerCubeArrayShadow cubeShadowArrays[], sampler shadowSamplers[], vec4 cubeLayer, float depth) {
+        return textureCompare(cubeShadowArrays[3], shadowSamplers[3], cubeLayer, depth);
+    }
+
+    fragment {
+        float main(FSInput input) @ gl_FragDepth {
+            return sampleArrayLayer(shadowArrays, shadowSamplers, input.uvLayer, input.depth) + sampleCubeLayer(cubeShadowArrays, shadowSamplers, input.cubeLayer, input.depth);
+        }
+    }
+}
+"""
+
+
+ARRAY_SHADOW_TEXTURE_QUERY_FRAGMENT_SHADER = """
+shader ArrayShadowTextureQueryValidation {
+    sampler2DArrayShadow shadowArray;
+    samplerCubeArrayShadow cubeShadowArray;
+    sampler2DArrayShadow shadowArrays[4];
+    samplerCubeArrayShadow cubeShadowArrays[4];
+
+    ivec3 query2DArrayShadow(sampler2DArrayShadow tex) {
+        ivec3 size = textureSize(tex, 1);
+        int levels = textureQueryLevels(tex);
+        return size + ivec3(levels);
+    }
+
+    ivec3 queryCubeArrayShadow(samplerCubeArrayShadow tex) {
+        ivec3 size = textureSize(tex, 0);
+        int levels = textureQueryLevels(tex);
+        return size + ivec3(levels);
+    }
+
+    ivec3 queryArrayElements(sampler2DArrayShadow shadowArrays[], samplerCubeArrayShadow cubeShadowArrays[]) {
+        ivec3 arraySize = textureSize(shadowArrays[2], 1);
+        ivec3 cubeSize = textureSize(cubeShadowArrays[3], 0);
+        int arrayLevels = textureQueryLevels(shadowArrays[2]);
+        int cubeLevels = textureQueryLevels(cubeShadowArrays[3]);
+        return arraySize + cubeSize + ivec3(arrayLevels + cubeLevels);
+    }
+
+    fragment {
+        vec4 main() @ gl_FragColor {
+            ivec3 a = query2DArrayShadow(shadowArray);
+            ivec3 b = queryCubeArrayShadow(cubeShadowArray);
+            ivec3 c = queryArrayElements(shadowArrays, cubeShadowArrays);
+            return vec4(float(a.x + b.y + c.z));
+        }
+    }
+}
+"""
+
+
+ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER = """
+shader ArrayTextureQueryLodValidation {
+    sampler2DArray layerMap;
+    samplerCubeArray cubeArray;
+    sampler2DArray layerMaps[4];
+    samplerCubeArray cubeArrays[4];
+    sampler linearSampler;
+    sampler linearSamplers[4];
+
+    struct FSInput {
+        vec3 uvLayer @ TEXCOORD0;
+        vec4 cubeLayer @ TEXCOORD1;
+    };
+
+    vec2 queryArrayLod(sampler2DArray tex, sampler s, vec3 uvLayer) {
+        return textureQueryLod(tex, s, uvLayer);
+    }
+
+    vec2 queryCubeArrayLod(samplerCubeArray tex, sampler s, vec4 cubeLayer) {
+        return textureQueryLod(tex, s, cubeLayer);
+    }
+
+    vec2 queryArrayElementLod(sampler2DArray layerMaps[], sampler linearSamplers[], vec3 uvLayer) {
+        return textureQueryLod(layerMaps[2], linearSamplers[2], uvLayer);
+    }
+
+    vec2 queryCubeArrayElementLod(samplerCubeArray cubeArrays[], sampler linearSamplers[], vec4 cubeLayer) {
+        return textureQueryLod(cubeArrays[3], linearSamplers[3], cubeLayer);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            vec2 a = queryArrayLod(layerMap, linearSampler, input.uvLayer);
+            vec2 b = queryCubeArrayLod(cubeArray, linearSampler, input.cubeLayer);
+            vec2 c = queryArrayElementLod(layerMaps, linearSamplers, input.uvLayer);
+            vec2 d = queryCubeArrayElementLod(cubeArrays, linearSamplers, input.cubeLayer);
+            return vec4(a.x + b.y, c.x + d.y, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+
+SHADOW_ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER = """
+shader ShadowArrayTextureQueryLodValidation {
+    sampler2DArrayShadow shadowArray;
+    samplerCubeArrayShadow cubeShadowArray;
+    sampler2DArrayShadow shadowArrays[4];
+    samplerCubeArrayShadow cubeShadowArrays[4];
+    sampler linearSampler;
+    sampler linearSamplers[4];
+
+    struct FSInput {
+        vec3 uvLayer @ TEXCOORD0;
+        vec4 cubeLayer @ TEXCOORD1;
+    };
+
+    vec2 queryArrayLod(sampler2DArrayShadow tex, sampler s, vec3 uvLayer) {
+        return textureQueryLod(tex, s, uvLayer);
+    }
+
+    vec2 queryCubeArrayLod(samplerCubeArrayShadow tex, sampler s, vec4 cubeLayer) {
+        return textureQueryLod(tex, s, cubeLayer);
+    }
+
+    vec2 queryArrayElementLod(sampler2DArrayShadow shadowArrays[], sampler linearSamplers[], vec3 uvLayer) {
+        return textureQueryLod(shadowArrays[2], linearSamplers[2], uvLayer);
+    }
+
+    vec2 queryCubeArrayElementLod(samplerCubeArrayShadow cubeShadowArrays[], sampler linearSamplers[], vec4 cubeLayer) {
+        return textureQueryLod(cubeShadowArrays[3], linearSamplers[3], cubeLayer);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            vec2 a = queryArrayLod(shadowArray, linearSampler, input.uvLayer);
+            vec2 b = queryCubeArrayLod(cubeShadowArray, linearSampler, input.cubeLayer);
+            vec2 c = queryArrayElementLod(shadowArrays, linearSamplers, input.uvLayer);
+            vec2 d = queryCubeArrayElementLod(cubeShadowArrays, linearSamplers, input.cubeLayer);
+            return vec4(a.x + b.y, c.x + d.y, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+
+CUBE_ARRAY_TEXTURE_GRAD_GATHER_FRAGMENT_SHADER = """
+shader CubeArrayGradGatherValidation {
+    samplerCubeArray cubeArray;
+    samplerCubeArray cubeArrays[4];
+    sampler cubeSampler;
+    sampler cubeSamplers[4];
+
+    struct FSInput {
+        vec4 cubeLayer @ TEXCOORD0;
+        vec3 ddx @ TEXCOORD1;
+        vec3 ddy @ TEXCOORD2;
+    };
+
+    vec4 sampleCubeArrayOps(samplerCubeArray tex, sampler s, vec4 cubeLayer, vec3 ddx, vec3 ddy) {
+        vec4 gradColor = textureGrad(tex, s, cubeLayer, ddx, ddy);
+        vec4 gathered = textureGather(tex, s, cubeLayer);
+        return gradColor + gathered;
+    }
+
+    vec4 sampleCubeArrayElements(samplerCubeArray cubeArrays[], sampler cubeSamplers[], vec4 cubeLayer, vec3 ddx, vec3 ddy) {
+        vec4 gradColor = textureGrad(cubeArrays[2], cubeSamplers[2], cubeLayer, ddx, ddy);
+        vec4 gathered = textureGather(cubeArrays[3], cubeSamplers[3], cubeLayer);
+        return gradColor + gathered;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleCubeArrayOps(cubeArray, cubeSampler, input.cubeLayer, input.ddx, input.ddy)
+                + sampleCubeArrayElements(cubeArrays, cubeSamplers, input.cubeLayer, input.ddx, input.ddy);
+        }
+    }
+}
+"""
+
+
+TEXTURE_GRADIENT_FAMILY_FRAGMENT_SHADER = """
+shader TextureGradientFamilyValidation {
+    sampler2D colorMap;
+    samplerCube cubeMap;
+    sampler3D volumeMap;
+    sampler colorSampler;
+    sampler cubeSampler;
+    sampler volumeSampler;
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec3 direction @ TEXCOORD1;
+        vec3 volumeUv @ TEXCOORD2;
+        vec2 ddx2 @ TEXCOORD3;
+        vec2 ddy2 @ TEXCOORD4;
+        vec3 ddx3 @ TEXCOORD5;
+        vec3 ddy3 @ TEXCOORD6;
+    };
+
+    vec4 sample2DGrad(sampler2D tex, sampler s, vec2 uv, vec2 ddx, vec2 ddy) {
+        return textureGrad(tex, s, uv, ddx, ddy);
+    }
+
+    vec4 sampleCubeGrad(samplerCube tex, sampler s, vec3 direction, vec3 ddx, vec3 ddy) {
+        return textureGrad(tex, s, direction, ddx, ddy);
+    }
+
+    vec4 sampleVolumeGrad(sampler3D tex, sampler s, vec3 volumeUv, vec3 ddx, vec3 ddy) {
+        return textureGrad(tex, s, volumeUv, ddx, ddy);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sample2DGrad(colorMap, colorSampler, input.uv, input.ddx2, input.ddy2)
+                + sampleCubeGrad(cubeMap, cubeSampler, input.direction, input.ddx3, input.ddy3)
+                + sampleVolumeGrad(volumeMap, volumeSampler, input.volumeUv, input.ddx3, input.ddy3);
+        }
+    }
+}
+"""
+
+
+TEXTURE_GATHER_OFFSET_FRAGMENT_SHADER = """
+shader TextureGatherOffsetValidation {
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+    sampler linearSampler;
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec3 uvLayer @ TEXCOORD1;
+        ivec2 offset @ TEXCOORD2;
+        ivec2 offset0 @ TEXCOORD3;
+        ivec2 offset1 @ TEXCOORD4;
+        ivec2 offset2 @ TEXCOORD5;
+        ivec2 offset3 @ TEXCOORD6;
+        int component @ TEXCOORD7;
+    };
+
+    vec4 gatherOps(
+        sampler2D tex,
+        sampler2DArray layers,
+        sampler s,
+        vec2 uv,
+        vec3 uvLayer,
+        ivec2 offset,
+        ivec2 offset0,
+        ivec2 offset1,
+        ivec2 offset2,
+        ivec2 offset3,
+        int component
+    ) {
+        vec4 green = textureGather(tex, s, uv, 1);
+        vec4 dynamic = textureGather(tex, s, uv, component);
+        vec4 offsetGather = textureGatherOffset(tex, s, uv, offset, 3);
+        vec4 dynamicOffset = textureGatherOffset(tex, s, uv, offset, component);
+        vec4 offsetsGather = textureGatherOffsets(
+            layers,
+            s,
+            uvLayer,
+            offset0,
+            offset1,
+            offset2,
+            offset3,
+            component
+        );
+        return green + dynamic + offsetGather + dynamicOffset + offsetsGather;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return gatherOps(
+                colorMap,
+                layerMap,
+                linearSampler,
+                input.uv,
+                input.uvLayer,
+                input.offset,
+                input.offset0,
+                input.offset1,
+                input.offset2,
+                input.offset3,
+                input.component
+            );
+        }
+    }
+}
+"""
+
+
+TEXTURE_SAMPLE_OFFSET_FRAGMENT_SHADER = """
+shader TextureSampleOffsetValidation {
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+    sampler linearSampler;
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec3 uvLayer @ TEXCOORD1;
+        float lod;
+        vec2 ddx @ TEXCOORD2;
+        vec2 ddy @ TEXCOORD3;
+    };
+
+    vec4 sampleOffsets(
+        sampler2D tex,
+        sampler2DArray layers,
+        sampler s,
+        vec2 uv,
+        vec3 uvLayer,
+        float lod,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        vec4 plain = textureOffset(tex, s, uv, ivec2(1, 0));
+        vec4 lodSample = textureLodOffset(tex, s, uv, lod, ivec2(1, 0));
+        vec4 gradSample = textureGradOffset(tex, s, uv, ddx, ddy, ivec2(1, 0));
+        vec4 arrayPlain = textureOffset(layers, s, uvLayer, ivec2(1, 0));
+        vec4 arrayLod = textureLodOffset(layers, s, uvLayer, lod, ivec2(1, 0));
+        vec4 arrayGrad = textureGradOffset(layers, s, uvLayer, ddx, ddy, ivec2(1, 0));
+        return plain + lodSample + gradSample + arrayPlain + arrayLod + arrayGrad;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleOffsets(
+                colorMap,
+                layerMap,
+                linearSampler,
+                input.uv,
+                input.uvLayer,
+                input.lod,
+                input.ddx,
+                input.ddy
+            );
+        }
+    }
+}
+"""
+
+
+TEXTURE_PROJECTED_FRAGMENT_SHADER = """
+shader TextureProjectionValidation {
+    sampler2D colorMap;
+    sampler3D volumeMap;
+    sampler linearSampler;
+
+    struct FSInput {
+        vec3 uvq @ TEXCOORD0;
+        vec4 uvqw @ TEXCOORD1;
+        vec4 xyzq @ TEXCOORD2;
+        vec2 ddx @ TEXCOORD3;
+        vec2 ddy @ TEXCOORD4;
+    };
+
+    vec4 projectedOps(
+        sampler2D tex,
+        sampler3D volume,
+        sampler s,
+        vec3 uvq,
+        vec4 uvqw,
+        vec4 xyzq,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        vec4 projected = textureProj(tex, s, uvq);
+        vec4 projectedBias = textureProj(tex, s, uvqw, 0.25);
+        vec4 volumeProjected = textureProj(volume, s, xyzq);
+        vec4 projectedOffset = textureProjOffset(tex, s, uvq, ivec2(1, 0));
+        vec4 projectedOffsetBias = textureProjOffset(tex, s, uvq, ivec2(1, 0), 0.5);
+        vec4 projectedLod = textureProjLod(tex, s, uvq, 2.0);
+        vec4 projectedLodOffset = textureProjLodOffset(tex, s, uvq, 3.0, ivec2(1, 0));
+        vec4 projectedGrad = textureProjGrad(tex, s, uvq, ddx, ddy);
+        vec4 projectedGradOffset = textureProjGradOffset(tex, s, uvq, ddx, ddy, ivec2(1, 0));
+        return projected
+            + projectedBias
+            + volumeProjected
+            + projectedOffset
+            + projectedOffsetBias
+            + projectedLod
+            + projectedLodOffset
+            + projectedGrad
+            + projectedGradOffset;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return projectedOps(
+                colorMap,
+                volumeMap,
+                linearSampler,
+                input.uvq,
+                input.uvqw,
+                input.xyzq,
+                input.ddx,
+                input.ddy
+            );
         }
     }
 }
@@ -107,6 +631,716 @@ shader CombinedStageIOValidation {
 """
 
 
+COMPUTE_STAGE_SHADER = """
+shader ComputeStageValidation {
+    compute {
+        void main() {
+            int value = 1;
+            uint unsignedValue = 7u;
+        }
+    }
+}
+"""
+
+
+METAL_COMPUTE_BUILTINS_SHADER = """
+shader MetalComputeBuiltinsValidation {
+    compute {
+        void main() {
+            uint gx = gl_GlobalInvocationID.x;
+            uint lx = gl_LocalInvocationID.x;
+            uint group = gl_WorkGroupID.x;
+            uint index = gl_LocalInvocationIndex;
+            uint size = gl_WorkGroupSize.x;
+            uint groups = gl_NumWorkGroups.x;
+        }
+    }
+}
+"""
+
+
+SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER = """
+shader ShadowGatherCompareOffsetValidation {
+    sampler2DShadow shadowMap;
+    sampler2DArrayShadow shadowArray;
+    sampler compareSampler;
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec3 uvLayer @ TEXCOORD1;
+        float depth;
+        ivec2 offset @ TEXCOORD2;
+    };
+
+    vec4 gatherShadow(sampler2DShadow tex, sampler s, vec2 uv, float depth, ivec2 offset) {
+        vec4 gathered = textureGatherCompare(tex, s, uv, depth);
+        vec4 offsetGathered = textureGatherCompareOffset(tex, s, uv, depth, offset);
+        float offsetCompared = textureCompareOffset(tex, s, uv, depth, offset);
+        return gathered + offsetGathered + vec4(offsetCompared);
+    }
+
+    vec4 gatherShadowArray(sampler2DArrayShadow tex, sampler s, vec3 uvLayer, float depth, ivec2 offset) {
+        vec4 gathered = textureGatherCompare(tex, s, uvLayer, depth);
+        vec4 offsetGathered = textureGatherCompareOffset(tex, s, uvLayer, depth, offset);
+        float offsetCompared = textureCompareOffset(tex, s, uvLayer, depth, offset);
+        return gathered + offsetGathered + vec4(offsetCompared);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return gatherShadow(shadowMap, compareSampler, input.uv, input.depth, input.offset)
+                + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset);
+        }
+    }
+}
+"""
+
+
+SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = """
+shader ShadowCompareLodGradValidation {
+    sampler2DShadow shadowMap;
+    sampler2DArrayShadow shadowArray;
+    sampler compareSampler;
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec3 uvLayer @ TEXCOORD1;
+        float depth;
+        float lod;
+        vec2 ddx @ TEXCOORD2;
+        vec2 ddy @ TEXCOORD3;
+    };
+
+    float compareShadow(
+        sampler2DShadow tex,
+        sampler s,
+        vec2 uv,
+        float depth,
+        float lod,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        float lodValue = textureCompareLod(tex, s, uv, depth, lod);
+        float lodOffsetValue = textureCompareLodOffset(tex, s, uv, depth, lod, ivec2(1, 0));
+        float gradValue = textureCompareGrad(tex, s, uv, depth, ddx, ddy);
+        float gradOffsetValue = textureCompareGradOffset(tex, s, uv, depth, ddx, ddy, ivec2(1, 0));
+        return lodValue + lodOffsetValue + gradValue + gradOffsetValue;
+    }
+
+    float compareShadowArray(
+        sampler2DArrayShadow tex,
+        sampler s,
+        vec3 uvLayer,
+        float depth,
+        float lod,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        float lodValue = textureCompareLod(tex, s, uvLayer, depth, lod);
+        float gradValue = textureCompareGrad(tex, s, uvLayer, depth, ddx, ddy);
+        float gradOffsetValue = textureCompareGradOffset(tex, s, uvLayer, depth, ddx, ddy, ivec2(1, 0));
+        return lodValue + gradValue + gradOffsetValue;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            float shadow = compareShadow(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth,
+                input.lod,
+                input.ddx,
+                input.ddy
+            );
+            float arrayShadow = compareShadowArray(
+                shadowArray,
+                compareSampler,
+                input.uvLayer,
+                input.depth,
+                input.lod,
+                input.ddx,
+                input.ddy
+            );
+            return vec4(shadow + arrayShadow);
+        }
+    }
+}
+"""
+
+
+PROJECTED_SHADOW_COMPARE_FRAGMENT_SHADER = """
+shader ProjectedShadowCompareValidation {
+    sampler2DShadow shadowMap;
+    sampler2DArrayShadow shadowArray;
+    sampler compareSampler;
+
+    struct FSInput {
+        vec3 uvq @ TEXCOORD0;
+        vec4 uvqw @ TEXCOORD1;
+        vec4 uvLayerQ @ TEXCOORD2;
+        float depth;
+        float lod;
+        vec2 ddx @ TEXCOORD3;
+        vec2 ddy @ TEXCOORD4;
+    };
+
+    float projectedShadow(
+        sampler2DShadow tex,
+        sampler s,
+        vec3 uvq,
+        vec4 uvqw,
+        float depth,
+        float lod,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        float projected = textureCompareProj(tex, s, uvq, depth);
+        float projectedW = textureCompareProj(tex, s, uvqw, depth);
+        float offsetProjected = textureCompareProjOffset(tex, s, uvq, depth, ivec2(1, 0));
+        float lodProjected = textureCompareProjLod(tex, s, uvq, depth, lod);
+        float lodOffsetProjected = textureCompareProjLodOffset(tex, s, uvq, depth, lod, ivec2(1, 0));
+        float gradProjected = textureCompareProjGrad(tex, s, uvq, depth, ddx, ddy);
+        float gradOffsetProjected = textureCompareProjGradOffset(tex, s, uvq, depth, ddx, ddy, ivec2(1, 0));
+        return projected + projectedW + offsetProjected + lodProjected + lodOffsetProjected + gradProjected + gradOffsetProjected;
+    }
+
+    float projectedArrayShadow(
+        sampler2DArrayShadow tex,
+        sampler s,
+        vec4 uvLayerQ,
+        float depth,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        float projected = textureCompareProj(tex, s, uvLayerQ, depth);
+        float offsetProjected = textureCompareProjOffset(tex, s, uvLayerQ, depth, ivec2(1, 0));
+        float gradProjected = textureCompareProjGrad(tex, s, uvLayerQ, depth, ddx, ddy);
+        float gradOffsetProjected = textureCompareProjGradOffset(tex, s, uvLayerQ, depth, ddx, ddy, ivec2(1, 0));
+        return projected + offsetProjected + gradProjected + gradOffsetProjected;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            float shadow = projectedShadow(
+                shadowMap,
+                compareSampler,
+                input.uvq,
+                input.uvqw,
+                input.depth,
+                input.lod,
+                input.ddx,
+                input.ddy
+            );
+            float arrayShadow = projectedArrayShadow(
+                shadowArray,
+                compareSampler,
+                input.uvLayerQ,
+                input.depth,
+                input.ddx,
+                input.ddy
+            );
+            return vec4(shadow + arrayShadow);
+        }
+    }
+}
+"""
+
+
+DEFAULT_FLOAT_IMAGE_COMPUTE_SHADER = """
+shader DefaultFloatImageValidation {
+    image2D storageImage;
+
+    float touchScalar(image2D image, ivec2 pixel, float value) {
+        float oldValue = imageLoad(image, pixel);
+        imageStore(image, pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec4 touchVector(image2D image, ivec2 pixel, vec4 value) {
+        vec4 oldValue = imageLoad(image, pixel);
+        imageStore(image, pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            float scalarValue = touchScalar(storageImage, ivec2(0, 1), 0.25);
+            vec4 vectorValue = touchVector(storageImage, ivec2(2, 3), vec4(1.0));
+            uint unsignedValue = 7u;
+        }
+    }
+}
+"""
+
+
+METAL_SCALAR_IMAGE_COMPUTE_SHADER = DEFAULT_FLOAT_IMAGE_COMPUTE_SHADER
+
+
+RG_IMAGE_COMPUTE_SHADER = """
+shader RGImageValidation {
+    image2D rgFloat @rg32f;
+    uimage2D rgUnsigned @rg32ui;
+
+    float scalarFloat(image2D image @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(image, pixel);
+        imageStore(image, pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec2 vectorFloat(image2D image @rg32f, ivec2 pixel, vec2 value) {
+        vec2 oldValue = imageLoad(image, pixel);
+        imageStore(image, pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint scalarUnsigned(uimage2D image @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(image, pixel);
+        imageStore(image, pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uvec2 vectorUnsigned(uimage2D image @rg32ui, ivec2 pixel, uvec2 value) {
+        uvec2 oldValue = imageLoad(image, pixel);
+        imageStore(image, pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            float a = scalarFloat(rgFloat, ivec2(0, 1), 0.25);
+            vec2 b = vectorFloat(rgFloat, ivec2(2, 3), vec2(1.0));
+            uint c = scalarUnsigned(rgUnsigned, ivec2(4, 5), 7u);
+            uvec2 d = vectorUnsigned(rgUnsigned, ivec2(6, 7), uvec2(8u, 9u));
+        }
+    }
+}
+"""
+
+
+RG_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader RGImageArrayValidation {
+    image2D rgFloatImages @rg32f[3];
+    uimage2D rgUnsignedImages @rg32ui[2];
+
+    float scalarFloat(image2D images[3] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[1], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec2 vectorFloat(image2D images[3] @rg32f, ivec2 pixel, vec2 value) {
+        vec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint scalarUnsigned(uimage2D images[2] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[1], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uvec2 vectorUnsigned(uimage2D images[2] @rg32ui, ivec2 pixel, uvec2 value) {
+        uvec2 oldValue = imageLoad(images[1], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            float sf = scalarFloat(rgFloatImages, ivec2(0, 1), 0.25);
+            vec2 vf = vectorFloat(rgFloatImages, ivec2(2, 3), vec2(1.0));
+            uint su = scalarUnsigned(rgUnsignedImages, ivec2(4, 5), 7u);
+            uvec2 vu = vectorUnsigned(rgUnsignedImages, ivec2(6, 7), uvec2(8u, 9u));
+        }
+    }
+}
+"""
+
+
+RG_INFERRED_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader RGImageArrayInferredValidation {
+    const int COUNT = 3;
+    const int LAYER = COUNT - 1;
+    image2D rgFloatImages @rg32f[];
+    uimage2D rgUnsignedImages @rg32ui[COUNT];
+    image2D afterImages @rg32f;
+
+    float scalarFloat(image2D images[] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[LAYER], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec2 vectorFloat(image2D images[] @rg32f, ivec2 pixel, vec2 value) {
+        vec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint scalarUnsigned(uimage2D images[COUNT] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[LAYER], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uvec2 vectorUnsigned(uimage2D images[COUNT] @rg32ui, ivec2 pixel, uvec2 value) {
+        uvec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            float sf = scalarFloat(rgFloatImages, ivec2(0, 1), 0.25);
+            vec2 vf = vectorFloat(rgFloatImages, ivec2(2, 3), vec2(1.0));
+            uint su = scalarUnsigned(rgUnsignedImages, ivec2(4, 5), 7u);
+            uvec2 vu = vectorUnsigned(rgUnsignedImages, ivec2(6, 7), uvec2(8u, 9u));
+        }
+    }
+}
+"""
+
+
+RG_TRANSITIVE_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader TransitiveRGImageArrayValidation {
+    image2D rgFloatImages @rg32f[];
+    uimage2D rgUnsignedImages @rg32ui[];
+
+    float scalarFloatDeep(image2D images[] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[3], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    float scalarFloatMid(image2D images[] @rg32f, ivec2 pixel, float value) {
+        return scalarFloatDeep(images, pixel, value);
+    }
+
+    vec2 vectorFloatDeep(image2D images[] @rg32f, ivec2 pixel, vec2 value) {
+        vec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec2 vectorFloatMid(image2D images[] @rg32f, ivec2 pixel, vec2 value) {
+        return vectorFloatDeep(images, pixel, value);
+    }
+
+    uint scalarUnsignedDeep(uimage2D images[] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[3], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint scalarUnsignedMid(uimage2D images[] @rg32ui, ivec2 pixel, uint value) {
+        return scalarUnsignedDeep(images, pixel, value);
+    }
+
+    uvec2 vectorUnsignedDeep(uimage2D images[] @rg32ui, ivec2 pixel, uvec2 value) {
+        uvec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uvec2 vectorUnsignedMid(uimage2D images[] @rg32ui, ivec2 pixel, uvec2 value) {
+        return vectorUnsignedDeep(images, pixel, value);
+    }
+
+    compute {
+        void main() {
+            float sf = scalarFloatMid(rgFloatImages, ivec2(0, 1), 0.25);
+            vec2 vf = vectorFloatMid(rgFloatImages, ivec2(2, 3), vec2(1.0));
+            uint su = scalarUnsignedMid(rgUnsignedImages, ivec2(4, 5), 7u);
+            uvec2 vu = vectorUnsignedMid(rgUnsignedImages, ivec2(6, 7), uvec2(8u, 9u));
+        }
+    }
+}
+"""
+
+
+RG_FIXED_PARAM_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader FixedParamRGImageArrayValidation {
+    image2D rgFloatImages @rg32f[];
+    uimage2D rgUnsignedImages @rg32ui[];
+
+    float scalarFloatFixed(image2D images[4] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[3], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec2 vectorFloatFixed(image2D images[4] @rg32f, ivec2 pixel, vec2 value) {
+        vec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint scalarUnsignedFixed(uimage2D images[4] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[3], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uvec2 vectorUnsignedFixed(uimage2D images[4] @rg32ui, ivec2 pixel, uvec2 value) {
+        uvec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            float sf = scalarFloatFixed(rgFloatImages, ivec2(0, 1), 0.25);
+            vec2 vf = vectorFloatFixed(rgFloatImages, ivec2(2, 3), vec2(1.0));
+            uint su = scalarUnsignedFixed(rgUnsignedImages, ivec2(4, 5), 7u);
+            uvec2 vu = vectorUnsignedFixed(rgUnsignedImages, ivec2(6, 7), uvec2(8u, 9u));
+        }
+    }
+}
+"""
+
+
+RG_FIXED_CONST_PARAM_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader FixedConstParamRGImageArrayValidation {
+    const int COUNT = 4;
+    const int LAST = COUNT - 1;
+    image2D rgFloatImages @rg32f[];
+    uimage2D rgUnsignedImages @rg32ui[];
+
+    float scalarFloatFixed(image2D images[COUNT] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[LAST], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec2 vectorFloatFixed(image2D images[COUNT] @rg32f, ivec2 pixel, vec2 value) {
+        vec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint scalarUnsignedFixed(uimage2D images[COUNT] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[LAST], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uvec2 vectorUnsignedFixed(uimage2D images[COUNT] @rg32ui, ivec2 pixel, uvec2 value) {
+        uvec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            float sf = scalarFloatFixed(rgFloatImages, ivec2(0, 1), 0.25);
+            vec2 vf = vectorFloatFixed(rgFloatImages, ivec2(2, 3), vec2(1.0));
+            uint su = scalarUnsignedFixed(rgUnsignedImages, ivec2(4, 5), 7u);
+            uvec2 vu = vectorUnsignedFixed(rgUnsignedImages, ivec2(6, 7), uvec2(8u, 9u));
+        }
+    }
+}
+"""
+
+
+RG_FIXED_EXPR_PARAM_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader FixedExprParamRGImageArrayValidation {
+    const int COUNT = 3;
+    const int UINT_COUNT = 2;
+    image2D rgFloatImages @rg32f[];
+    uimage2D rgUnsignedImages @rg32ui[];
+
+    float scalarFloatFixed(image2D images[(COUNT + 1)] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[COUNT], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    vec2 vectorFloatFixed(image2D images[(COUNT + 1)] @rg32f, ivec2 pixel, vec2 value) {
+        vec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint scalarUnsignedFixed(uimage2D images[(UINT_COUNT * 2)] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[3], pixel);
+        imageStore(images[1], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uvec2 vectorUnsignedFixed(uimage2D images[(UINT_COUNT * 2)] @rg32ui, ivec2 pixel, uvec2 value) {
+        uvec2 oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            float sf = scalarFloatFixed(rgFloatImages, ivec2(0, 1), 0.25);
+            vec2 vf = vectorFloatFixed(rgFloatImages, ivec2(2, 3), vec2(1.0));
+            uint su = scalarUnsignedFixed(rgUnsignedImages, ivec2(4, 5), 7u);
+            uvec2 vu = vectorUnsignedFixed(rgUnsignedImages, ivec2(6, 7), uvec2(8u, 9u));
+        }
+    }
+}
+"""
+
+
+RG_DIRECT_INDEX_WITHIN_FIXED_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader DirectIndexWithinFixedValidation {
+    image2D rgFloatImages @rg32f[];
+    uimage2D rgUnsignedImages @rg32ui[];
+
+    float touchFour(image2D images[4] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[3], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint touchUnsignedFour(uimage2D images[4] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[3], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            float directFloat = imageLoad(rgFloatImages[2], pixel);
+            uint directUint = imageLoad(rgUnsignedImages[1], pixel);
+            float helperFloat = touchFour(rgFloatImages, pixel, directFloat);
+            uint helperUint = touchUnsignedFour(rgUnsignedImages, pixel, directUint);
+        }
+    }
+}
+"""
+
+
+RG_FIXED_GLOBAL_TO_UNSIZED_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader FixedGlobalToUnsizedValidation {
+    image2D rgFloatImages @rg32f[4];
+    uimage2D rgUnsignedImages @rg32ui[4];
+
+    float touchFloat(image2D images[] @rg32f, ivec2 pixel, float value) {
+        float oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    uint touchUnsigned(uimage2D images[] @rg32ui, ivec2 pixel, uint value) {
+        uint oldValue = imageLoad(images[2], pixel);
+        imageStore(images[0], pixel, oldValue + value);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            float sf = touchFloat(rgFloatImages, pixel, 0.25);
+            uint su = touchUnsigned(rgUnsignedImages, pixel, 7u);
+        }
+    }
+}
+"""
+
+
+RG_FIXED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader FixedConstIndexValidation {
+    const int COUNT = 4;
+    image2D rgFloatImages @rg32f[4];
+    uimage2D rgUnsignedImages @rg32ui[4];
+
+    float touchFloat(image2D images[4] @rg32f, ivec2 pixel) {
+        return imageLoad(images[COUNT - 1], pixel);
+    }
+
+    uint touchUnsigned(uimage2D images[4] @rg32ui, ivec2 pixel) {
+        return imageLoad(images[COUNT - 1], pixel);
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            float directFloat = imageLoad(rgFloatImages[COUNT - 1], pixel);
+            uint directUint = imageLoad(rgUnsignedImages[COUNT - 1], pixel);
+            float helperFloat = touchFloat(rgFloatImages, pixel);
+            uint helperUint = touchUnsigned(rgUnsignedImages, pixel);
+        }
+    }
+}
+"""
+
+
+RG_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader FixedShadowedConstIndexValidation {
+    const int COUNT = 4;
+    image2D rgFloatImages @rg32f[4];
+    uimage2D rgUnsignedImages @rg32ui[4];
+
+    float touchFloat(image2D images[4] @rg32f, ivec2 pixel) {
+        int COUNT = 0;
+        return imageLoad(images[COUNT], pixel);
+    }
+
+    uint touchUnsigned(uimage2D images[4] @rg32ui, ivec2 pixel) {
+        int COUNT = 0;
+        return imageLoad(images[COUNT], pixel);
+    }
+
+    compute {
+        void main() {
+            int COUNT = 0;
+            ivec2 pixel = ivec2(0, 1);
+            float directFloat = imageLoad(rgFloatImages[COUNT], pixel);
+            uint directUint = imageLoad(rgUnsignedImages[COUNT], pixel);
+            float helperFloat = touchFloat(rgFloatImages, pixel);
+            uint helperUint = touchUnsigned(rgUnsignedImages, pixel);
+        }
+    }
+}
+"""
+
+
+RG_TRANSITIVE_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER = """
+shader TransitiveShadowedConstIndexValidation {
+    const int COUNT = 4;
+    image2D rgFloatImages @rg32f[4];
+    uimage2D rgUnsignedImages @rg32ui[4];
+
+    float leafFloat(image2D images[] @rg32f, ivec2 pixel) {
+        int COUNT = 0;
+        return imageLoad(images[COUNT], pixel);
+    }
+
+    uint leafUnsigned(uimage2D images[] @rg32ui, ivec2 pixel) {
+        int COUNT = 0;
+        return imageLoad(images[COUNT], pixel);
+    }
+
+    float passFloat(image2D images[] @rg32f, ivec2 pixel) {
+        int COUNT = 0;
+        float sampled = imageLoad(images[COUNT], pixel);
+        return sampled + leafFloat(images, pixel);
+    }
+
+    uint passUnsigned(uimage2D images[] @rg32ui, ivec2 pixel) {
+        int COUNT = 0;
+        uint sampled = imageLoad(images[COUNT], pixel);
+        return sampled + leafUnsigned(images, pixel);
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            float sf = passFloat(rgFloatImages, pixel);
+            uint su = passUnsigned(rgUnsignedImages, pixel);
+        }
+    }
+}
+"""
+
+
 def run_validator(command):
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode == 0, (
@@ -114,6 +1348,35 @@ def run_validator(command):
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
+
+
+def dxc_supports_sample_cmp_lod_grad(dxc, tmp_path):
+    source = tmp_path / "sample_cmp_lod_grad_probe.hlsl"
+    output = tmp_path / "sample_cmp_lod_grad_probe.dxil"
+    source.write_text(
+        """
+Texture2D shadowMap : register(t0);
+SamplerComparisonState shadowSampler : register(s0);
+
+	float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
+	    float2 ddx = float2(0.1, 0.0);
+	    float2 ddy = float2(0.0, 0.1);
+	    int2 offset = int2(1, 0);
+	    float lodValue = shadowMap.SampleCmpLevel(shadowSampler, uv, 0.5, 1.0);
+	    float lodOffsetValue = shadowMap.SampleCmpLevel(shadowSampler, uv, 0.5, 1.0, offset);
+	    float gradValue = shadowMap.SampleCmpGrad(shadowSampler, uv, 0.5, ddx, ddy);
+	    float gradOffsetValue = shadowMap.SampleCmpGrad(shadowSampler, uv, 0.5, ddx, ddy, offset);
+	    return float4(lodValue + lodOffsetValue + gradValue + gradOffsetValue);
+	}
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [dxc, "-T", "ps_6_7", "-E", "PSMain", str(source), "-Fo", str(output)],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
 
 
 def test_generated_metal_fragment_smoke_compiles_with_metal(tmp_path):
@@ -124,6 +1387,616 @@ def test_generated_metal_fragment_smoke_compiles_with_metal(tmp_path):
     source = tmp_path / "fragment_range.metal"
     output = tmp_path / "fragment_range.air"
     code = MetalCodeGen().generate(crosstl.translator.parse(FRAGMENT_RANGE_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_sampled_texture_array_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_array.metal"
+    output = tmp_path / "fragment_sampled_texture_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_sampled_texture_const_index_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_const_index.metal"
+    output = tmp_path / "fragment_sampled_texture_const_index.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_sampled_texture_transitive_shadowed_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_transitive_shadowed.metal"
+    output = tmp_path / "fragment_sampled_texture_transitive_shadowed.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            SAMPLED_TEXTURE_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_shadow_sampler_transitive_shadowed_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_shadow_sampler_transitive_shadowed.metal"
+    output = tmp_path / "fragment_shadow_sampler_transitive_shadowed.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            SHADOW_SAMPLER_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_array_shadow_texture_resource_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_array_shadow_texture_resource_array.metal"
+    output = tmp_path / "fragment_array_shadow_texture_resource_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_SHADOW_TEXTURE_RESOURCE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_array_shadow_texture_query_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_array_shadow_texture_query.metal"
+    output = tmp_path / "fragment_array_shadow_texture_query.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_SHADOW_TEXTURE_QUERY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_array_texture_query_lod_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_array_texture_query_lod.metal"
+    output = tmp_path / "fragment_array_texture_query_lod.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_shadow_array_texture_query_lod_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_shadow_array_texture_query_lod.metal"
+    output = tmp_path / "fragment_shadow_array_texture_query_lod.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_cube_array_texture_grad_gather_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_cube_array_texture_grad_gather.metal"
+    output = tmp_path / "fragment_cube_array_texture_grad_gather.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(CUBE_ARRAY_TEXTURE_GRAD_GATHER_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_texture_gradient_family_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_texture_gradient_family.metal"
+    output = tmp_path / "fragment_texture_gradient_family.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_GRADIENT_FAMILY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_texture_gather_offset_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_texture_gather_offset.metal"
+    output = tmp_path / "fragment_texture_gather_offset.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_GATHER_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_texture_sample_offset_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_texture_sample_offset.metal"
+    output = tmp_path / "fragment_texture_sample_offset.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_SAMPLE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_texture_projection_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_texture_projection.metal"
+    output = tmp_path / "fragment_texture_projection.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_PROJECTED_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_shadow_gather_compare_offset_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_shadow_gather_compare_offset.metal"
+    output = tmp_path / "fragment_shadow_gather_compare_offset.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_shadow_compare_lod_grad_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_shadow_compare_lod_grad.metal"
+    output = tmp_path / "fragment_shadow_compare_lod_grad.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_projected_shadow_compare_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_projected_shadow_compare.metal"
+    output = tmp_path / "fragment_projected_shadow_compare.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(PROJECTED_SHADOW_COMPARE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_combined_stages_compile_separately_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    ast = crosstl.translator.parse(COMBINED_STAGE_IO_SHADER)
+    generator = MetalCodeGen()
+
+    for stage_name in ("vertex", "fragment"):
+        source = tmp_path / f"combined_stage_{stage_name}.metal"
+        output = tmp_path / f"combined_stage_{stage_name}.air"
+        source.write_text(generator.generate_stage(ast, stage_name), encoding="utf-8")
+
+        run_validator(
+            [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+        )
+
+
+def test_generated_metal_compute_stage_with_builtins_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_builtins.metal"
+    output = tmp_path / "compute_builtins.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_COMPUTE_BUILTINS_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_scalar_image_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_scalar_image.metal"
+    output = tmp_path / "compute_scalar_image.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_SCALAR_IMAGE_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_rg_image_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_rg_image.metal"
+    output = tmp_path / "compute_rg_image.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_IMAGE_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_rg_image_array_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_rg_image_array.metal"
+    output = tmp_path / "compute_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_inferred_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_inferred_rg_image_array.metal"
+    output = tmp_path / "compute_inferred_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_INFERRED_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_transitive_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_transitive_rg_image_array.metal"
+    output = tmp_path / "compute_transitive_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_TRANSITIVE_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_fixed_param_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_fixed_param_rg_image_array.metal"
+    output = tmp_path / "compute_fixed_param_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_fixed_const_param_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_fixed_const_param_rg_image_array.metal"
+    output = tmp_path / "compute_fixed_const_param_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_CONST_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_fixed_expr_param_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_fixed_expr_param_rg_image_array.metal"
+    output = tmp_path / "compute_fixed_expr_param_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_EXPR_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_direct_index_within_fixed_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_direct_index_within_fixed_rg_image_array.metal"
+    output = tmp_path / "compute_direct_index_within_fixed_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            RG_DIRECT_INDEX_WITHIN_FIXED_IMAGE_ARRAY_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_fixed_global_unsized_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_fixed_global_unsized_rg_image_array.metal"
+    output = tmp_path / "compute_fixed_global_unsized_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_GLOBAL_TO_UNSIZED_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_fixed_const_index_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_fixed_const_index_rg_image_array.metal"
+    output = tmp_path / "compute_fixed_const_index_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_shadowed_const_index_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_shadowed_const_index_rg_image_array.metal"
+    output = tmp_path / "compute_shadowed_const_index_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RG_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_transitive_shadowed_const_index_rg_image_array_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_transitive_shadowed_const_index_rg_image_array.metal"
+    output = tmp_path / "compute_transitive_shadowed_const_index_rg_image_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            RG_TRANSITIVE_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER
+        ),
+        "compute",
+    )
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -151,6 +2024,265 @@ def test_generated_glsl_fragment_struct_input_validates_with_glslang(tmp_path):
     source = tmp_path / "fragment_struct_input.frag"
     code = GLSLCodeGen().generate(
         crosstl.translator.parse(FRAGMENT_STRUCT_INPUT_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_sampled_texture_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_array.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_sampled_texture_const_index_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_const_index.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_sampled_texture_transitive_shadowed_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_transitive_shadowed.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            SAMPLED_TEXTURE_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_shadow_sampler_transitive_shadowed_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_shadow_sampler_transitive_shadowed.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            SHADOW_SAMPLER_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_array_shadow_texture_resource_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_array_shadow_texture_resource_array.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_SHADOW_TEXTURE_RESOURCE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_array_shadow_texture_query_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_array_shadow_texture_query.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_SHADOW_TEXTURE_QUERY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_array_texture_query_lod_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_array_texture_query_lod.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_shadow_array_texture_query_lod_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_shadow_array_texture_query_lod.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_cube_array_texture_grad_gather_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_cube_array_texture_grad_gather.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(CUBE_ARRAY_TEXTURE_GRAD_GATHER_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_texture_gather_offset_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_texture_gather_offset.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_GATHER_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_texture_sample_offset_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_texture_sample_offset.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_SAMPLE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_texture_projection_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_texture_projection.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_PROJECTED_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_shadow_gather_compare_offset.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_shadow_compare_lod_grad_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_shadow_compare_lod_grad.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_projected_shadow_compare_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_projected_shadow_compare.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(PROJECTED_SHADOW_COMPARE_FRAGMENT_SHADER),
+        "fragment",
     )
     source.write_text(code, encoding="utf-8")
 
@@ -186,6 +2318,831 @@ def test_generated_glsl_combined_stages_validate_separately_with_glslang(tmp_pat
         generator.generate_stage(ast, "fragment"), encoding="utf-8"
     )
     run_validator([glslang, "-S", "frag", str(fragment_source)])
+
+
+def test_generated_glsl_compute_stage_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_stage.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(COMPUTE_STAGE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_default_float_image_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_default_float_image.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(DEFAULT_FLOAT_IMAGE_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_rg_image_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_rg_image.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_IMAGE_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_rg_image_array_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_inferred_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_inferred_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_INFERRED_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_transitive_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_transitive_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_TRANSITIVE_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_fixed_param_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_fixed_param_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_fixed_const_param_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_fixed_const_param_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_CONST_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_fixed_expr_param_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_fixed_expr_param_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_EXPR_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_direct_index_within_fixed_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_direct_index_within_fixed_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            RG_DIRECT_INDEX_WITHIN_FIXED_IMAGE_ARRAY_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_fixed_global_unsized_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_fixed_global_unsized_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_GLOBAL_TO_UNSIZED_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_fixed_const_index_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_fixed_const_index_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_shadowed_const_index_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_shadowed_const_index_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_transitive_shadowed_const_index_rg_image_array_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_transitive_shadowed_const_index_rg_image_array.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            RG_TRANSITIVE_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_hlsl_combined_stages_validate_separately_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    ast = crosstl.translator.parse(COMBINED_STAGE_IO_SHADER)
+    generator = HLSLCodeGen()
+
+    for stage_name, target, entry_point in (
+        ("vertex", "vs_6_0", "VSMain"),
+        ("fragment", "ps_6_0", "PSMain"),
+    ):
+        source = tmp_path / f"combined_stage_{stage_name}.hlsl"
+        output = tmp_path / f"combined_stage_{stage_name}.dxil"
+        source.write_text(generator.generate_stage(ast, stage_name), encoding="utf-8")
+
+        run_validator(
+            [dxc, "-T", target, "-E", entry_point, str(source), "-Fo", str(output)]
+        )
+
+
+def test_generated_hlsl_fragment_sampled_texture_array_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_array.hlsl"
+    output = tmp_path / "fragment_sampled_texture_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_sampled_texture_const_index_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_const_index.hlsl"
+    output = tmp_path / "fragment_sampled_texture_const_index.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_sampled_texture_transitive_shadowed_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_sampled_texture_transitive_shadowed.hlsl"
+    output = tmp_path / "fragment_sampled_texture_transitive_shadowed.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            SAMPLED_TEXTURE_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_shadow_sampler_transitive_shadowed_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_shadow_sampler_transitive_shadowed.hlsl"
+    output = tmp_path / "fragment_shadow_sampler_transitive_shadowed.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            SHADOW_SAMPLER_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_array_shadow_texture_resource_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_array_shadow_texture_resource_array.hlsl"
+    output = tmp_path / "fragment_array_shadow_texture_resource_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_SHADOW_TEXTURE_RESOURCE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_array_shadow_texture_query_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_array_shadow_texture_query.hlsl"
+    output = tmp_path / "fragment_array_shadow_texture_query.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_SHADOW_TEXTURE_QUERY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_array_texture_query_lod_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_array_texture_query_lod.hlsl"
+    output = tmp_path / "fragment_array_texture_query_lod.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_shadow_array_texture_query_lod_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_shadow_array_texture_query_lod.hlsl"
+    output = tmp_path / "fragment_shadow_array_texture_query_lod.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_cube_array_texture_grad_gather_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_cube_array_texture_grad_gather.hlsl"
+    output = tmp_path / "fragment_cube_array_texture_grad_gather.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(CUBE_ARRAY_TEXTURE_GRAD_GATHER_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_texture_gather_offset_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_texture_gather_offset.hlsl"
+    output = tmp_path / "fragment_texture_gather_offset.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_GATHER_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_texture_sample_offset_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_texture_sample_offset.hlsl"
+    output = tmp_path / "fragment_texture_sample_offset.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_SAMPLE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_texture_projection_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_texture_projection.hlsl"
+    output = tmp_path / "fragment_texture_projection.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_PROJECTED_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_shadow_gather_compare_offset_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_shadow_gather_compare_offset.hlsl"
+    output = tmp_path / "fragment_shadow_gather_compare_offset.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_shadow_compare_lod_grad_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+    if not dxc_supports_sample_cmp_lod_grad(dxc, tmp_path):
+        pytest.skip("dxc does not support SampleCmpLevel/SampleCmpGrad variants")
+
+    source = tmp_path / "fragment_shadow_compare_lod_grad.hlsl"
+    output = tmp_path / "fragment_shadow_compare_lod_grad.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_7", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_projected_shadow_compare_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+    if not dxc_supports_sample_cmp_lod_grad(dxc, tmp_path):
+        pytest.skip("dxc does not support SampleCmpLevel/SampleCmpGrad variants")
+
+    source = tmp_path / "fragment_projected_shadow_compare.hlsl"
+    output = tmp_path / "fragment_projected_shadow_compare.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(PROJECTED_SHADOW_COMPARE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_7", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_stage_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_stage.hlsl"
+    output = tmp_path / "compute_stage.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(COMPUTE_STAGE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_default_float_image_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_default_float_image.hlsl"
+    output = tmp_path / "compute_default_float_image.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(DEFAULT_FLOAT_IMAGE_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_rg_image_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_rg_image.hlsl"
+    output = tmp_path / "compute_rg_image.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_IMAGE_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_rg_image_array_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_rg_image_array.hlsl"
+    output = tmp_path / "compute_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_inferred_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_inferred_rg_image_array.hlsl"
+    output = tmp_path / "compute_inferred_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_INFERRED_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_transitive_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_transitive_rg_image_array.hlsl"
+    output = tmp_path / "compute_transitive_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_TRANSITIVE_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_fixed_param_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_fixed_param_rg_image_array.hlsl"
+    output = tmp_path / "compute_fixed_param_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_fixed_const_param_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_fixed_const_param_rg_image_array.hlsl"
+    output = tmp_path / "compute_fixed_const_param_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_CONST_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_fixed_expr_param_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_fixed_expr_param_rg_image_array.hlsl"
+    output = tmp_path / "compute_fixed_expr_param_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_EXPR_PARAM_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_direct_index_within_fixed_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_direct_index_within_fixed_rg_image_array.hlsl"
+    output = tmp_path / "compute_direct_index_within_fixed_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            RG_DIRECT_INDEX_WITHIN_FIXED_IMAGE_ARRAY_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_fixed_global_unsized_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_fixed_global_unsized_rg_image_array.hlsl"
+    output = tmp_path / "compute_fixed_global_unsized_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_GLOBAL_TO_UNSIZED_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_fixed_const_index_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_fixed_const_index_rg_image_array.hlsl"
+    output = tmp_path / "compute_fixed_const_index_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_FIXED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_shadowed_const_index_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_shadowed_const_index_rg_image_array.hlsl"
+    output = tmp_path / "compute_shadowed_const_index_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(RG_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_transitive_shadowed_const_index_rg_image_array_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_transitive_shadowed_const_index_rg_image_array.hlsl"
+    output = tmp_path / "compute_transitive_shadowed_const_index_rg_image_array.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            RG_TRANSITIVE_SHADOWED_CONST_INDEX_IMAGE_ARRAY_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
 
 
 def test_generated_hlsl_helper_smoke_validates_with_dxc(tmp_path):

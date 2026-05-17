@@ -82,6 +82,24 @@ def test_range_tokenization():
     assert token_types.index("RANGE_INCLUSIVE") > token_types.index("RANGE")
 
 
+def test_unsigned_integer_literal_tokenization():
+    code = """
+    uint a = 7u;
+    uint b = 0xFu;
+    uint c = 0b101U;
+    uint d = 0o17u;
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("NUMBER", "7u") in tokens
+    assert ("HEX_NUMBER", "0xFu") in tokens
+    assert ("BIN_NUMBER", "0b101U") in tokens
+    assert ("OCT_NUMBER", "0o17u") in tokens
+    assert ("IDENTIFIER", "u") not in tokens
+    assert ("IDENTIFIER", "U") not in tokens
+
+
 def test_else_statement_tokenization():
     code = """
     if (a > b) {

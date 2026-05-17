@@ -184,10 +184,10 @@ TOKENS = OrderedDict(
         ("DOLLAR", r"\$"),
         # Literals
         ("FLOAT_NUMBER", r"\d*\.\d+[fF]?|\d+\.(?!\.)\d*[fF]?|\d+[fF]"),
-        ("HEX_NUMBER", r"0[xX][0-9a-fA-F]+"),
-        ("BIN_NUMBER", r"0[bB][01]+"),
-        ("OCT_NUMBER", r"0[oO][0-7]+"),
-        ("NUMBER", r"\d+"),
+        ("HEX_NUMBER", r"0[xX][0-9a-fA-F]+[uU]?"),
+        ("BIN_NUMBER", r"0[bB][01]+[uU]?"),
+        ("OCT_NUMBER", r"0[oO][0-7]+[uU]?"),
+        ("NUMBER", r"\d+[uU]?"),
         ("STRING_LITERAL", r'"(?:[^"\\]|\\.)*"'),
         ("CHAR_LITERAL", r"'(?:[^'\\]|\\.)'"),
         # Operators - Assignment

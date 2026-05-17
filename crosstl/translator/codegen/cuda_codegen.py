@@ -19,13 +19,24 @@ from ..ast import (
     LiteralNode,
     BlockNode,
 )
+from .resource_diagnostics import ResourceDiagnosticMixin
+from .resource_query import ResourceQueryMixin
+from .resource_arrays import format_array_declarator
 
 
-class CudaCodeGen:
+class CudaCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
+    resource_diagnostic_backend = "CUDA"
+
     def __init__(self):
         self.indent_level = 0
         self.output = []
         self.variable_types = {}
+        self.helper_functions = {}
+        self.query_resource_names = set()
+        self.query_metadata_function_params = {}
+        self.query_functions_by_name = {}
+        self.current_function_name = None
+        self.resource_query_info_required = False
         self.builtin_map = {
             "gl_LocalInvocationID.x": "threadIdx.x",
             "gl_LocalInvocationID.y": "threadIdx.y",
@@ -48,7 +59,21 @@ class CudaCodeGen:
         self.output = []
         self.indent_level = 0
         self.variable_types = {}
+        self.helper_functions = {}
+        self.resource_query_info_required = False
+        (
+            self.query_resource_names,
+            self.query_metadata_function_params,
+        ) = self.collect_resource_query_requirements(ast_node)
+        self.query_functions_by_name = {
+            getattr(func, "name", None): func
+            for func in self.query_collect_functions(ast_node)
+        }
+        self.query_functions_by_name = {
+            name: func for name, func in self.query_functions_by_name.items() if name
+        }
         self.visit(ast_node)
+        self.insert_helper_functions()
         return "\n".join(self.output)
 
     def visit(self, node):
@@ -138,6 +163,8 @@ class CudaCodeGen:
 
     def visit_FunctionNode(self, node):
         saved_variable_types = self.variable_types.copy()
+        saved_current_function_name = self.current_function_name
+        self.current_function_name = node.name
         qualifiers = []
 
         if hasattr(node, "qualifiers") and node.qualifiers:
@@ -178,6 +205,9 @@ class CudaCodeGen:
 
             self.register_variable_type(param.name, param_type)
             params.append(self.format_typed_declarator(param_type, param.name))
+            metadata_param = self.query_metadata_parameter(param.name, param_type)
+            if metadata_param:
+                params.append(metadata_param)
 
         param_str = ", ".join(params)
         self.emit(f"{qualifier_str} {return_type} {node.name}({param_str}) {{")
@@ -190,6 +220,7 @@ class CudaCodeGen:
         self.indent_level -= 1
         self.emit("}")
         self.variable_types = saved_variable_types
+        self.current_function_name = saved_current_function_name
 
     def visit_StructNode(self, node):
         self.emit(f"struct {node.name} {{")
@@ -256,11 +287,12 @@ class CudaCodeGen:
         array_suffix = type_name[open_bracket:]
         mapped_base = self.convert_crossgl_type_to_cuda(base_type)
 
-        if dynamic_array_as_pointer and "[]" in array_suffix:
-            array_suffix = array_suffix.replace("[]", "")
-            return f"{mapped_base}* {name}{array_suffix}"
-
-        return f"{mapped_base} {name}{array_suffix}"
+        return format_array_declarator(
+            mapped_base,
+            name,
+            array_suffix,
+            dynamic_array_as_pointer=dynamic_array_as_pointer,
+        )
 
     def format_array_size(self, size):
         if size is None:
@@ -270,9 +302,13 @@ class CudaCodeGen:
         return self.visit(size)
 
     def visit_VariableNode(self, node):
+        var_type = self.get_variable_node_type(node)
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
             self.emit(f"{declaration};")
+            metadata_declaration = self.query_metadata_declaration(node.name, var_type)
+            if metadata_declaration:
+                self.emit(f"{metadata_declaration};")
             return None
 
         return node.name
@@ -296,6 +332,12 @@ class CudaCodeGen:
         if literal_type == "char":
             escaped = self.escape_literal(value, quote="'")
             return f"'{escaped}'"
+        if (
+            literal_type == "uint"
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        ):
+            return f"{value}u"
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
@@ -359,6 +401,7 @@ class CudaCodeGen:
         if resource_call is not None:
             return resource_call
 
+        args = self.query_metadata_call_arguments(func_name, raw_args, args)
         args_str = ", ".join(args)
 
         # Convert built-in functions
@@ -776,37 +819,110 @@ class CudaCodeGen:
             return None
         return self.variable_types.get(name)
 
-    def resource_base_type(self, type_name):
-        if not isinstance(type_name, str):
-            return None
-        return type_name.split("[", 1)[0]
+    def insert_helper_functions(self):
+        if not self.helper_functions:
+            return
 
-    def is_multisample_resource_type(self, type_name):
-        base_type = self.resource_base_type(type_name)
-        return isinstance(base_type, str) and "MS" in base_type
+        helper_lines = []
+        if self.resource_query_info_required:
+            helper_lines.extend(
+                [
+                    "struct CglResourceQueryInfo {",
+                    "    int width;",
+                    "    int height;",
+                    "    int depth;",
+                    "    int elements;",
+                    "    int levels;",
+                    "    int samples;",
+                    "};",
+                    "",
+                ]
+            )
+        for helper in self.helper_functions.values():
+            helper_lines.extend(helper.splitlines())
+            helper_lines.append("")
 
-    def image_value_type(self, image_type):
-        base_type = self.resource_base_type(image_type)
-        if isinstance(base_type, str) and base_type.startswith("iimage"):
-            return "int"
-        if isinstance(base_type, str) and base_type.startswith("uimage"):
-            return "uint"
-        return "float4"
-
-    def coord_component(self, coord, component):
-        return f"{coord}.{component}"
-
-    def surface_x_offset(self, coord, value_type):
-        return f"{self.coord_component(coord, 'x')} * sizeof({value_type})"
-
-    def unsupported_multisample_resource_call(self, func_name, resource_type, args):
-        args_str = ", ".join(args)
-        return (
-            f"/* unsupported CUDA multisample resource call: "
-            f"{func_name} on {resource_type} */ {func_name}({args_str})"
-        )
+        self.output[3:3] = helper_lines
 
     def generate_resource_call(self, func_name, raw_args, args):
+        if func_name in {"textureSize", "imageSize"}:
+            return self.generate_dimension_query(func_name, raw_args, args)
+
+        if func_name in {"textureSamples", "imageSamples"}:
+            return self.generate_sample_count_query(func_name, raw_args, args)
+
+        if func_name == "textureQueryLevels":
+            return self.generate_texture_query_levels(raw_args)
+
+        if func_name == "textureQueryLod" and len(args) >= 2:
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if texture_type is not None:
+                return self.unsupported_resource_query_call(
+                    func_name, texture_type, args
+                )
+
+        if (
+            func_name
+            in {
+                "texture",
+                "textureLod",
+                "textureGrad",
+                "textureGather",
+                "textureCompare",
+                "textureCompareLod",
+                "textureCompareGrad",
+                "textureCompareOffset",
+                "textureGatherCompare",
+                "textureGatherCompareOffset",
+            }
+            and len(args) >= 2
+        ):
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if self.is_shadow_resource_type(texture_type):
+                return self.unsupported_shadow_resource_call(
+                    func_name, texture_type, args
+                )
+
+        if (
+            func_name
+            in {
+                "textureGather",
+                "textureGatherOffset",
+                "textureGatherOffsets",
+            }
+            and len(args) >= 2
+        ):
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if texture_type is not None:
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+
+        if func_name in {
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+        }:
+            image_type = None
+            if raw_args:
+                image_type = self.resource_base_type(
+                    self.get_expression_type(raw_args[0])
+                )
+            return self.unsupported_image_atomic_resource_call(
+                func_name, image_type, args
+            )
+
         if func_name in {"texture", "textureLod", "textureGrad"} and len(args) >= 2:
             texture_type = self.resource_base_type(
                 self.get_expression_type(raw_args[0])

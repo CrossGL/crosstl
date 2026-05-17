@@ -7,6 +7,8 @@ from ..ast import (
     ArrayAccessNode,
     ArrayNode,
     BinaryOpNode,
+    BreakNode,
+    ContinueNode,
     ForNode,
     FunctionCallNode,
     IdentifierNode,
@@ -16,8 +18,10 @@ from ..ast import (
     ReturnNode,
     ShaderNode,
     StructNode,
+    TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WhileNode,
 )
 
 
@@ -84,11 +88,14 @@ class VulkanSPIRVCodeGen:
         self.functions = {}
         self.function_signatures = {}
         self.function_resource_array_params = {}
+        self.function_resource_array_type_hints = {}
 
         self.glsl_std450_id = None
         self.main_fn_id = None
 
         self.current_label = None
+        self.loop_merge_labels = []
+        self.loop_continue_labels = []
         self.defined_functions = set()
         self.current_struct_members = {}
 
@@ -439,6 +446,50 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, result_type.type)
         return spirv_id
 
+    def composite_extract(
+        self, composite: SpirvId, member_type: SpirvId, member_index: int
+    ) -> SpirvId:
+        """Extract a member from a composite value."""
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpCompositeExtract %{member_type.id} "
+            f"%{composite.id} {member_index}"
+        )
+
+        spirv_id = SpirvId(id_value, member_type.type)
+        self.value_types[id_value] = member_type
+        return spirv_id
+
+    def struct_member_info(self, struct_type: str, member_name: str):
+        members = self.current_struct_members.get(struct_type)
+        if not members:
+            return None
+        for index, (member_type, name) in enumerate(members):
+            if name == member_name:
+                return index, member_type
+        return None
+
+    def struct_type_name_from_pointer(self, pointer: SpirvId):
+        struct_type_id = self.variable_value_types.get(pointer.id)
+        return struct_type_id.type.base_type if struct_type_id else None
+
+    def create_member_access_pointer(
+        self, base_pointer: SpirvId, member_name: str
+    ) -> Optional[SpirvId]:
+        struct_type = self.struct_type_name_from_pointer(base_pointer)
+        member_info = self.struct_member_info(struct_type, member_name)
+        if member_info is None:
+            return None
+
+        member_index, member_type = member_info
+        int_type = self.primitive_types["int"]
+        index = self.register_constant(member_index, int_type)
+        storage_class = base_pointer.type.storage_class or "Function"
+        ptr_type = self.register_pointer_type(member_type, storage_class)
+        access = self.access_chain(base_pointer, [index], ptr_type)
+        self.variable_value_types[access.id] = member_type
+        return access
+
     def create_function(
         self, name: str, return_type: SpirvId, param_types: List[SpirvId]
     ) -> SpirvId:
@@ -489,33 +540,65 @@ class VulkanSPIRVCodeGen:
         """Create a binary operation."""
         id_value = self.get_id()
 
-        spv_op = {
-            "+": "OpFAdd",
-            "-": "OpFSub",
-            "*": "OpFMul",
-            "/": "OpFDiv",
-            "%": "OpFMod",
-            "==": "OpFOrdEqual",
-            "!=": "OpFOrdNotEqual",
-            "<": "OpFOrdLessThan",
-            ">": "OpFOrdGreaterThan",
-            "<=": "OpFOrdLessThanEqual",
-            ">=": "OpFOrdGreaterThanEqual",
-            "&&": "OpLogicalAnd",
-            "||": "OpLogicalOr",
-            "&": "OpBitwiseAnd",
-            "|": "OpBitwiseOr",
-            "^": "OpBitwiseXor",
-            "<<": "OpShiftLeftLogical",
-            ">>": "OpShiftRightLogical",
-            # Add more mappings as needed
-            "MULTIPLY": "OpFMul",  # Fix MULTIPLY to be OpFMul
-        }.get(op, f"Op{op}")
+        arithmetic_ops = {
+            "+": ("OpFAdd", "OpIAdd", "OpIAdd"),
+            "-": ("OpFSub", "OpISub", "OpISub"),
+            "*": ("OpFMul", "OpIMul", "OpIMul"),
+            "MULTIPLY": ("OpFMul", "OpIMul", "OpIMul"),
+            "/": ("OpFDiv", "OpSDiv", "OpUDiv"),
+            "%": ("OpFMod", "OpSMod", "OpUMod"),
+        }
+        comparison_ops = {
+            "==": ("OpFOrdEqual", "OpIEqual", "OpIEqual"),
+            "!=": ("OpFOrdNotEqual", "OpINotEqual", "OpINotEqual"),
+            "<": ("OpFOrdLessThan", "OpSLessThan", "OpULessThan"),
+            ">": ("OpFOrdGreaterThan", "OpSGreaterThan", "OpUGreaterThan"),
+            "<=": ("OpFOrdLessThanEqual", "OpSLessThanEqual", "OpULessThanEqual"),
+            ">=": (
+                "OpFOrdGreaterThanEqual",
+                "OpSGreaterThanEqual",
+                "OpUGreaterThanEqual",
+            ),
+        }
+
+        if op in {"&&", "||"}:
+            result_type = self.register_primitive_type("bool")
+            spv_op = "OpLogicalAnd" if op == "&&" else "OpLogicalOr"
+        elif op in comparison_ops:
+            result_type = self.register_primitive_type("bool")
+            float_op, signed_op, unsigned_op = comparison_ops[op]
+            spv_op = (
+                unsigned_op
+                if self.is_unsigned_type(left.type)
+                else signed_op if self.is_integer_type(left.type) else float_op
+            )
+        elif op in arithmetic_ops:
+            float_op, signed_op, unsigned_op = arithmetic_ops[op]
+            spv_op = (
+                unsigned_op
+                if self.is_unsigned_type(left.type)
+                else signed_op if self.is_integer_type(left.type) else float_op
+            )
+        else:
+            spv_op = {
+                "&": "OpBitwiseAnd",
+                "|": "OpBitwiseOr",
+                "^": "OpBitwiseXor",
+                "<<": "OpShiftLeftLogical",
+                ">>": "OpShiftRightLogical",
+            }.get(op, f"Op{op}")
 
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{left.id} %{right.id}")
 
         spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
         return spirv_id
+
+    def is_integer_type(self, spirv_type: SpirvType) -> bool:
+        return spirv_type.base_type in {"int", "uint"}
+
+    def is_unsigned_type(self, spirv_type: SpirvType) -> bool:
+        return spirv_type.base_type == "uint"
 
     def unary_operation(
         self, op: str, result_type: SpirvId, operand: SpirvId
@@ -536,6 +619,24 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{operand.id}")
 
         spirv_id = SpirvId(id_value, result_type.type)
+        return spirv_id
+
+    def select_operation(
+        self,
+        result_type: SpirvId,
+        condition: SpirvId,
+        true_value: SpirvId,
+        false_value: SpirvId,
+    ) -> SpirvId:
+        """Create a SPIR-V select operation for ternary expressions."""
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpSelect %{result_type.id} %{condition.id} "
+            f"%{true_value.id} %{false_value.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
         return spirv_id
 
     def call_function(
@@ -1169,6 +1270,17 @@ class VulkanSPIRVCodeGen:
 
             return SpirvId(id_value, vector_type.type)
 
+        if function_name in self.struct_types:
+            struct_type = self.struct_types[function_name]
+            id_value = self.get_id()
+            arg_list = " ".join([f"%{arg.id}" for arg in args])
+            self.emit(
+                f"%{id_value} = OpCompositeConstruct %{struct_type.id} {arg_list}"
+            )
+            spirv_id = SpirvId(id_value, struct_type.type)
+            self.value_types[id_value] = struct_type
+            return spirv_id
+
         # Matrix constructors
         elif re.match(r"mat(\d)x\d", function_name) or re.match(
             r"mat\d", function_name
@@ -1372,6 +1484,17 @@ class VulkanSPIRVCodeGen:
     def create_return_value(self, value: SpirvId):
         """Create a return value instruction."""
         self.emit(f"OpReturnValue %{value.id}")
+
+    def current_block_has_terminator(self) -> bool:
+        """Return whether the current block already ends in a terminator."""
+        for line in reversed(self.code_lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith(";"):
+                continue
+            if re.match(r"%\d+ = OpLabel$", stripped):
+                return False
+            return stripped.startswith(("OpBranch", "OpReturn", "OpKill"))
+        return False
 
     def normalize_primitive_name(self, type_name: str) -> str:
         aliases = {
@@ -1708,10 +1831,14 @@ class VulkanSPIRVCodeGen:
         type_str = self.normalize_generic_vector_type(type_str)
         explicit_format = self.explicit_image_format(node) if node is not None else None
 
-        if "[" in type_str and type_str.endswith("]"):
-            base_type, size = parse_array_type(type_str)
+        array_type = self.split_outer_array_type(type_str)
+        if array_type is not None:
+            base_type = self.array_base_type_name(type_str)
+            element_type_name, size = array_type
             if self.is_resource_type_name(base_type):
-                element_type = self.register_resource_type(base_type, explicit_format)
+                element_type = self.map_resource_type_with_format(
+                    element_type_name, node
+                )
                 return self.register_array_type(element_type, size)
 
         if self.is_resource_type_name(type_str):
@@ -1765,9 +1892,10 @@ class VulkanSPIRVCodeGen:
 
         type_str = self.normalize_generic_vector_type(type_str)
 
-        if "[" in type_str and type_str.endswith("]"):
-            base_type, size = parse_array_type(type_str)
-            element_type = self.map_crossgl_type(base_type)
+        array_type = self.split_outer_array_type(type_str)
+        if array_type is not None:
+            element_type_name, size = array_type
+            element_type = self.map_crossgl_type(element_type_name)
             return self.register_array_type(element_type, size)
 
         primitive_type = self.normalize_primitive_name(type_str)
@@ -1887,12 +2015,18 @@ class VulkanSPIRVCodeGen:
         param_types = []
         param_value_types = []
         resource_array_param_indices = set()
+        param_type_hints = self.function_resource_array_type_hints.get(
+            function_node.name, {}
+        )
         for param in getattr(
             function_node, "parameters", getattr(function_node, "params", [])
         ):
             param_type_source = getattr(
                 param, "param_type", getattr(param, "vtype", None)
             )
+            param_name = getattr(param, "name", None)
+            if param_name in param_type_hints:
+                param_type_source = param_type_hints[param_name]
             if param_type_source is not None:
                 param_type = self.map_resource_type_with_format(
                     param_type_source, param
@@ -1947,6 +2081,8 @@ class VulkanSPIRVCodeGen:
             stmt_list = [statements]
 
         for stmt in stmt_list:
+            if self.current_block_has_terminator():
+                break
             self.process_statement(stmt)
 
     def process_statement(self, stmt):
@@ -1961,8 +2097,16 @@ class VulkanSPIRVCodeGen:
             self.process_if(stmt)
         elif isinstance(stmt, ForNode):
             self.process_for(stmt)
+        elif isinstance(stmt, WhileNode):
+            self.process_while(stmt)
+        elif isinstance(stmt, BreakNode):
+            self.process_break(stmt)
+        elif isinstance(stmt, ContinueNode):
+            self.process_continue(stmt)
         elif isinstance(stmt, FunctionCallNode):
             self.process_expression(stmt)  # Just evaluate and discard result
+        elif isinstance(stmt, (UnaryOpNode, BinaryOpNode)):
+            self.process_expression(stmt)
         elif hasattr(stmt, "expression"):
             expression = stmt.expression
             if isinstance(expression, AssignmentNode):
@@ -2039,6 +2183,268 @@ class VulkanSPIRVCodeGen:
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
 
+    def collect_ast_functions(self, root):
+        functions = []
+        visited = set()
+
+        def walk(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    walk(item)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    walk(item)
+                return
+
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+
+            if hasattr(value, "body") and hasattr(value, "parameters"):
+                functions.append(value)
+
+            if hasattr(value, "__dict__"):
+                for child in vars(value).values():
+                    walk(child)
+
+        walk(root)
+        return functions
+
+    def walk_ast_nodes(self, root):
+        visited = set()
+
+        def walk(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    yield from walk(item)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    yield from walk(item)
+                return
+
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+            yield value
+
+            if hasattr(value, "__dict__"):
+                for child in vars(value).values():
+                    yield from walk(child)
+
+        yield from walk(root)
+
+    def array_dimensions(self, type_name: str):
+        if not type_name or "[" not in type_name:
+            return None
+
+        suffix = type_name[type_name.find("[") :]
+        dimensions = []
+        offset = 0
+        while offset < len(suffix):
+            if suffix[offset] != "[":
+                return None
+            end = suffix.find("]", offset + 1)
+            if end == -1:
+                return None
+            dimensions.append(suffix[offset + 1 : end])
+            offset = end + 1
+        return dimensions
+
+    def is_unsized_resource_array_type_name(self, type_name: str) -> bool:
+        type_name = self.normalize_generic_vector_type(str(type_name))
+        array_type = self.split_outer_array_type(type_name)
+        return (
+            array_type is not None
+            and array_type[1] is None
+            and self.is_resource_type_name(self.array_base_type_name(type_name))
+        )
+
+    def is_fixed_resource_array_type_name(self, type_name: str) -> bool:
+        type_name = self.normalize_generic_vector_type(str(type_name))
+        array_type = self.split_outer_array_type(type_name)
+        return (
+            array_type is not None
+            and array_type[1] is not None
+            and self.is_resource_type_name(self.array_base_type_name(type_name))
+        )
+
+    def fixed_type_for_unsized_resource_param(self, declared_type: str, arg_type: str):
+        declared_type = self.normalize_generic_vector_type(str(declared_type))
+        arg_type = self.normalize_generic_vector_type(str(arg_type))
+
+        if not self.is_unsized_resource_array_type_name(declared_type):
+            return None
+        if not self.is_fixed_resource_array_type_name(arg_type):
+            return None
+        if self.array_base_type_name(declared_type) != self.array_base_type_name(
+            arg_type
+        ):
+            return None
+
+        declared_dimensions = self.array_dimensions(declared_type)
+        arg_dimensions = self.array_dimensions(arg_type)
+        if not declared_dimensions or not arg_dimensions:
+            return None
+        if len(declared_dimensions) != len(arg_dimensions):
+            return None
+        if declared_dimensions[0] != "":
+            return None
+        if declared_dimensions[1:] != arg_dimensions[1:]:
+            return None
+
+        return arg_type
+
+    def expression_name(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if hasattr(expr, "name") and isinstance(expr.name, str):
+            return expr.name
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+            return self.expression_name(array_expr)
+        return None
+
+    def function_call_name(self, call):
+        callee = getattr(call, "function", getattr(call, "name", None))
+        if hasattr(callee, "name"):
+            return callee.name
+        if isinstance(callee, str):
+            return callee
+        return None
+
+    def collect_resource_array_parameter_type_hints(self, ast):
+        functions = {
+            getattr(func, "name", None): func
+            for func in self.collect_ast_functions(ast)
+        }
+        functions = {name: func for name, func in functions.items() if name}
+
+        global_nodes = list(getattr(ast, "global_variables", []) or [])
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            global_nodes.extend(getattr(stage, "local_variables", []) or [])
+
+        global_types = {}
+        for node in self.walk_ast_nodes(global_nodes):
+            if isinstance(node, VariableNode):
+                global_types[node.name] = self.type_name_from_value(
+                    getattr(node, "var_type", getattr(node, "vtype", "float"))
+                )
+
+        declared_param_types = {}
+        for func_name, func in functions.items():
+            declared_param_types[func_name] = {}
+            for param in getattr(func, "parameters", getattr(func, "params", [])):
+                param_name = getattr(param, "name", None)
+                param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+                if param_name and param_type is not None:
+                    declared_param_types[func_name][param_name] = (
+                        self.type_name_from_value(param_type)
+                    )
+
+        hints = {func_name: {} for func_name in functions}
+
+        def visible_types(func_name):
+            visible = dict(global_types)
+            for param_name, param_type in declared_param_types.get(
+                func_name, {}
+            ).items():
+                visible[param_name] = hints.get(func_name, {}).get(
+                    param_name, param_type
+                )
+            return visible
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, func in functions.items():
+                caller_visible_types = visible_types(caller_name)
+                for call in self.walk_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(call)
+                    callee = functions.get(callee_name)
+                    if callee is None:
+                        continue
+
+                    callee_params = getattr(
+                        callee, "parameters", getattr(callee, "params", [])
+                    )
+                    args = getattr(call, "arguments", getattr(call, "args", []))
+                    for index, arg in enumerate(args):
+                        if index >= len(callee_params):
+                            continue
+
+                        param = callee_params[index]
+                        param_name = getattr(param, "name", None)
+                        declared_type = declared_param_types.get(callee_name, {}).get(
+                            param_name
+                        )
+                        if not param_name or declared_type is None:
+                            continue
+
+                        arg_name = self.expression_name(arg)
+                        arg_type = caller_visible_types.get(arg_name)
+                        if arg_type is None:
+                            continue
+
+                        fixed_type = self.fixed_type_for_unsized_resource_param(
+                            declared_type, arg_type
+                        )
+                        if fixed_type is None:
+                            continue
+
+                        existing = hints.setdefault(callee_name, {}).get(param_name)
+                        if existing is not None and existing != fixed_type:
+                            raise ValueError(
+                                "Conflicting SPIR-V resource array parameter sizes for "
+                                f"'{param_name}': {existing} and {fixed_type}"
+                            )
+                        if existing != fixed_type:
+                            hints[callee_name][param_name] = fixed_type
+                            changed = True
+
+        return {
+            func_name: param_hints
+            for func_name, param_hints in hints.items()
+            if param_hints
+        }
+
+    def split_outer_array_type(self, type_name: str):
+        if not type_name or "[" not in type_name or not type_name.endswith("]"):
+            return None
+
+        open_bracket = type_name.find("[")
+        close_bracket = type_name.find("]", open_bracket)
+        if close_bracket == -1:
+            return None
+
+        base_type = type_name[:open_bracket]
+        remaining_suffix = type_name[close_bracket + 1 :]
+        element_type = (
+            f"{base_type}{remaining_suffix}" if remaining_suffix else base_type
+        )
+        size_text = type_name[open_bracket + 1 : close_bracket].strip()
+        if not size_text:
+            return element_type, None
+
+        try:
+            return element_type, int(size_text)
+        except ValueError:
+            return element_type, None
+
+    def array_base_type_name(self, type_name: str):
+        if not type_name or "[" not in type_name:
+            return type_name
+        return type_name[: type_name.find("[")]
+
     def get_variable_value(self, variable_id: SpirvId) -> SpirvId:
         value_type = self.variable_value_types.get(variable_id.id)
         if value_type:
@@ -2058,6 +2464,18 @@ class VulkanSPIRVCodeGen:
             name = expr.name
         elif isinstance(expr, str):
             name = expr
+        elif isinstance(expr, ArrayAccessNode):
+            index = self.process_expression(expr.index)
+            if index is None:
+                return None
+            access, _ = self.create_array_element_access(expr.array, index)
+            return access
+        elif isinstance(expr, MemberAccessNode):
+            base_pointer = self.variable_pointer_from_expression(expr.object)
+            if base_pointer is None:
+                return None
+
+            return self.create_member_access_pointer(base_pointer, expr.member)
         else:
             return None
 
@@ -2075,9 +2493,11 @@ class VulkanSPIRVCodeGen:
 
     def is_resource_array_type(self, array_type: Optional[SpirvId]) -> bool:
         element_type = self.array_element_type_from_type(array_type)
-        return (
-            element_type is not None and element_type.id in self.resource_type_metadata
-        )
+        while element_type is not None:
+            if element_type.id in self.resource_type_metadata:
+                return True
+            element_type = self.array_element_type_from_type(element_type)
+        return False
 
     def create_array_element_access(self, array_expr, index: SpirvId):
         array_variable = self.variable_pointer_from_expression(array_expr)
@@ -2141,29 +2561,18 @@ class VulkanSPIRVCodeGen:
             self.store_to_variable(var_id, rhs_value)
 
         elif isinstance(target, MemberAccessNode):
-            base = self.process_expression(target.object)
-            if base is None:
+            base_pointer = self.variable_pointer_from_expression(target.object)
+            if base_pointer is None:
                 return
 
             member_name = target.member
-            struct_type = base.type.base_type
-
-            if struct_type in self.current_struct_members:
-                for i, (_, name) in enumerate(self.current_struct_members[struct_type]):
-                    if name == member_name:
-                        int_type = self.primitive_types["int"]
-                        index = self.register_constant(i, int_type)
-
-                        member_type = self.current_struct_members[struct_type][i][0]
-
-                        ptr_type = self.register_pointer_type(member_type, "Function")
-
-                        access = self.access_chain(base, [index], ptr_type)
-
-                        self.store_to_variable(access, rhs_value)
-                        return
+            access = self.create_member_access_pointer(base_pointer, member_name)
+            if access is not None:
+                self.store_to_variable(access, rhs_value)
+                return
 
             # Default handling if member not found
+            struct_type = self.struct_type_name_from_pointer(base_pointer)
             self.emit(
                 f"; WARNING: Could not find member {member_name} in {struct_type}"
             )
@@ -2223,13 +2632,15 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{then_label.id} = OpLabel")
         self.current_label = then_label.id
         self.process_statements(node.if_body)
-        self.create_branch(merge_label)
+        if not self.current_block_has_terminator():
+            self.create_branch(merge_label)
 
         self.emit(f"%{else_label.id} = OpLabel")
         self.current_label = else_label.id
         if node.else_body:
             self.process_statements(node.else_body)
-        self.create_branch(merge_label)
+        if not self.current_block_has_terminator():
+            self.create_branch(merge_label)
 
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
@@ -2258,18 +2669,109 @@ class VulkanSPIRVCodeGen:
 
         self.emit(f"%{body_label.id} = OpLabel")
         self.current_label = body_label.id
-        if node.body:
-            self.process_statements(node.body)
-        self.create_branch(continue_label)
+        self.loop_merge_labels.append(merge_label)
+        self.loop_continue_labels.append(continue_label)
+        try:
+            if node.body:
+                self.process_statements(node.body)
+            if not self.current_block_has_terminator():
+                self.create_branch(continue_label)
+        finally:
+            self.loop_continue_labels.pop()
+            self.loop_merge_labels.pop()
 
         self.emit(f"%{continue_label.id} = OpLabel")
         self.current_label = continue_label.id
         if node.update:
             self.process_statement(node.update)
+        if not self.current_block_has_terminator():
+            self.create_branch(header_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+
+    def process_while(self, node: WhileNode):
+        """Process a CrossGL while loop."""
+        header_label = SpirvId(self.get_id(), SpirvType("label"))
+        body_label = SpirvId(self.get_id(), SpirvType("label"))
+        continue_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_branch(header_label)
+
+        self.emit(f"%{header_label.id} = OpLabel")
+        self.current_label = header_label.id
+
+        condition = self.process_expression(node.condition)
+        if condition is None:
+            condition = self.register_constant(True, self.primitive_types["bool"])
+
+        self.create_loop_merge(merge_label, continue_label)
+        self.create_conditional_branch(condition, body_label, merge_label)
+
+        self.emit(f"%{body_label.id} = OpLabel")
+        self.current_label = body_label.id
+        self.loop_merge_labels.append(merge_label)
+        self.loop_continue_labels.append(continue_label)
+        try:
+            if node.body:
+                self.process_statements(node.body)
+            if not self.current_block_has_terminator():
+                self.create_branch(continue_label)
+        finally:
+            self.loop_continue_labels.pop()
+            self.loop_merge_labels.pop()
+
+        self.emit(f"%{continue_label.id} = OpLabel")
+        self.current_label = continue_label.id
         self.create_branch(header_label)
 
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
+
+    def process_break(self, node: BreakNode):
+        """Process a CrossGL break statement."""
+        if not self.loop_merge_labels:
+            self.emit("; WARNING: break used outside a loop")
+            return
+        self.create_branch(self.loop_merge_labels[-1])
+
+    def process_continue(self, node: ContinueNode):
+        """Process a CrossGL continue statement."""
+        if not self.loop_continue_labels:
+            self.emit("; WARNING: continue used outside a loop")
+            return
+        self.create_branch(self.loop_continue_labels[-1])
+
+    def process_increment_expression(self, node: UnaryOpNode) -> SpirvId:
+        """Process prefix/postfix ++ and -- as load/update/store operations."""
+        variable_id = self.variable_pointer_from_expression(node.operand)
+        if variable_id is None:
+            self.emit("; WARNING: increment target is not assignable")
+            int_type = self.register_primitive_type("int")
+            return self.register_constant(0, int_type)
+
+        value_type = self.variable_value_types.get(variable_id.id)
+        if value_type is None:
+            value_type = self.find_registered_type_by_base(
+                variable_id.type.base_type.replace("ptr_", "", 1)
+            )
+        if value_type is None:
+            value_type = self.register_primitive_type("int")
+
+        old_value = self.load_from_variable(variable_id, value_type)
+        step_value = (
+            self.register_constant(1.0, value_type)
+            if value_type.type.base_type == "float"
+            else self.register_constant(1, value_type)
+        )
+        operator = "+" if node.op == "++" else "-"
+        new_value = self.binary_operation(operator, value_type, old_value, step_value)
+        self.store_to_variable(variable_id, new_value)
+
+        if getattr(node, "is_postfix", getattr(node, "postfix", False)):
+            return old_value
+        return new_value
 
     def process_expression(self, expr) -> Optional[SpirvId]:
         """Process a CrossGL expression."""
@@ -2378,6 +2880,9 @@ class VulkanSPIRVCodeGen:
             )
 
         elif isinstance(expr, UnaryOpNode):
+            if expr.op in {"++", "--"}:
+                return self.process_increment_expression(expr)
+
             operand = self.process_expression(expr.operand)
             if operand is None:
                 # Return a default value instead of None
@@ -2385,6 +2890,26 @@ class VulkanSPIRVCodeGen:
                 return self.register_constant(0.0, float_type)
 
             return self.unary_operation(expr.op, operand.type, operand)
+
+        elif isinstance(expr, TernaryOpNode):
+            condition = self.process_expression(expr.condition)
+            true_value = self.process_expression(expr.true_expr)
+            false_value = self.process_expression(expr.false_expr)
+
+            if condition is None:
+                condition = self.register_constant(
+                    False, self.register_primitive_type("bool")
+                )
+            if true_value is None or false_value is None:
+                float_type = self.register_primitive_type("float")
+                fallback = self.register_constant(0.0, float_type)
+                true_value = true_value or fallback
+                false_value = false_value or fallback
+
+            result_type = self.map_crossgl_type(true_value.type.base_type)
+            return self.select_operation(
+                result_type, condition, true_value, false_value
+            )
 
         elif isinstance(expr, FunctionCallNode):
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
@@ -2437,26 +2962,23 @@ class VulkanSPIRVCodeGen:
             return self.call_function(callee_name, args)
 
         elif isinstance(expr, MemberAccessNode):
+            member_name = expr.member
+            base_pointer = self.variable_pointer_from_expression(expr.object)
+            if base_pointer is not None:
+                access = self.create_member_access_pointer(base_pointer, member_name)
+                if access is not None:
+                    member_type = self.variable_value_types.get(access.id)
+                    return self.load_from_variable(access, member_type)
+
             base = self.process_expression(expr.object)
             if base is None:
                 return None
 
-            member_name = expr.member
             struct_type = base.type.base_type
-
-            if struct_type in self.current_struct_members:
-                for i, (member_type, name) in enumerate(
-                    self.current_struct_members[struct_type]
-                ):
-                    if name == member_name:
-                        int_type = self.primitive_types["int"]
-                        index = self.register_constant(i, int_type)
-
-                        ptr_type = self.register_pointer_type(member_type, "Function")
-
-                        access = self.access_chain(base, [index], ptr_type)
-
-                        return self.load_from_variable(access, member_type)
+            member_info = self.struct_member_info(struct_type, member_name)
+            if member_info is not None:
+                member_index, member_type = member_info
+                return self.composite_extract(base, member_type, member_index)
 
             # Default handling if member not found
             self.emit(
@@ -2664,6 +3186,10 @@ class VulkanSPIRVCodeGen:
 
         for struct in ast.structs:
             self.process_crossgl_struct(struct)
+
+        self.function_resource_array_type_hints = (
+            self.collect_resource_array_parameter_type_hints(ast)
+        )
 
         for var in getattr(ast, "global_variables", []):
             self.process_global_variable_declaration(var)

@@ -1089,10 +1089,2004 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpImageQueryLod {vec2_type.group(1)}" in spv_code
         assert f"OpLoad {array_type.group(1)}" not in spv_code
         assert "OpFunctionCall" not in spv_code
-        assert "textureSize" not in spv_code
-        assert "imageSize" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
         assert "textureQueryLevels" not in spv_code
         assert "textureQueryLod" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_dynamic_and_nested_resource_array_queries_emit_spirv_element_access(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][4];
+
+            void queryArrays(
+                sampler2d dynamicTextures[],
+                sampler2d fixedTextures[3],
+                sampler2dms dynamicMsTextures[],
+                int layer,
+                int slot
+            ) {
+                ivec2 dynamicSize = textureSize(dynamicTextures[slot], 0);
+                int fixedLevels = textureQueryLevels(fixedTextures[slot]);
+                int dynamicSamples = textureSamples(dynamicMsTextures[slot]);
+                ivec2 gridSize = textureSize(textureGrid[layer][slot], 0);
+                ivec2 imageGridSize = imageSize(imageGrid[layer][slot]);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert float_type is not None
+        assert int_type is not None
+
+        sampled_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 0 0 0 1 Unknown\n(%\d+) = OpTypeSampledImage \1",
+            spv_code,
+        )
+        ms_sampled_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 0 0 1 1 Unknown\n(%\d+) = OpTypeSampledImage \1",
+            spv_code,
+        )
+        storage_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 0 0 0 2 Rgba16f",
+            spv_code,
+        )
+        assert sampled_image_type is not None
+        assert ms_sampled_image_type is not None
+        assert storage_image_type is not None
+
+        sampled_type = sampled_image_type.group(2)
+        storage_type = storage_image_type.group(1)
+
+        sampled_inner_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(sampled_type)} %\d+",
+            spv_code,
+        )
+        sampled_outer_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(sampled_inner_array.group(1))} %\d+",
+            spv_code,
+        )
+        storage_inner_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(storage_type)} %\d+",
+            spv_code,
+        )
+        storage_outer_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(storage_inner_array.group(1))} %\d+",
+            spv_code,
+        )
+        assert sampled_inner_array is not None
+        assert sampled_outer_array is not None
+        assert storage_inner_array is not None
+        assert storage_outer_array is not None
+
+        sampled_outer_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant "
+            rf"{re.escape(sampled_outer_array.group(1))}",
+            spv_code,
+        )
+        sampled_inner_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant "
+            rf"{re.escape(sampled_inner_array.group(1))}",
+            spv_code,
+        )
+        sampled_element_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant {re.escape(sampled_type)}",
+            spv_code,
+        )
+        storage_outer_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant "
+            rf"{re.escape(storage_outer_array.group(1))}",
+            spv_code,
+        )
+        storage_inner_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant "
+            rf"{re.escape(storage_inner_array.group(1))}",
+            spv_code,
+        )
+        storage_element_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant {re.escape(storage_type)}",
+            spv_code,
+        )
+        assert sampled_outer_pointer is not None
+        assert sampled_inner_pointer is not None
+        assert sampled_element_pointer is not None
+        assert storage_outer_pointer is not None
+        assert storage_inner_pointer is not None
+        assert storage_element_pointer is not None
+
+        texture_grid = re.search(
+            rf"(%\d+) = OpVariable {sampled_outer_pointer.group(1)} "
+            r"UniformConstant\nOpName \1 \"textureGrid\"",
+            spv_code,
+        )
+        image_grid = re.search(
+            rf"(%\d+) = OpVariable {storage_outer_pointer.group(1)} "
+            r"UniformConstant\nOpName \1 \"imageGrid\"",
+            spv_code,
+        )
+        dynamic_textures = re.search(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"dynamicTextures\"",
+            spv_code,
+        )
+        fixed_textures = re.search(
+            rf"(%\d+) = OpFunctionParameter {sampled_inner_pointer.group(1)}\n"
+            r"OpName \1 \"fixedTextures\"",
+            spv_code,
+        )
+        dynamic_ms_textures = re.search(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"dynamicMsTextures\"",
+            spv_code,
+        )
+        assert texture_grid is not None
+        assert image_grid is not None
+        assert dynamic_textures is not None
+        assert fixed_textures is not None
+        assert dynamic_ms_textures is not None
+
+        texture_grid_row = re.search(
+            rf"(%\d+) = OpAccessChain {sampled_inner_pointer.group(1)} "
+            rf"{texture_grid.group(1)} %\d+",
+            spv_code,
+        )
+        image_grid_row = re.search(
+            rf"(%\d+) = OpAccessChain {storage_inner_pointer.group(1)} "
+            rf"{image_grid.group(1)} %\d+",
+            spv_code,
+        )
+        assert texture_grid_row is not None
+        assert image_grid_row is not None
+        assert re.search(
+            rf"OpAccessChain {sampled_element_pointer.group(1)} "
+            rf"{texture_grid_row.group(1)} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain {storage_element_pointer.group(1)} "
+            rf"{image_grid_row.group(1)} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain {sampled_element_pointer.group(1)} "
+            rf"{dynamic_textures.group(1)} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain {sampled_element_pointer.group(1)} "
+            rf"{fixed_textures.group(1)} %\d+",
+            spv_code,
+        )
+
+        assert f"OpTypeRuntimeArray {sampled_outer_array.group(1)}" not in spv_code
+        assert f"OpLoad {sampled_inner_array.group(1)}" not in spv_code
+        assert f"OpLoad {sampled_outer_array.group(1)}" not in spv_code
+        assert f"OpLoad {storage_inner_array.group(1)}" not in spv_code
+        assert f"OpLoad {storage_outer_array.group(1)}" not in spv_code
+        assert len(re.findall(r"\bOpImageQuerySizeLod\b", spv_code)) == 2
+        assert len(re.findall(r"\bOpImageQueryLevels\b", spv_code)) == 1
+        assert len(re.findall(r"\bOpImageQuerySamples\b", spv_code)) == 1
+        assert len(re.findall(r"\bOpImageQuerySize\b", spv_code)) == 1
+        assert f"OpImageQuerySamples {int_type.group(1)}" in spv_code
+        assert "textureSize" not in spv_code
+        assert "textureSamples" not in spv_code
+        assert "textureQueryLevels" not in spv_code
+        assert "imageSize" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_dynamic_resource_array_calls_use_spirv_fixed_pointer_signatures(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+            uimage2D counterGrid @r32ui[2][2];
+
+            vec4 sampleDynamic(
+                sampler2d dynGrid[][3],
+                int layer,
+                int slot,
+                vec2 uv
+            ) {
+                return texture(dynGrid[layer][slot], uv);
+            }
+
+            vec4 readDynamic(
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                return imageLoad(dynImages[layer][slot], pixel);
+            }
+
+            uint readCounter(
+                uimage2D dynCounters[][2] @r32ui,
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                return imageLoad(dynCounters[layer][slot], pixel);
+            }
+
+            void queryDynamic(
+                sampler2d dynGrid[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot
+            ) {
+                ivec2 texSize = textureSize(dynGrid[layer][slot], 0);
+                ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 sampled = sampleDynamic(textureGrid, 1, 2, uv);
+                    vec4 color = readDynamic(imageGrid, 1, 2, pixel);
+                    uint count = readCounter(counterGrid, 1, 1, pixel);
+                    queryDynamic(textureGrid, imageGrid, 1, 2);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        sampled_image_type = re.search(r"(%\d+) = OpTypeSampledImage %\d+", spv_code)
+        rgba_image_type = re.search(
+            r"(%\d+) = OpTypeImage %\d+ 2D 0 0 0 2 Rgba16f",
+            spv_code,
+        )
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        r32ui_image_type = re.search(
+            r"(%\d+) = OpTypeImage %\d+ 2D 0 0 0 2 R32ui",
+            spv_code,
+        )
+        assert sampled_image_type is not None
+        assert rgba_image_type is not None
+        assert uint_type is not None
+        assert r32ui_image_type is not None
+
+        sampled_row = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(sampled_image_type.group(1))} %\d+",
+            spv_code,
+        )
+        rgba_row = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(rgba_image_type.group(1))} %\d+",
+            spv_code,
+        )
+        r32ui_row = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(r32ui_image_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert sampled_row is not None
+        assert rgba_row is not None
+        assert r32ui_row is not None
+
+        sampled_grid = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(sampled_row.group(1))} %\d+",
+            spv_code,
+        )
+        rgba_grid = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(rgba_row.group(1))} %\d+",
+            spv_code,
+        )
+        r32ui_grid = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(r32ui_row.group(1))} %\d+",
+            spv_code,
+        )
+        assert sampled_grid is not None
+        assert rgba_grid is not None
+        assert r32ui_grid is not None
+
+        sampled_grid_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant "
+            rf"{re.escape(sampled_grid.group(1))}",
+            spv_code,
+        )
+        rgba_grid_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant "
+            rf"{re.escape(rgba_grid.group(1))}",
+            spv_code,
+        )
+        r32ui_grid_pointer = re.search(
+            rf"(%\d+) = OpTypePointer UniformConstant "
+            rf"{re.escape(r32ui_grid.group(1))}",
+            spv_code,
+        )
+        assert sampled_grid_pointer is not None
+        assert rgba_grid_pointer is not None
+        assert r32ui_grid_pointer is not None
+
+        texture_grid = re.search(
+            rf"(%\d+) = OpVariable {sampled_grid_pointer.group(1)} "
+            r"UniformConstant\nOpName \1 \"textureGrid\"",
+            spv_code,
+        )
+        image_grid = re.search(
+            rf"(%\d+) = OpVariable {rgba_grid_pointer.group(1)} "
+            r"UniformConstant\nOpName \1 \"imageGrid\"",
+            spv_code,
+        )
+        counter_grid = re.search(
+            rf"(%\d+) = OpVariable {r32ui_grid_pointer.group(1)} "
+            r"UniformConstant\nOpName \1 \"counterGrid\"",
+            spv_code,
+        )
+        assert texture_grid is not None
+        assert image_grid is not None
+        assert counter_grid is not None
+
+        dyn_grid_params = re.findall(
+            rf"(%\d+) = OpFunctionParameter {sampled_grid_pointer.group(1)}\n"
+            r"OpName \1 \"dynGrid\"",
+            spv_code,
+        )
+        dyn_image_params = re.findall(
+            rf"(%\d+) = OpFunctionParameter {rgba_grid_pointer.group(1)}\n"
+            r"OpName \1 \"dynImages\"",
+            spv_code,
+        )
+        dyn_counter_params = re.findall(
+            rf"(%\d+) = OpFunctionParameter {r32ui_grid_pointer.group(1)}\n"
+            r"OpName \1 \"dynCounters\"",
+            spv_code,
+        )
+        assert len(dyn_grid_params) == 2
+        assert len(dyn_image_params) == 2
+        assert len(dyn_counter_params) == 1
+
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(texture_grid.group(1))}",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(image_grid.group(1))}",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(counter_grid.group(1))}",
+            spv_code,
+        )
+        assert f"OpTypeRuntimeArray {sampled_row.group(1)}" not in spv_code
+        assert f"OpTypeRuntimeArray {rgba_row.group(1)}" not in spv_code
+        assert f"OpTypeRuntimeArray {r32ui_row.group(1)}" not in spv_code
+        assert f"OpLoad {sampled_grid.group(1)}" not in spv_code
+        assert f"OpLoad {rgba_grid.group(1)}" not in spv_code
+        assert f"OpLoad {r32ui_grid.group(1)}" not in spv_code
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert spv_code.count("OpImageRead") >= 2
+        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_forwarded_dynamic_resource_arrays_use_spirv_fixed_pointer_signatures(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+            uimage2D counterGrid @r32ui[2][2];
+
+            vec4 leafSample(sampler2d dynGrid[][3], int layer, int slot, vec2 uv) {
+                return texture(dynGrid[layer][slot], uv);
+            }
+
+            vec4 forwardSample(sampler2d dynGrid[][3], int layer, int slot, vec2 uv) {
+                return leafSample(dynGrid, layer, slot, uv);
+            }
+
+            vec4 leafImage(
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                vec4 color = imageLoad(dynImages[layer][slot], pixel);
+                imageStore(dynImages[layer][slot], pixel, color);
+                return color;
+            }
+
+            vec4 forwardImage(
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                return leafImage(dynImages, layer, slot, pixel);
+            }
+
+            uint leafCounter(
+                uimage2D dynCounters[][2] @r32ui,
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                uint count = imageLoad(dynCounters[layer][slot], pixel);
+                imageStore(dynCounters[layer][slot], pixel, count);
+                return count;
+            }
+
+            uint forwardCounter(
+                uimage2D dynCounters[][2] @r32ui,
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                return leafCounter(dynCounters, layer, slot, pixel);
+            }
+
+            void leafQuery(
+                sampler2d dynGrid[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot
+            ) {
+                ivec2 texSize = textureSize(dynGrid[layer][slot], 0);
+                ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+            }
+
+            void forwardQuery(
+                sampler2d dynGrid[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot
+            ) {
+                leafQuery(dynGrid, dynImages, layer, slot);
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 sampled = forwardSample(textureGrid, 1, 2, uv);
+                    vec4 color = forwardImage(imageGrid, 1, 2, pixel);
+                    uint count = forwardCounter(counterGrid, 1, 1, pixel);
+                    forwardQuery(textureGrid, imageGrid, 1, 2);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        texture_grid = re.search(
+            r"(%\d+) = OpVariable (%\d+) UniformConstant\nOpName \1 \"textureGrid\"",
+            spv_code,
+        )
+        image_grid = re.search(
+            r"(%\d+) = OpVariable (%\d+) UniformConstant\nOpName \1 \"imageGrid\"",
+            spv_code,
+        )
+        counter_grid = re.search(
+            r"(%\d+) = OpVariable (%\d+) UniformConstant\nOpName \1 \"counterGrid\"",
+            spv_code,
+        )
+        assert texture_grid is not None
+        assert image_grid is not None
+        assert counter_grid is not None
+
+        texture_pointer = texture_grid.group(2)
+        image_pointer = image_grid.group(2)
+        counter_pointer = counter_grid.group(2)
+        dyn_grid_params = re.findall(
+            rf"(%\d+) = OpFunctionParameter {texture_pointer}\n"
+            r"OpName \1 \"dynGrid\"",
+            spv_code,
+        )
+        dyn_image_params = re.findall(
+            rf"(%\d+) = OpFunctionParameter {image_pointer}\n"
+            r"OpName \1 \"dynImages\"",
+            spv_code,
+        )
+        dyn_counter_params = re.findall(
+            rf"(%\d+) = OpFunctionParameter {counter_pointer}\n"
+            r"OpName \1 \"dynCounters\"",
+            spv_code,
+        )
+        assert len(dyn_grid_params) == 4
+        assert len(dyn_image_params) == 4
+        assert len(dyn_counter_params) == 2
+
+        assert any(
+            re.search(rf"OpFunctionCall %\d+ %\d+ {param_id}\b", spv_code)
+            for param_id in dyn_grid_params
+        )
+        assert any(
+            re.search(rf"OpFunctionCall %\d+ %\d+ {param_id}\b", spv_code)
+            for param_id in dyn_image_params
+        )
+        assert any(
+            re.search(rf"OpFunctionCall %\d+ %\d+ {param_id}\b", spv_code)
+            for param_id in dyn_counter_params
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(texture_grid.group(1))}",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(image_grid.group(1))}",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(counter_grid.group(1))}",
+            spv_code,
+        )
+        assert "OpTypeRuntimeArray" not in spv_code
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert spv_code.count("OpImageRead") >= 2
+        assert "OpImageWrite" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_mixed_fixed_dynamic_resource_arrays_use_spirv_row_and_grid_pointers(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            void leafMixed(
+                sampler2d dynamicGrid[][3],
+                sampler2d fixedRow[3],
+                image2D dynamicImages[][3] @rgba16f,
+                image2D fixedImages[3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                vec4 dynamicSample = texture(dynamicGrid[layer][slot], uv);
+                vec4 fixedSample = texture(fixedRow[slot], uv);
+                vec4 dynamicColor = imageLoad(dynamicImages[layer][slot], pixel);
+                vec4 fixedColor = imageLoad(fixedImages[slot], pixel);
+                imageStore(dynamicImages[layer][slot], pixel, dynamicColor);
+                imageStore(fixedImages[slot], pixel, fixedColor);
+                ivec2 dynamicSize = textureSize(dynamicGrid[layer][slot], 0);
+                ivec2 fixedSize = textureSize(fixedRow[slot], 0);
+                ivec2 dynamicImageSize = imageSize(dynamicImages[layer][slot]);
+                ivec2 fixedImageSize = imageSize(fixedImages[slot]);
+            }
+
+            void forwardMixed(
+                sampler2d dynamicGrid[][3],
+                sampler2d fixedRow[3],
+                image2D dynamicImages[][3] @rgba16f,
+                image2D fixedImages[3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                leafMixed(
+                    dynamicGrid,
+                    fixedRow,
+                    dynamicImages,
+                    fixedImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    forwardMixed(
+                        textureGrid,
+                        textureGrid[1],
+                        imageGrid,
+                        imageGrid[1],
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        sampled_image_type = re.search(r"(%\d+) = OpTypeSampledImage %\d+", spv_code)
+        rgba_image_type = re.search(
+            r"(%\d+) = OpTypeImage %\d+ 2D 0 0 0 2 Rgba16f",
+            spv_code,
+        )
+        assert sampled_image_type is not None
+        assert rgba_image_type is not None
+
+        def array_type(element_type):
+            match = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(element_type)} %\d+",
+                spv_code,
+            )
+            assert match is not None
+            return match.group(1)
+
+        def uniform_pointer(pointed_type):
+            match = re.search(
+                rf"(%\d+) = OpTypePointer UniformConstant "
+                rf"{re.escape(pointed_type)}",
+                spv_code,
+            )
+            assert match is not None
+            return match.group(1)
+
+        sampled_row = array_type(sampled_image_type.group(1))
+        sampled_grid = array_type(sampled_row)
+        rgba_row = array_type(rgba_image_type.group(1))
+        rgba_grid = array_type(rgba_row)
+        sampled_row_pointer = uniform_pointer(sampled_row)
+        sampled_grid_pointer = uniform_pointer(sampled_grid)
+        rgba_row_pointer = uniform_pointer(rgba_row)
+        rgba_grid_pointer = uniform_pointer(rgba_grid)
+
+        def named_variable(name, pointer_type):
+            variable = re.search(
+                rf"(%\d+) = OpVariable {re.escape(pointer_type)} "
+                rf"UniformConstant\nOpName \1 \"{name}\"",
+                spv_code,
+            )
+            assert variable is not None
+            return variable.group(1)
+
+        texture_grid = named_variable("textureGrid", sampled_grid_pointer)
+        image_grid = named_variable("imageGrid", rgba_grid_pointer)
+
+        def named_params(name, pointer_type):
+            return re.findall(
+                rf"(%\d+) = OpFunctionParameter {re.escape(pointer_type)}\n"
+                rf"OpName \1 \"{name}\"",
+                spv_code,
+            )
+
+        dynamic_grid_params = named_params("dynamicGrid", sampled_grid_pointer)
+        fixed_row_params = named_params("fixedRow", sampled_row_pointer)
+        dynamic_image_params = named_params("dynamicImages", rgba_grid_pointer)
+        fixed_image_params = named_params("fixedImages", rgba_row_pointer)
+        assert len(dynamic_grid_params) == 2
+        assert len(fixed_row_params) == 2
+        assert len(dynamic_image_params) == 2
+        assert len(fixed_image_params) == 2
+
+        sampled_row_access = re.search(
+            rf"(%\d+) = OpAccessChain {re.escape(sampled_row_pointer)} "
+            rf"{re.escape(texture_grid)} %\d+",
+            spv_code,
+        )
+        rgba_row_access = re.search(
+            rf"(%\d+) = OpAccessChain {re.escape(rgba_row_pointer)} "
+            rf"{re.escape(image_grid)} %\d+",
+            spv_code,
+        )
+        assert sampled_row_access is not None
+        assert rgba_row_access is not None
+
+        assert any(
+            re.search(
+                rf"OpFunctionCall %\d+ %\d+ {re.escape(dynamic_grid)} "
+                rf"{re.escape(fixed_row)} {re.escape(dynamic_images)} "
+                rf"{re.escape(fixed_images)}\b",
+                spv_code,
+            )
+            for dynamic_grid in dynamic_grid_params
+            for fixed_row in fixed_row_params
+            for dynamic_images in dynamic_image_params
+            for fixed_images in fixed_image_params
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(texture_grid)} "
+            rf"{re.escape(sampled_row_access.group(1))} "
+            rf"{re.escape(image_grid)} {re.escape(rgba_row_access.group(1))}",
+            spv_code,
+        )
+
+        assert "OpTypeRuntimeArray" not in spv_code
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert spv_code.count("OpImageRead") >= 2
+        assert "OpImageWrite" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_multihop_reordered_resource_arrays_use_spirv_row_and_grid_pointers(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            void leafShuffle(
+                sampler2d dynA[][3],
+                image2D fixedImageRow[3] @rgba16f,
+                sampler2d fixedTexRow[3],
+                image2D dynImageGrid[][3] @rgba16f,
+                sampler2d dynAlias[][3],
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                vec4 sampledA = texture(dynA[layer][slot], uv);
+                vec4 sampledFixed = texture(fixedTexRow[slot], uv);
+                vec4 sampledAlias = texture(dynAlias[layer][slot], uv);
+                vec4 dynamicColor = imageLoad(dynImageGrid[layer][slot], pixel);
+                vec4 fixedColor = imageLoad(fixedImageRow[slot], pixel);
+                imageStore(dynImageGrid[layer][slot], pixel, dynamicColor);
+                imageStore(fixedImageRow[slot], pixel, fixedColor);
+                ivec2 dynSize = textureSize(dynA[layer][slot], 0);
+                ivec2 fixedTexSize = textureSize(fixedTexRow[slot], 0);
+                ivec2 aliasSize = textureSize(dynAlias[layer][slot], 0);
+                ivec2 dynamicImageSize = imageSize(dynImageGrid[layer][slot]);
+                ivec2 fixedImageSize = imageSize(fixedImageRow[slot]);
+            }
+
+            void midForward(
+                sampler2d firstDyn[][3],
+                sampler2d firstFixed[3],
+                image2D firstDynImages[][3] @rgba16f,
+                image2D firstFixedImages[3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                leafShuffle(
+                    firstDyn,
+                    firstFixedImages,
+                    firstFixed,
+                    firstDynImages,
+                    firstDyn,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+            }
+
+            void topForward(
+                sampler2d topFixedTex[3],
+                image2D topDynImages[][3] @rgba16f,
+                sampler2d topDynTex[][3],
+                image2D topFixedImages[3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                midForward(
+                    topDynTex,
+                    topFixedTex,
+                    topDynImages,
+                    topFixedImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    topForward(
+                        textureGrid[1],
+                        imageGrid,
+                        textureGrid,
+                        imageGrid[1],
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        sampled_image_type = re.search(r"(%\d+) = OpTypeSampledImage %\d+", spv_code)
+        rgba_image_type = re.search(
+            r"(%\d+) = OpTypeImage %\d+ 2D 0 0 0 2 Rgba16f",
+            spv_code,
+        )
+        assert sampled_image_type is not None
+        assert rgba_image_type is not None
+
+        def array_type(element_type):
+            match = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(element_type)} %\d+",
+                spv_code,
+            )
+            assert match is not None
+            return match.group(1)
+
+        def uniform_pointer(pointed_type):
+            match = re.search(
+                rf"(%\d+) = OpTypePointer UniformConstant "
+                rf"{re.escape(pointed_type)}",
+                spv_code,
+            )
+            assert match is not None
+            return match.group(1)
+
+        sampled_row = array_type(sampled_image_type.group(1))
+        sampled_grid = array_type(sampled_row)
+        rgba_row = array_type(rgba_image_type.group(1))
+        rgba_grid = array_type(rgba_row)
+        sampled_row_pointer = uniform_pointer(sampled_row)
+        sampled_grid_pointer = uniform_pointer(sampled_grid)
+        rgba_row_pointer = uniform_pointer(rgba_row)
+        rgba_grid_pointer = uniform_pointer(rgba_grid)
+
+        def named_variable(name, pointer_type):
+            variable = re.search(
+                rf"(%\d+) = OpVariable {re.escape(pointer_type)} "
+                rf"UniformConstant\nOpName \1 \"{name}\"",
+                spv_code,
+            )
+            assert variable is not None
+            return variable.group(1)
+
+        def named_param(name, pointer_type):
+            parameter = re.search(
+                rf"(%\d+) = OpFunctionParameter {re.escape(pointer_type)}\n"
+                rf"OpName \1 \"{name}\"",
+                spv_code,
+            )
+            assert parameter is not None
+            return parameter.group(1)
+
+        texture_grid = named_variable("textureGrid", sampled_grid_pointer)
+        image_grid = named_variable("imageGrid", rgba_grid_pointer)
+
+        dyn_a = named_param("dynA", sampled_grid_pointer)
+        dyn_alias = named_param("dynAlias", sampled_grid_pointer)
+        dyn_image_grid = named_param("dynImageGrid", rgba_grid_pointer)
+        fixed_image_row = named_param("fixedImageRow", rgba_row_pointer)
+        fixed_tex_row = named_param("fixedTexRow", sampled_row_pointer)
+        first_dyn = named_param("firstDyn", sampled_grid_pointer)
+        first_dyn_images = named_param("firstDynImages", rgba_grid_pointer)
+        first_fixed = named_param("firstFixed", sampled_row_pointer)
+        first_fixed_images = named_param("firstFixedImages", rgba_row_pointer)
+        top_fixed_tex = named_param("topFixedTex", sampled_row_pointer)
+        top_dyn_images = named_param("topDynImages", rgba_grid_pointer)
+        top_dyn_tex = named_param("topDynTex", sampled_grid_pointer)
+        top_fixed_images = named_param("topFixedImages", rgba_row_pointer)
+
+        assert dyn_a != dyn_alias
+        assert dyn_image_grid != fixed_image_row
+        assert fixed_tex_row != top_fixed_tex
+        assert first_dyn != top_dyn_tex
+        assert first_dyn_images != top_dyn_images
+        assert first_fixed != top_fixed_tex
+        assert first_fixed_images != top_fixed_images
+
+        sampled_row_access = re.search(
+            rf"(%\d+) = OpAccessChain {re.escape(sampled_row_pointer)} "
+            rf"{re.escape(texture_grid)} %\d+",
+            spv_code,
+        )
+        rgba_row_access = re.search(
+            rf"(%\d+) = OpAccessChain {re.escape(rgba_row_pointer)} "
+            rf"{re.escape(image_grid)} %\d+",
+            spv_code,
+        )
+        assert sampled_row_access is not None
+        assert rgba_row_access is not None
+
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(first_dyn)} "
+            rf"{re.escape(first_fixed_images)} {re.escape(first_fixed)} "
+            rf"{re.escape(first_dyn_images)} {re.escape(first_dyn)}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(top_dyn_tex)} "
+            rf"{re.escape(top_fixed_tex)} {re.escape(top_dyn_images)} "
+            rf"{re.escape(top_fixed_images)}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(sampled_row_access.group(1))} "
+            rf"{re.escape(image_grid)} {re.escape(texture_grid)} "
+            rf"{re.escape(rgba_row_access.group(1))}",
+            spv_code,
+        )
+
+        assert "OpTypeRuntimeArray" not in spv_code
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert spv_code.count("OpImageRead") >= 2
+        assert "OpImageWrite" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_resource_calls_in_control_flow_use_spirv_select_and_calls(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            vec4 sampleDynamic(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                vec4 sampled = texture(dynTex[layer][slot], uv);
+                vec4 loaded = imageLoad(dynImages[layer][slot], pixel);
+                ivec2 texSize = textureSize(dynTex[layer][slot], 0);
+                ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+                return sampled + loaded;
+            }
+
+            vec4 sampleFixed(
+                sampler2d fixedTex[3],
+                image2D fixedImages[3] @rgba16f,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                vec4 sampled = texture(fixedTex[slot], uv);
+                vec4 loaded = imageLoad(fixedImages[slot], pixel);
+                ivec2 texSize = textureSize(fixedTex[slot], 0);
+                ivec2 imageSizeValue = imageSize(fixedImages[slot]);
+                return sampled + loaded;
+            }
+
+            vec4 chooseBranch(
+                sampler2d dynTex[][3],
+                sampler2d fixedTex[3],
+                image2D dynImages[][3] @rgba16f,
+                image2D fixedImages[3] @rgba16f,
+                bool useFixed,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                vec4 result = sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);
+                if (useFixed) {
+                    result = sampleFixed(fixedTex, fixedImages, slot, uv, pixel);
+                }
+                return result;
+            }
+
+            vec4 chooseReturn(
+                sampler2d dynTex[][3],
+                sampler2d fixedTex[3],
+                image2D dynImages[][3] @rgba16f,
+                image2D fixedImages[3] @rgba16f,
+                bool useFixed,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                if (useFixed) {
+                    return sampleFixed(fixedTex, fixedImages, slot, uv, pixel);
+                }
+                return sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);
+            }
+
+            vec4 chooseTernary(
+                sampler2d dynTex[][3],
+                sampler2d fixedTex[3],
+                image2D dynImages[][3] @rgba16f,
+                image2D fixedImages[3] @rgba16f,
+                bool useFixed,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                return useFixed
+                    ? sampleFixed(fixedTex, fixedImages, slot, uv, pixel)
+                    : sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 branchValue = chooseBranch(
+                        textureGrid,
+                        textureGrid[1],
+                        imageGrid,
+                        imageGrid[1],
+                        true,
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                    vec4 returnValue = chooseReturn(
+                        textureGrid,
+                        textureGrid[1],
+                        imageGrid,
+                        imageGrid[1],
+                        false,
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                    vec4 ternaryValue = chooseTernary(
+                        textureGrid,
+                        textureGrid[1],
+                        imageGrid,
+                        imageGrid[1],
+                        true,
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpBranchConditional" in spv_code
+        assert re.search(
+            r"(%\d+) = OpFunctionCall[^\n]+\n"
+            r"(%\d+) = OpFunctionCall[^\n]+\n"
+            r"(%\d+) = OpSelect %\d+ %\d+ \1 \2\n"
+            r"OpReturnValue \3",
+            spv_code,
+        )
+        assert not re.search(r"OpReturnValue %\d+\nOpBranch %\d+", spv_code)
+        assert spv_code.count("OpFunctionCall") >= 8
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert "OpImageRead" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "texture(" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_resource_calls_in_loops_use_spirv_loop_control_and_indices(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            vec4 sampleLoop(
+                sampler2d dynTex[][3],
+                sampler2d fixedTex[3],
+                image2D dynImages[][3] @rgba16f,
+                image2D fixedImages[3] @rgba16f,
+                int layer,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                vec4 accum = vec4(0.0);
+                for (int slot = 0; slot < 3; slot++) {
+                    if (slot == 1) {
+                        continue;
+                    }
+                    vec4 sampled = texture(dynTex[layer][slot], uv);
+                    vec4 loaded = imageLoad(dynImages[layer][slot], pixel);
+                    ivec2 texSize = textureSize(dynTex[layer][slot], 0);
+                    ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+                    accum = accum + sampled + loaded;
+                    if (slot == 2) {
+                        break;
+                    }
+                }
+                int fixedSlot = 0;
+                while (fixedSlot < 3) {
+                    accum = accum + texture(fixedTex[fixedSlot], uv);
+                    accum = accum + imageLoad(fixedImages[fixedSlot], pixel);
+                    ivec2 fixedTexSize = textureSize(fixedTex[fixedSlot], 0);
+                    ivec2 fixedImageSize = imageSize(fixedImages[fixedSlot]);
+                    fixedSlot++;
+                }
+                return accum;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = sampleLoop(
+                        textureGrid,
+                        textureGrid[1],
+                        imageGrid,
+                        imageGrid[1],
+                        1,
+                        uv,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        loop_merges = re.findall(r"OpLoopMerge (%\d+) (%\d+) None", spv_code)
+        assert len(loop_merges) >= 2
+        for_merge, for_continue = loop_merges[0]
+        assert f"OpBranch {for_continue}" in spv_code
+        assert f"OpBranch {for_merge}" in spv_code
+        assert "OpSLessThan" in spv_code
+        assert "OpIEqual" in spv_code
+        assert re.search(r"(%\d+) = OpIAdd %\d+ %\d+ %\d+\nOpStore %\d+ \1", spv_code)
+        assert spv_code.count("OpImageSampleImplicitLod") >= 2
+        assert spv_code.count("OpImageRead") >= 2
+        assert spv_code.count("OpImageQuerySizeLod") >= 2
+        assert spv_code.count("OpImageQuerySize") >= 2
+        assert "OpFunctionCall" in spv_code
+        assert "texture(" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "BreakNode" not in spv_code
+        assert "ContinueNode" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_nested_loop_resource_indices_use_spirv_loop_stack_and_updates(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            vec4 sampleNestedLoops(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                vec4 accum = vec4(0.0);
+                for (int layer = 0; layer < 2; layer++) {
+                    if (layer == 1) {
+                        break;
+                    }
+                    for (int slot = 0; slot < 3; slot++) {
+                        if (slot == 1) {
+                            continue;
+                        }
+                        vec4 sampled = texture(dynTex[layer][slot], uv);
+                        vec4 loaded = imageLoad(dynImages[layer][slot], pixel);
+                        imageStore(dynImages[layer][slot], pixel, loaded);
+                        ivec2 texSize = textureSize(dynTex[layer][slot], 0);
+                        ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+                        accum = accum + sampled + loaded;
+                    }
+                }
+                return accum;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = sampleNestedLoops(textureGrid, imageGrid, uv, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        loop_merges = re.findall(r"OpLoopMerge (%\d+) (%\d+) None", spv_code)
+        assert len(loop_merges) >= 2
+        outer_merge, outer_continue = loop_merges[0]
+        inner_merge, inner_continue = loop_merges[1]
+        assert f"OpBranch {outer_merge}" in spv_code
+        assert f"OpBranch {inner_continue}" in spv_code
+        assert f"OpBranch {inner_merge}" not in spv_code
+        assert f"OpBranch {outer_continue}" in spv_code
+        assert spv_code.count("OpSLessThan") >= 2
+        assert spv_code.count("OpIEqual") >= 2
+        assert (
+            len(
+                re.findall(r"(%\d+) = OpIAdd %\d+ %\d+ %\d+\nOpStore %\d+ \1", spv_code)
+            )
+            >= 2
+        )
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert "OpImageRead" in spv_code
+        assert "OpImageWrite" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "OpFunctionCall" in spv_code
+        assert "texture(" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "imageStore(" not in spv_code
+        assert "BreakNode" not in spv_code
+        assert "ContinueNode" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_struct_and_scalar_params_use_spirv_value_extracts_and_resource_calls(self):
+        source_code = """
+        struct SampleParams {
+            vec2 uv;
+            ivec2 pixel;
+            int layer;
+            int slot;
+        };
+
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            vec4 samplePacked(
+                sampler2d dynTex[][3],
+                SampleParams params,
+                image2D dynImages[][3] @rgba16f,
+                float weight,
+                sampler2d fixedTex[3],
+                image2D fixedImages[3] @rgba16f
+            ) {
+                vec4 dynamicSample = texture(
+                    dynTex[params.layer][params.slot],
+                    params.uv
+                );
+                vec4 fixedSample = texture(fixedTex[params.slot], params.uv);
+                vec4 dynamicColor = imageLoad(
+                    dynImages[params.layer][params.slot],
+                    params.pixel
+                );
+                vec4 fixedColor = imageLoad(fixedImages[params.slot], params.pixel);
+                ivec2 dynSize = textureSize(dynTex[params.layer][params.slot], 0);
+                ivec2 fixedSize = textureSize(fixedTex[params.slot], 0);
+                ivec2 dynImageSize = imageSize(dynImages[params.layer][params.slot]);
+                ivec2 fixedImageSize = imageSize(fixedImages[params.slot]);
+                vec4 combined = dynamicSample + fixedSample + dynamicColor + fixedColor;
+                return combined * weight;
+            }
+
+            vec4 passPacked(
+                SampleParams params,
+                sampler2d firstDyn[][3],
+                float weight,
+                image2D firstImages[][3] @rgba16f,
+                sampler2d fixedTex[3],
+                image2D fixedImages[3] @rgba16f
+            ) {
+                return samplePacked(
+                    firstDyn,
+                    params,
+                    firstImages,
+                    weight,
+                    fixedTex,
+                    fixedImages
+                );
+            }
+
+            compute {
+                void main() {
+                    SampleParams params;
+                    params.uv = vec2(0.5, 0.25);
+                    params.pixel = ivec2(0, 0);
+                    params.layer = 1;
+                    params.slot = 2;
+                    vec4 value = passPacked(
+                        params,
+                        textureGrid,
+                        0.5,
+                        imageGrid,
+                        textureGrid[1],
+                        imageGrid[1]
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        params = re.findall(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"params\"",
+            spv_code,
+        )
+        first_dyn = re.search(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"firstDyn\"",
+            spv_code,
+        )
+        first_images = re.search(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"firstImages\"",
+            spv_code,
+        )
+        weight = re.findall(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"weight\"",
+            spv_code,
+        )
+        fixed_tex = re.findall(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"fixedTex\"",
+            spv_code,
+        )
+        fixed_images = re.findall(
+            r"(%\d+) = OpFunctionParameter %\d+\nOpName \1 \"fixedImages\"",
+            spv_code,
+        )
+        assert len(params) >= 2
+        assert first_dyn is not None
+        assert first_images is not None
+        assert len(weight) >= 2
+        assert len(fixed_tex) >= 2
+        assert len(fixed_images) >= 2
+
+        sample_params = params[0]
+        pass_params = params[-1]
+        assert re.search(
+            rf"OpCompositeExtract %\d+ {re.escape(sample_params)} 0", spv_code
+        )
+        assert re.search(
+            rf"OpCompositeExtract %\d+ {re.escape(sample_params)} 1", spv_code
+        )
+        assert re.search(
+            rf"OpCompositeExtract %\d+ {re.escape(sample_params)} 2", spv_code
+        )
+        assert re.search(
+            rf"OpCompositeExtract %\d+ {re.escape(sample_params)} 3", spv_code
+        )
+        assert not re.search(
+            rf"OpAccessChain %\d+ {re.escape(sample_params)} ", spv_code
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(first_dyn.group(1))} "
+            rf"{re.escape(pass_params)} {re.escape(first_images.group(1))} "
+            rf"{re.escape(weight[-1])} {re.escape(fixed_tex[-1])} "
+            rf"{re.escape(fixed_images[-1])}",
+            spv_code,
+        )
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert "OpImageRead" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "texture(" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_resource_values_in_struct_returns_use_spirv_composites(self):
+        source_code = """
+        struct SampleResult {
+            vec4 sampled;
+            vec4 loaded;
+            ivec2 texSize;
+            ivec2 imageSizeValue;
+        };
+
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            SampleResult buildAssigned(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleResult result;
+                result.sampled = texture(dynTex[layer][slot], uv);
+                result.loaded = imageLoad(dynImages[layer][slot], pixel);
+                result.texSize = textureSize(dynTex[layer][slot], 0);
+                result.imageSizeValue = imageSize(dynImages[layer][slot]);
+                return result;
+            }
+
+            SampleResult buildConstructed(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                return SampleResult(
+                    texture(dynTex[layer][slot], uv),
+                    imageLoad(dynImages[layer][slot], pixel),
+                    textureSize(dynTex[layer][slot], 0),
+                    imageSize(dynImages[layer][slot])
+                );
+            }
+
+            vec4 consumeResults(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleResult assigned = buildAssigned(
+                    dynTex,
+                    dynImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+                SampleResult constructed = buildConstructed(
+                    dynTex,
+                    dynImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+                return assigned.sampled + assigned.loaded +
+                    constructed.sampled + constructed.loaded;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = consumeResults(textureGrid, imageGrid, 1, 2, uv, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        struct_type = re.search(
+            r"(%\d+) = OpTypeStruct %\d+ %\d+ %\d+ %\d+\n"
+            r"OpName \1 \"SampleResult\"",
+            spv_code,
+        )
+        assert struct_type is not None
+        assert re.search(
+            rf"(%\d+) = OpCompositeConstruct "
+            rf"{re.escape(struct_type.group(1))} %\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert not re.search(r"OpExtInst %\d+ %\d+ SampleResult", spv_code)
+        assert spv_code.count("OpStore") >= 4
+        assert spv_code.count("OpAccessChain") >= 6
+        assert spv_code.count("OpLoad") >= 2
+        assert "OpReturnValue" in spv_code
+        assert "OpImageSampleImplicitLod" in spv_code
+        assert "OpImageRead" in spv_code
+        assert "OpImageQuerySizeLod" in spv_code
+        assert "OpImageQuerySize" in spv_code
+        assert "OpFunctionCall" in spv_code
+        assert "texture(" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_nested_struct_resource_assignments_store_spirv_member_pointers(self):
+        source_code = """
+        struct SampleResult {
+            vec4 sampled;
+            vec4 loaded;
+            ivec2 texSize;
+            ivec2 imageSizeValue;
+        };
+
+        struct SampleEnvelope {
+            SampleResult result;
+            vec4 bias;
+        };
+
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            SampleEnvelope buildNestedAssigned(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope;
+                envelope.result.sampled = texture(dynTex[layer][slot], uv);
+                envelope.result.loaded = imageLoad(dynImages[layer][slot], pixel);
+                envelope.result.texSize = textureSize(dynTex[layer][slot], 0);
+                envelope.result.imageSizeValue = imageSize(dynImages[layer][slot]);
+                envelope.bias = texture(dynTex[layer][slot], uv) +
+                    imageLoad(dynImages[layer][slot], pixel);
+                return envelope;
+            }
+
+            vec4 consumeNested(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope = buildNestedAssigned(
+                    dynTex,
+                    dynImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+                return envelope.result.sampled + envelope.result.loaded + envelope.bias;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = consumeNested(textureGrid, imageGrid, 1, 2, uv, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpName" in spv_code and '"SampleEnvelope"' in spv_code
+
+        def resource_result_is_stored_through_nested_access(opcode):
+            lines = spv_code.splitlines()
+            for index, line in enumerate(lines):
+                match = re.match(rf"(%\d+) = {opcode}\b", line)
+                if not match:
+                    continue
+
+                result_id = match.group(1)
+                window = lines[index + 1 : index + 8]
+                if sum("OpAccessChain" in item for item in window) >= 2 and any(
+                    item.startswith("OpStore ") and item.endswith(f" {result_id}")
+                    for item in window
+                ):
+                    return True
+            return False
+
+        for opcode in [
+            "OpImageSampleImplicitLod",
+            "OpImageRead",
+            "OpImageQuerySizeLod",
+            "OpImageQuerySize",
+        ]:
+            assert resource_result_is_stored_through_nested_access(opcode)
+
+        assert re.search(
+            r"(?:%\d+ = OpAccessChain [^\n]+\n){2}%\d+ = OpLoad %\d+ %\d+",
+            spv_code,
+        )
+        assert "OpFunctionCall" in spv_code
+        assert "OpReturnValue" in spv_code
+        assert "texture(" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_nested_resource_array_access_operations_use_spirv_element_pointers(self):
+        source_code = """
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][4];
+            uimage2D counterGrid @r32ui[2][2];
+
+            vec4 sampleGrid(
+                sampler2d paramGrid[2][3],
+                int layer,
+                int slot,
+                vec2 uv
+            ) {
+                return texture(paramGrid[layer][slot], uv);
+            }
+
+            vec4 readGrid(
+                image2D paramImages[2][4] @rgba16f,
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                return imageLoad(paramImages[layer][slot], pixel);
+            }
+
+            compute {
+                void main() {
+                    int layer = 1;
+                    int slot = 1;
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 sampled = texture(textureGrid[layer][slot], uv);
+                    vec4 sampledParam = sampleGrid(textureGrid, layer, slot, uv);
+                    vec4 color = imageLoad(imageGrid[layer][slot], pixel);
+                    vec4 colorParam = readGrid(imageGrid, layer, slot, pixel);
+                    imageStore(imageGrid[layer][slot], pixel, color);
+                    uint count = imageLoad(counterGrid[layer][slot], pixel);
+                    imageStore(counterGrid[layer][slot], pixel, count);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        assert float_type is not None
+        assert uint_type is not None
+
+        sampled_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 0 0 0 1 Unknown\n(%\d+) = OpTypeSampledImage \1",
+            spv_code,
+        )
+        rgba_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 0 0 0 2 Rgba16f",
+            spv_code,
+        )
+        r32ui_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(uint_type.group(1))} "
+            r"2D 0 0 0 2 R32ui",
+            spv_code,
+        )
+        assert sampled_image_type is not None
+        assert rgba_image_type is not None
+        assert r32ui_image_type is not None
+
+        sampled_type = sampled_image_type.group(2)
+        rgba_type = rgba_image_type.group(1)
+        r32ui_type = r32ui_image_type.group(1)
+
+        def nested_array_types(element_type):
+            inner = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(element_type)} %\d+",
+                spv_code,
+            )
+            assert inner is not None
+            outer = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(inner.group(1))} %\d+",
+                spv_code,
+            )
+            assert outer is not None
+            return inner.group(1), outer.group(1)
+
+        sampled_inner, sampled_outer = nested_array_types(sampled_type)
+        rgba_inner, rgba_outer = nested_array_types(rgba_type)
+        r32ui_inner, r32ui_outer = nested_array_types(r32ui_type)
+
+        def uniform_pointer(pointed_type):
+            pointer = re.search(
+                rf"(%\d+) = OpTypePointer UniformConstant "
+                rf"{re.escape(pointed_type)}",
+                spv_code,
+            )
+            assert pointer is not None
+            return pointer.group(1)
+
+        sampled_outer_pointer = uniform_pointer(sampled_outer)
+        sampled_inner_pointer = uniform_pointer(sampled_inner)
+        sampled_element_pointer = uniform_pointer(sampled_type)
+        rgba_outer_pointer = uniform_pointer(rgba_outer)
+        rgba_inner_pointer = uniform_pointer(rgba_inner)
+        rgba_element_pointer = uniform_pointer(rgba_type)
+        r32ui_outer_pointer = uniform_pointer(r32ui_outer)
+        r32ui_inner_pointer = uniform_pointer(r32ui_inner)
+        r32ui_element_pointer = uniform_pointer(r32ui_type)
+
+        def named_variable(name, pointer_type):
+            variable = re.search(
+                rf"(%\d+) = OpVariable {re.escape(pointer_type)} "
+                rf"UniformConstant\nOpName \1 \"{name}\"",
+                spv_code,
+            )
+            assert variable is not None
+            return variable.group(1)
+
+        texture_grid = named_variable("textureGrid", sampled_outer_pointer)
+        image_grid = named_variable("imageGrid", rgba_outer_pointer)
+        counter_grid = named_variable("counterGrid", r32ui_outer_pointer)
+
+        param_grid = re.search(
+            rf"(%\d+) = OpFunctionParameter {re.escape(sampled_outer_pointer)}\n"
+            r"OpName \1 \"paramGrid\"",
+            spv_code,
+        )
+        param_images = re.search(
+            rf"(%\d+) = OpFunctionParameter {re.escape(rgba_outer_pointer)}\n"
+            r"OpName \1 \"paramImages\"",
+            spv_code,
+        )
+        assert param_grid is not None
+        assert param_images is not None
+
+        def assert_nested_access(base_id, row_pointer, element_pointer):
+            row_access = re.search(
+                rf"(%\d+) = OpAccessChain {re.escape(row_pointer)} "
+                rf"{re.escape(base_id)} %\d+",
+                spv_code,
+            )
+            assert row_access is not None
+            assert re.search(
+                rf"OpAccessChain {re.escape(element_pointer)} "
+                rf"{row_access.group(1)} %\d+",
+                spv_code,
+            )
+
+        assert_nested_access(
+            texture_grid, sampled_inner_pointer, sampled_element_pointer
+        )
+        assert_nested_access(
+            param_grid.group(1), sampled_inner_pointer, sampled_element_pointer
+        )
+        assert_nested_access(image_grid, rgba_inner_pointer, rgba_element_pointer)
+        assert_nested_access(
+            param_images.group(1), rgba_inner_pointer, rgba_element_pointer
+        )
+        assert_nested_access(counter_grid, r32ui_inner_pointer, r32ui_element_pointer)
+
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(texture_grid)} %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(image_grid)} %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert len(re.findall(r"\bOpImageSampleImplicitLod\b", spv_code)) == 2
+        assert len(re.findall(r"\bOpImageRead\b", spv_code)) == 3
+        assert len(re.findall(r"\bOpImageWrite\b", spv_code)) == 2
+        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        for array_type in [
+            sampled_inner,
+            sampled_outer,
+            rgba_inner,
+            rgba_outer,
+            r32ui_inner,
+            r32ui_outer,
+        ]:
+            assert f"OpLoad {array_type}" not in spv_code
+        assert "texture(" not in spv_code
+        assert "imageLoad" not in spv_code
+        assert "imageStore" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_nested_resource_array_shadow_gather_and_fetch_emit_spirv_ops(self):
+        source_code = """
+        shader Resources {
+            sampler2d colorGrid[2][3];
+            sampler2dms msGrid[2][2];
+            sampler2dshadow shadowGrid[2][3];
+            sampler cmpSampler;
+
+            float compareGrid(
+                sampler2dshadow paramShadow[2][3],
+                int layer,
+                int slot,
+                vec2 uv,
+                float depth
+            ) {
+                return textureCompare(paramShadow[layer][slot], uv, depth);
+            }
+
+            compute {
+                void main() {
+                    int layer = 1;
+                    int slot = 1;
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    float depth = 0.5;
+                    float directCompare = textureCompare(
+                        shadowGrid[layer][slot],
+                        uv,
+                        depth
+                    );
+                    float sampledCompare = textureCompare(
+                        shadowGrid[layer][slot],
+                        cmpSampler,
+                        uv,
+                        depth
+                    );
+                    float helperCompare = compareGrid(
+                        shadowGrid,
+                        layer,
+                        slot,
+                        uv,
+                        depth
+                    );
+                    vec4 gathered = textureGather(colorGrid[layer][slot], uv, 1);
+                    vec4 gatheredShadow = textureGatherCompare(
+                        shadowGrid[layer][slot],
+                        uv,
+                        depth
+                    );
+                    vec4 fetched = texelFetch(colorGrid[layer][slot], pixel, 0);
+                    vec4 fetchedMs = texelFetch(msGrid[layer][slot], pixel, 1);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+
+        sampled_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 0 0 0 1 Unknown\n(%\d+) = OpTypeSampledImage \1",
+            spv_code,
+        )
+        ms_sampled_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 0 0 1 1 Unknown\n(%\d+) = OpTypeSampledImage \1",
+            spv_code,
+        )
+        shadow_sampled_image_type = re.search(
+            rf"(%\d+) = OpTypeImage {re.escape(float_type.group(1))} "
+            r"2D 1 0 0 1 Unknown\n(%\d+) = OpTypeSampledImage \1",
+            spv_code,
+        )
+        assert sampled_image_type is not None
+        assert ms_sampled_image_type is not None
+        assert shadow_sampled_image_type is not None
+
+        sampled_type = sampled_image_type.group(2)
+        ms_sampled_type = ms_sampled_image_type.group(2)
+        shadow_type = shadow_sampled_image_type.group(2)
+
+        def nested_array_types(element_type):
+            inner = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(element_type)} %\d+",
+                spv_code,
+            )
+            assert inner is not None
+            outer = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(inner.group(1))} %\d+",
+                spv_code,
+            )
+            assert outer is not None
+            return inner.group(1), outer.group(1)
+
+        color_inner, color_outer = nested_array_types(sampled_type)
+        ms_inner, ms_outer = nested_array_types(ms_sampled_type)
+        shadow_inner, shadow_outer = nested_array_types(shadow_type)
+
+        def uniform_pointer(pointed_type):
+            pointer = re.search(
+                rf"(%\d+) = OpTypePointer UniformConstant "
+                rf"{re.escape(pointed_type)}",
+                spv_code,
+            )
+            assert pointer is not None
+            return pointer.group(1)
+
+        color_outer_pointer = uniform_pointer(color_outer)
+        color_inner_pointer = uniform_pointer(color_inner)
+        color_element_pointer = uniform_pointer(sampled_type)
+        ms_outer_pointer = uniform_pointer(ms_outer)
+        ms_inner_pointer = uniform_pointer(ms_inner)
+        ms_element_pointer = uniform_pointer(ms_sampled_type)
+        shadow_outer_pointer = uniform_pointer(shadow_outer)
+        shadow_inner_pointer = uniform_pointer(shadow_inner)
+        shadow_element_pointer = uniform_pointer(shadow_type)
+
+        def named_variable(name, pointer_type):
+            variable = re.search(
+                rf"(%\d+) = OpVariable {re.escape(pointer_type)} "
+                rf"UniformConstant\nOpName \1 \"{name}\"",
+                spv_code,
+            )
+            assert variable is not None
+            return variable.group(1)
+
+        color_grid = named_variable("colorGrid", color_outer_pointer)
+        ms_grid = named_variable("msGrid", ms_outer_pointer)
+        shadow_grid = named_variable("shadowGrid", shadow_outer_pointer)
+
+        param_shadow = re.search(
+            rf"(%\d+) = OpFunctionParameter {re.escape(shadow_outer_pointer)}\n"
+            r"OpName \1 \"paramShadow\"",
+            spv_code,
+        )
+        assert param_shadow is not None
+
+        def assert_nested_access(base_id, row_pointer, element_pointer):
+            row_access = re.search(
+                rf"(%\d+) = OpAccessChain {re.escape(row_pointer)} "
+                rf"{re.escape(base_id)} %\d+",
+                spv_code,
+            )
+            assert row_access is not None
+            assert re.search(
+                rf"OpAccessChain {re.escape(element_pointer)} "
+                rf"{row_access.group(1)} %\d+",
+                spv_code,
+            )
+
+        assert_nested_access(color_grid, color_inner_pointer, color_element_pointer)
+        assert_nested_access(ms_grid, ms_inner_pointer, ms_element_pointer)
+        assert_nested_access(shadow_grid, shadow_inner_pointer, shadow_element_pointer)
+        assert_nested_access(
+            param_shadow.group(1), shadow_inner_pointer, shadow_element_pointer
+        )
+
+        assert re.search(
+            rf"OpFunctionCall %\d+ %\d+ {re.escape(shadow_grid)} "
+            r"%\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert len(re.findall(r"\bOpImageSampleDrefImplicitLod\b", spv_code)) == 3
+        assert len(re.findall(r"\bOpImageDrefGather\b", spv_code)) == 1
+        assert len(re.findall(r"\bOpImageGather\b", spv_code)) == 1
+        assert len(re.findall(r"\bOpImageFetch\b", spv_code)) == 2
+        for array_type in [
+            color_inner,
+            color_outer,
+            ms_inner,
+            ms_outer,
+            shadow_inner,
+            shadow_outer,
+        ]:
+            assert f"OpLoad {array_type}" not in spv_code
+        assert "textureCompare" not in spv_code
+        assert "textureGather" not in spv_code
+        assert "textureGatherCompare" not in spv_code
+        assert "texelFetch" not in spv_code
         assert "WARNING" not in spv_code
 
     def test_texture_query_shapes_for_array_cube_and_multisample_samplers(self):

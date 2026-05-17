@@ -37,6 +37,13 @@ from .array_utils import (
     evaluate_literal_int_expression,
     collect_literal_int_constants,
 )
+from .stage_utils import (
+    compute_local_size,
+    normalize_stage_name,
+    should_emit_qualified_function,
+    stage_matches,
+)
+from .resource_arrays import collect_resource_array_size_hints
 
 
 class GLSLCodeGen:
@@ -60,6 +67,9 @@ class GLSLCodeGen:
         self.vertex_output_struct_names = set()
         self.fragment_input_struct_names = set()
         self.vertex_input_member_names = set()
+        self.current_function_return_type = None
+        self.current_expression_expected_type = None
+        self.local_variable_types = {}
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
@@ -230,8 +240,7 @@ class GLSLCodeGen:
         return self.generate_program(ast, target_stage=shader_type)
 
     def generate_program(self, ast, target_stage=None):
-        if target_stage is not None:
-            target_stage = str(target_stage).split(".")[-1].lower()
+        target_stage = normalize_stage_name(target_stage)
 
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
@@ -249,6 +258,9 @@ class GLSLCodeGen:
         self.current_stage_inputs = {}
         self.current_stage_outputs = {}
         self.flattened_stage_variables = set()
+        self.current_function_return_type = None
+        self.current_expression_expected_type = None
+        self.local_variable_types = {}
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -296,6 +308,7 @@ class GLSLCodeGen:
         )
         emit_vertex_io = target_stage in {None, "vertex"}
         emit_fragment_io = target_stage in {None, "fragment"}
+        emit_graphics_io = target_stage in {None, "vertex", "fragment"}
         for node in structs:
             if isinstance(node, StructNode):
                 if (
@@ -304,6 +317,8 @@ class GLSLCodeGen:
                 ):
                     if emit_vertex_io:
                         code += self.generate_stage_input_declarations(node)
+                    elif not emit_graphics_io:
+                        code += self.generate_struct(node)
                 elif node.name == "VSOutput":
                     emitted_io = False
                     if node.name in self.vertex_output_struct_names and emit_vertex_io:
@@ -316,7 +331,10 @@ class GLSLCodeGen:
                         code += self.generate_fragment_input_declarations(node)
                         emitted_io = True
                     if not emitted_io:
-                        code += self.generate_legacy_output_declarations(node)
+                        if emit_graphics_io:
+                            code += self.generate_legacy_output_declarations(node)
+                        else:
+                            code += self.generate_struct(node)
                 elif node.name in self.vertex_output_struct_names:
                     if emit_vertex_io:
                         code += self.generate_vertex_output_declarations(node)
@@ -329,31 +347,37 @@ class GLSLCodeGen:
                 elif node.name == "PSInput":
                     if emit_fragment_io:
                         code += self.generate_fragment_input_declarations(node)
+                    elif not emit_graphics_io:
+                        code += self.generate_struct(node)
                 elif node.name in self.fragment_input_struct_names:
                     if emit_fragment_io:
                         code += self.generate_fragment_input_declarations(node)
-                    code += self.generate_struct(node)
+                    if not emit_graphics_io:
+                        code += self.generate_struct(node)
                 elif node.name == "PSOutput":
-                    members = getattr(node, "members", [])
-                    for member in members:
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(member.member_type)
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
+                    if emit_graphics_io:
+                        members = getattr(node, "members", [])
+                        for member in members:
+                            if hasattr(member, "member_type"):
+                                member_type = self.map_type(member.member_type)
+                            else:
+                                member_type = self.map_type(
+                                    getattr(member, "vtype", "float")
+                                )
 
-                        # Handle semantic
-                        semantic = None
-                        if hasattr(member, "semantic"):
-                            semantic = member.semantic
-                        elif hasattr(member, "attributes"):
-                            for attr in member.attributes:
-                                if hasattr(attr, "name"):
-                                    semantic = attr.name
-                                    break
+                            # Handle semantic
+                            semantic = None
+                            if hasattr(member, "semantic"):
+                                semantic = member.semantic
+                            elif hasattr(member, "attributes"):
+                                for attr in member.attributes:
+                                    if hasattr(attr, "name"):
+                                        semantic = attr.name
+                                        break
 
-                        code += f"{self.map_semantic(semantic)} out {member_type} {member.name};\n"
+                            code += f"{self.map_semantic(semantic)} out {member_type} {member.name};\n"
+                    else:
+                        code += self.generate_struct(node)
                 else:
                     code += self.generate_struct(node)
 
@@ -442,26 +466,18 @@ class GLSLCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
+            qualifier_name = normalize_stage_name(qualifier)
 
-            if (
-                target_stage is not None
-                and qualifier
-                in {
-                    "vertex",
-                    "fragment",
-                    "compute",
-                }
-                and qualifier != target_stage
-            ):
+            if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
 
-            if qualifier == "vertex":
+            if qualifier_name == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
-            elif qualifier == "fragment":
+            elif qualifier_name == "fragment":
                 code += "// Fragment Shader\n"
                 code += self.generate_function(func, shader_type="fragment")
-            elif qualifier == "compute":
+            elif qualifier_name == "compute":
                 code += "// Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
             else:
@@ -471,18 +487,18 @@ class GLSLCodeGen:
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = (
-                        str(stage_type).split(".")[-1].lower()
-                    )  # Extract stage name from enum
-                    if target_stage is not None and stage_name != target_stage:
+                    stage_name = normalize_stage_name(stage_type)
+                    if not stage_matches(target_stage, stage_name):
                         continue
                     code += f"// {stage_name.title()} Shader\n"
                     code += self.generate_function(
-                        stage.entry_point, shader_type=stage_name
+                        stage.entry_point,
+                        shader_type=stage_name,
+                        execution_config=getattr(stage, "execution_config", None),
                     )
                 if hasattr(stage, "local_functions"):
-                    stage_name = str(stage_type).split(".")[-1].lower()
-                    if target_stage is not None and stage_name != target_stage:
+                    stage_name = normalize_stage_name(stage_type)
+                    if not stage_matches(target_stage, stage_name):
                         continue
                     for func in stage.local_functions:
                         code += self.generate_function(func)
@@ -562,7 +578,17 @@ class GLSLCodeGen:
                 code += "};\n"
         return code
 
-    def generate_function(self, func, indent=0, shader_type=None):
+    def generate_compute_layout(self, execution_config=None):
+        x, y, z = compute_local_size(execution_config)
+        return (
+            f"layout(local_size_x = {x}, "
+            f"local_size_y = {y}, "
+            f"local_size_z = {z}) in;\n"
+        )
+
+    def generate_function(
+        self, func, indent=0, shader_type=None, execution_config=None
+    ):
         code = ""
         code += "  " * indent
 
@@ -571,6 +597,9 @@ class GLSLCodeGen:
         sampler_parameters = set()
         texture_parameters = {}
         image_format_parameters = {}
+        previous_function_return_type = self.current_function_return_type
+        previous_local_variable_types = self.local_variable_types
+        self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
                 if hasattr(p.param_type, "name"):
@@ -581,6 +610,7 @@ class GLSLCodeGen:
                 raw_param_type = p.vtype
             else:
                 raw_param_type = "float"
+            self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
 
             if self.is_sampler_type(raw_param_type):
                 sampler_parameters.add(p.name)
@@ -634,10 +664,16 @@ class GLSLCodeGen:
         if stage_output and stage_output["declaration"]:
             code += f"{stage_output['declaration']}\n"
 
+        if shader_type == "compute":
+            code += self.generate_compute_layout(execution_config)
+
         if shader_type in stage_entry_types:
             code += "void main() {\n"
+            self.current_function_return_type = "void"
         else:
-            return_type = self.function_return_type(func)
+            raw_return_type = self.type_name_string(getattr(func, "return_type", None))
+            self.current_function_return_type = raw_return_type or "void"
+            return_type = self.map_type(self.current_function_return_type)
             code += f"{return_type} {func.name}({params_str}) {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
@@ -668,6 +704,8 @@ class GLSLCodeGen:
         self.current_stage_inputs = previous_stage_inputs
         self.current_stage_outputs = previous_stage_outputs
         self.flattened_stage_variables = previous_flattened_stage_variables
+        self.current_function_return_type = previous_function_return_type
+        self.local_variable_types = previous_local_variable_types
 
         code += "}\n\n"
         return code
@@ -680,11 +718,11 @@ class GLSLCodeGen:
             qualifier = (
                 qualifiers[0] if qualifiers else getattr(func, "qualifier", None)
             )
-            if qualifier == stage_name:
+            if normalize_stage_name(qualifier) == stage_name:
                 functions.append(func)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
-            current_stage = str(stage_type).split(".")[-1].lower()
+            current_stage = normalize_stage_name(stage_type)
             if current_stage == stage_name and hasattr(stage, "entry_point"):
                 functions.append(stage.entry_point)
 
@@ -886,13 +924,16 @@ class GLSLCodeGen:
                 var_type = stmt.vtype
             else:
                 var_type = "float"
+            self.local_variable_types[stmt.name] = var_type
 
             declaration = format_c_style_array_declaration(
                 self.map_type(var_type), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
-                init_expr = self.generate_expression(stmt.initial_value)
+                init_expr = self.generate_expression_with_expected(
+                    stmt.initial_value, var_type
+                )
                 return f"{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
@@ -931,7 +972,9 @@ class GLSLCodeGen:
                     )
                     value = values
                 else:
-                    value = self.generate_expression(stmt.value)
+                    value = self.generate_expression_with_expected(
+                        stmt.value, self.current_function_return_type
+                    )
                 return (
                     f"{indent_str}{self.current_stage_output['name']} = {value};\n"
                     f"{indent_str}return;\n"
@@ -941,7 +984,10 @@ class GLSLCodeGen:
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)
                 return f"{indent_str}return {values};\n"
             else:
-                return f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                return (
+                    f"{indent_str}return "
+                    f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
+                )
         elif hasattr(stmt, "__class__") and "ExpressionStatementNode" in str(
             type(stmt)
         ):
@@ -959,10 +1005,146 @@ class GLSLCodeGen:
     def local_variable_qualifier(self, node):
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
 
+    def type_name_string(self, vtype):
+        if vtype is None:
+            return None
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            return self.convert_type_node_to_string(vtype)
+        return str(vtype)
+
+    def generate_expression_with_expected(self, expr, expected_type):
+        previous_expected_type = self.current_expression_expected_type
+        self.current_expression_expected_type = self.type_name_string(expected_type)
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.current_expression_expected_type = previous_expected_type
+
+    def is_scalar_value_type(self, vtype):
+        vtype = self.type_name_string(vtype)
+        if not vtype:
+            return False
+        return self.map_type(vtype) in {
+            "float",
+            "double",
+            "int",
+            "uint",
+            "bool",
+        }
+
+    def is_vector_value_type(self, vtype):
+        vtype = self.type_name_string(vtype)
+        if not vtype:
+            return False
+        return self.map_type(vtype) in {
+            "vec2",
+            "vec3",
+            "vec4",
+            "dvec2",
+            "dvec3",
+            "dvec4",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "bvec2",
+            "bvec3",
+            "bvec4",
+        }
+
+    def vector_component_type(self, vtype):
+        mapped_type = self.map_type(vtype)
+        if mapped_type.startswith("dvec"):
+            return "double"
+        if mapped_type.startswith("uvec"):
+            return "uint"
+        if mapped_type.startswith("ivec"):
+            return "int"
+        if mapped_type.startswith("bvec"):
+            return "bool"
+        if mapped_type.startswith("vec"):
+            return "float"
+        return None
+
+    def expression_result_type(self, expr):
+        if expr is None:
+            return None
+        if isinstance(expr, VariableNode):
+            return self.local_variable_types.get(getattr(expr, "name", None))
+        if isinstance(expr, (int, float)):
+            return "float" if isinstance(expr, float) else "int"
+        if isinstance(expr, BinaryOpNode):
+            left_type = self.expression_result_type(expr.left)
+            right_type = self.expression_result_type(expr.right)
+            if self.is_vector_value_type(left_type):
+                return left_type
+            if self.is_vector_value_type(right_type):
+                return right_type
+            if left_type == "float" or right_type == "float":
+                return "float"
+            return left_type or right_type
+        if isinstance(expr, UnaryOpNode):
+            return self.expression_result_type(expr.operand)
+        if isinstance(expr, AssignmentNode):
+            target = getattr(expr, "target", getattr(expr, "left", None))
+            return self.expression_result_type(target)
+        if isinstance(expr, ArrayAccessNode):
+            array_type = self.type_name_string(self.expression_result_type(expr.array))
+            if array_type and "[" in array_type and "]" in array_type:
+                base_type, _ = split_array_type_suffix(array_type)
+                return base_type
+            return array_type
+        if isinstance(expr, MemberAccessNode):
+            object_type = self.expression_result_type(expr.object)
+            member = str(expr.member)
+            if object_type and all(ch in "xyzwrgba" for ch in member):
+                component_type = self.vector_component_type(object_type)
+                if component_type and len(member) == 1:
+                    return component_type
+                if component_type:
+                    return f"{component_type}{len(member)}"
+            return None
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
+            func_name = getattr(func_expr, "name", func_expr)
+            if func_name in {
+                "float",
+                "double",
+                "int",
+                "uint",
+                "bool",
+                "vec2",
+                "vec3",
+                "vec4",
+                "ivec2",
+                "ivec3",
+                "ivec4",
+                "uvec2",
+                "uvec3",
+                "uvec4",
+                "bvec2",
+                "bvec3",
+                "bvec4",
+            }:
+                return str(func_name)
+        if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
+            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+            if literal_type:
+                return literal_type
+        if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            return self.local_variable_types.get(getattr(expr, "name", None))
+        return None
+
     def generate_assignment(self, node, is_main=False):
-        left = self.generate_expression(node.left)
-        right = self.generate_expression(node.right)
-        op = self.map_operator(node.operator)
+        left_node = getattr(node, "target", getattr(node, "left", None))
+        right_node = getattr(node, "value", getattr(node, "right", None))
+        left = self.generate_expression(left_node)
+        right = self.generate_expression_with_expected(
+            right_node, self.expression_result_type(left_node)
+        )
+        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
         return f"{left} {op} {right}"
 
     def generate_if(self, node, indent, is_main=False):
@@ -1191,6 +1373,13 @@ class GLSLCodeGen:
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
             return expr.name
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
+            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+            if (
+                literal_type == "uint"
+                and isinstance(expr.value, int)
+                and not isinstance(expr.value, bool)
+            ):
+                return f"{expr.value}u"
             return str(expr.value)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
             left = self.generate_expression(expr.left)
@@ -1339,6 +1528,360 @@ class GLSLCodeGen:
             texture_name, self.texture_variable_types.get(texture_name)
         )
 
+    def vector_component(self, expression, component):
+        if all(char.isalnum() or char in "_.[]" for char in expression):
+            return f"{expression}.{component}"
+        return f"({expression}).{component}"
+
+    def texture_query_lod_coordinate(self, texture_type, coord):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type in {"sampler2DArray", "sampler2DArrayShadow"}:
+            return self.vector_component(coord, "xy")
+        if texture_type in {"samplerCubeArray", "samplerCubeArrayShadow"}:
+            return self.vector_component(coord, "xyz")
+        return coord
+
+    def texture_compare_coordinate(self, texture_type, coord, compare):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type == "samplerCubeArrayShadow":
+            return None
+        constructor = (
+            "vec4"
+            if texture_type
+            in {
+                "sampler2DArrayShadow",
+                "samplerCubeShadow",
+            }
+            else "vec3"
+        )
+        return f"{constructor}({coord}, {compare})"
+
+    def texture_compare_offset_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+
+    def texture_compare_lod_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+
+    def texture_compare_grad_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+            "samplerCubeShadow",
+        }
+
+    def texture_compare_lod_offset_supported(self, texture_type):
+        return self.resource_base_type(texture_type) == "sampler2DShadow"
+
+    def texture_compare_grad_offset_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+
+    def texture_compare_projected_coordinate(
+        self, texture_type, coord_arg, coord, compare
+    ):
+        texture_type = self.resource_base_type(texture_type)
+        coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
+
+        if texture_type == "sampler2DShadow":
+            if coord_type in {"vec3", "float3"}:
+                divisor = self.vector_component(coord, "z")
+            elif coord_type in {"vec4", "float4"}:
+                divisor = self.vector_component(coord, "w")
+            else:
+                return None
+            projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
+            return f"vec3({projected_coord}, {compare})"
+
+        if texture_type != "sampler2DArrayShadow" or coord_type not in {
+            "vec4",
+            "float4",
+        }:
+            return None
+
+        projected_coord = (
+            f"{self.vector_component(coord, 'xy')} / "
+            f"{self.vector_component(coord, 'w')}"
+        )
+        layer = self.vector_component(coord, "z")
+        return f"vec4({projected_coord}, {layer}, {compare})"
+
+    def unsupported_texture_compare_call(self, func_name, reason):
+        return f"/* unsupported GLSL texture compare: {func_name} {reason} */ 0.0"
+
+    def generate_texture_compare_call(self, func_name, args):
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return self.unsupported_texture_compare_call(
+                func_name, "requires texture and coordinate arguments"
+            )
+
+        texture_name, coord, extra_args = parts
+        if not extra_args:
+            return self.unsupported_texture_compare_call(
+                func_name, "requires a compare argument"
+            )
+
+        compare = self.generate_expression(extra_args[0])
+        texture_type = self.texture_resource_type(args[0])
+        if func_name in {
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }:
+            coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
+            compare_coord = self.texture_compare_projected_coordinate(
+                texture_type, args[coord_index], coord, compare
+            )
+            if compare_coord is None:
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow vec4 projection coordinates",
+                )
+
+            if func_name == "textureCompareProj":
+                if len(extra_args) != 1:
+                    return self.unsupported_texture_compare_call(
+                        func_name, "accepts no extra arguments"
+                    )
+                return f"texture({texture_name}, {compare_coord})"
+
+            if func_name == "textureCompareProjOffset":
+                if len(extra_args) != 2:
+                    return self.unsupported_texture_compare_call(
+                        func_name, "requires compare and offset arguments"
+                    )
+                offset = self.generate_expression(extra_args[1])
+                return f"textureOffset({texture_name}, {compare_coord}, {offset})"
+
+            if func_name == "textureCompareProjLod":
+                if len(extra_args) != 2:
+                    return self.unsupported_texture_compare_call(
+                        func_name, "requires compare and lod arguments"
+                    )
+                if self.resource_base_type(texture_type) == "sampler2DArrayShadow":
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "projected explicit LOD is not supported for sampler2DArrayShadow",
+                    )
+                lod = self.generate_expression(extra_args[1])
+                return f"textureLod({texture_name}, {compare_coord}, {lod})"
+
+            if func_name == "textureCompareProjLodOffset":
+                if len(extra_args) != 3:
+                    return self.unsupported_texture_compare_call(
+                        func_name, "requires compare, lod, and offset arguments"
+                    )
+                if self.resource_base_type(texture_type) == "sampler2DArrayShadow":
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "projected explicit LOD is not supported for sampler2DArrayShadow",
+                    )
+                lod = self.generate_expression(extra_args[1])
+                offset = self.generate_expression(extra_args[2])
+                return (
+                    f"textureLodOffset({texture_name}, {compare_coord}, "
+                    f"{lod}, {offset})"
+                )
+
+            if func_name == "textureCompareProjGrad":
+                if len(extra_args) != 3:
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "requires compare, gradient x, and gradient y arguments",
+                    )
+                ddx = self.generate_expression(extra_args[1])
+                ddy = self.generate_expression(extra_args[2])
+                return f"textureGrad({texture_name}, {compare_coord}, {ddx}, {ddy})"
+
+            if len(extra_args) != 4:
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "requires compare, gradient x, gradient y, and offset arguments",
+                )
+            ddx = self.generate_expression(extra_args[1])
+            ddy = self.generate_expression(extra_args[2])
+            offset = self.generate_expression(extra_args[3])
+            return (
+                f"textureGradOffset({texture_name}, {compare_coord}, "
+                f"{ddx}, {ddy}, {offset})"
+            )
+
+        if func_name == "textureCompare":
+            if texture_type == "samplerCubeArrayShadow":
+                return f"texture({texture_name}, {coord}, {compare})"
+            compare_coord = self.texture_compare_coordinate(
+                texture_type, coord, compare
+            )
+            if compare_coord is None:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires supported shadow texture coordinates"
+                )
+            return f"texture({texture_name}, {compare_coord})"
+
+        if func_name == "textureCompareOffset":
+            if len(extra_args) != 2:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires compare and offset arguments"
+                )
+            if not self.texture_compare_offset_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name, "offsets require 2D or 2D-array shadow samplers"
+                )
+            compare_coord = self.texture_compare_coordinate(
+                texture_type, coord, compare
+            )
+            if compare_coord is None:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires supported shadow texture coordinates"
+                )
+            offset = self.generate_expression(extra_args[1])
+            return f"textureOffset({texture_name}, {compare_coord}, {offset})"
+
+        if func_name == "textureCompareLod":
+            if len(extra_args) != 2:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires compare and lod arguments"
+                )
+            if not self.texture_compare_lod_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name, "explicit LOD requires 2D or 2D-array shadow samplers"
+                )
+            compare_coord = self.texture_compare_coordinate(
+                texture_type, coord, compare
+            )
+            if compare_coord is None:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires supported shadow texture coordinates"
+                )
+            lod = self.generate_expression(extra_args[1])
+            return f"textureLod({texture_name}, {compare_coord}, {lod})"
+
+        if func_name == "textureCompareLodOffset":
+            if len(extra_args) != 3:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires compare, lod, and offset arguments"
+                )
+            if not self.texture_compare_lod_offset_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name, "explicit LOD offsets require 2D shadow samplers"
+                )
+            compare_coord = self.texture_compare_coordinate(
+                texture_type, coord, compare
+            )
+            if compare_coord is None:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires supported shadow texture coordinates"
+                )
+            lod = self.generate_expression(extra_args[1])
+            offset = self.generate_expression(extra_args[2])
+            return f"textureLodOffset({texture_name}, {compare_coord}, {lod}, {offset})"
+
+        if func_name == "textureCompareGrad":
+            if len(extra_args) != 3:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires compare, gradient x, and gradient y arguments"
+                )
+            if not self.texture_compare_grad_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "explicit gradients require 2D, 2D-array, or cube shadow samplers",
+                )
+            compare_coord = self.texture_compare_coordinate(
+                texture_type, coord, compare
+            )
+            if compare_coord is None:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires supported shadow texture coordinates"
+                )
+            ddx = self.generate_expression(extra_args[1])
+            ddy = self.generate_expression(extra_args[2])
+            return f"textureGrad({texture_name}, {compare_coord}, {ddx}, {ddy})"
+
+        if func_name == "textureCompareGradOffset":
+            if len(extra_args) != 4:
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "requires compare, gradient x, gradient y, and offset arguments",
+                )
+            if not self.texture_compare_grad_offset_supported(texture_type):
+                return self.unsupported_texture_compare_call(
+                    func_name,
+                    "explicit gradient offsets require 2D or 2D-array shadow samplers",
+                )
+            compare_coord = self.texture_compare_coordinate(
+                texture_type, coord, compare
+            )
+            if compare_coord is None:
+                return self.unsupported_texture_compare_call(
+                    func_name, "requires supported shadow texture coordinates"
+                )
+            ddx = self.generate_expression(extra_args[1])
+            ddy = self.generate_expression(extra_args[2])
+            offset = self.generate_expression(extra_args[3])
+            return (
+                f"textureGradOffset({texture_name}, {compare_coord}, "
+                f"{ddx}, {ddy}, {offset})"
+            )
+
+        return None
+
+    def unsupported_texture_gather_compare_call(self, func_name, reason):
+        return (
+            f"/* unsupported GLSL texture gather compare: "
+            f"{func_name} {reason} */ vec4(0.0)"
+        )
+
+    def texture_gather_compare_offset_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+
+    def generate_texture_gather_compare_call(self, func_name, args):
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, "requires texture and coordinate arguments"
+            )
+
+        texture_name, coord, extra_args = parts
+        if not extra_args:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, "requires a compare argument"
+            )
+
+        compare = self.generate_expression(extra_args[0])
+        if func_name == "textureGatherCompare":
+            if len(extra_args) != 1:
+                return self.unsupported_texture_gather_compare_call(
+                    func_name, "accepts no extra arguments"
+                )
+            return f"textureGather({texture_name}, {coord}, {compare})"
+
+        if len(extra_args) != 2:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, "requires compare and offset arguments"
+            )
+        if not self.texture_gather_compare_offset_supported(
+            self.texture_resource_type(args[0])
+        ):
+            return self.unsupported_texture_gather_compare_call(
+                func_name, "offsets require 2D or 2D-array shadow samplers"
+            )
+        offset = self.generate_expression(extra_args[1])
+        return f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
+
     def image_resource_format(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
         if not texture_name:
@@ -1394,10 +1937,19 @@ class GLSLCodeGen:
             return self.is_scalar_image_format(image_format)
         return self.is_integer_image_type(texture_type)
 
+    def is_float_image_resource(self, texture_type):
+        return texture_type in {"image2D", "image3D", "image2DArray"}
+
     def image_load_component_suffix(self, texture_type, image_format):
         if self.is_scalar_integer_image_resource(texture_type, image_format):
             return ".x"
+        if self.is_float_image_resource(texture_type) and self.is_scalar_value_type(
+            self.current_expression_expected_type
+        ):
+            return ".x"
         if self.is_two_component_image_format(image_format):
+            if self.is_scalar_value_type(self.current_expression_expected_type):
+                return ".x"
             return ".xy"
         return ""
 
@@ -1424,7 +1976,9 @@ class GLSLCodeGen:
             return "uvec4"
         return None
 
-    def two_component_image_store_expression(self, image_format, value):
+    def two_component_image_store_expression(
+        self, image_format, value, value_type=None
+    ):
         constructors = {
             "rg8": ("vec4", "0.0"),
             "rg8_snorm": ("vec4", "0.0"),
@@ -1443,11 +1997,15 @@ class GLSLCodeGen:
         if constructor is None:
             return None
         type_name, zero_value = constructor
+        if self.is_scalar_value_type(value_type):
+            return f"{type_name}({value}, {zero_value}, {zero_value}, {zero_value})"
         return f"{type_name}({value}, {zero_value}, {zero_value})"
 
-    def image_store_value_expression(self, texture_type, image_format, value):
+    def image_store_value_expression(
+        self, texture_type, image_format, value, value_type=None
+    ):
         two_component_value = self.two_component_image_store_expression(
-            image_format, value
+            image_format, value, value_type
         )
         if two_component_value is not None:
             return two_component_value
@@ -1457,6 +2015,10 @@ class GLSLCodeGen:
             constructor = self.integer_image_store_constructor(texture_type)
             if constructor is None:
                 constructor = self.image_format_store_constructor(image_format)
+        elif self.is_float_image_resource(texture_type) and self.is_scalar_value_type(
+            value_type
+        ):
+            constructor = "vec4"
         if constructor:
             return f"{constructor}({value})"
         return value
@@ -1479,36 +2041,38 @@ class GLSLCodeGen:
             value = self.generate_expression(args[2])
             texture_type = self.texture_resource_type(args[0])
             image_format = self.image_resource_format(args[0])
-            value = self.image_store_value_expression(texture_type, image_format, value)
+            value = self.image_store_value_expression(
+                texture_type, image_format, value, self.expression_result_type(args[2])
+            )
             return f"imageStore({image_name}, {coord}, {value})"
 
-        if func_name == "textureCompare":
-            parts = self.texture_call_parts(args)
-            if parts is None:
-                return None
-            texture_name, coord, extra_args = parts
-            if not extra_args:
-                return None
-            compare = self.generate_expression(extra_args[0])
-            texture_type = self.texture_resource_type(args[0])
-            if texture_type == "samplerCubeArrayShadow":
-                return f"texture({texture_name}, {coord}, {compare})"
-            compare_constructor = (
-                "vec4"
-                if texture_type
-                in {
-                    "sampler2DArrayShadow",
-                    "samplerCubeShadow",
-                }
-                else "vec3"
-            )
-            return f"texture({texture_name}, {compare_constructor}({coord}, {compare}))"
+        if func_name in {
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }:
+            return self.generate_texture_compare_call(func_name, args)
+
+        if func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
+            return self.generate_texture_gather_compare_call(func_name, args)
 
         if func_name == "textureQueryLod" and self.is_explicit_sampler_argument(args):
             parts = self.texture_call_parts(args)
             if parts is None:
                 return None
             texture_name, coord, _ = parts
+            coord = self.texture_query_lod_coordinate(
+                self.texture_resource_type(args[0]), coord
+            )
             return f"textureQueryLod({texture_name}, {coord})"
 
         texture_funcs = {
@@ -1517,7 +2081,14 @@ class GLSLCodeGen:
             "textureGrad",
             "textureGather",
             "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
             "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
             "textureGatherOffset",
             "textureGatherOffsets",
         }
@@ -1582,90 +2153,19 @@ class GLSLCodeGen:
         return [arg for index, arg in enumerate(args) if index not in sampler_indices]
 
     def collect_resource_array_size_hints(self, ast):
-        global_arrays = self.collect_unsized_sampled_texture_globals(ast)
-        function_arrays = self.collect_unsized_sampled_texture_parameters(ast)
-        global_hints = {name: 0 for name in global_arrays}
-        function_hints = {
-            func_name: {param_name: 0 for param_name in params}
-            for func_name, params in function_arrays.items()
-        }
-        functions = {
-            getattr(func, "name", None): func for func in self.collect_functions(ast)
-        }
-        functions = {name: func for name, func in functions.items() if name}
-
-        for func_name, func in functions.items():
-            visible_constants = self.visible_literal_int_constants(func)
-            for node in self.walk_ast(getattr(func, "body", [])):
-                if not isinstance(node, ArrayAccessNode):
-                    continue
-                array_expr = getattr(node, "array", getattr(node, "array_expr", None))
-                index_expr = getattr(node, "index", getattr(node, "index_expr", None))
-                array_name = self.expression_name(array_expr)
-                index = self.literal_int_value(index_expr, visible_constants)
-                if array_name is None or index is None or index < 0:
-                    continue
-                required_size = index + 1
-                if array_name in global_hints:
-                    global_hints[array_name] = max(
-                        global_hints[array_name], required_size
-                    )
-                if array_name in function_hints.get(func_name, {}):
-                    function_hints[func_name][array_name] = max(
-                        function_hints[func_name][array_name], required_size
-                    )
-
-        changed = True
-        while changed:
-            changed = False
-            for caller_name, func in functions.items():
-                caller_param_hints = function_hints.get(caller_name, {})
-                for call in self.walk_ast(getattr(func, "body", [])):
-                    if not isinstance(call, FunctionCallNode):
-                        continue
-                    callee_name = self.function_call_name(call)
-                    callee_param_hints = function_hints.get(callee_name)
-                    if not callee_param_hints:
-                        continue
-                    callee = functions.get(callee_name)
-                    if callee is None:
-                        continue
-                    callee_params = getattr(callee, "parameters", [])
-                    args = getattr(call, "arguments", getattr(call, "args", []))
-                    for index, arg in enumerate(args):
-                        if index >= len(callee_params):
-                            continue
-                        required_size = callee_param_hints.get(
-                            getattr(callee_params[index], "name", None)
-                        )
-                        if not required_size:
-                            continue
-                        arg_name = self.expression_name(arg)
-                        if (
-                            arg_name in global_hints
-                            and required_size > global_hints[arg_name]
-                        ):
-                            global_hints[arg_name] = required_size
-                            changed = True
-                        if (
-                            arg_name in caller_param_hints
-                            and required_size > caller_param_hints[arg_name]
-                        ):
-                            caller_param_hints[arg_name] = required_size
-                            changed = True
-
-        return (
-            {
-                name: str(size) if size > 1 else ""
-                for name, size in global_hints.items()
-            },
-            {
-                func_name: {
-                    param_name: str(size) if size > 1 else ""
-                    for param_name, size in param_hints.items()
-                }
-                for func_name, param_hints in function_hints.items()
-            },
+        return collect_resource_array_size_hints(
+            global_arrays=self.collect_unsized_sampled_texture_globals(ast),
+            function_arrays=self.collect_unsized_sampled_texture_parameters(ast),
+            fixed_global_array_sizes=self.collect_fixed_resource_global_sizes(ast),
+            fixed_function_array_sizes=self.collect_fixed_resource_parameter_sizes(ast),
+            functions=self.collect_functions(ast),
+            walk_nodes=self.walk_ast,
+            expression_name=self.expression_name,
+            literal_int_value=self.literal_int_value,
+            visible_literal_int_constants=self.visible_literal_int_constants,
+            function_call_name=self.function_call_name,
+            initial_size=0,
+            format_size=lambda size: str(size) if size > 1 else "",
         )
 
     def collect_unsized_sampled_texture_globals(self, ast):
@@ -1676,6 +2176,16 @@ class GLSLCodeGen:
             if name and self.is_unsized_sampled_texture_array_type(vtype):
                 globals_by_name[name] = vtype
         return globals_by_name
+
+    def collect_fixed_resource_global_sizes(self, ast):
+        global_arrays = {}
+        for node in getattr(ast, "global_variables", []) or []:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            size = self.fixed_resource_array_size(vtype)
+            if name and size is not None:
+                global_arrays[name] = size
+        return global_arrays
 
     def collect_unsized_sampled_texture_parameters(self, ast):
         function_arrays = {}
@@ -1688,6 +2198,39 @@ class GLSLCodeGen:
                 if self.is_unsized_sampled_texture_array_type(vtype):
                     function_arrays.setdefault(func_name, {})[param.name] = vtype
         return function_arrays
+
+    def collect_fixed_resource_parameter_sizes(self, ast):
+        function_arrays = {}
+        for func in self.collect_functions(ast):
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            for param in getattr(func, "parameters", getattr(func, "params", [])):
+                size = self.fixed_resource_array_size(
+                    getattr(param, "param_type", getattr(param, "vtype", None))
+                )
+                if size is not None:
+                    function_arrays.setdefault(func_name, {})[param.name] = size
+        return function_arrays
+
+    def fixed_resource_array_size(self, vtype):
+        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+            if vtype.size is None:
+                return None
+            base_type = self.convert_type_node_to_string(vtype.element_type)
+            if not self.is_inferable_resource_array_type(base_type):
+                return None
+            size = self.literal_int_value(vtype.size, self.literal_int_constants)
+            return size if size is not None and size > 0 else None
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            return None
+        type_string = str(vtype)
+        if "[" not in type_string or "]" not in type_string:
+            return None
+        base_type, size = parse_array_type(type_string)
+        if size is None or not self.is_inferable_resource_array_type(base_type):
+            return None
+        return max(size, 1)
 
     def is_unsized_sampled_texture_array_type(self, vtype):
         if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:

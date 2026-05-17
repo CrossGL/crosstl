@@ -431,6 +431,35 @@ def test_resource_types_emit_slang_texture_names():
     assert "uimage2DMS" not in generated_code
 
 
+def test_non_resource_arrays_preserve_expression_sizes():
+    code = """
+    shader ArraySizes {
+        vec3 colors[(2 + 1) * 2];
+
+        float accumulate(float values[(2 + 1) * 2], vec3 normals[+6]) {
+            float localWeights[(2 + 1) * 2];
+            return values[0] + localWeights[1] + normals[0].x;
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float3 colors[((2 + 1) * 2)];" in generated_code
+    assert (
+        "float accumulate(float values[((2 + 1) * 2)], float3 normals[+6])"
+        in generated_code
+    )
+    assert "float localWeights[((2 + 1) * 2)];" in generated_code
+    assert "2 + 1 * 2" not in generated_code
+
+
 def test_sampled_texture_builtins_emit_slang_methods():
     code = """
     shader Resources {
@@ -502,12 +531,2429 @@ def test_sampled_texture_builtins_emit_slang_methods():
     assert "texelFetch(" not in generated_code
 
 
+def test_explicit_sampler_texture_builtins_emit_combined_slang_methods():
+    code = """
+    shader Resources {
+        sampler linearSampler;
+        sampler2d colorMap;
+        sampler2darray layerMap;
+        sampler3d volumeMap;
+
+        compute {
+            vec4 sampleExplicit(
+                sampler2d tex,
+                sampler2darray layers,
+                sampler3d volume,
+                sampler sampleState,
+                vec2 uv,
+                vec3 uvw,
+                vec2 ddx,
+                vec2 ddy,
+                vec3 ddx3,
+                vec3 ddy3
+            ) {
+                vec4 color = texture(tex, sampleState, uv);
+                vec4 biased = texture(tex, sampleState, uv, 0.5);
+                vec4 mip = textureLod(tex, sampleState, uv, 2.0);
+                vec4 grad = textureGrad(tex, sampleState, uv, ddx, ddy);
+                vec4 layer = texture(layers, sampleState, uvw);
+                vec4 volumeGrad = textureGrad(volume, sampleState, uvw, ddx3, ddy3);
+                return color + biased + mip + grad + layer + volumeGrad;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "SamplerState linearSampler;" in generated_code
+    assert "SamplerState sampleState" in generated_code
+    assert "float4 color = tex.Sample(uv);" in generated_code
+    assert "float4 biased = tex.SampleBias(uv, 0.5);" in generated_code
+    assert "float4 mip = tex.SampleLevel(uv, 2.0);" in generated_code
+    assert "float4 grad = tex.SampleGrad(uv, ddx, ddy);" in generated_code
+    assert "float4 layer = layers.Sample(uvw);" in generated_code
+    assert "float4 volumeGrad = volume.SampleGrad(uvw, ddx3, ddy3);" in generated_code
+    assert "tex.Sample(sampleState" not in generated_code
+    assert "tex.SampleBias(sampleState" not in generated_code
+    assert "tex.SampleLevel(sampleState" not in generated_code
+    assert "tex.SampleGrad(sampleState" not in generated_code
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+
+
+def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices():
+    code = """
+    shader TextureArrays {
+        sampler2d textures[(2 + 1) * 2];
+        sampler samplers[(2 + 1) * 2];
+        sampler2d unaryTextures[+6];
+        sampler2dshadow shadowMaps[(2 + 1) * 2];
+        sampler shadowSamplers[(2 + 1) * 2];
+
+        compute {
+            vec4 sampleLayer(
+                sampler2d textures[(2 + 1) * 2],
+                sampler samplers[(2 + 1) * 2],
+                sampler2d unaryTextures[+6],
+                vec2 uv,
+                vec2 ddx,
+                vec2 ddy
+            ) {
+                vec4 color = texture(textures[1 + 2], samplers[1 + 2], uv);
+                vec4 lodColor = textureLod(textures[2], samplers[2], uv, 1.0);
+                vec4 gradColor = textureGrad(textures[2], samplers[2], uv, ddx, ddy);
+                vec4 gathered = textureGather(textures[1 + 2], samplers[1 + 2], uv);
+                vec4 unaryColor = texture(unaryTextures[2], uv);
+                return color + lodColor + gradColor + gathered + unaryColor;
+            }
+
+            float shadowLayer(
+                sampler2dshadow shadowMaps[(2 + 1) * 2],
+                sampler shadowSamplers[(2 + 1) * 2],
+                vec2 uv,
+                float depth
+            ) {
+                float compared = textureCompare(
+                    shadowMaps[1 + 2],
+                    shadowSamplers[1 + 2],
+                    uv,
+                    depth
+                );
+                vec4 gathered = textureGatherCompare(
+                    shadowMaps[2],
+                    shadowSamplers[2],
+                    uv,
+                    depth
+                );
+                return compared + gathered.x;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler2D<float4> textures[((2 + 1) * 2)];" in generated_code
+    assert "SamplerState samplers[((2 + 1) * 2)];" in generated_code
+    assert "Sampler2D<float4> unaryTextures[+6];" in generated_code
+    assert "Sampler2DShadow shadowMaps[((2 + 1) * 2)];" in generated_code
+    assert "SamplerState shadowSamplers[((2 + 1) * 2)];" in generated_code
+    assert (
+        "float4 sampleLayer(Sampler2D<float4> textures[((2 + 1) * 2)], "
+        "SamplerState samplers[((2 + 1) * 2)], "
+        "Sampler2D<float4> unaryTextures[+6], float2 uv, float2 ddx, float2 ddy)"
+        in generated_code
+    )
+    assert (
+        "float shadowLayer(Sampler2DShadow shadowMaps[((2 + 1) * 2)], "
+        "SamplerState shadowSamplers[((2 + 1) * 2)], float2 uv, float depth)"
+        in generated_code
+    )
+    assert "float4 color = textures[(1 + 2)].Sample(uv);" in generated_code
+    assert "float4 lodColor = textures[2].SampleLevel(uv, 1.0);" in generated_code
+    assert "float4 gradColor = textures[2].SampleGrad(uv, ddx, ddy);" in generated_code
+    assert "float4 gathered = textures[(1 + 2)].Gather(uv);" in generated_code
+    assert "float4 unaryColor = unaryTextures[2].Sample(uv);" in generated_code
+    assert (
+        "float compared = shadowMaps[(1 + 2)].SampleCmp(uv, depth);" in generated_code
+    )
+    assert "float4 gathered = shadowMaps[2].GatherCmp(uv, depth);" in generated_code
+    assert "1 + 2]." not in generated_code
+    assert "2 + 1 * 2" not in generated_code
+    assert ".Sample(samplers" not in generated_code
+    assert ".SampleCmp(shadowSamplers" not in generated_code
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+    assert "textureGather(" not in generated_code
+    assert "textureCompare(" not in generated_code
+
+
+def test_texture_offset_builtins_emit_slang_offset_methods():
+    code = """
+    shader Resources {
+        sampler linearSampler;
+        sampler2d colorMap;
+        sampler2darray layerMap;
+
+        compute {
+            vec4 offsetOps(
+                sampler2d tex,
+                sampler2darray layers,
+                sampler sampleState,
+                vec2 uv,
+                vec3 uvw,
+                vec2 ddx,
+                vec2 ddy,
+                ivec2 offset
+            ) {
+                vec4 offsetColor = textureOffset(tex, uv, offset);
+                vec4 explicitOffset = textureOffset(
+                    tex,
+                    sampleState,
+                    uv,
+                    offset
+                );
+                vec4 arrayOffset = textureOffset(layers, sampleState, uvw, offset);
+                vec4 lodOffset = textureLodOffset(tex, uv, 2.0, offset);
+                vec4 explicitLodOffset = textureLodOffset(
+                    tex,
+                    sampleState,
+                    uv,
+                    3.0,
+                    offset
+                );
+                vec4 gradOffset = textureGradOffset(tex, uv, ddx, ddy, offset);
+                vec4 explicitGradOffset = textureGradOffset(
+                    tex,
+                    sampleState,
+                    uv,
+                    ddx,
+                    ddy,
+                    offset
+                );
+                return offsetColor
+                    + explicitOffset
+                    + arrayOffset
+                    + lodOffset
+                    + explicitLodOffset
+                    + gradOffset
+                    + explicitGradOffset;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler2D<float4> tex" in generated_code
+    assert "Sampler2DArray<float4> layers" in generated_code
+    assert "SamplerState sampleState" in generated_code
+    assert "float4 offsetColor = tex.Sample(uv, offset);" in generated_code
+    assert "float4 explicitOffset = tex.Sample(uv, offset);" in generated_code
+    assert "float4 arrayOffset = layers.Sample(uvw, offset);" in generated_code
+    assert "float4 lodOffset = tex.SampleLevel(uv, 2.0, offset);" in generated_code
+    assert (
+        "float4 explicitLodOffset = tex.SampleLevel(uv, 3.0, offset);" in generated_code
+    )
+    assert "float4 gradOffset = tex.SampleGrad(uv, ddx, ddy, offset);" in generated_code
+    assert (
+        "float4 explicitGradOffset = tex.SampleGrad(uv, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert "textureOffset(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
+    assert ".Sample(sampleState" not in generated_code
+    assert ".SampleLevel(sampleState" not in generated_code
+    assert ".SampleGrad(sampleState" not in generated_code
+
+
+def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddx = vec2(0.1, 0.0);
+                ivec2 offset = ivec2(1, 0);
+                vec4 missingOffset = textureOffset(colorMap, uv);
+                vec4 missingLodOffset = textureLodOffset(colorMap, uv, offset);
+                vec4 missingGradOffset = textureGradOffset(colorMap, uv, ddx, offset);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 missingOffset = /* unsupported Slang texture offset: "
+        "textureOffset requires one offset argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 missingLodOffset = /* unsupported Slang texture offset: "
+        "textureLodOffset requires lod and offset arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 missingGradOffset = /* unsupported Slang texture offset: "
+        "textureGradOffset requires gradient x, gradient y, and offset arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    assert "textureOffset(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
+
+
+def test_projected_texture_builtins_emit_slang_projected_samples():
+    code = """
+    shader Resources {
+        sampler linearSampler;
+        sampler2d colorMap;
+        sampler3d volumeMap;
+
+        compute {
+            vec4 projectedOps(
+                sampler2d tex,
+                sampler3d volume,
+                sampler sampleState,
+                vec3 uvq,
+                vec4 uvqw,
+                vec4 xyzq,
+                vec2 ddx,
+                vec2 ddy,
+                ivec2 offset
+            ) {
+                vec4 projected = textureProj(tex, uvq);
+                vec4 explicitProjected = textureProj(tex, sampleState, uvqw, 0.25);
+                vec4 volumeProjected = textureProj(volume, xyzq);
+                vec4 projectedOffset = textureProjOffset(tex, uvq, offset);
+                vec4 projectedOffsetBias = textureProjOffset(
+                    tex,
+                    sampleState,
+                    uvq,
+                    offset,
+                    0.5
+                );
+                vec4 projectedLod = textureProjLod(tex, sampleState, uvq, 2.0);
+                vec4 projectedLodOffset = textureProjLodOffset(
+                    tex,
+                    uvq,
+                    3.0,
+                    offset
+                );
+                vec4 projectedGrad = textureProjGrad(tex, uvq, ddx, ddy);
+                vec4 projectedGradOffset = textureProjGradOffset(
+                    tex,
+                    sampleState,
+                    uvq,
+                    ddx,
+                    ddy,
+                    offset
+                );
+                return projected
+                    + explicitProjected
+                    + volumeProjected
+                    + projectedOffset
+                    + projectedOffsetBias
+                    + projectedLod
+                    + projectedLodOffset
+                    + projectedGrad
+                    + projectedGradOffset;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler2D<float4> tex" in generated_code
+    assert "Sampler3D<float4> volume" in generated_code
+    assert "SamplerState sampleState" in generated_code
+    assert "float4 projected = tex.Sample(uvq.xy / uvq.z);" in generated_code
+    assert (
+        "float4 explicitProjected = tex.SampleBias(uvqw.xy / uvqw.w, 0.25);"
+        in generated_code
+    )
+    assert (
+        "float4 volumeProjected = volume.Sample(xyzq.xyz / xyzq.w);" in generated_code
+    )
+    assert (
+        "float4 projectedOffset = tex.Sample(uvq.xy / uvq.z, offset);" in generated_code
+    )
+    assert (
+        "float4 projectedOffsetBias = tex.SampleBias("
+        "uvq.xy / uvq.z, 0.5, offset);" in generated_code
+    )
+    assert (
+        "float4 projectedLod = tex.SampleLevel(uvq.xy / uvq.z, 2.0);" in generated_code
+    )
+    assert (
+        "float4 projectedLodOffset = tex.SampleLevel("
+        "uvq.xy / uvq.z, 3.0, offset);" in generated_code
+    )
+    assert (
+        "float4 projectedGrad = tex.SampleGrad(uvq.xy / uvq.z, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float4 projectedGradOffset = tex.SampleGrad("
+        "uvq.xy / uvq.z, ddx, ddy, offset);" in generated_code
+    )
+    assert "textureProj(" not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLod(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGrad(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
+    assert ".Sample(sampleState" not in generated_code
+    assert ".SampleBias(sampleState" not in generated_code
+    assert ".SampleLevel(sampleState" not in generated_code
+    assert ".SampleGrad(sampleState" not in generated_code
+
+
+def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec3 uvq = vec3(0.25, 0.75, 1.0);
+                vec2 ddx = vec2(0.1, 0.0);
+                ivec2 offset = ivec2(1, 0);
+                vec4 badCoord = textureProj(colorMap, uv);
+                vec4 missingLod = textureProjLod(colorMap, uvq);
+                vec4 missingGrad = textureProjGrad(colorMap, uvq, ddx);
+                vec4 missingOffset = textureProjGradOffset(
+                    colorMap,
+                    uvq,
+                    ddx,
+                    ddx
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 badCoord = /* unsupported Slang projected texture: "
+        "textureProj requires sampler1D/2D/3D projection coordinates */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 missingLod = /* unsupported Slang projected texture: "
+        "textureProjLod requires one lod argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 missingGrad = /* unsupported Slang projected texture: "
+        "textureProjGrad requires gradient x and gradient y arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 missingOffset = /* unsupported Slang projected texture: "
+        "textureProjGradOffset requires gradient x, gradient y, and offset arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    assert "textureProj(" not in generated_code
+    assert "textureProjLod(" not in generated_code
+    assert "textureProjGrad(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
+
+
+def test_explicit_sampler_texel_fetch_emits_combined_slang_methods():
+    code = """
+    shader Resources {
+        sampler linearSampler;
+        sampler2d colorMap;
+        sampler2darray layerMap;
+        sampler3d volumeMap;
+        sampler2dms msTex;
+        sampler2dmsarray msArray;
+
+        compute {
+            vec4 fetchExplicit(
+                sampler2d tex,
+                sampler2darray layers,
+                sampler3d volume,
+                sampler2dms ms,
+                sampler2dmsarray msLayers,
+                sampler sampleState,
+                ivec2 pixel,
+                ivec3 pixelLayer,
+                int lod,
+                int sampleIndex
+            ) {
+                vec4 fetched = texelFetch(tex, sampleState, pixel, lod);
+                vec4 fetchedLayer = texelFetch(
+                    layers,
+                    sampleState,
+                    pixelLayer,
+                    lod
+                );
+                vec4 fetchedVolume = texelFetch(volume, sampleState, pixelLayer, lod);
+                vec4 msColor = texelFetch(ms, sampleState, pixel, sampleIndex);
+                vec4 msLayer = texelFetch(
+                    msLayers,
+                    sampleState,
+                    pixelLayer,
+                    sampleIndex
+                );
+                return fetched + fetchedLayer + fetchedVolume + msColor + msLayer;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "SamplerState linearSampler;" in generated_code
+    assert "SamplerState sampleState" in generated_code
+    assert "float4 fetched = tex.Load(int3(pixel, lod));" in generated_code
+    assert "float4 fetchedLayer = layers.Load(int4(pixelLayer, lod));" in generated_code
+    assert (
+        "float4 fetchedVolume = volume.Load(int4(pixelLayer, lod));" in generated_code
+    )
+    assert "float4 msColor = ms[pixel, sampleIndex];" in generated_code
+    assert "float4 msLayer = msLayers[pixelLayer, sampleIndex];" in generated_code
+    assert "tex.Load(int3(sampleState" not in generated_code
+    assert "layers.Load(int4(sampleState" not in generated_code
+    assert "volume.Load(int4(sampleState" not in generated_code
+    assert "ms[sampleState" not in generated_code
+    assert "msLayers[sampleState" not in generated_code
+    assert "texelFetch(" not in generated_code
+
+
+def test_texture_gather_builtins_emit_slang_gather_methods():
+    code = """
+    shader Resources {
+        sampler linearSampler;
+        sampler2d colorMap;
+        sampler2darray layerMap;
+
+        compute {
+            vec4 gatherOps(
+                sampler2d tex,
+                sampler2darray layers,
+                sampler sampleState,
+                vec2 uv,
+                vec3 uvLayer,
+                ivec2 offset,
+                ivec2 offsets[4],
+                int component
+            ) {
+                vec4 gathered = textureGather(tex, uv);
+                vec4 explicitGathered = textureGather(tex, sampleState, uv);
+                vec4 greenGather = textureGather(tex, uv, 1);
+                vec4 blueExplicitGather = textureGather(
+                    tex,
+                    sampleState,
+                    uv,
+                    2
+                );
+                vec4 offsetGather = textureGatherOffset(tex, uv, offset);
+                vec4 alphaOffsetGather = textureGatherOffset(
+                    tex,
+                    sampleState,
+                    uv,
+                    offset,
+                    3
+                );
+                vec4 offsetsGather = textureGatherOffsets(
+                    layers,
+                    sampleState,
+                    uvLayer,
+                    offsets
+                );
+                vec4 dynamicGather = textureGather(tex, uv, component);
+                vec4 dynamicOffsetGather = textureGatherOffset(
+                    tex,
+                    sampleState,
+                    uv,
+                    offset,
+                    component
+                );
+                vec4 dynamicOffsetsGather = textureGatherOffsets(
+                    layers,
+                    sampleState,
+                    uvLayer,
+                    offsets,
+                    component
+                );
+                return gathered
+                    + explicitGathered
+                    + greenGather
+                    + blueExplicitGather
+                    + offsetGather
+                    + alphaOffsetGather
+                    + offsetsGather
+                    + dynamicGather
+                    + dynamicOffsetGather
+                    + dynamicOffsetsGather;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler2D<float4> tex" in generated_code
+    assert "Sampler2DArray<float4> layers" in generated_code
+    assert "SamplerState sampleState" in generated_code
+    assert "float4 gathered = tex.Gather(uv);" in generated_code
+    assert "float4 explicitGathered = tex.Gather(uv);" in generated_code
+    assert "float4 greenGather = tex.GatherGreen(uv);" in generated_code
+    assert "float4 blueExplicitGather = tex.GatherBlue(uv);" in generated_code
+    assert "float4 offsetGather = tex.Gather(uv, offset);" in generated_code
+    assert "float4 alphaOffsetGather = tex.GatherAlpha(uv, offset);" in generated_code
+    assert (
+        "float4 offsetsGather = layers.Gather("
+        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]);" in generated_code
+    )
+    assert (
+        "float4 dynamicGather = (component == 0 ? tex.GatherRed(uv) : "
+        "component == 1 ? tex.GatherGreen(uv) : "
+        "component == 2 ? tex.GatherBlue(uv) : tex.GatherAlpha(uv));" in generated_code
+    )
+    assert (
+        "float4 dynamicOffsetGather = ("
+        "component == 0 ? tex.GatherRed(uv, offset) : "
+        "component == 1 ? tex.GatherGreen(uv, offset) : "
+        "component == 2 ? tex.GatherBlue(uv, offset) : "
+        "tex.GatherAlpha(uv, offset));" in generated_code
+    )
+    assert (
+        "float4 dynamicOffsetsGather = ("
+        "component == 0 ? layers.GatherRed("
+        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
+        "component == 1 ? layers.GatherGreen("
+        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
+        "component == 2 ? layers.GatherBlue("
+        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]) : "
+        "layers.GatherAlpha("
+        "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]));" in generated_code
+    )
+    assert "textureGather" not in generated_code
+    assert ".Gather(sampleState" not in generated_code
+    assert ".GatherBlue(sampleState" not in generated_code
+    assert ".GatherAlpha(sampleState" not in generated_code
+
+
+def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            vec4 gatherDiagnostics(
+                sampler2d tex,
+                vec2 uv,
+                ivec2 offset
+            ) {
+                vec4 badComponent = textureGather(tex, uv, 4);
+                vec4 missingOffset = textureGatherOffset(tex, uv);
+                vec4 badOffsets = textureGatherOffsets(tex, uv, offset);
+                return badComponent + missingOffset + badOffsets;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 badComponent = /* unsupported Slang texture gather: "
+        "textureGather component literal must be 0, 1, 2, or 3 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 missingOffset = /* unsupported Slang texture gather: "
+        "textureGatherOffset requires offset and optional component arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsets = /* unsupported Slang texture gather: "
+        "textureGatherOffsets requires a typed offsets array or four offset arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    assert "textureGather(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+
+
+def test_shadow_compare_builtins_emit_slang_compare_methods():
+    code = """
+    shader Resources {
+        sampler compareSampler;
+        sampler2dshadow shadowMap;
+        sampler2darrayshadow shadowLayers;
+        samplercubeshadow cubeShadow;
+
+        compute {
+            float compareOps(
+                sampler2DShadow tex,
+                sampler2DArrayShadow layers,
+                samplerCubeShadow cube,
+                sampler compareState,
+                vec2 uv,
+                vec3 uvLayer,
+                vec3 direction,
+                float depth,
+                vec2 ddx,
+                vec2 ddy,
+                ivec2 offset
+            ) {
+                float direct = textureCompare(tex, uv, depth);
+                float explicitCompare = textureCompare(
+                    tex,
+                    compareState,
+                    uv,
+                    depth
+                );
+                float arrayCompare = textureCompare(
+                    layers,
+                    compareState,
+                    uvLayer,
+                    depth
+                );
+                float cubeCompare = textureCompare(cube, direction, depth);
+                float lod = textureCompareLod(tex, compareState, uv, depth, 2.0);
+                float grad = textureCompareGrad(
+                    tex,
+                    compareState,
+                    uv,
+                    depth,
+                    ddx,
+                    ddy
+                );
+                float offsetCompare = textureCompareOffset(tex, uv, depth, offset);
+                vec4 gathered = textureGatherCompare(tex, compareState, uv, depth);
+                vec4 gatheredOffset = textureGatherCompareOffset(
+                    tex,
+                    uv,
+                    depth,
+                    offset
+                );
+                return direct
+                    + explicitCompare
+                    + arrayCompare
+                    + cubeCompare
+                    + lod
+                    + grad
+                    + offsetCompare
+                    + gathered.x
+                    + gatheredOffset.x;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler2DShadow tex" in generated_code
+    assert "Sampler2DArrayShadow layers" in generated_code
+    assert "SamplerCubeShadow cube" in generated_code
+    assert "SamplerState compareState" in generated_code
+    assert "float direct = tex.SampleCmp(uv, depth);" in generated_code
+    assert "float explicitCompare = tex.SampleCmp(uv, depth);" in generated_code
+    assert "float arrayCompare = layers.SampleCmp(uvLayer, depth);" in generated_code
+    assert "float cubeCompare = cube.SampleCmp(direction, depth);" in generated_code
+    assert "float lod = tex.SampleCmpLevel(uv, depth, 2.0);" in generated_code
+    assert "float grad = tex.SampleCmpGrad(uv, depth, ddx, ddy);" in generated_code
+    assert "float offsetCompare = tex.SampleCmp(uv, depth, offset);" in generated_code
+    assert "float4 gathered = tex.GatherCmp(uv, depth);" in generated_code
+    assert "float4 gatheredOffset = tex.GatherCmp(uv, depth, offset);" in generated_code
+    assert "textureCompare" not in generated_code
+    assert "textureGatherCompare" not in generated_code
+    assert ".SampleCmp(compareState" not in generated_code
+    assert ".GatherCmp(compareState" not in generated_code
+
+
+def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+        sampler2dshadow shadowMap;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddx = vec2(0.1, 0.0);
+                float badResource = textureCompare(colorMap, uv, 0.5);
+                float missingDepth = textureCompare(shadowMap, uv);
+                float missingLod = textureCompareLod(shadowMap, uv, 0.5);
+                float missingGrad = textureCompareGrad(shadowMap, uv, 0.5, ddx);
+                vec4 missingGatherOffset = textureGatherCompareOffset(
+                    shadowMap,
+                    uv,
+                    0.5
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float badResource = /* unsupported Slang shadow compare: "
+        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+    )
+    assert (
+        "float missingDepth = /* unsupported Slang shadow compare: "
+        "textureCompare requires texture, coordinate, and compare arguments */ 0.0;"
+        in generated_code
+    )
+    assert (
+        "float missingLod = /* unsupported Slang shadow compare: "
+        "textureCompareLod requires one lod argument */ 0.0;" in generated_code
+    )
+    assert (
+        "float missingGrad = /* unsupported Slang shadow compare: "
+        "textureCompareGrad requires gradient x and gradient y arguments */ 0.0;"
+        in generated_code
+    )
+    assert (
+        "float4 missingGatherOffset = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompareOffset requires one offset argument */ float4(0.0);"
+        in generated_code
+    )
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGrad(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+
+
+def test_texture_query_lod_emits_slang_lod_methods():
+    code = """
+    shader Resources {
+        sampler querySampler;
+        sampler2d colorMap;
+        sampler2darray layers;
+        sampler3d volumeTex;
+        samplercube cubeTex;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.5);
+                vec3 uvw = vec3(0.25, 0.5, 0.75);
+                vec3 direction = vec3(1.0, 0.0, 0.0);
+                vec2 lod = textureQueryLod(colorMap, uv);
+                vec2 explicitLod = textureQueryLod(colorMap, querySampler, uv);
+                vec2 arrayLod = textureQueryLod(layers, querySampler, uvw);
+                vec2 volumeLod = textureQueryLod(volumeTex, uvw);
+                vec2 cubeLod = textureQueryLod(cubeTex, direction);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float2 lod = float2("
+        "colorMap.CalculateLevelOfDetailUnclamped(uv), "
+        "colorMap.CalculateLevelOfDetail(uv));" in generated_code
+    )
+    assert (
+        "float2 explicitLod = float2("
+        "colorMap.CalculateLevelOfDetailUnclamped(uv), "
+        "colorMap.CalculateLevelOfDetail(uv));" in generated_code
+    )
+    assert (
+        "float2 arrayLod = float2("
+        "layers.CalculateLevelOfDetailUnclamped(uvw), "
+        "layers.CalculateLevelOfDetail(uvw));" in generated_code
+    )
+    assert (
+        "float2 volumeLod = float2("
+        "volumeTex.CalculateLevelOfDetailUnclamped(uvw), "
+        "volumeTex.CalculateLevelOfDetail(uvw));" in generated_code
+    )
+    assert (
+        "float2 cubeLod = float2("
+        "cubeTex.CalculateLevelOfDetailUnclamped(direction), "
+        "cubeTex.CalculateLevelOfDetail(direction));" in generated_code
+    )
+    assert "textureQueryLod(" not in generated_code
+    assert "CalculateLevelOfDetail(querySampler" not in generated_code
+
+
+def test_resource_queries_on_texture_arrays_emit_slang_helpers():
+    code = """
+    shader QueryArrays {
+        sampler querySampler;
+        sampler2d textures[(2 + 1) * 2];
+        sampler2dms msTextures[(2 + 1) * 2];
+        sampler2dmsarray msLayers[(2 + 1) * 2];
+        sampler2dshadow shadowMaps[(2 + 1) * 2];
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.5);
+                ivec3 pixelLayer = ivec3(1, 2, 3);
+                ivec2 sizeValue = textureSize(textures[1 + 2], 0);
+                int levelsValue = textureQueryLevels(textures[1 + 2]);
+                vec2 lodValue = textureQueryLod(textures[1 + 2], uv);
+                vec2 explicitLodValue = textureQueryLod(
+                    textures[1 + 2],
+                    querySampler,
+                    uv
+                );
+                ivec2 msSize = textureSize(msTextures[1 + 2], 0);
+                int msSamples = textureSamples(msTextures[1 + 2]);
+                ivec3 msLayerSize = textureSize(msLayers[1 + 2], 0);
+                int msLayerSamples = textureSamples(msLayers[1 + 2]);
+                ivec2 shadowSize = textureSize(shadowMaps[1 + 2], 0);
+                int shadowLevels = textureQueryLevels(shadowMaps[1 + 2]);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "int2 cgl_textureSize_sampler2D(Sampler2D<float4> tex, uint mipLevel)"
+        in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_sampler2D(Sampler2D<float4> tex)" in generated_code
+    )
+    assert "int2 cgl_textureSize_sampler2DMS(Sampler2DMS<float4> tex)" in generated_code
+    assert (
+        "int cgl_textureSamples_sampler2DMS(Sampler2DMS<float4> tex)" in generated_code
+    )
+    assert (
+        "int3 cgl_textureSize_sampler2DMSArray(Sampler2DMSArray<float4> tex)"
+        in generated_code
+    )
+    assert (
+        "int cgl_textureSamples_sampler2DMSArray(Sampler2DMSArray<float4> tex)"
+        in generated_code
+    )
+    assert (
+        "int2 cgl_textureSize_sampler2DShadow(Sampler2DShadow tex, uint mipLevel)"
+        in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_sampler2DShadow(Sampler2DShadow tex)"
+        in generated_code
+    )
+    assert (
+        "int2 sizeValue = cgl_textureSize_sampler2D(textures[(1 + 2)], 0);"
+        in generated_code
+    )
+    assert (
+        "int levelsValue = cgl_textureQueryLevels_sampler2D(textures[(1 + 2)]);"
+        in generated_code
+    )
+    assert (
+        "float2 lodValue = float2("
+        "textures[(1 + 2)].CalculateLevelOfDetailUnclamped(uv), "
+        "textures[(1 + 2)].CalculateLevelOfDetail(uv));" in generated_code
+    )
+    assert (
+        "float2 explicitLodValue = float2("
+        "textures[(1 + 2)].CalculateLevelOfDetailUnclamped(uv), "
+        "textures[(1 + 2)].CalculateLevelOfDetail(uv));" in generated_code
+    )
+    assert (
+        "int2 msSize = cgl_textureSize_sampler2DMS(msTextures[(1 + 2)]);"
+        in generated_code
+    )
+    assert (
+        "int msSamples = cgl_textureSamples_sampler2DMS(msTextures[(1 + 2)]);"
+        in generated_code
+    )
+    assert (
+        "int3 msLayerSize = cgl_textureSize_sampler2DMSArray(msLayers[(1 + 2)]);"
+        in generated_code
+    )
+    assert (
+        "int msLayerSamples = cgl_textureSamples_sampler2DMSArray(msLayers[(1 + 2)]);"
+        in generated_code
+    )
+    assert (
+        "int2 shadowSize = cgl_textureSize_sampler2DShadow(shadowMaps[(1 + 2)], 0);"
+        in generated_code
+    )
+    assert (
+        "int shadowLevels = cgl_textureQueryLevels_sampler2DShadow("
+        "shadowMaps[(1 + 2)]);" in generated_code
+    )
+    assert "1 + 2]." not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+    assert "CalculateLevelOfDetail(querySampler" not in generated_code
+
+
+def test_nested_resource_arrays_emit_slang_queries_and_operations():
+    code = """
+    shader NestedResources {
+        sampler querySampler;
+        sampler2d textureGrid[2][3];
+        sampler2dms msGrid[2][2];
+        sampler2dshadow shadowGrid[2][3];
+        image2D imageGrid @rgba16f[2][4];
+        uimage2D counterGrid @r32ui[2][2];
+
+        vec4 sampleGrid(sampler2d paramGrid[2][3], int layer, int slot, vec2 uv) {
+            return texture(paramGrid[layer][slot], uv);
+        }
+
+        float compareGrid(
+            sampler2dshadow paramShadow[2][3],
+            int layer,
+            int slot,
+            vec2 uv,
+            float depth
+        ) {
+            return textureCompare(paramShadow[layer][slot], uv, depth);
+        }
+
+        compute {
+            void main() {
+                int layer = 1;
+                int slot = 1;
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                float depth = 0.5;
+                ivec2 sizeValue = textureSize(textureGrid[layer][slot], 0);
+                int levelsValue = textureQueryLevels(textureGrid[layer][slot]);
+                vec2 lodValue = textureQueryLod(
+                    textureGrid[layer][slot],
+                    querySampler,
+                    uv
+                );
+                int msSamples = textureSamples(msGrid[layer][slot]);
+                ivec2 imageSizeValue = imageSize(imageGrid[layer][slot]);
+                vec4 sampled = texture(textureGrid[layer][slot], uv);
+                vec4 sampledParam = sampleGrid(textureGrid, layer, slot, uv);
+                float compared = textureCompare(shadowGrid[layer][slot], uv, depth);
+                float comparedParam = compareGrid(shadowGrid, layer, slot, uv, depth);
+                vec4 gathered = textureGather(textureGrid[layer][slot], uv, 1);
+                vec4 gatheredShadow = textureGatherCompare(
+                    shadowGrid[layer][slot],
+                    uv,
+                    depth
+                );
+                vec4 fetched = texelFetch(textureGrid[layer][slot], pixel, 0);
+                vec4 fetchedMs = texelFetch(msGrid[layer][slot], pixel, 1);
+                vec4 color = imageLoad(imageGrid[layer][slot], pixel);
+                imageStore(imageGrid[layer][slot], pixel, color);
+                uint count = imageLoad(counterGrid[layer][slot], pixel);
+                imageStore(counterGrid[layer][slot], pixel, count);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler2D<float4> textureGrid[2][3];" in generated_code
+    assert "Sampler2DMS<float4> msGrid[2][2];" in generated_code
+    assert "Sampler2DShadow shadowGrid[2][3];" in generated_code
+    assert "RWTexture2D<float4> imageGrid[2][4];" in generated_code
+    assert "RWTexture2D<uint> counterGrid[2][2];" in generated_code
+    assert (
+        "float4 sampleGrid(Sampler2D<float4> paramGrid[2][3], "
+        "int layer, int slot, float2 uv)" in generated_code
+    )
+    assert (
+        "float compareGrid(Sampler2DShadow paramShadow[2][3], "
+        "int layer, int slot, float2 uv, float depth)" in generated_code
+    )
+    assert "return paramGrid[layer][slot].Sample(uv);" in generated_code
+    assert "return paramShadow[layer][slot].SampleCmp(uv, depth);" in generated_code
+    assert (
+        "int2 sizeValue = cgl_textureSize_sampler2D"
+        "(textureGrid[layer][slot], 0);" in generated_code
+    )
+    assert (
+        "int levelsValue = cgl_textureQueryLevels_sampler2D"
+        "(textureGrid[layer][slot]);" in generated_code
+    )
+    assert (
+        "float2 lodValue = float2("
+        "textureGrid[layer][slot].CalculateLevelOfDetailUnclamped(uv), "
+        "textureGrid[layer][slot].CalculateLevelOfDetail(uv));" in generated_code
+    )
+    assert (
+        "int msSamples = cgl_textureSamples_sampler2DMS(msGrid[layer][slot]);"
+        in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = cgl_imageSize_image2D(imageGrid[layer][slot]);"
+        in generated_code
+    )
+    assert "float4 sampled = textureGrid[layer][slot].Sample(uv);" in generated_code
+    assert (
+        "float4 sampledParam = sampleGrid(textureGrid, layer, slot, uv);"
+        in generated_code
+    )
+    assert (
+        "float compared = shadowGrid[layer][slot].SampleCmp(uv, depth);"
+        in generated_code
+    )
+    assert (
+        "float comparedParam = compareGrid(shadowGrid, layer, slot, uv, depth);"
+        in generated_code
+    )
+    assert (
+        "float4 gathered = textureGrid[layer][slot].GatherGreen(uv);" in generated_code
+    )
+    assert (
+        "float4 gatheredShadow = shadowGrid[layer][slot].GatherCmp(uv, depth);"
+        in generated_code
+    )
+    assert (
+        "float4 fetched = textureGrid[layer][slot].Load(int3(pixel, 0));"
+        in generated_code
+    )
+    assert "float4 fetchedMs = msGrid[layer][slot][pixel, 1];" in generated_code
+    assert "float4 color = imageGrid[layer][slot][pixel];" in generated_code
+    assert "imageGrid[layer][slot][pixel] = color;" in generated_code
+    assert "uint count = counterGrid[layer][slot][pixel];" in generated_code
+    assert "counterGrid[layer][slot][pixel] = count;" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "textureGather(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "texelFetch(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_dynamic_resource_array_params_emit_slang_queries_and_operations():
+    code = """
+    shader DynamicResources {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+        uimage2D counterGrid @r32ui[2][2];
+
+        vec4 sampleDynamic(
+            sampler2d dynGrid[][3],
+            int layer,
+            int slot,
+            vec2 uv
+        ) {
+            return texture(dynGrid[layer][slot], uv);
+        }
+
+        vec4 readDynamic(
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            ivec2 pixel
+        ) {
+            return imageLoad(dynImages[layer][slot], pixel);
+        }
+
+        uint readCounter(
+            uimage2D dynCounters[][2] @r32ui,
+            int layer,
+            int slot,
+            ivec2 pixel
+        ) {
+            return imageLoad(dynCounters[layer][slot], pixel);
+        }
+
+        void queryDynamic(
+            sampler2d dynGrid[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot
+        ) {
+            ivec2 texSize = textureSize(dynGrid[layer][slot], 0);
+            ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 sampled = sampleDynamic(textureGrid, 1, 2, uv);
+                vec4 color = readDynamic(imageGrid, 1, 2, pixel);
+                uint count = readCounter(counterGrid, 1, 1, pixel);
+                queryDynamic(textureGrid, imageGrid, 1, 2);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler2D<float4> textureGrid[2][3];" in generated_code
+    assert "RWTexture2D<float4> imageGrid[2][3];" in generated_code
+    assert "RWTexture2D<uint> counterGrid[2][2];" in generated_code
+    assert (
+        "float4 sampleDynamic(Sampler2D<float4> dynGrid[][3], "
+        "int layer, int slot, float2 uv)" in generated_code
+    )
+    assert (
+        "float4 readDynamic(RWTexture2D<float4> dynImages[][3], "
+        "int layer, int slot, int2 pixel)" in generated_code
+    )
+    assert (
+        "uint readCounter(RWTexture2D<uint> dynCounters[][2], "
+        "int layer, int slot, int2 pixel)" in generated_code
+    )
+    assert (
+        "void queryDynamic(Sampler2D<float4> dynGrid[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot)" in generated_code
+    )
+    assert "return dynGrid[layer][slot].Sample(uv);" in generated_code
+    assert "return dynImages[layer][slot][pixel];" in generated_code
+    assert "return dynCounters[layer][slot][pixel];" in generated_code
+    assert (
+        "int2 texSize = cgl_textureSize_sampler2D(dynGrid[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = cgl_imageSize_image2D(dynImages[layer][slot]);"
+        in generated_code
+    )
+    assert "float4 sampled = sampleDynamic(textureGrid, 1, 2, uv);" in generated_code
+    assert "float4 color = readDynamic(imageGrid, 1, 2, pixel);" in generated_code
+    assert "uint count = readCounter(counterGrid, 1, 1, pixel);" in generated_code
+    assert "queryDynamic(textureGrid, imageGrid, 1, 2);" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_forwarded_dynamic_resource_array_params_emit_slang_operations():
+    code = """
+    shader ForwardedDynamicResources {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+        uimage2D counterGrid @r32ui[2][2];
+
+        vec4 leafSample(sampler2d dynGrid[][3], int layer, int slot, vec2 uv) {
+            return texture(dynGrid[layer][slot], uv);
+        }
+
+        vec4 forwardSample(sampler2d dynGrid[][3], int layer, int slot, vec2 uv) {
+            return leafSample(dynGrid, layer, slot, uv);
+        }
+
+        vec4 leafImage(
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            ivec2 pixel
+        ) {
+            vec4 color = imageLoad(dynImages[layer][slot], pixel);
+            imageStore(dynImages[layer][slot], pixel, color);
+            return color;
+        }
+
+        vec4 forwardImage(
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            ivec2 pixel
+        ) {
+            return leafImage(dynImages, layer, slot, pixel);
+        }
+
+        uint leafCounter(
+            uimage2D dynCounters[][2] @r32ui,
+            int layer,
+            int slot,
+            ivec2 pixel
+        ) {
+            uint count = imageLoad(dynCounters[layer][slot], pixel);
+            imageStore(dynCounters[layer][slot], pixel, count);
+            return count;
+        }
+
+        uint forwardCounter(
+            uimage2D dynCounters[][2] @r32ui,
+            int layer,
+            int slot,
+            ivec2 pixel
+        ) {
+            return leafCounter(dynCounters, layer, slot, pixel);
+        }
+
+        void leafQuery(
+            sampler2d dynGrid[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot
+        ) {
+            ivec2 texSize = textureSize(dynGrid[layer][slot], 0);
+            ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+        }
+
+        void forwardQuery(
+            sampler2d dynGrid[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot
+        ) {
+            leafQuery(dynGrid, dynImages, layer, slot);
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 sampled = forwardSample(textureGrid, 1, 2, uv);
+                vec4 color = forwardImage(imageGrid, 1, 2, pixel);
+                uint count = forwardCounter(counterGrid, 1, 1, pixel);
+                forwardQuery(textureGrid, imageGrid, 1, 2);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 leafSample(Sampler2D<float4> dynGrid[][3], "
+        "int layer, int slot, float2 uv)" in generated_code
+    )
+    assert (
+        "float4 forwardSample(Sampler2D<float4> dynGrid[][3], "
+        "int layer, int slot, float2 uv)" in generated_code
+    )
+    assert "return leafSample(dynGrid, layer, slot, uv);" in generated_code
+    assert (
+        "float4 leafImage(RWTexture2D<float4> dynImages[][3], "
+        "int layer, int slot, int2 pixel)" in generated_code
+    )
+    assert "return leafImage(dynImages, layer, slot, pixel);" in generated_code
+    assert (
+        "uint leafCounter(RWTexture2D<uint> dynCounters[][2], "
+        "int layer, int slot, int2 pixel)" in generated_code
+    )
+    assert "return leafCounter(dynCounters, layer, slot, pixel);" in generated_code
+    assert (
+        "void leafQuery(Sampler2D<float4> dynGrid[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot)" in generated_code
+    )
+    assert "leafQuery(dynGrid, dynImages, layer, slot);" in generated_code
+    assert "float4 sampled = forwardSample(textureGrid, 1, 2, uv);" in generated_code
+    assert "float4 color = forwardImage(imageGrid, 1, 2, pixel);" in generated_code
+    assert "uint count = forwardCounter(counterGrid, 1, 1, pixel);" in generated_code
+    assert "forwardQuery(textureGrid, imageGrid, 1, 2);" in generated_code
+    assert "return dynGrid[layer][slot].Sample(uv);" in generated_code
+    assert "float4 color = dynImages[layer][slot][pixel];" in generated_code
+    assert "dynImages[layer][slot][pixel] = color;" in generated_code
+    assert "uint count = dynCounters[layer][slot][pixel];" in generated_code
+    assert "dynCounters[layer][slot][pixel] = count;" in generated_code
+    assert (
+        "int2 texSize = cgl_textureSize_sampler2D(dynGrid[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = cgl_imageSize_image2D(dynImages[layer][slot]);"
+        in generated_code
+    )
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_mixed_fixed_dynamic_resource_array_params_emit_slang_operations():
+    code = """
+    shader MixedResourceForwarding {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        void leafMixed(
+            sampler2d dynamicGrid[][3],
+            sampler2d fixedRow[3],
+            image2D dynamicImages[][3] @rgba16f,
+            image2D fixedImages[3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            vec4 dynamicSample = texture(dynamicGrid[layer][slot], uv);
+            vec4 fixedSample = texture(fixedRow[slot], uv);
+            vec4 dynamicColor = imageLoad(dynamicImages[layer][slot], pixel);
+            vec4 fixedColor = imageLoad(fixedImages[slot], pixel);
+            imageStore(dynamicImages[layer][slot], pixel, dynamicColor);
+            imageStore(fixedImages[slot], pixel, fixedColor);
+            ivec2 dynamicSize = textureSize(dynamicGrid[layer][slot], 0);
+            ivec2 fixedSize = textureSize(fixedRow[slot], 0);
+            ivec2 dynamicImageSize = imageSize(dynamicImages[layer][slot]);
+            ivec2 fixedImageSize = imageSize(fixedImages[slot]);
+        }
+
+        void forwardMixed(
+            sampler2d dynamicGrid[][3],
+            sampler2d fixedRow[3],
+            image2D dynamicImages[][3] @rgba16f,
+            image2D fixedImages[3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            leafMixed(
+                dynamicGrid,
+                fixedRow,
+                dynamicImages,
+                fixedImages,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                forwardMixed(
+                    textureGrid,
+                    textureGrid[1],
+                    imageGrid,
+                    imageGrid[1],
+                    1,
+                    2,
+                    uv,
+                    pixel
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "void leafMixed(Sampler2D<float4> dynamicGrid[][3], "
+        "Sampler2D<float4> fixedRow[3], "
+        "RWTexture2D<float4> dynamicImages[][3], "
+        "RWTexture2D<float4> fixedImages[3], "
+        "int layer, int slot, float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "void forwardMixed(Sampler2D<float4> dynamicGrid[][3], "
+        "Sampler2D<float4> fixedRow[3], "
+        "RWTexture2D<float4> dynamicImages[][3], "
+        "RWTexture2D<float4> fixedImages[3], "
+        "int layer, int slot, float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "leafMixed(dynamicGrid, fixedRow, dynamicImages, fixedImages, "
+        "layer, slot, uv, pixel);" in generated_code
+    )
+    assert (
+        "forwardMixed(textureGrid, textureGrid[1], imageGrid, imageGrid[1], "
+        "1, 2, uv, pixel);" in generated_code
+    )
+    assert (
+        "float4 dynamicSample = dynamicGrid[layer][slot].Sample(uv);" in generated_code
+    )
+    assert "float4 fixedSample = fixedRow[slot].Sample(uv);" in generated_code
+    assert "float4 dynamicColor = dynamicImages[layer][slot][pixel];" in generated_code
+    assert "float4 fixedColor = fixedImages[slot][pixel];" in generated_code
+    assert "dynamicImages[layer][slot][pixel] = dynamicColor;" in generated_code
+    assert "fixedImages[slot][pixel] = fixedColor;" in generated_code
+    assert (
+        "int2 dynamicSize = cgl_textureSize_sampler2D"
+        "(dynamicGrid[layer][slot], 0);" in generated_code
+    )
+    assert (
+        "int2 fixedSize = cgl_textureSize_sampler2D(fixedRow[slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 dynamicImageSize = cgl_imageSize_image2D"
+        "(dynamicImages[layer][slot]);" in generated_code
+    )
+    assert (
+        "int2 fixedImageSize = cgl_imageSize_image2D(fixedImages[slot]);"
+        in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_multihop_reordered_resource_array_params_emit_slang_operations():
+    code = """
+    shader MultiHopResourceForwarding {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        void leafShuffle(
+            sampler2d dynA[][3],
+            image2D fixedImageRow[3] @rgba16f,
+            sampler2d fixedTexRow[3],
+            image2D dynImageGrid[][3] @rgba16f,
+            sampler2d dynAlias[][3],
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            vec4 sampledA = texture(dynA[layer][slot], uv);
+            vec4 sampledFixed = texture(fixedTexRow[slot], uv);
+            vec4 sampledAlias = texture(dynAlias[layer][slot], uv);
+            vec4 dynamicColor = imageLoad(dynImageGrid[layer][slot], pixel);
+            vec4 fixedColor = imageLoad(fixedImageRow[slot], pixel);
+            imageStore(dynImageGrid[layer][slot], pixel, dynamicColor);
+            imageStore(fixedImageRow[slot], pixel, fixedColor);
+            ivec2 dynSize = textureSize(dynA[layer][slot], 0);
+            ivec2 fixedTexSize = textureSize(fixedTexRow[slot], 0);
+            ivec2 aliasSize = textureSize(dynAlias[layer][slot], 0);
+            ivec2 dynamicImageSize = imageSize(dynImageGrid[layer][slot]);
+            ivec2 fixedImageSize = imageSize(fixedImageRow[slot]);
+        }
+
+        void midForward(
+            sampler2d firstDyn[][3],
+            sampler2d firstFixed[3],
+            image2D firstDynImages[][3] @rgba16f,
+            image2D firstFixedImages[3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            leafShuffle(
+                firstDyn,
+                firstFixedImages,
+                firstFixed,
+                firstDynImages,
+                firstDyn,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+        }
+
+        void topForward(
+            sampler2d topFixedTex[3],
+            image2D topDynImages[][3] @rgba16f,
+            sampler2d topDynTex[][3],
+            image2D topFixedImages[3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            midForward(
+                topDynTex,
+                topFixedTex,
+                topDynImages,
+                topFixedImages,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                topForward(
+                    textureGrid[1],
+                    imageGrid,
+                    textureGrid,
+                    imageGrid[1],
+                    1,
+                    2,
+                    uv,
+                    pixel
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "void leafShuffle(Sampler2D<float4> dynA[][3], "
+        "RWTexture2D<float4> fixedImageRow[3], "
+        "Sampler2D<float4> fixedTexRow[3], "
+        "RWTexture2D<float4> dynImageGrid[][3], "
+        "Sampler2D<float4> dynAlias[][3], "
+        "int layer, int slot, float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "void midForward(Sampler2D<float4> firstDyn[][3], "
+        "Sampler2D<float4> firstFixed[3], "
+        "RWTexture2D<float4> firstDynImages[][3], "
+        "RWTexture2D<float4> firstFixedImages[3], "
+        "int layer, int slot, float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "void topForward(Sampler2D<float4> topFixedTex[3], "
+        "RWTexture2D<float4> topDynImages[][3], "
+        "Sampler2D<float4> topDynTex[][3], "
+        "RWTexture2D<float4> topFixedImages[3], "
+        "int layer, int slot, float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "leafShuffle(firstDyn, firstFixedImages, firstFixed, firstDynImages, "
+        "firstDyn, layer, slot, uv, pixel);" in generated_code
+    )
+    assert (
+        "midForward(topDynTex, topFixedTex, topDynImages, topFixedImages, "
+        "layer, slot, uv, pixel);" in generated_code
+    )
+    assert (
+        "topForward(textureGrid[1], imageGrid, textureGrid, imageGrid[1], "
+        "1, 2, uv, pixel);" in generated_code
+    )
+    assert "float4 sampledA = dynA[layer][slot].Sample(uv);" in generated_code
+    assert "float4 sampledFixed = fixedTexRow[slot].Sample(uv);" in generated_code
+    assert "float4 sampledAlias = dynAlias[layer][slot].Sample(uv);" in generated_code
+    assert "float4 dynamicColor = dynImageGrid[layer][slot][pixel];" in generated_code
+    assert "float4 fixedColor = fixedImageRow[slot][pixel];" in generated_code
+    assert "dynImageGrid[layer][slot][pixel] = dynamicColor;" in generated_code
+    assert "fixedImageRow[slot][pixel] = fixedColor;" in generated_code
+    assert (
+        "int2 dynSize = cgl_textureSize_sampler2D(dynA[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 fixedTexSize = cgl_textureSize_sampler2D(fixedTexRow[slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 aliasSize = cgl_textureSize_sampler2D(dynAlias[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 dynamicImageSize = cgl_imageSize_image2D(dynImageGrid[layer][slot]);"
+        in generated_code
+    )
+    assert (
+        "int2 fixedImageSize = cgl_imageSize_image2D(fixedImageRow[slot]);"
+        in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_resource_calls_in_control_flow_emit_slang_operations():
+    code = """
+    shader ControlFlowResourceForwarding {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        vec4 sampleDynamic(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            vec4 sampled = texture(dynTex[layer][slot], uv);
+            vec4 loaded = imageLoad(dynImages[layer][slot], pixel);
+            ivec2 texSize = textureSize(dynTex[layer][slot], 0);
+            ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+            return sampled + loaded;
+        }
+
+        vec4 sampleFixed(
+            sampler2d fixedTex[3],
+            image2D fixedImages[3] @rgba16f,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            vec4 sampled = texture(fixedTex[slot], uv);
+            vec4 loaded = imageLoad(fixedImages[slot], pixel);
+            ivec2 texSize = textureSize(fixedTex[slot], 0);
+            ivec2 imageSizeValue = imageSize(fixedImages[slot]);
+            return sampled + loaded;
+        }
+
+        vec4 chooseBranch(
+            sampler2d dynTex[][3],
+            sampler2d fixedTex[3],
+            image2D dynImages[][3] @rgba16f,
+            image2D fixedImages[3] @rgba16f,
+            bool useFixed,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            vec4 result = sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);
+            if (useFixed) {
+                result = sampleFixed(fixedTex, fixedImages, slot, uv, pixel);
+            }
+            return result;
+        }
+
+        vec4 chooseReturn(
+            sampler2d dynTex[][3],
+            sampler2d fixedTex[3],
+            image2D dynImages[][3] @rgba16f,
+            image2D fixedImages[3] @rgba16f,
+            bool useFixed,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            if (useFixed) {
+                return sampleFixed(fixedTex, fixedImages, slot, uv, pixel);
+            }
+            return sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);
+        }
+
+        vec4 chooseTernary(
+            sampler2d dynTex[][3],
+            sampler2d fixedTex[3],
+            image2D dynImages[][3] @rgba16f,
+            image2D fixedImages[3] @rgba16f,
+            bool useFixed,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            return useFixed
+                ? sampleFixed(fixedTex, fixedImages, slot, uv, pixel)
+                : sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 branchValue = chooseBranch(
+                    textureGrid,
+                    textureGrid[1],
+                    imageGrid,
+                    imageGrid[1],
+                    true,
+                    1,
+                    2,
+                    uv,
+                    pixel
+                );
+                vec4 returnValue = chooseReturn(
+                    textureGrid,
+                    textureGrid[1],
+                    imageGrid,
+                    imageGrid[1],
+                    false,
+                    1,
+                    2,
+                    uv,
+                    pixel
+                );
+                vec4 ternaryValue = chooseTernary(
+                    textureGrid,
+                    textureGrid[1],
+                    imageGrid,
+                    imageGrid[1],
+                    true,
+                    1,
+                    2,
+                    uv,
+                    pixel
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 chooseBranch(Sampler2D<float4> dynTex[][3], "
+        "Sampler2D<float4> fixedTex[3], "
+        "RWTexture2D<float4> dynImages[][3], "
+        "RWTexture2D<float4> fixedImages[3], "
+        "bool useFixed, int layer, int slot, float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "float4 result = sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);"
+        in generated_code
+    )
+    assert (
+        "result = sampleFixed(fixedTex, fixedImages, slot, uv, pixel);"
+        in generated_code
+    )
+    assert (
+        "return sampleFixed(fixedTex, fixedImages, slot, uv, pixel);" in generated_code
+    )
+    assert (
+        "return sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel);"
+        in generated_code
+    )
+    assert (
+        "return (useFixed ? sampleFixed(fixedTex, fixedImages, slot, uv, pixel) : "
+        "sampleDynamic(dynTex, dynImages, layer, slot, uv, pixel));" in generated_code
+    )
+    assert (
+        "chooseBranch(textureGrid, textureGrid[1], imageGrid, imageGrid[1], "
+        "true, 1, 2, uv, pixel);" in generated_code
+    )
+    assert (
+        "chooseTernary(textureGrid, textureGrid[1], imageGrid, imageGrid[1], "
+        "true, 1, 2, uv, pixel);" in generated_code
+    )
+    assert "float4 sampled = dynTex[layer][slot].Sample(uv);" in generated_code
+    assert "float4 loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert "float4 sampled = fixedTex[slot].Sample(uv);" in generated_code
+    assert "float4 loaded = fixedImages[slot][pixel];" in generated_code
+    assert (
+        "int2 texSize = cgl_textureSize_sampler2D(dynTex[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = cgl_imageSize_image2D(dynImages[layer][slot]);"
+        in generated_code
+    )
+    assert (
+        "int2 texSize = cgl_textureSize_sampler2D(fixedTex[slot], 0);" in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = cgl_imageSize_image2D(fixedImages[slot]);"
+        in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_resource_calls_in_loops_emit_slang_operations():
+    code = """
+    shader LoopResourceForwarding {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        vec4 sampleLoop(
+            sampler2d dynTex[][3],
+            sampler2d fixedTex[3],
+            image2D dynImages[][3] @rgba16f,
+            image2D fixedImages[3] @rgba16f,
+            int layer,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            vec4 accum = vec4(0.0);
+            for (int slot = 0; slot < 3; slot++) {
+                if (slot == 1) {
+                    continue;
+                }
+                vec4 sampled = texture(dynTex[layer][slot], uv);
+                vec4 loaded = imageLoad(dynImages[layer][slot], pixel);
+                ivec2 texSize = textureSize(dynTex[layer][slot], 0);
+                ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+                accum = accum + sampled + loaded;
+                if (slot == 2) {
+                    break;
+                }
+            }
+            int fixedSlot = 0;
+            while (fixedSlot < 3) {
+                accum = accum + texture(fixedTex[fixedSlot], uv);
+                accum = accum + imageLoad(fixedImages[fixedSlot], pixel);
+                ivec2 fixedTexSize = textureSize(fixedTex[fixedSlot], 0);
+                ivec2 fixedImageSize = imageSize(fixedImages[fixedSlot]);
+                fixedSlot++;
+            }
+            return accum;
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 value = sampleLoop(
+                    textureGrid,
+                    textureGrid[1],
+                    imageGrid,
+                    imageGrid[1],
+                    1,
+                    uv,
+                    pixel
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 sampleLoop(Sampler2D<float4> dynTex[][3], "
+        "Sampler2D<float4> fixedTex[3], "
+        "RWTexture2D<float4> dynImages[][3], "
+        "RWTexture2D<float4> fixedImages[3], int layer, float2 uv, int2 pixel)"
+        in generated_code
+    )
+    assert "for (int slot = 0; slot < 3; slot++)" in generated_code
+    assert "continue;" in generated_code
+    assert "break;" in generated_code
+    assert "while (fixedSlot < 3)" in generated_code
+    assert "float4 sampled = dynTex[layer][slot].Sample(uv);" in generated_code
+    assert "float4 loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert (
+        "int2 texSize = cgl_textureSize_sampler2D(dynTex[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = cgl_imageSize_image2D(dynImages[layer][slot]);"
+        in generated_code
+    )
+    assert "accum = accum + fixedTex[fixedSlot].Sample(uv);" in generated_code
+    assert "accum = accum + fixedImages[fixedSlot][pixel];" in generated_code
+    assert (
+        "int2 fixedTexSize = cgl_textureSize_sampler2D(fixedTex[fixedSlot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 fixedImageSize = cgl_imageSize_image2D(fixedImages[fixedSlot]);"
+        in generated_code
+    )
+    assert (
+        "sampleLoop(textureGrid, textureGrid[1], imageGrid, imageGrid[1], "
+        "1, uv, pixel);" in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_nested_loop_resource_indices_emit_slang_operations():
+    code = """
+    shader NestedLoopResourceForwarding {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        vec4 sampleNestedLoops(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            vec4 accum = vec4(0.0);
+            for (int layer = 0; layer < 2; layer++) {
+                if (layer == 1) {
+                    break;
+                }
+                for (int slot = 0; slot < 3; slot++) {
+                    if (slot == 1) {
+                        continue;
+                    }
+                    vec4 sampled = texture(dynTex[layer][slot], uv);
+                    vec4 loaded = imageLoad(dynImages[layer][slot], pixel);
+                    imageStore(dynImages[layer][slot], pixel, loaded);
+                    ivec2 texSize = textureSize(dynTex[layer][slot], 0);
+                    ivec2 imageSizeValue = imageSize(dynImages[layer][slot]);
+                    accum = accum + sampled + loaded;
+                }
+            }
+            return accum;
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 value = sampleNestedLoops(textureGrid, imageGrid, uv, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 sampleNestedLoops(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], float2 uv, int2 pixel)" in generated_code
+    )
+    assert "for (int layer = 0; layer < 2; layer++)" in generated_code
+    assert "for (int slot = 0; slot < 3; slot++)" in generated_code
+    assert "break;" in generated_code
+    assert "continue;" in generated_code
+    assert "float4 sampled = dynTex[layer][slot].Sample(uv);" in generated_code
+    assert "float4 loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert "dynImages[layer][slot][pixel] = loaded;" in generated_code
+    assert (
+        "int2 texSize = cgl_textureSize_sampler2D(dynTex[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = cgl_imageSize_image2D(dynImages[layer][slot]);"
+        in generated_code
+    )
+    assert "sampleNestedLoops(textureGrid, imageGrid, uv, pixel);" in generated_code
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_struct_and_scalar_params_preserve_slang_resource_argument_order():
+    code = """
+    struct SampleParams {
+        vec2 uv;
+        ivec2 pixel;
+        int layer;
+        int slot;
+    };
+
+    shader PackedResourceForwarding {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        vec4 samplePacked(
+            sampler2d dynTex[][3],
+            SampleParams params,
+            image2D dynImages[][3] @rgba16f,
+            float weight,
+            sampler2d fixedTex[3],
+            image2D fixedImages[3] @rgba16f
+        ) {
+            vec4 dynamicSample = texture(
+                dynTex[params.layer][params.slot],
+                params.uv
+            );
+            vec4 fixedSample = texture(fixedTex[params.slot], params.uv);
+            vec4 dynamicColor = imageLoad(
+                dynImages[params.layer][params.slot],
+                params.pixel
+            );
+            vec4 fixedColor = imageLoad(fixedImages[params.slot], params.pixel);
+            ivec2 dynSize = textureSize(dynTex[params.layer][params.slot], 0);
+            ivec2 fixedSize = textureSize(fixedTex[params.slot], 0);
+            ivec2 dynImageSize = imageSize(dynImages[params.layer][params.slot]);
+            ivec2 fixedImageSize = imageSize(fixedImages[params.slot]);
+            vec4 combined = dynamicSample + fixedSample + dynamicColor + fixedColor;
+            return combined * weight;
+        }
+
+        vec4 passPacked(
+            SampleParams params,
+            sampler2d firstDyn[][3],
+            float weight,
+            image2D firstImages[][3] @rgba16f,
+            sampler2d fixedTex[3],
+            image2D fixedImages[3] @rgba16f
+        ) {
+            return samplePacked(
+                firstDyn,
+                params,
+                firstImages,
+                weight,
+                fixedTex,
+                fixedImages
+            );
+        }
+
+        compute {
+            void main() {
+                SampleParams params;
+                params.uv = vec2(0.5, 0.25);
+                params.pixel = ivec2(0, 0);
+                params.layer = 1;
+                params.slot = 2;
+                vec4 value = passPacked(
+                    params,
+                    textureGrid,
+                    0.5,
+                    imageGrid,
+                    textureGrid[1],
+                    imageGrid[1]
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct SampleParams" in generated_code
+    assert (
+        "float4 samplePacked(Sampler2D<float4> dynTex[][3], "
+        "SampleParams params, RWTexture2D<float4> dynImages[][3], "
+        "float weight, Sampler2D<float4> fixedTex[3], "
+        "RWTexture2D<float4> fixedImages[3])" in generated_code
+    )
+    assert (
+        "float4 passPacked(SampleParams params, "
+        "Sampler2D<float4> firstDyn[][3], float weight, "
+        "RWTexture2D<float4> firstImages[][3], "
+        "Sampler2D<float4> fixedTex[3], "
+        "RWTexture2D<float4> fixedImages[3])" in generated_code
+    )
+    assert (
+        "return samplePacked(firstDyn, params, firstImages, weight, fixedTex, "
+        "fixedImages);" in generated_code
+    )
+    assert (
+        "passPacked(params, textureGrid, 0.5, imageGrid, textureGrid[1], "
+        "imageGrid[1]);" in generated_code
+    )
+    assert (
+        "float4 dynamicSample = dynTex[params.layer][params.slot].Sample(params.uv);"
+        in generated_code
+    )
+    assert (
+        "float4 fixedSample = fixedTex[params.slot].Sample(params.uv);"
+        in generated_code
+    )
+    assert (
+        "float4 dynamicColor = dynImages[params.layer][params.slot][params.pixel];"
+        in generated_code
+    )
+    assert (
+        "float4 fixedColor = fixedImages[params.slot][params.pixel];" in generated_code
+    )
+    assert (
+        "int2 dynSize = cgl_textureSize_sampler2D"
+        "(dynTex[params.layer][params.slot], 0);" in generated_code
+    )
+    assert (
+        "int2 fixedSize = cgl_textureSize_sampler2D(fixedTex[params.slot], 0);"
+        in generated_code
+    )
+    assert (
+        "int2 dynImageSize = cgl_imageSize_image2D"
+        "(dynImages[params.layer][params.slot]);" in generated_code
+    )
+    assert (
+        "int2 fixedImageSize = cgl_imageSize_image2D(fixedImages[params.slot]);"
+        in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_resource_values_in_struct_returns_emit_slang_operations():
+    code = """
+    struct SampleResult {
+        vec4 sampled;
+        vec4 loaded;
+        ivec2 texSize;
+        ivec2 imageSizeValue;
+    };
+
+    shader Resources {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        SampleResult buildAssigned(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleResult result;
+            result.sampled = texture(dynTex[layer][slot], uv);
+            result.loaded = imageLoad(dynImages[layer][slot], pixel);
+            result.texSize = textureSize(dynTex[layer][slot], 0);
+            result.imageSizeValue = imageSize(dynImages[layer][slot]);
+            return result;
+        }
+
+        SampleResult buildConstructed(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            return SampleResult(
+                texture(dynTex[layer][slot], uv),
+                imageLoad(dynImages[layer][slot], pixel),
+                textureSize(dynTex[layer][slot], 0),
+                imageSize(dynImages[layer][slot])
+            );
+        }
+
+        vec4 consumeResults(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleResult assigned = buildAssigned(
+                dynTex,
+                dynImages,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+            SampleResult constructed = buildConstructed(
+                dynTex,
+                dynImages,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+            return assigned.sampled + assigned.loaded +
+                constructed.sampled + constructed.loaded;
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 value = consumeResults(textureGrid, imageGrid, 1, 2, uv, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct SampleResult" in generated_code
+    assert (
+        "SampleResult buildAssigned(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "SampleResult buildConstructed(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "float4 consumeResults(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "float2 uv, int2 pixel)" in generated_code
+    )
+    assert "result.sampled = dynTex[layer][slot].Sample(uv);" in generated_code
+    assert "result.loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert (
+        "result.texSize = cgl_textureSize_sampler2D(dynTex[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "result.imageSizeValue = cgl_imageSize_image2D(dynImages[layer][slot]);"
+        in generated_code
+    )
+    assert (
+        "return SampleResult(dynTex[layer][slot].Sample(uv), "
+        "dynImages[layer][slot][pixel], "
+        "cgl_textureSize_sampler2D(dynTex[layer][slot], 0), "
+        "cgl_imageSize_image2D(dynImages[layer][slot]));" in generated_code
+    )
+    assert (
+        "SampleResult assigned = buildAssigned(dynTex, dynImages, layer, slot, "
+        "uv, pixel);" in generated_code
+    )
+    assert (
+        "SampleResult constructed = buildConstructed(dynTex, dynImages, layer, slot, "
+        "uv, pixel);" in generated_code
+    )
+    assert "consumeResults(textureGrid, imageGrid, 1, 2, uv, pixel);" in generated_code
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_nested_struct_resource_assignments_emit_slang_operations():
+    code = """
+    struct SampleResult {
+        vec4 sampled;
+        vec4 loaded;
+        ivec2 texSize;
+        ivec2 imageSizeValue;
+    };
+
+    struct SampleEnvelope {
+        SampleResult result;
+        vec4 bias;
+    };
+
+    shader Resources {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        SampleEnvelope buildNestedAssigned(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleEnvelope envelope;
+            envelope.result.sampled = texture(dynTex[layer][slot], uv);
+            envelope.result.loaded = imageLoad(dynImages[layer][slot], pixel);
+            envelope.result.texSize = textureSize(dynTex[layer][slot], 0);
+            envelope.result.imageSizeValue = imageSize(dynImages[layer][slot]);
+            envelope.bias = texture(dynTex[layer][slot], uv) +
+                imageLoad(dynImages[layer][slot], pixel);
+            return envelope;
+        }
+
+        vec4 consumeNested(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleEnvelope envelope = buildNestedAssigned(
+                dynTex,
+                dynImages,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+            return envelope.result.sampled + envelope.result.loaded + envelope.bias;
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 value = consumeNested(textureGrid, imageGrid, 1, 2, uv, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct SampleEnvelope" in generated_code
+    assert (
+        "SampleEnvelope buildNestedAssigned(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "float2 uv, int2 pixel)" in generated_code
+    )
+    assert "envelope.result.sampled = dynTex[layer][slot].Sample(uv);" in generated_code
+    assert "envelope.result.loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert (
+        "envelope.result.texSize = "
+        "cgl_textureSize_sampler2D(dynTex[layer][slot], 0);" in generated_code
+    )
+    assert (
+        "envelope.result.imageSizeValue = "
+        "cgl_imageSize_image2D(dynImages[layer][slot]);" in generated_code
+    )
+    assert (
+        "envelope.bias = dynTex[layer][slot].Sample(uv) + "
+        "dynImages[layer][slot][pixel];" in generated_code
+    )
+    assert (
+        "SampleEnvelope envelope = buildNestedAssigned("
+        "dynTex, dynImages, layer, slot, uv, pixel);" in generated_code
+    )
+    assert "consumeNested(textureGrid, imageGrid, 1, 2, uv, pixel);" in generated_code
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
 def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     code = """
     shader Resources {
         sampler2d colorMap;
         sampler2darray layers;
         sampler3d volumeTex;
+        sampler2dshadow shadowMap;
+        sampler2darrayshadow shadowLayers;
+        samplercubeshadow cubeShadow;
+        samplercubearrayshadow cubeShadowLayers;
         sampler2dms msTex;
         sampler2dmsarray msLayers;
         image2D colorImage;
@@ -522,8 +2968,19 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
                 ivec2 texSize = textureSize(colorMap, 2);
                 ivec3 layerSize = textureSize(layers, 1);
                 ivec3 volumeSize = textureSize(volumeTex, 0);
+                ivec2 shadowSize = textureSize(shadowMap, 0);
+                ivec3 shadowLayerSize = textureSize(shadowLayers, 0);
+                ivec2 cubeShadowSize = textureSize(cubeShadow, 0);
+                ivec3 cubeShadowLayerSize = textureSize(cubeShadowLayers, 0);
                 ivec2 msSize = textureSize(msTex, 0);
                 ivec3 msLayerSize = textureSize(msLayers, 0);
+                int texLevels = textureQueryLevels(colorMap);
+                int layerLevels = textureQueryLevels(layers);
+                int volumeLevels = textureQueryLevels(volumeTex);
+                int shadowLevels = textureQueryLevels(shadowMap);
+                int shadowLayerLevels = textureQueryLevels(shadowLayers);
+                int cubeShadowLevels = textureQueryLevels(cubeShadow);
+                int cubeShadowLayerLevels = textureQueryLevels(cubeShadowLayers);
                 ivec2 imageSize2d = imageSize(colorImage);
                 ivec3 imageSize3d = imageSize(volumeImage);
                 ivec3 imageSizeLayer = imageSize(layerImage);
@@ -562,6 +3019,51 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert (
         "tex.GetDimensions(mipLevel, width, height, depth, levels);" in generated_code
     )
+    assert (
+        "int2 cgl_textureSize_sampler2DShadow(Sampler2DShadow tex, uint mipLevel)"
+        in generated_code
+    )
+    assert (
+        "int3 cgl_textureSize_sampler2DArrayShadow("
+        "Sampler2DArrayShadow tex, uint mipLevel)" in generated_code
+    )
+    assert (
+        "int2 cgl_textureSize_samplerCubeShadow(SamplerCubeShadow tex, uint mipLevel)"
+        in generated_code
+    )
+    assert (
+        "int3 cgl_textureSize_samplerCubeArrayShadow("
+        "SamplerCubeArrayShadow tex, uint mipLevel)" in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_sampler2D(Sampler2D<float4> tex)" in generated_code
+    )
+    assert "tex.GetDimensions(width, height, levels);" in generated_code
+    assert (
+        "int cgl_textureQueryLevels_sampler2DArray(Sampler2DArray<float4> tex)"
+        in generated_code
+    )
+    assert "tex.GetDimensions(width, height, elements, levels);" in generated_code
+    assert (
+        "int cgl_textureQueryLevels_sampler3D(Sampler3D<float4> tex)" in generated_code
+    )
+    assert "tex.GetDimensions(width, height, depth, levels);" in generated_code
+    assert (
+        "int cgl_textureQueryLevels_sampler2DShadow(Sampler2DShadow tex)"
+        in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_sampler2DArrayShadow(Sampler2DArrayShadow tex)"
+        in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_samplerCubeShadow(SamplerCubeShadow tex)"
+        in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_samplerCubeArrayShadow("
+        "SamplerCubeArrayShadow tex)" in generated_code
+    )
     assert "int2 cgl_textureSize_sampler2DMS(Sampler2DMS<float4> tex)" in generated_code
     assert (
         "int3 cgl_textureSize_sampler2DMSArray(Sampler2DMSArray<float4> tex)"
@@ -597,6 +3099,49 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert (
         "int3 volumeSize = cgl_textureSize_sampler3D(volumeTex, 0);" in generated_code
     )
+    assert (
+        "int2 shadowSize = cgl_textureSize_sampler2DShadow(shadowMap, 0);"
+        in generated_code
+    )
+    assert (
+        "int3 shadowLayerSize = cgl_textureSize_sampler2DArrayShadow("
+        "shadowLayers, 0);" in generated_code
+    )
+    assert (
+        "int2 cubeShadowSize = cgl_textureSize_samplerCubeShadow(cubeShadow, 0);"
+        in generated_code
+    )
+    assert (
+        "int3 cubeShadowLayerSize = cgl_textureSize_samplerCubeArrayShadow("
+        "cubeShadowLayers, 0);" in generated_code
+    )
+    assert (
+        "int texLevels = cgl_textureQueryLevels_sampler2D(colorMap);" in generated_code
+    )
+    assert (
+        "int layerLevels = cgl_textureQueryLevels_sampler2DArray(layers);"
+        in generated_code
+    )
+    assert (
+        "int volumeLevels = cgl_textureQueryLevels_sampler3D(volumeTex);"
+        in generated_code
+    )
+    assert (
+        "int shadowLevels = cgl_textureQueryLevels_sampler2DShadow(shadowMap);"
+        in generated_code
+    )
+    assert (
+        "int shadowLayerLevels = cgl_textureQueryLevels_sampler2DArrayShadow("
+        "shadowLayers);" in generated_code
+    )
+    assert (
+        "int cubeShadowLevels = cgl_textureQueryLevels_samplerCubeShadow(cubeShadow);"
+        in generated_code
+    )
+    assert (
+        "int cubeShadowLayerLevels = cgl_textureQueryLevels_samplerCubeArrayShadow("
+        "cubeShadowLayers);" in generated_code
+    )
     assert "int2 msSize = cgl_textureSize_sampler2DMS(msTex);" in generated_code
     assert (
         "int3 msLayerSize = cgl_textureSize_sampler2DMSArray(msLayers);"
@@ -628,6 +3173,7 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert "imageSize(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "imageSamples(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
 
 
 def test_storage_image_load_store_emit_slang_subscript_access():
@@ -675,6 +3221,439 @@ def test_storage_image_load_store_emit_slang_subscript_access():
     assert "signedLayers[pixelLayer, sampleIndex] = signedValue;" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_explicit_image_formats_emit_slang_storage_element_types():
+    code = """
+    shader ExplicitImageFormats {
+        image2D scalarFloat @r32f;
+        image2D rgFloat @rg32f;
+        uimage2D rgUnsigned @format(rg32ui);
+        image3D rgbaVolume @rgba16f;
+        uimage2DMS msCounter @r32ui;
+        image2DMSArray msLayers @rgba8;
+
+        float scalarLoad(image2D image @rg32f, ivec2 pixel, float value) {
+            float oldValue = imageLoad(image, pixel);
+            imageStore(image, pixel, oldValue + value);
+            return oldValue;
+        }
+
+        vec2 vectorLoad(image2D image @rg32f, ivec2 pixel, vec2 value) {
+            vec2 oldValue = imageLoad(image, pixel);
+            imageStore(image, pixel, oldValue + value);
+            return oldValue;
+        }
+
+        uint unsignedLoad(uimage2D image @rg32ui, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(image, pixel);
+            imageStore(image, pixel, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 rgbaLoad(image3D image @format(rgba16f), ivec3 voxel, vec4 value) {
+            vec4 oldValue = imageLoad(image, voxel);
+            imageStore(image, voxel, oldValue + value);
+            return oldValue;
+        }
+
+        uint sampleLoad(uimage2DMS image @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+            uint oldValue = imageLoad(image, pixel, sampleIndex);
+            imageStore(image, pixel, sampleIndex, oldValue + value);
+            return oldValue;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<float> scalarFloat;" in generated_code
+    assert "RWTexture2D<float2> rgFloat;" in generated_code
+    assert "RWTexture2D<uint2> rgUnsigned;" in generated_code
+    assert "RWTexture3D<float4> rgbaVolume;" in generated_code
+    assert "RWTexture2DMS<uint> msCounter;" in generated_code
+    assert "RWTexture2DMSArray<float4> msLayers;" in generated_code
+    assert (
+        "float scalarLoad(RWTexture2D<float2> image, int2 pixel, float value)"
+        in generated_code
+    )
+    assert (
+        "float2 vectorLoad(RWTexture2D<float2> image, int2 pixel, float2 value)"
+        in generated_code
+    )
+    assert (
+        "uint unsignedLoad(RWTexture2D<uint2> image, int2 pixel, uint value)"
+        in generated_code
+    )
+    assert (
+        "float4 rgbaLoad(RWTexture3D<float4> image, int3 voxel, float4 value)"
+        in generated_code
+    )
+    assert (
+        "uint sampleLoad(RWTexture2DMS<uint> image, int2 pixel, int sampleIndex, uint value)"
+        in generated_code
+    )
+    assert "float oldValue = image[pixel].x;" in generated_code
+    assert "image[pixel] = float2(oldValue + value, 0.0);" in generated_code
+    assert "float2 oldValue = image[pixel];" in generated_code
+    assert "image[pixel] = oldValue + value;" in generated_code
+    assert "uint oldValue = image[pixel].x;" in generated_code
+    assert "image[pixel] = uint2(oldValue + value, 0u);" in generated_code
+    assert "float4 oldValue = image[voxel];" in generated_code
+    assert "image[voxel] = oldValue + value;" in generated_code
+    assert "uint oldValue = image[pixel, sampleIndex];" in generated_code
+    assert "image[pixel, sampleIndex] = oldValue + value;" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_integer_image_atomics_emit_slang_interlocked_helpers():
+    code = """
+    shader AtomicImages {
+        image2D unsignedCounters @r32ui;
+        image2D signedCounters @r32i;
+        image3D unsignedVolume @format(r32ui);
+        image2DArray signedLayers @format(r32i);
+
+        uint unsignedOps(image2D image @r32ui, ivec2 pixel, uint value) {
+            uint added = imageAtomicAdd(image, pixel, value);
+            uint minValue = imageAtomicMin(image, pixel, value);
+            uint maxValue = imageAtomicMax(image, pixel, value);
+            uint andValue = imageAtomicAnd(image, pixel, value);
+            uint orValue = imageAtomicOr(image, pixel, value);
+            uint xorValue = imageAtomicXor(image, pixel, value);
+            uint exchanged = imageAtomicExchange(image, pixel, value);
+            return added + minValue + maxValue + andValue + orValue + xorValue + exchanged;
+        }
+
+        int signedOps(image2D image @r32i, ivec2 pixel, int value) {
+            int minValue = imageAtomicMin(image, pixel, value);
+            int exchanged = imageAtomicExchange(image, pixel, value);
+            return minValue + exchanged;
+        }
+
+        uint swapVolume(image3D image @r32ui, ivec3 voxel, uint expected, uint value) {
+            return imageAtomicCompSwap(image, voxel, expected, value);
+        }
+
+        int exchangeLayer(image2DArray image @r32i, ivec3 pixelLayer, int value) {
+            return imageAtomicExchange(image, pixelLayer, value);
+        }
+
+        compute {
+            void main() {
+                uint a = unsignedOps(unsignedCounters, ivec2(0, 0), 1u);
+                int b = signedOps(signedCounters, ivec2(1, 0), -1);
+                uint c = swapVolume(unsignedVolume, ivec3(0, 1, 2), 3u, 4u);
+                int d = exchangeLayer(signedLayers, ivec3(2, 3, 4), 5);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> unsignedCounters;" in generated_code
+    assert "RWTexture2D<int> signedCounters;" in generated_code
+    assert "RWTexture3D<uint> unsignedVolume;" in generated_code
+    assert "RWTexture2DArray<int> signedLayers;" in generated_code
+    assert (
+        "uint cgl_imageAtomicAdd_uimage2D(RWTexture2D<uint> image, "
+        "int2 coord, uint value)" in generated_code
+    )
+    assert (
+        "int cgl_imageAtomicMin_iimage2D(RWTexture2D<int> image, "
+        "int2 coord, int value)" in generated_code
+    )
+    assert (
+        "uint cgl_imageAtomicCompSwap_uimage3D(RWTexture3D<uint> image, "
+        "int3 coord, uint compareValue, uint value)" in generated_code
+    )
+    assert (
+        "int cgl_imageAtomicExchange_iimage2DArray(RWTexture2DArray<int> image, "
+        "int3 coord, int value)" in generated_code
+    )
+    for intrinsic in [
+        "InterlockedAdd",
+        "InterlockedMin",
+        "InterlockedMax",
+        "InterlockedAnd",
+        "InterlockedOr",
+        "InterlockedXor",
+        "InterlockedExchange",
+    ]:
+        assert f"{intrinsic}(image[coord], value, original);" in generated_code
+    assert (
+        "InterlockedCompareExchange(image[coord], compareValue, value, original);"
+        in generated_code
+    )
+    assert (
+        "uint added = cgl_imageAtomicAdd_uimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "uint minValue = cgl_imageAtomicMin_uimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "uint maxValue = cgl_imageAtomicMax_uimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "uint andValue = cgl_imageAtomicAnd_uimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "uint orValue = cgl_imageAtomicOr_uimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "uint xorValue = cgl_imageAtomicXor_uimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "uint exchanged = cgl_imageAtomicExchange_uimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "int minValue = cgl_imageAtomicMin_iimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "int exchanged = cgl_imageAtomicExchange_iimage2D(image, pixel, value);"
+        in generated_code
+    )
+    assert (
+        "return cgl_imageAtomicCompSwap_uimage3D(image, voxel, expected, value);"
+        in generated_code
+    )
+    assert (
+        "return cgl_imageAtomicExchange_iimage2DArray(image, pixelLayer, value);"
+        in generated_code
+    )
+    for operation in [
+        "imageAtomicAdd",
+        "imageAtomicMin",
+        "imageAtomicMax",
+        "imageAtomicAnd",
+        "imageAtomicOr",
+        "imageAtomicXor",
+        "imageAtomicExchange",
+        "imageAtomicCompSwap",
+    ]:
+        assert f"{operation}(image" not in generated_code
+
+
+def test_integer_image_array_atomics_preserve_expression_indices():
+    code = """
+    shader AtomicImageArrays {
+        image2D counterImages @r32ui[(2 + 1) * 2];
+        image2DArray layerImages @r32i[(2 + 1) * 2];
+
+        uint addArray(image2D images[(2 + 1) * 2] @r32ui, ivec2 pixel, uint value) {
+            return imageAtomicAdd(images[1 + 2], pixel, value);
+        }
+
+        int compareLayer(
+            image2DArray images[(2 + 1) * 2] @r32i,
+            ivec3 pixelLayer,
+            int expected,
+            int value
+        ) {
+            return imageAtomicCompSwap(images[1 + 2], pixelLayer, expected, value);
+        }
+
+        compute {
+            void main() {
+                uint a = addArray(counterImages, ivec2(0, 0), 1u);
+                int b = compareLayer(layerImages, ivec3(1, 2, 3), 4, 5);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> counterImages[((2 + 1) * 2)];" in generated_code
+    assert "RWTexture2DArray<int> layerImages[((2 + 1) * 2)];" in generated_code
+    assert (
+        "uint addArray(RWTexture2D<uint> images[((2 + 1) * 2)], "
+        "int2 pixel, uint value)" in generated_code
+    )
+    assert (
+        "int compareLayer(RWTexture2DArray<int> images[((2 + 1) * 2)], "
+        "int3 pixelLayer, int expected, int value)" in generated_code
+    )
+    assert (
+        "return cgl_imageAtomicAdd_uimage2D(images[(1 + 2)], pixel, value);"
+        in generated_code
+    )
+    assert (
+        "return cgl_imageAtomicCompSwap_iimage2DArray("
+        "images[(1 + 2)], pixelLayer, expected, value);" in generated_code
+    )
+    assert "1 + 2]," not in generated_code
+    assert "2 + 1 * 2" not in generated_code
+    assert "imageAtomicAdd(images" not in generated_code
+    assert "imageAtomicCompSwap(images" not in generated_code
+
+
+def test_unsupported_image_atomics_emit_slang_diagnostic_stubs():
+    code = """
+    shader UnsupportedAtomicImages {
+        image2DMS msCounters @r32ui;
+        image2DMSArray msLayers @r32i;
+        image2D vectorCounters @rg32ui;
+
+        uint addMs(image2DMS image @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+            return imageAtomicAdd(image, pixel, sampleIndex, value);
+        }
+
+        int compareMsLayer(
+            image2DMSArray image @r32i,
+            ivec3 pixelLayer,
+            int sampleIndex,
+            int expected,
+            int value
+        ) {
+            return imageAtomicCompSwap(image, pixelLayer, sampleIndex, expected, value);
+        }
+
+        uint addVector(image2D image @rg32ui, ivec2 pixel, uint value) {
+            return imageAtomicAdd(image, pixel, value);
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2DMS<uint> msCounters;" in generated_code
+    assert "RWTexture2DMSArray<int> msLayers;" in generated_code
+    assert "RWTexture2D<uint2> vectorCounters;" in generated_code
+    assert (
+        "return /* unsupported Slang image atomic: imageAtomicAdd "
+        "requires scalar int or uint image2D/image3D/image2DArray resource */ 0u;"
+        in generated_code
+    )
+    assert (
+        "return /* unsupported Slang image atomic: imageAtomicCompSwap "
+        "requires scalar int or uint image2D/image3D/image2DArray resource */ 0;"
+        in generated_code
+    )
+    assert "imageAtomicAdd(image" not in generated_code
+    assert "imageAtomicCompSwap(image" not in generated_code
+    assert "cgl_imageAtomicAdd_uimage2DMS" not in generated_code
+    assert "cgl_imageAtomicCompSwap_iimage2DMSArray" not in generated_code
+
+
+def test_formatted_image_arrays_preserve_expression_sizes():
+    code = """
+    shader ExprFormattedImageArrays {
+        image2D counters @r32ui[(1 + 1) * 2];
+        image2D rgPairs @rg16f[+3];
+        image2D afterCounters @r32ui;
+
+        uint touchCounters(image2D images[(1 + 1) * 2] @r32ui, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[2], pixel);
+            imageStore(images[1], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        vec2 touchPairs(image2D images[+3] @rg16f, ivec2 pixel, vec2 value) {
+            vec2 oldValue = imageLoad(images[2], pixel);
+            imageStore(images[1], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        compute {
+            void main() {
+                uint a = touchCounters(counters, ivec2(1, 2), 3u);
+                vec2 b = touchPairs(rgPairs, ivec2(2, 3), vec2(0.5));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> counters[((1 + 1) * 2)];" in generated_code
+    assert "RWTexture2D<float2> rgPairs[+3];" in generated_code
+    assert "RWTexture2D<uint> afterCounters;" in generated_code
+    assert (
+        "uint touchCounters(RWTexture2D<uint> images[((1 + 1) * 2)], "
+        "int2 pixel, uint value)" in generated_code
+    )
+    assert (
+        "float2 touchPairs(RWTexture2D<float2> images[+3], int2 pixel, float2 value)"
+        in generated_code
+    )
+    assert "uint oldValue = images[2][pixel];" in generated_code
+    assert "images[1][pixel] = oldValue + value;" in generated_code
+    assert "float2 oldValue = images[2][pixel];" in generated_code
+    assert "images[1][pixel] = oldValue + value;" in generated_code
+    assert "uint a = touchCounters(counters, int2(1, 2), 3u);" in generated_code
+    assert "float2 b = touchPairs(rgPairs, int2(2, 3), float2(0.5));" in generated_code
+    assert "1 + 1 * 2" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_formatted_image_queries_emit_typed_slang_helpers():
+    code = """
+    shader FormattedImageQueries {
+        image2D rgFloat @rg32f;
+        image2DMS msRg @format(rg32f);
+
+        compute {
+            void main() {
+                ivec2 imageSizeValue = imageSize(rgFloat);
+                ivec2 msSizeValue = imageSize(msRg);
+                int msSamples = imageSamples(msRg);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "int2 cgl_imageSize_image2D_RWTexture2D_float2(RWTexture2D<float2> tex)"
+        in generated_code
+    )
+    assert (
+        "int2 cgl_imageSize_image2DMS_RWTexture2DMS_float2("
+        "RWTexture2DMS<float2> tex)" in generated_code
+    )
+    assert (
+        "int cgl_imageSamples_image2DMS_RWTexture2DMS_float2("
+        "RWTexture2DMS<float2> tex)" in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = "
+        "cgl_imageSize_image2D_RWTexture2D_float2(rgFloat);" in generated_code
+    )
+    assert (
+        "int2 msSizeValue = "
+        "cgl_imageSize_image2DMS_RWTexture2DMS_float2(msRg);" in generated_code
+    )
+    assert (
+        "int msSamples = "
+        "cgl_imageSamples_image2DMS_RWTexture2DMS_float2(msRg);" in generated_code
+    )
+    assert "imageSize(" not in generated_code
+    assert "imageSamples(" not in generated_code
 
 
 def test_bool_string_and_char_literals_emit_slang_syntax():
