@@ -1,3 +1,5 @@
+"""Registry for source-language parsers and reverse code generators."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

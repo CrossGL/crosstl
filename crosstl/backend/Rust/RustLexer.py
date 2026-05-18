@@ -1,3 +1,5 @@
+"""Lexer for importing Rust source into CrossGL Translator."""
+
 import re
 from typing import Iterator, Tuple, List
 from enum import Enum, auto

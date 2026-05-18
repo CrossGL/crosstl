@@ -1,3 +1,5 @@
+"""Lexer for tokenizing CrossGL source code."""
+
 import re
 from collections import OrderedDict
 

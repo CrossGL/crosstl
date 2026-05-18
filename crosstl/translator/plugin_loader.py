@@ -1,3 +1,5 @@
+"""Plugin discovery helpers for external CrossGL Translator backends."""
+
 from __future__ import annotations
 
 import importlib

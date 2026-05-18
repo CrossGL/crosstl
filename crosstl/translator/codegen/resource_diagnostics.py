@@ -1,3 +1,5 @@
+"""Shared diagnostics mixin for reporting resource translation issues."""
+
 class ResourceDiagnosticMixin:
     resource_diagnostic_backend = None
     zero_float2 = "make_float2(0.0f, 0.0f)"

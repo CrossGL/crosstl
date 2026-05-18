@@ -1,3 +1,5 @@
+"""Helpers for recognizing resource query expressions in CrossGL AST nodes."""
+
 from ..ast import ArrayAccessNode, FunctionCallNode
 
 

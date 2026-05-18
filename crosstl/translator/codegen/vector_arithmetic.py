@@ -1,3 +1,5 @@
+"""Utilities for lowering vector arithmetic expressions during code generation."""
+
 from ..ast import (
     ArrayAccessNode,
     BinaryOpNode,

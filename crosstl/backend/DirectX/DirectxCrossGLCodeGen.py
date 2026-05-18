@@ -1,3 +1,5 @@
+"""Reverse code generator that emits CrossGL from HLSL AST nodes."""
+
 from .DirectxAst import *
 from .DirectxParser import *
 from .DirectxLexer import *

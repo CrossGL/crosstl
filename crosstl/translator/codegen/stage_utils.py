@@ -1,3 +1,5 @@
+"""Utilities for normalizing and matching shader stage qualifiers."""
+
 STAGE_QUALIFIER_NAMES = frozenset(
     {
         "vertex",

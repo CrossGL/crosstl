@@ -1,3 +1,5 @@
+"""Lexer for importing HIP source into CrossGL Translator."""
+
 import re
 from typing import List
 

@@ -1,3 +1,5 @@
+"""CrossGL-to-CUDA code generator."""
+
 from ..ast import (
     AssignmentNode,
     ForNode,

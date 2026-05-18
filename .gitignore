@@ -48,3 +48,5 @@ crosstl.egg-info
 .github/.DS_Store
 dist/crosstl-1.0.0.tar.gz
 .DS_Store
+docs/_build/
+docs/doxygen/build/

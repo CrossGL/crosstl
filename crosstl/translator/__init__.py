@@ -1,3 +1,5 @@
+"""Frontend API for parsing CrossGL and registering translator extensions."""
+
 from . import lexer
 from . import parser
 from . import codegen

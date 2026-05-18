@@ -1,3 +1,5 @@
+"""CrossGL-to-HLSL code generator."""
+
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
@@ -36,6 +38,7 @@ from .array_utils import (
     get_array_size_from_node,
     evaluate_literal_int_expression,
     collect_literal_int_constants,
+    collect_struct_member_types,
 )
 from .stage_utils import (
     compute_local_size,
@@ -67,6 +70,7 @@ class HLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.struct_member_types = {}
         self.type_mapping = {
             "void": "void",
             "vec2": "float2",
@@ -168,6 +172,9 @@ class HLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.struct_member_types = collect_struct_member_types(
+            getattr(ast, "structs", []), self.type_name_string
+        )
         self.function_parameter_names = self.collect_function_parameter_names(ast)
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
@@ -914,6 +921,12 @@ class HLSLCodeGen:
                     return component_type
                 if component_type:
                     return f"{component_type}{len(member)}"
+            if object_type:
+                member_type = self.struct_member_types.get(
+                    self.type_name_string(object_type), {}
+                ).get(member)
+                if member_type:
+                    return member_type
             return None
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
@@ -3482,6 +3495,34 @@ class HLSLCodeGen:
                 "int4" if texture_type in {"Texture2DArray", "Texture3D"} else "int3"
             )
             return f"{texture_name}.Load({load_coord_type}({coord}, {lod}))"
+
+        if func_name == "texelFetchOffset" and len(args) >= 4:
+            texture_name = self.generate_expression(args[0])
+            coord = self.generate_expression(args[1])
+            lod = self.generate_expression(args[2])
+            offset = self.generate_expression(args[3])
+            texture_type = self.resource_base_type(self.texture_resource_type(args[0]))
+            if texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
+                return "/* unsupported DirectX texel fetch offset: multisample textures do not support offsets */ float4(0.0)"
+            if texture_type == "Texture2DArray":
+                coord_xy = self.vector_component(coord, "xy")
+                layer = self.vector_component(coord, "z")
+                return (
+                    f"{texture_name}.Load("
+                    f"int4(({coord_xy} + {offset}), {layer}, {lod}))"
+                )
+            if texture_type == "Texture3D":
+                return f"{texture_name}.Load(int4(({coord} + {offset}), {lod}))"
+            if texture_type == "Texture1D":
+                return f"{texture_name}.Load(int2(({coord} + {offset}), {lod}))"
+            if texture_type == "Texture1DArray":
+                coord_x = self.vector_component(coord, "x")
+                layer = self.vector_component(coord, "y")
+                return (
+                    f"{texture_name}.Load("
+                    f"int3(({coord_x} + {offset}), {layer}, {lod}))"
+                )
+            return f"{texture_name}.Load(int3(({coord} + {offset}), {lod}))"
 
         return None
 

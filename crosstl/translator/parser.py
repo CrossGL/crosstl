@@ -1,3 +1,5 @@
+"""Parser that builds CrossGL AST nodes from lexer tokens."""
+
 from .ast import (
     ASTNode,
     TypeNode,

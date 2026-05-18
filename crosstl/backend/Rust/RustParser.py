@@ -1,3 +1,5 @@
+"""Parser for Rust source AST construction."""
+
 from .RustAst import (
     AssignmentNode,
     BinaryOpNode,

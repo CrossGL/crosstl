@@ -2686,6 +2686,88 @@ def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     )
 
 
+def test_opengl_direct_stage_gather_offsets_use_input_members():
+    shader = """
+    shader DirectStageGatherOffsets {
+        sampler2D colorMap;
+        sampler2DArray layerMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            ivec2 offset0 @ TEXCOORD3;
+            ivec2 offset1 @ TEXCOORD4;
+            ivec2 offset2 @ TEXCOORD5;
+            ivec2 offset3 @ TEXCOORD6;
+            int component @ TEXCOORD7;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 dynamic = textureGather(colorMap, linearSampler, input.uv, input.component);
+                vec4 dynamicOffset = textureGatherOffset(colorMap, linearSampler, input.uv, input.offset, input.component);
+                vec4 offsetsGather = textureGatherOffsets(
+                    layerMap,
+                    linearSampler,
+                    input.uvLayer,
+                    input.offset0,
+                    input.offset1,
+                    input.offset2,
+                    input.offset3,
+                    input.component
+                );
+                return dynamic + dynamicOffset + offsetsGather;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
+    assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
+    assert (
+        "vec4 dynamic = (component == 0 ? textureGather(colorMap, uv, 0) : "
+        "component == 1 ? textureGather(colorMap, uv, 1) : "
+        "component == 2 ? textureGather(colorMap, uv, 2) : "
+        "textureGather(colorMap, uv, 3));"
+        in generated_code
+    )
+    assert (
+        "component == 0 ? textureGatherOffset(colorMap, uv, offset, 0) : "
+        "component == 1 ? textureGatherOffset(colorMap, uv, offset, 1) : "
+        "component == 2 ? textureGatherOffset(colorMap, uv, offset, 2) : "
+        "textureGatherOffset(colorMap, uv, offset, 3)"
+        in generated_code
+    )
+    for component in range(4):
+        assert (
+            f"textureGatherOffset(layerMap, uvLayer, offset0, {component}).x"
+            in generated_code
+        )
+        assert (
+            f"textureGatherOffset(layerMap, uvLayer, offset1, {component}).y"
+            in generated_code
+        )
+        assert (
+            f"textureGatherOffset(layerMap, uvLayer, offset2, {component}).z"
+            in generated_code
+        )
+        assert (
+            f"textureGatherOffset(layerMap, uvLayer, offset3, {component}).w"
+            in generated_code
+        )
+    assert "textureGather(colorMap, uv, component)" not in generated_code
+    assert "textureGatherOffset(colorMap, uv, offset, component)" not in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+    assert "input.uv" not in generated_code
+    assert "input.offset" not in generated_code
+
+
 def test_opengl_cube_texture_gather_dynamic_components_use_constant_branches():
     shader = """
     shader CubeGatherDynamicComponent {
@@ -2835,6 +2917,77 @@ def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
     assert ", s, uvLayer" not in generated_code
 
 
+def test_opengl_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members():
+    shader = """
+    shader DirectStageSampleOffsets {
+        sampler2D colorMap;
+        sampler2DArray layerMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            ivec2 pixel @ TEXCOORD2;
+            ivec3 pixelLayer @ TEXCOORD3;
+            float lod;
+            vec2 ddx @ TEXCOORD4;
+            vec2 ddy @ TEXCOORD5;
+            ivec2 offset @ TEXCOORD6;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 plain = textureOffset(colorMap, linearSampler, input.uv, input.offset);
+                vec4 lodSample = textureLodOffset(colorMap, linearSampler, input.uv, input.lod, input.offset);
+                vec4 gradSample = textureGradOffset(colorMap, linearSampler, input.uv, input.ddx, input.ddy, input.offset);
+                vec4 arrayPlain = textureOffset(layerMap, linearSampler, input.uvLayer, input.offset);
+                vec4 arrayLod = textureLodOffset(layerMap, linearSampler, input.uvLayer, input.lod, input.offset);
+                vec4 arrayGrad = textureGradOffset(layerMap, linearSampler, input.uvLayer, input.ddx, input.ddy, input.offset);
+                vec4 fetched = texelFetchOffset(colorMap, input.pixel, int(input.lod), input.offset);
+                vec4 fetchedLayer = texelFetchOffset(layerMap, input.pixelLayer, int(input.lod), input.offset);
+                return plain + lodSample + gradSample + arrayPlain + arrayLod + arrayGrad + fetched + fetchedLayer;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
+    assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
+    assert "vec4 plain = textureOffset(colorMap, uv, offset);" in generated_code
+    assert (
+        "vec4 lodSample = textureLodOffset(colorMap, uv, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 gradSample = textureGradOffset(colorMap, uv, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert "vec4 arrayPlain = textureOffset(layerMap, uvLayer, offset);" in generated_code
+    assert (
+        "vec4 arrayLod = textureLodOffset(layerMap, uvLayer, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 arrayGrad = textureGradOffset(layerMap, uvLayer, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 fetched = texelFetchOffset(colorMap, pixel, int(lod), offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 fetchedLayer = texelFetchOffset(layerMap, pixelLayer, int(lod), offset);"
+        in generated_code
+    )
+    assert "linearSampler" not in generated_code
+    assert "input.uv" not in generated_code
+    assert "input.pixel" not in generated_code
+
+
 def test_opengl_projected_texture_variants_filter_sampler_arguments():
     shader = """
     shader TextureProjectionVariants {
@@ -2925,6 +3078,139 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
     assert ", s, uvq" not in generated_code
     assert ", s, uvqw" not in generated_code
     assert ", s, xyzq" not in generated_code
+
+
+def test_opengl_direct_projected_texture_stage_input_members():
+    shader = """
+    shader DirectProjectedTexture {
+        sampler2D colorMap;
+        sampler3D volumeMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 uvq @ TEXCOORD0;
+            vec4 uvqw @ TEXCOORD1;
+            vec4 xyzq @ TEXCOORD2;
+            float lod;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projected = textureProj(colorMap, linearSampler, input.uvq);
+                vec4 projectedBias = textureProj(colorMap, linearSampler, input.uvqw, 0.25);
+                vec4 volumeProjected = textureProj(volumeMap, linearSampler, input.xyzq);
+                vec4 projectedOffset = textureProjOffset(colorMap, linearSampler, input.uvq, input.offset);
+                vec4 projectedLod = textureProjLod(colorMap, linearSampler, input.uvq, input.lod);
+                vec4 projectedLodOffset = textureProjLodOffset(colorMap, linearSampler, input.uvq, input.lod, input.offset);
+                vec4 projectedGrad = textureProjGrad(colorMap, linearSampler, input.uvq, input.ddx, input.ddy);
+                vec4 projectedGradOffset = textureProjGradOffset(colorMap, linearSampler, input.uvq, input.ddx, input.ddy, input.offset);
+                return projected
+                    + projectedBias
+                    + volumeProjected
+                    + projectedOffset
+                    + projectedLod
+                    + projectedLodOffset
+                    + projectedGrad
+                    + projectedGradOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
+    assert "layout(binding = 1) uniform sampler3D volumeMap;" in generated_code
+    assert "vec4 projected = textureProj(colorMap, uvq);" in generated_code
+    assert (
+        "vec4 projectedBias = textureProj(colorMap, uvqw, 0.25);"
+        in generated_code
+    )
+    assert "vec4 volumeProjected = textureProj(volumeMap, xyzq);" in generated_code
+    assert (
+        "vec4 projectedOffset = textureProjOffset(colorMap, uvq, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 projectedLod = textureProjLod(colorMap, uvq, lod);"
+        in generated_code
+    )
+    assert (
+        "vec4 projectedLodOffset = textureProjLodOffset(colorMap, uvq, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 projectedGrad = textureProjGrad(colorMap, uvq, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "vec4 projectedGradOffset = textureProjGradOffset(colorMap, uvq, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert "linearSampler" not in generated_code
+    assert ", input." not in generated_code
+
+
+def test_opengl_implicit_projected_stage_input_members_strip_samplers():
+    shader = """
+    shader DirectImplicitProjection {
+        sampler2D colorMap;
+        sampler3D volumeMap;
+        sampler2DShadow shadowMap;
+        sampler2DArrayShadow shadowArray;
+
+        struct FSInput {
+            vec3 uvq @ TEXCOORD0;
+            vec4 uvqw @ TEXCOORD1;
+            vec4 xyzq @ TEXCOORD2;
+            vec4 uvLayerQ @ TEXCOORD3;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD4;
+            vec2 ddy @ TEXCOORD5;
+            ivec2 offset @ TEXCOORD6;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 color = textureProj(colorMap, input.uvq);
+                vec4 colorLod = textureProjLod(colorMap, input.uvqw, input.lod);
+                vec4 volume = textureProj(volumeMap, input.xyzq);
+                float shadow = textureCompareProj(shadowMap, input.uvq, input.depth);
+                float shadowGrad = textureCompareProjGrad(shadowArray, input.uvLayerQ, input.depth, input.ddx, input.ddy);
+                return color + colorLod + volume + vec4(shadow + shadowGrad);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
+    assert "layout(binding = 1) uniform sampler3D volumeMap;" in generated_code
+    assert "layout(binding = 2) uniform sampler2DShadow shadowMap;" in generated_code
+    assert (
+        "layout(binding = 3) uniform sampler2DArrayShadow shadowArray;"
+        in generated_code
+    )
+    assert "vec4 color = textureProj(colorMap, uvq);" in generated_code
+    assert "vec4 colorLod = textureProjLod(colorMap, uvqw, lod);" in generated_code
+    assert "vec4 volume = textureProj(volumeMap, xyzq);" in generated_code
+    assert "float shadow = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));" in generated_code
+    assert (
+        "float shadowGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        in generated_code
+    )
+    assert "unsupported GLSL texture compare" not in generated_code
+    assert "textureCompareProj" not in generated_code
+    assert "input." not in generated_code
 
 
 def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
@@ -3079,6 +3365,60 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert "compareSampler" not in generated_code
+    assert "textureCompareProj" not in generated_code
+
+
+def test_opengl_direct_projected_shadow_compare_stage_input_members():
+    shader = """
+    shader DirectProjectedShadowCompare {
+        sampler2DShadow shadowMap;
+        sampler2DArrayShadow shadowArray;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec3 uvq @ TEXCOORD0;
+            vec4 uvqw @ TEXCOORD1;
+            vec4 uvLayerQ @ TEXCOORD2;
+            float depth;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float planar = textureCompareProj(shadowMap, compareSampler, input.uvq, input.depth);
+                float planarOffset = textureCompareProjOffset(shadowMap, compareSampler, input.uvqw, input.depth, input.offset);
+                float arrayGrad = textureCompareProjGrad(shadowArray, compareSampler, input.uvLayerQ, input.depth, input.ddx, input.ddy);
+                return vec4(planar + planarOffset + arrayGrad);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2DShadow shadowMap;" in generated_code
+    assert (
+        "layout(binding = 1) uniform sampler2DArrayShadow shadowArray;"
+        in generated_code
+    )
+    assert (
+        "float planar = texture(shadowMap, vec3(uvq.xy / uvq.z, depth));"
+        in generated_code
+    )
+    assert (
+        "float planarOffset = textureOffset(shadowMap, vec3(uvqw.xy / uvqw.w, depth), offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+        in generated_code
+    )
+    assert "compareSampler" not in generated_code
+    assert "unsupported GLSL texture compare" not in generated_code
     assert "textureCompareProj" not in generated_code
 
 
@@ -3344,6 +3684,128 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
     assert "textureCompareProj" not in generated_code
 
 
+def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constant_size():
+    shader = """
+    shader UnsizedProjectedShadowResources {
+        const int LAYER = 4;
+        sampler2DShadow shadowMaps[];
+        sampler2DArrayShadow shadowArrays[];
+        sampler shadowSamplers[];
+        sampler2DShadow afterShadow;
+        sampler afterSampler;
+
+        struct FSInput {
+            vec3 uvq @ TEXCOORD0;
+            vec4 uvLayerQ @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD2;
+            vec2 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        float shadowDeep(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            sampler shadowSamplers[],
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            float planarHigh = textureCompareProj(shadowMaps[LAYER], shadowSamplers[LAYER], uvq, depth);
+            float planarLow = textureCompareProjOffset(shadowMaps[1], shadowSamplers[1], uvq, depth, offset);
+            float arrayHigh = textureCompareProjGrad(shadowArrays[2 * 2], shadowSamplers[2 * 2], uvLayerQ, depth, ddx, ddy);
+            float arrayLow = textureCompareProjOffset(shadowArrays[3], shadowSamplers[3], uvLayerQ, depth, offset);
+            return planarHigh + planarLow + arrayHigh + arrayLow;
+        }
+
+        float shadowMid(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            sampler shadowSamplers[],
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            return shadowDeep(shadowMaps, shadowArrays, shadowSamplers, uvq, uvLayerQ, depth, lod, ddx, ddy, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float arrayShadow = shadowMid(
+                    shadowMaps,
+                    shadowArrays,
+                    shadowSamplers,
+                    input.uvq,
+                    input.uvLayerQ,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+                float singleShadow = textureCompare(afterShadow, afterSampler, input.uvq.xy, input.depth);
+                return vec4(arrayShadow + singleShadow);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[5];" in generated_code
+    assert (
+        "layout(binding = 5) uniform sampler2DArrayShadow shadowArrays[5];"
+        in generated_code
+    )
+    assert "layout(binding = 10) uniform sampler2DShadow afterShadow;" in generated_code
+    assert (
+        "float shadowDeep(sampler2DShadow shadowMaps[5], sampler2DArrayShadow shadowArrays[5], "
+        "vec3 uvq, vec4 uvLayerQ, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset)"
+    ) in generated_code
+    assert (
+        "float shadowMid(sampler2DShadow shadowMaps[5], sampler2DArrayShadow shadowArrays[5], "
+        "vec3 uvq, vec4 uvLayerQ, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset)"
+    ) in generated_code
+    assert (
+        "float planarHigh = texture(shadowMaps[LAYER], vec3(uvq.xy / uvq.z, depth));"
+        in generated_code
+    )
+    assert (
+        "float planarLow = textureOffset(shadowMaps[1], vec3(uvq.xy / uvq.z, depth), offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayHigh = textureGrad(shadowArrays[(2 * 2)], "
+        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
+    ) in generated_code
+    assert (
+        "float arrayLow = textureOffset(shadowArrays[3], "
+        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), offset);"
+    ) in generated_code
+    assert (
+        "shadowDeep(shadowMaps, shadowArrays, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
+        in generated_code
+    )
+    assert (
+        "shadowMid(shadowMaps, shadowArrays, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
+        in generated_code
+    )
+    assert "float singleShadow = texture(afterShadow, vec3(uvq.xy, depth));" in generated_code
+    assert "sampler shadowSamplers" not in generated_code
+    assert "shadowSamplers" not in generated_code
+    assert "afterSampler" not in generated_code
+    assert "textureCompareProj" not in generated_code
+
+
 def test_opengl_projected_array_shadow_lod_offset_reports_unsupported():
     shader = """
     shader ProjectedArrayShadowLodOffsetUnsupported {
@@ -3592,6 +4054,104 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     assert "textureGatherCompare" not in generated_code
     assert "textureGatherCompareOffset" not in generated_code
     assert "textureCompareOffset" not in generated_code
+
+
+def test_opengl_direct_shadow_gather_compare_stage_input_members():
+    explicit_shader = """
+    shader DirectShadowGatherCompare {
+        sampler2DShadow shadowMap;
+        sampler2DArrayShadow shadowArray;
+        samplerCubeArrayShadow cubeShadowArray;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec4 cubeLayer @ TEXCOORD2;
+            float depth;
+            ivec2 offset @ TEXCOORD3;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 planar = textureGatherCompare(shadowMap, compareSampler, input.uv, input.depth);
+                vec4 planarOffset = textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset);
+                vec4 arrayGather = textureGatherCompare(shadowArray, compareSampler, input.uvLayer, input.depth);
+                vec4 arrayOffset = textureGatherCompareOffset(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset);
+                vec4 cubeArrayGather = textureGatherCompare(cubeShadowArray, compareSampler, input.cubeLayer, input.depth);
+                return planar + planarOffset + arrayGather + arrayOffset + cubeArrayGather;
+            }
+        }
+    }
+    """
+    implicit_shader = """
+    shader DirectImplicitShadowGatherCompare {
+        sampler2DShadow shadowMap;
+        sampler2DArrayShadow shadowArray;
+        samplerCubeArrayShadow cubeShadowArray;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec4 cubeLayer @ TEXCOORD2;
+            float depth;
+            ivec2 offset @ TEXCOORD3;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 planar = textureGatherCompare(shadowMap, input.uv, input.depth);
+                vec4 planarOffset = textureGatherCompareOffset(shadowMap, input.uv, input.depth, input.offset);
+                vec4 arrayGather = textureGatherCompare(shadowArray, input.uvLayer, input.depth);
+                vec4 arrayOffset = textureGatherCompareOffset(shadowArray, input.uvLayer, input.depth, input.offset);
+                vec4 cubeArrayGather = textureGatherCompare(cubeShadowArray, input.cubeLayer, input.depth);
+                return planar + planarOffset + arrayGather + arrayOffset + cubeArrayGather;
+            }
+        }
+    }
+    """
+
+    explicit_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(explicit_shader), "fragment"
+    )
+    implicit_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(implicit_shader), "fragment"
+    )
+
+    for generated_code in (explicit_code, implicit_code):
+        assert (
+            "layout(binding = 0) uniform sampler2DShadow shadowMap;"
+            in generated_code
+        )
+        assert (
+            "layout(binding = 1) uniform sampler2DArrayShadow shadowArray;"
+            in generated_code
+        )
+        assert (
+            "layout(binding = 2) uniform samplerCubeArrayShadow cubeShadowArray;"
+            in generated_code
+        )
+        assert "vec4 planar = textureGather(shadowMap, uv, depth);" in generated_code
+        assert (
+            "vec4 planarOffset = textureGatherOffset(shadowMap, uv, depth, offset);"
+            in generated_code
+        )
+        assert (
+            "vec4 arrayGather = textureGather(shadowArray, uvLayer, depth);"
+            in generated_code
+        )
+        assert (
+            "vec4 arrayOffset = textureGatherOffset(shadowArray, uvLayer, depth, offset);"
+            in generated_code
+        )
+        assert (
+            "vec4 cubeArrayGather = textureGather(cubeShadowArray, cubeLayer, depth);"
+            in generated_code
+        )
+        assert "unsupported GLSL texture gather compare" not in generated_code
+        assert "textureGatherCompare" not in generated_code
+        assert "compareSampler" not in generated_code
+        assert "input." not in generated_code
 
 
 def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
@@ -4329,6 +4889,196 @@ def test_opengl_storage_image_load_store():
     assert "imageStore(outImg, pixel, (color + layerColor));" in generated_code
     assert "imageStore(volume, voxel, volumeColor);" in generated_code
     assert "imageStore(layers, pixelLayer, color);" in generated_code
+
+
+def test_opengl_direct_stage_image_load_store_and_atomics_use_input_members():
+    shader = """
+    shader DirectStageImageOps {
+        image2D outImg;
+        image3D volume;
+        image2DArray layers;
+        uimage2D counters;
+        iimage2DArray signedLayers;
+
+        struct FSInput {
+            ivec2 pixel @ TEXCOORD0;
+            ivec3 voxel @ TEXCOORD1;
+            ivec3 pixelLayer @ TEXCOORD2;
+            uint amount;
+            int signedAmount;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 color = imageLoad(outImg, input.pixel);
+                vec4 volumeColor = imageLoad(volume, input.voxel);
+                vec4 layerColor = imageLoad(layers, input.pixelLayer);
+                imageStore(outImg, input.pixel, color + layerColor);
+                imageStore(volume, input.voxel, volumeColor);
+                imageStore(layers, input.pixelLayer, color);
+                uint previous = imageAtomicAdd(counters, input.pixel, input.amount);
+                int previousSigned = imageAtomicMin(signedLayers, input.pixelLayer, input.signedAmount);
+                return color + volumeColor + layerColor + vec4(float(previous + uint(previousSigned)));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(rgba32f, binding = 0) uniform image2D outImg;" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image3D volume;" in generated_code
+    assert "layout(rgba32f, binding = 2) uniform image2DArray layers;" in generated_code
+    assert "layout(r32ui, binding = 3) uniform uimage2D counters;" in generated_code
+    assert (
+        "layout(r32i, binding = 4) uniform iimage2DArray signedLayers;"
+        in generated_code
+    )
+    assert "vec4 color = imageLoad(outImg, pixel);" in generated_code
+    assert "vec4 volumeColor = imageLoad(volume, voxel);" in generated_code
+    assert "vec4 layerColor = imageLoad(layers, pixelLayer);" in generated_code
+    assert "imageStore(outImg, pixel, (color + layerColor));" in generated_code
+    assert "imageStore(volume, voxel, volumeColor);" in generated_code
+    assert "imageStore(layers, pixelLayer, color);" in generated_code
+    assert "uint previous = imageAtomicAdd(counters, pixel, amount);" in generated_code
+    assert (
+        "int previousSigned = imageAtomicMin(signedLayers, pixelLayer, signedAmount);"
+        in generated_code
+    )
+    assert "input.pixel" not in generated_code
+    assert "input.voxel" not in generated_code
+    assert "input.pixelLayer" not in generated_code
+
+
+def test_opengl_direct_stage_explicit_image_formats_use_input_members():
+    shader = """
+    shader DirectStageImageFormats {
+        image2D scalarFloat @r32f;
+        image2D rgFloat @rg32f;
+        uimage2D unsignedScalar @r32ui;
+        uimage2DArray unsignedLayers @rg32ui;
+        iimage3D signedVolume @r32i;
+
+        struct FSInput {
+            ivec2 pixel @ TEXCOORD0;
+            ivec3 voxel @ TEXCOORD1;
+            ivec3 pixelLayer @ TEXCOORD2;
+            float amount;
+            uint unsignedAmount;
+            int signedAmount;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float scalarValue = imageLoad(scalarFloat, input.pixel);
+                vec2 rgValue = imageLoad(rgFloat, input.pixel);
+                uint unsignedValue = imageLoad(unsignedScalar, input.pixel);
+                uvec2 layerValue = imageLoad(unsignedLayers, input.pixelLayer);
+                int signedValue = imageLoad(signedVolume, input.voxel);
+                imageStore(scalarFloat, input.pixel, scalarValue + input.amount);
+                imageStore(rgFloat, input.pixel, rgValue + vec2(input.amount));
+                imageStore(unsignedScalar, input.pixel, unsignedValue + input.unsignedAmount);
+                imageStore(unsignedLayers, input.pixelLayer, layerValue + uvec2(input.unsignedAmount));
+                imageStore(signedVolume, input.voxel, signedValue + input.signedAmount);
+                return vec4(scalarValue + rgValue.x + float(unsignedValue + layerValue.x) + float(signedValue));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(r32f, binding = 0) uniform image2D scalarFloat;" in generated_code
+    assert "layout(rg32f, binding = 1) uniform image2D rgFloat;" in generated_code
+    assert "layout(r32ui, binding = 2) uniform uimage2D unsignedScalar;" in generated_code
+    assert (
+        "layout(rg32ui, binding = 3) uniform uimage2DArray unsignedLayers;"
+        in generated_code
+    )
+    assert "layout(r32i, binding = 4) uniform iimage3D signedVolume;" in generated_code
+    assert "float scalarValue = imageLoad(scalarFloat, pixel).x;" in generated_code
+    assert "vec2 rgValue = imageLoad(rgFloat, pixel).xy;" in generated_code
+    assert "uint unsignedValue = imageLoad(unsignedScalar, pixel).x;" in generated_code
+    assert (
+        "uvec2 layerValue = imageLoad(unsignedLayers, pixelLayer).xy;"
+        in generated_code
+    )
+    assert "int signedValue = imageLoad(signedVolume, voxel).x;" in generated_code
+    assert (
+        "imageStore(scalarFloat, pixel, vec4((scalarValue + amount)));"
+        in generated_code
+    )
+    assert (
+        "imageStore(rgFloat, pixel, vec4((rgValue + vec2(amount)), 0.0, 0.0));"
+        in generated_code
+    )
+    assert (
+        "imageStore(unsignedScalar, pixel, uvec4((unsignedValue + unsignedAmount)));"
+        in generated_code
+    )
+    assert (
+        "imageStore(unsignedLayers, pixelLayer, uvec4((layerValue + uvec2(unsignedAmount)), 0u, 0u));"
+        in generated_code
+    )
+    assert (
+        "imageStore(signedVolume, voxel, ivec4((signedValue + signedAmount)));"
+        in generated_code
+    )
+    assert "input.pixel" not in generated_code
+    assert "input.voxel" not in generated_code
+    assert "input.pixelLayer" not in generated_code
+
+
+def test_opengl_direct_stage_image_compare_swap_use_input_members():
+    shader = """
+    shader DirectStageImageCompareSwap {
+        uimage3D volumeCounters;
+        iimage2DArray layerCounters;
+
+        struct FSInput {
+            ivec3 voxel @ TEXCOORD0;
+            ivec3 pixelLayer @ TEXCOORD1;
+            uint expected;
+            uint replacement;
+            int signedExpected;
+            int signedReplacement;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                uint volumeOld = imageAtomicCompSwap(volumeCounters, input.voxel, input.expected, input.replacement);
+                int layerOld = imageAtomicCompSwap(layerCounters, input.pixelLayer, input.signedExpected, input.signedReplacement);
+                return vec4(float(volumeOld), float(layerOld), 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert (
+        "layout(r32ui, binding = 0) uniform uimage3D volumeCounters;"
+        in generated_code
+    )
+    assert (
+        "layout(r32i, binding = 1) uniform iimage2DArray layerCounters;"
+        in generated_code
+    )
+    assert (
+        "uint volumeOld = imageAtomicCompSwap(volumeCounters, voxel, expected, replacement);"
+        in generated_code
+    )
+    assert (
+        "int layerOld = imageAtomicCompSwap(layerCounters, pixelLayer, signedExpected, signedReplacement);"
+        in generated_code
+    )
+    assert "input.voxel" not in generated_code
+    assert "input.pixelLayer" not in generated_code
+    assert "input.expected" not in generated_code
+    assert "input.signedExpected" not in generated_code
 
 
 def test_opengl_storage_image_format_layouts():
@@ -6913,6 +7663,87 @@ def test_opengl_array_shadow_texture_query_functions():
     assert "int arrayLevels = textureQueryLevels(shadowArrays[2]);" in generated_code
     assert "int cubeLevels = textureQueryLevels(cubeShadowArrays[3]);" in generated_code
     assert "textureCompare(" not in generated_code
+
+
+def test_opengl_direct_stage_texture_queries_mix_size_levels_and_lod():
+    shader = """
+    shader DirectTextureQueries {
+        sampler2D colorMap;
+        sampler2DArray layerMap;
+        samplerCubeArray cubeArray;
+        sampler2DShadow shadowMap;
+        sampler2DArrayShadow shadowArray;
+        samplerCubeArrayShadow cubeShadowArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec4 cubeLayer @ TEXCOORD2;
+            float lod;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 colorSize = textureSize(colorMap, 1);
+                ivec3 layerSize = textureSize(layerMap, 2);
+                ivec3 cubeSize = textureSize(cubeArray, 0);
+                ivec2 shadowSize = textureSize(shadowMap, 0);
+                ivec3 shadowArraySize = textureSize(shadowArray, 1);
+                ivec3 cubeShadowSize = textureSize(cubeShadowArray, 0);
+                int colorLevels = textureQueryLevels(colorMap);
+                int shadowLevels = textureQueryLevels(shadowArray);
+                vec2 colorLod = textureQueryLod(colorMap, linearSampler, input.uv);
+                vec2 layerLod = textureQueryLod(layerMap, linearSampler, input.uvLayer);
+                vec2 cubeLod = textureQueryLod(cubeArray, linearSampler, input.cubeLayer);
+                vec2 implicitLayerLod = textureQueryLod(layerMap, input.uvLayer);
+                vec2 implicitCubeShadowLod = textureQueryLod(cubeShadowArray, input.cubeLayer);
+                float total = float(colorSize.x + layerSize.z + cubeSize.z + shadowSize.x + shadowArraySize.z + cubeShadowSize.z + colorLevels + shadowLevels);
+                return vec4(total + colorLod.x + layerLod.y + cubeLod.x + implicitLayerLod.x + implicitCubeShadowLod.y);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
+    assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
+    assert "layout(binding = 2) uniform samplerCubeArray cubeArray;" in generated_code
+    assert "layout(binding = 3) uniform sampler2DShadow shadowMap;" in generated_code
+    assert (
+        "layout(binding = 4) uniform sampler2DArrayShadow shadowArray;"
+        in generated_code
+    )
+    assert (
+        "layout(binding = 5) uniform samplerCubeArrayShadow cubeShadowArray;"
+        in generated_code
+    )
+    assert "linearSampler" not in generated_code
+    assert "ivec2 colorSize = textureSize(colorMap, 1);" in generated_code
+    assert "ivec3 layerSize = textureSize(layerMap, 2);" in generated_code
+    assert "ivec3 cubeSize = textureSize(cubeArray, 0);" in generated_code
+    assert "ivec2 shadowSize = textureSize(shadowMap, 0);" in generated_code
+    assert "ivec3 shadowArraySize = textureSize(shadowArray, 1);" in generated_code
+    assert "ivec3 cubeShadowSize = textureSize(cubeShadowArray, 0);" in generated_code
+    assert "int colorLevels = textureQueryLevels(colorMap);" in generated_code
+    assert "int shadowLevels = textureQueryLevels(shadowArray);" in generated_code
+    assert "vec2 colorLod = textureQueryLod(colorMap, uv);" in generated_code
+    assert "vec2 layerLod = textureQueryLod(layerMap, uvLayer.xy);" in generated_code
+    assert "vec2 cubeLod = textureQueryLod(cubeArray, cubeLayer.xyz);" in generated_code
+    assert (
+        "vec2 implicitLayerLod = textureQueryLod(layerMap, uvLayer.xy);"
+        in generated_code
+    )
+    assert (
+        "vec2 implicitCubeShadowLod = textureQueryLod(cubeShadowArray, cubeLayer.xyz);"
+        in generated_code
+    )
+    assert "textureQueryLod(layerMap, uvLayer);" not in generated_code
+    assert "textureQueryLod(cubeArray, cubeLayer);" not in generated_code
+    assert "input." not in generated_code
 
 
 def test_opengl_array_texture_query_lod_uses_non_layer_coordinates():

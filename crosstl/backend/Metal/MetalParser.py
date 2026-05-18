@@ -1,3 +1,5 @@
+"""Parser for Metal source AST construction."""
+
 from .MetalLexer import *
 from .MetalAst import *
 

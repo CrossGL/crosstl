@@ -99,6 +99,35 @@ def split_array_type_suffix(type_name: str) -> Tuple[str, str]:
     return type_name[:open_bracket], type_name[open_bracket:]
 
 
+def collect_struct_member_types(structs, type_name_string) -> Dict[str, Dict[str, str]]:
+    """Collect raw struct member types for expression type inference."""
+    member_types = {}
+    for struct in structs or []:
+        struct_name = getattr(struct, "name", None)
+        members = getattr(struct, "members", None)
+        if not struct_name or members is None:
+            continue
+        member_types[struct_name] = {
+            member.name: _struct_member_type_name(member, type_name_string)
+            for member in members
+            if getattr(member, "name", None)
+        }
+    return member_types
+
+
+def _struct_member_type_name(member, type_name_string) -> str:
+    if member.__class__.__name__ == "ArrayNode":
+        element_type = getattr(
+            member, "element_type", getattr(member, "vtype", "float")
+        )
+        base_type = type_name_string(element_type)
+        size = getattr(member, "size", None)
+        return f"{base_type}[{size}]" if size else f"{base_type}[]"
+    if hasattr(member, "member_type"):
+        return type_name_string(member.member_type)
+    return type_name_string(getattr(member, "vtype", "float"))
+
+
 def detect_array_element_type(
     array_type: str, type_mapping: Dict[str, Any] = None
 ) -> str:

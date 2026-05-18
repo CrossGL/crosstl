@@ -1,3 +1,5 @@
+"""CrossGL-to-Slang code generator."""
+
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,

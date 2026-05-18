@@ -1,3 +1,5 @@
+"""High-level translation API and command-line entry point for CrossGL Translator."""
+
 from typing import Optional
 
 from .translator.codegen import (

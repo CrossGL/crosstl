@@ -1,3 +1,5 @@
+"""Preprocessor support for GLSL source imports."""
+
 import re
 from typing import Dict, List, Optional
 

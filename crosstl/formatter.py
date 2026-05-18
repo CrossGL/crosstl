@@ -1,3 +1,5 @@
+"""Formatting helpers for generated shader and compute source code."""
+
 import os
 import subprocess
 import tempfile

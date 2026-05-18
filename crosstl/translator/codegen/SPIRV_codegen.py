@@ -1,3 +1,5 @@
+"""CrossGL-to-Vulkan SPIR-V code generator."""
+
 import re
 from typing import List, Optional, Tuple, Union
 

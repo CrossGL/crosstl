@@ -1,3 +1,5 @@
+"""CrossGL-to-Rust code generator."""
+
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,

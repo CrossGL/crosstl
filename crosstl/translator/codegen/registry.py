@@ -1,3 +1,5 @@
+"""Backend registry and alias resolution for CrossGL code generators."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

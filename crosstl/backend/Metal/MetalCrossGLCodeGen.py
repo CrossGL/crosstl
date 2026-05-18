@@ -1,3 +1,5 @@
+"""Reverse code generator that emits CrossGL from Metal AST nodes."""
+
 from .MetalAst import *
 from .MetalParser import *
 from .MetalLexer import *

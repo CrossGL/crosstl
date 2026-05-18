@@ -1,3 +1,5 @@
+"""Reverse code generator that emits CrossGL from Slang AST nodes."""
+
 from .SlangAst import *
 from .SlangParser import *
 from .SlangLexer import *

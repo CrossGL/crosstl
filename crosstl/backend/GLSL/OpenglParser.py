@@ -1,3 +1,5 @@
+"""Parser for GLSL source AST construction."""
+
 from .OpenglAst import (
     ShaderNode,
     VariableNode,

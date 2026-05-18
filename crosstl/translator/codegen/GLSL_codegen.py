@@ -1,3 +1,5 @@
+"""CrossGL-to-GLSL code generator."""
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -36,6 +38,7 @@ from .array_utils import (
     get_array_size_from_node,
     evaluate_literal_int_expression,
     collect_literal_int_constants,
+    collect_struct_member_types,
 )
 from .stage_utils import (
     compute_local_size,
@@ -70,6 +73,7 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.struct_member_types = {}
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
@@ -261,6 +265,9 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.struct_member_types = collect_struct_member_types(
+            getattr(ast, "structs", []), self.type_name_string
+        )
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -1105,6 +1112,12 @@ class GLSLCodeGen:
                     return component_type
                 if component_type:
                     return f"{component_type}{len(member)}"
+            if object_type:
+                member_type = self.struct_member_types.get(
+                    self.type_name_string(object_type), {}
+                ).get(member)
+                if member_type:
+                    return member_type
             return None
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)

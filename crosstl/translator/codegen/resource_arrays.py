@@ -1,3 +1,5 @@
+"""Helpers for collecting resource-array size hints from CrossGL AST nodes."""
+
 from ..ast import ArrayAccessNode, FunctionCallNode
 
 

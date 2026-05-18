@@ -1,3 +1,5 @@
+"""Lexer for importing GLSL source into CrossGL Translator."""
+
 import re
 from typing import Iterator, Tuple, List, Optional, Dict
 

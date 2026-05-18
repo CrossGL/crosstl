@@ -1,0 +1,6 @@
+sphinx>=7.2
+furo>=2024.1.29
+myst-parser>=2.0
+sphinx-copybutton>=0.5
+sphinx-autodoc-typehints>=1.25
+breathe>=4.35

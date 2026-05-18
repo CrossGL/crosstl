@@ -1,3 +1,5 @@
+"""Parser for DirectX HLSL source AST construction."""
+
 import re
 
 from .DirectxAst import (

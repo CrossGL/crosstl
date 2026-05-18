@@ -1,3 +1,5 @@
+"""Reverse code generator that emits CrossGL from GLSL AST nodes."""
+
 from .OpenglAst import (
     ShaderNode,
     VariableNode,

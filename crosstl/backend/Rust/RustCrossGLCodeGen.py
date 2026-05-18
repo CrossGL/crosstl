@@ -1,3 +1,5 @@
+"""Reverse code generator that emits CrossGL from Rust AST nodes."""
+
 from .RustAst import *
 from .RustParser import *
 from .RustLexer import *

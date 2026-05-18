@@ -1,3 +1,5 @@
+"""Preprocessor support for DirectX HLSL source imports."""
+
 import os
 import re
 from dataclasses import dataclass

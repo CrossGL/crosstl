@@ -1,3 +1,5 @@
+"""Public registry helpers for CrossGL target code generation."""
+
 from .registry import (
     BackendSpec,
     register_backend,

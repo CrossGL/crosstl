@@ -1,3 +1,5 @@
+"""Reverse code generator that emits CrossGL from Mojo AST nodes."""
+
 from .MojoAst import *
 from .MojoParser import *
 from .MojoLexer import *

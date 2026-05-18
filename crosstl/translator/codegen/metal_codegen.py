@@ -1,3 +1,5 @@
+"""CrossGL-to-Metal code generator."""
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -36,6 +38,7 @@ from .array_utils import (
     get_array_size_from_node,
     evaluate_literal_int_expression,
     collect_literal_int_constants,
+    collect_struct_member_types,
 )
 from .stage_utils import (
     normalize_stage_name,
@@ -82,6 +85,7 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.struct_member_types = {}
         self.type_mapping = {
             # Scalar Types
             "void": "void",
@@ -242,6 +246,9 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.struct_member_types = collect_struct_member_types(
+            getattr(ast, "structs", []), self.type_name_string
+        )
         code = "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
@@ -916,6 +923,12 @@ class MetalCodeGen:
                     return component_type
                 if component_type:
                     return f"{component_type}{len(member)}"
+            if object_type:
+                member_type = self.struct_member_types.get(
+                    self.type_name_string(object_type), {}
+                ).get(member)
+                if member_type:
+                    return member_type
             return None
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
@@ -3087,6 +3100,16 @@ class MetalCodeGen:
                 texel_xy, layer = self.array_texture_coordinate_parts(coord)
                 return f"{texture_name}.read({texel_xy}, {layer}, {lod})"
             return f"{texture_name}.read({coord}, {lod})"
+
+        if func_name == "texelFetchOffset" and len(args) >= 4:
+            lod = self.generate_expression(args[2])
+            offset = self.generate_expression(args[3])
+            if self.is_multisample_texture_resource(texture_type):
+                return "/* unsupported Metal texel fetch offset: multisample textures do not support offsets */ float4(0.0)"
+            if is_array_texture:
+                texel_xy, layer = self.array_texture_coordinate_parts(coord)
+                return f"{texture_name}.read(({texel_xy} + {offset}), {layer}, {lod})"
+            return f"{texture_name}.read(({coord} + {offset}), {lod})"
 
         return None
 

@@ -1,3 +1,5 @@
+"""Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
+
 from .VulkanAst import (
     AssignmentNode,
     BinaryOpNode,
