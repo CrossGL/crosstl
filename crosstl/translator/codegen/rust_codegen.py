@@ -7,7 +7,9 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    IdentifierNode,
     IfNode,
+    LiteralNode,
     MemberAccessNode,
     ReturnNode,
     ShaderNode,
@@ -160,8 +162,10 @@ class RustCodeGen:
             "fract": "fract",
             "mod": "modulo",
         }
+        self.variable_types = {}
 
     def generate(self, ast):
+        self.variable_types = {}
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -409,6 +413,7 @@ class RustCodeGen:
     def generate_function(self, func, indent=0, shader_type=None):
         code = ""
         code += "  " * indent
+        saved_variable_types = self.variable_types.copy()
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
@@ -420,6 +425,7 @@ class RustCodeGen:
             else:
                 param_type = "float"
 
+            self.register_variable_type(p.name, param_type)
             params.append(f"{p.name}: {self.map_type(param_type)}")
 
         params_str = ", ".join(params) if params else ""
@@ -447,6 +453,7 @@ class RustCodeGen:
                 code += self.generate_statement(stmt, indent + 1)
 
         code += "  " * indent + "}\n\n"
+        self.variable_types = saved_variable_types
         return code
 
     def generate_param_attributes(self, param):
@@ -485,6 +492,7 @@ class RustCodeGen:
             else:
                 vtype = "f32"
 
+            self.register_variable_type(stmt.name, vtype)
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
                 init_expr = self.generate_expression(stmt.initial_value)
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
@@ -734,40 +742,15 @@ class RustCodeGen:
 
             func_name = self.function_map.get(func_name, func_name)
 
-            if func_name in [
-                "vec2",
-                "vec3",
-                "vec4",
-                "vec2<f32>",
-                "vec3<f32>",
-                "vec4<f32>",
-                "vec2<f64>",
-                "vec3<f64>",
-                "vec4<f64>",
-                "vec2<i32>",
-                "vec3<i32>",
-                "vec4<i32>",
-                "vec2<u32>",
-                "vec3<u32>",
-                "vec4<u32>",
-                "vec2<bool>",
-                "vec3<bool>",
-                "vec4<bool>",
-                "ivec2",
-                "ivec3",
-                "ivec4",
-                "uvec2",
-                "uvec3",
-                "uvec4",
-                "dvec2",
-                "dvec3",
-                "dvec4",
-                "bvec2",
-                "bvec3",
-                "bvec4",
-            ]:
+            vector_info = self.vector_type_info(func_name)
+            if vector_info:
                 rust_type = self.map_type(func_name)
-                args_str = ", ".join(self.generate_expression(arg) for arg in args)
+                generated_args = [self.generate_expression(arg) for arg in args]
+                if len(generated_args) == 1:
+                    arg_type = self.expression_result_type(args[0])
+                    if arg_type is not None and not self.vector_type_info(arg_type):
+                        generated_args *= vector_info["size"]
+                args_str = ", ".join(generated_args)
                 return f"{rust_type}::new({args_str})"
 
             if func_name in [
@@ -829,6 +812,125 @@ class RustCodeGen:
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
         return str(value)
+
+    def register_variable_type(self, name, type_name):
+        if not name or type_name is None:
+            return
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+        self.variable_types[name] = type_name
+
+    def get_expression_name(self, expr):
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            return self.get_expression_name(array_expr)
+        return None
+
+    def expression_result_type(self, expr):
+        if expr is None:
+            return None
+        if isinstance(expr, (IdentifierNode, VariableNode, ArrayAccessNode)):
+            return self.variable_types.get(self.get_expression_name(expr))
+        if isinstance(expr, LiteralNode):
+            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+            if literal_type:
+                return literal_type
+            if isinstance(expr.value, bool):
+                return "bool"
+            if isinstance(expr.value, float):
+                return "float"
+            if isinstance(expr.value, int):
+                return "int"
+            return None
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", getattr(expr, "name", None))
+            func_name = getattr(func_expr, "name", func_expr)
+            if isinstance(func_name, str) and self.vector_type_info(func_name):
+                return func_name
+            return None
+        if isinstance(expr, BinaryOpNode):
+            left_type = self.expression_result_type(expr.left)
+            right_type = self.expression_result_type(expr.right)
+            if self.vector_type_info(left_type):
+                return left_type
+            if self.vector_type_info(right_type):
+                return right_type
+            return left_type or right_type
+        if isinstance(expr, UnaryOpNode):
+            return self.expression_result_type(expr.operand)
+        if isinstance(expr, TernaryOpNode):
+            return self.expression_result_type(expr.true_expr) or self.expression_result_type(
+                expr.false_expr
+            )
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+            object_type = self.expression_result_type(object_expr)
+            vector_info = self.vector_type_info(object_type)
+            if not vector_info:
+                return None
+            member = getattr(expr, "member", "")
+            if len(member) == 1:
+                return vector_info["component_type"]
+            if all(component in "xyzwrgba" for component in member):
+                return self.vector_type_for_components(
+                    vector_info["component_type"], len(member)
+                )
+        return None
+
+    def vector_type_info(self, type_name):
+        if type_name is None:
+            return None
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+
+        mapped_type = self.map_type(type_name)
+        vector_details = {
+            "Vec2<f32>": ("float", 2),
+            "Vec3<f32>": ("float", 3),
+            "Vec4<f32>": ("float", 4),
+            "Vec2<f64>": ("double", 2),
+            "Vec3<f64>": ("double", 3),
+            "Vec4<f64>": ("double", 4),
+            "Vec2<i32>": ("int", 2),
+            "Vec3<i32>": ("int", 3),
+            "Vec4<i32>": ("int", 4),
+            "Vec2<u32>": ("uint", 2),
+            "Vec3<u32>": ("uint", 3),
+            "Vec4<u32>": ("uint", 4),
+            "Vec2<bool>": ("bool", 2),
+            "Vec3<bool>": ("bool", 3),
+            "Vec4<bool>": ("bool", 4),
+        }
+        details = vector_details.get(mapped_type)
+        if details is None:
+            return None
+        component_type, size = details
+        return {"component_type": component_type, "size": size}
+
+    def vector_type_for_components(self, component_type, component_count):
+        if component_count < 2 or component_count > 4:
+            return component_type
+        prefixes = {
+            "float": "vec",
+            "double": "dvec",
+            "int": "ivec",
+            "uint": "uvec",
+            "bool": "bvec",
+        }
+        prefix = prefixes.get(component_type)
+        if prefix is None:
+            return None
+        return f"{prefix}{component_count}"
 
     def escape_literal(self, value, quote):
         text = str(value)

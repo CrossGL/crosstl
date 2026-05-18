@@ -1541,6 +1541,165 @@ class GLSLCodeGen:
             return self.vector_component(coord, "xyz")
         return coord
 
+    def is_array_expression(self, node):
+        type_name = self.type_name_string(self.expression_result_type(node))
+        return isinstance(type_name, str) and "[" in type_name and "]" in type_name
+
+    def texture_gather_offsets_args(self, extra_args):
+        if len(extra_args) in {1, 2} and self.is_array_expression(extra_args[0]):
+            offsets_name = self.generate_expression(extra_args[0])
+            offset_args = [f"{offsets_name}[{index}]" for index in range(4)]
+            component_arg = extra_args[1] if len(extra_args) == 2 else None
+            return offset_args, component_arg
+
+        if len(extra_args) in {4, 5}:
+            component_arg = extra_args[4] if len(extra_args) == 5 else None
+            return extra_args[:4], component_arg
+
+        return None, None
+
+    def texture_gather_component_value(self, component_arg):
+        if component_arg is None:
+            return None
+        return self.literal_int_value(component_arg, self.literal_int_constants)
+
+    def texture_gather_call_expression(
+        self, function_name, texture_name, coord, offset_arg=None, component=None
+    ):
+        args = [texture_name, coord]
+        if offset_arg is not None:
+            args.append(offset_arg)
+        if component is not None:
+            args.append(str(component))
+        return f"{function_name}({', '.join(args)})"
+
+    def texture_gather_offsets_expression(
+        self, texture_name, coord, offset_args, component
+    ):
+        component_suffixes = ("x", "y", "z", "w")
+        component_values = []
+        for index, offset_arg in enumerate(offset_args):
+            gather = self.texture_gather_call_expression(
+                "textureGatherOffset",
+                texture_name,
+                coord,
+                self.generate_expression(offset_arg),
+                component,
+            )
+            component_values.append(f"{gather}.{component_suffixes[index]}")
+        return f"vec4({', '.join(component_values)})"
+
+    def texture_gather_dynamic_component_expression(self, build_expression, component):
+        component_calls = [build_expression(index) for index in range(4)]
+        return (
+            f"({component} == 0 ? {component_calls[0]} : "
+            f"{component} == 1 ? {component_calls[1]} : "
+            f"{component} == 2 ? {component_calls[2]} : {component_calls[3]})"
+        )
+
+    def unsupported_texture_gather_call(self, func_name, reason):
+        return (
+            f"/* unsupported GLSL texture gather: "
+            f"{func_name} {reason} */ vec4(0.0)"
+        )
+
+    def generate_texture_gather_call(self, func_name, args):
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return self.unsupported_texture_gather_call(
+                func_name, "requires texture and coordinate arguments"
+            )
+
+        texture_name, coord, extra_args = parts
+        offset_args = []
+        component_arg = None
+
+        if func_name == "textureGather":
+            if len(extra_args) > 1:
+                return self.unsupported_texture_gather_call(
+                    func_name, "accepts at most one component argument"
+                )
+            if extra_args:
+                component_arg = extra_args[0]
+        elif func_name == "textureGatherOffset":
+            if len(extra_args) not in {1, 2}:
+                return self.unsupported_texture_gather_call(
+                    func_name, "requires offset and optional component arguments"
+                )
+            offset_args = [extra_args[0]]
+            if len(extra_args) == 2:
+                component_arg = extra_args[1]
+        else:
+            offset_args, component_arg = self.texture_gather_offsets_args(extra_args)
+            if offset_args is None:
+                return self.unsupported_texture_gather_call(
+                    func_name,
+                    "requires a typed offsets array or four offset arguments",
+                )
+
+        component = self.texture_gather_component_value(component_arg)
+        if component is not None:
+            if component not in {0, 1, 2, 3}:
+                return self.unsupported_texture_gather_call(
+                    func_name, "component literal must be 0, 1, 2, or 3"
+                )
+            if func_name == "textureGatherOffsets":
+                return self.texture_gather_offsets_expression(
+                    texture_name, coord, offset_args, component
+                )
+            offset_arg = (
+                self.generate_expression(offset_args[0]) if offset_args else None
+            )
+            function_name = (
+                "textureGatherOffset"
+                if func_name == "textureGatherOffset"
+                else "textureGather"
+            )
+            return self.texture_gather_call_expression(
+                function_name, texture_name, coord, offset_arg, component
+            )
+
+        if component_arg is None:
+            if func_name == "textureGatherOffsets":
+                return self.texture_gather_offsets_expression(
+                    texture_name, coord, offset_args, None
+                )
+            offset_arg = (
+                self.generate_expression(offset_args[0]) if offset_args else None
+            )
+            function_name = (
+                "textureGatherOffset"
+                if func_name == "textureGatherOffset"
+                else "textureGather"
+            )
+            return self.texture_gather_call_expression(
+                function_name, texture_name, coord, offset_arg
+            )
+
+        component_expr = self.generate_expression(component_arg)
+        if func_name == "textureGatherOffsets":
+            return self.texture_gather_dynamic_component_expression(
+                lambda option: self.texture_gather_offsets_expression(
+                    texture_name, coord, offset_args, option
+                ),
+                component_expr,
+            )
+
+        offset_arg = (
+            self.generate_expression(offset_args[0]) if offset_args else None
+        )
+        function_name = (
+            "textureGatherOffset"
+            if func_name == "textureGatherOffset"
+            else "textureGather"
+        )
+        return self.texture_gather_dynamic_component_expression(
+            lambda option: self.texture_gather_call_expression(
+                function_name, texture_name, coord, offset_arg, option
+            ),
+            component_expr,
+        )
+
     def texture_compare_coordinate(self, texture_type, coord, compare):
         texture_type = self.resource_base_type(texture_type)
         if texture_type == "samplerCubeArrayShadow":
@@ -2062,7 +2221,14 @@ class GLSLCodeGen:
         if func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
             return self.generate_texture_gather_compare_call(func_name, args)
 
-        if func_name == "textureQueryLod" and self.is_explicit_sampler_argument(args):
+        if func_name in {
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+        }:
+            return self.generate_texture_gather_call(func_name, args)
+
+        if func_name == "textureQueryLod":
             parts = self.texture_call_parts(args)
             if parts is None:
                 return None
@@ -2076,7 +2242,6 @@ class GLSLCodeGen:
             "texture",
             "textureLod",
             "textureGrad",
-            "textureGather",
             "textureOffset",
             "textureLodOffset",
             "textureGradOffset",
@@ -2086,8 +2251,6 @@ class GLSLCodeGen:
             "textureProjLodOffset",
             "textureProjGrad",
             "textureProjGradOffset",
-            "textureGatherOffset",
-            "textureGatherOffsets",
         }
         if func_name not in texture_funcs or not self.is_explicit_sampler_argument(
             args

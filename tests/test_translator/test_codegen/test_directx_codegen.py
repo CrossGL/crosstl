@@ -4848,6 +4848,85 @@ def test_directx_texture_gather_offset_variants_keep_sampler_arguments():
     assert "textureGatherOffsets(" not in generated_code
 
 
+def test_directx_texture_gather_offsets_mix_literal_and_dynamic_offsets():
+    shader = """
+    shader GatherOffsetMixed {
+        sampler2DArray layerMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            ivec2 dynamic0 @ TEXCOORD1;
+            ivec2 dynamic1 @ TEXCOORD2;
+            int component @ TEXCOORD3;
+        };
+
+        vec4 gatherOps(
+            sampler2DArray layers,
+            sampler s,
+            vec3 uvLayer,
+            ivec2 dynamic0,
+            ivec2 dynamic1,
+            int component
+        ) {
+            return textureGatherOffsets(
+                layers,
+                s,
+                uvLayer,
+                ivec2(-1, 0),
+                dynamic0,
+                ivec2(1, -1),
+                dynamic1,
+                component
+            );
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherOps(
+                    layerMap,
+                    linearSampler,
+                    input.uvLayer,
+                    input.dynamic0,
+                    input.dynamic1,
+                    input.component
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DArray layerMap : register(t0);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert (
+        "float4 gatherOps(Texture2DArray layers, SamplerState s, float3 uvLayer, int2 dynamic0, int2 dynamic1, int component)"
+        in generated_code
+    )
+    assert "textureGatherOffsets(" not in generated_code
+    methods = {
+        0: "GatherRed",
+        1: "GatherGreen",
+        2: "GatherBlue",
+        3: "GatherAlpha",
+    }
+    for component, method in methods.items():
+        call = (
+            f"layers.{method}(s, uvLayer, int2(-1, 0), "
+            "dynamic0, int2(1, -1), dynamic1)"
+        )
+        assert call in generated_code
+        if component < 3:
+            assert f"component == {component} ? {call}" in generated_code
+    assert (
+        "gatherOps(layerMap, linearSampler, input.uvLayer, input.dynamic0, input.dynamic1, input.component)"
+        in generated_code
+    )
+
+
 def test_directx_texture_sample_offset_variants_use_sample_offsets():
     shader = """
     shader TextureSampleOffsets {
@@ -5331,18 +5410,512 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
     assert "textureCompareProj" not in generated_code
 
 
+def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_samplers():
+    shader = """
+    shader ProjectedShadowResourceArrays {
+        sampler2DShadow shadowMaps[4];
+        sampler2DArrayShadow shadowArrays[4];
+        sampler shadowSamplers[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec3 uvq @ TEXCOORD1;
+            vec4 uvLayerQ @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        float projectedLeaf(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            sampler shadowSamplers[],
+            int layer,
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            float planar = textureCompareProj(shadowMaps[layer], shadowSamplers[layer], uvq, depth);
+            float planarOffset = textureCompareProjOffset(shadowMaps[1], shadowSamplers[1], uvq, depth, offset);
+            float planarLod = textureCompareProjLod(shadowMaps[2], shadowSamplers[2], uvq, depth, lod);
+            float planarGradOffset = textureCompareProjGradOffset(shadowMaps[layer], shadowSamplers[layer], uvq, depth, ddx, ddy, offset);
+            float arrayProjected = textureCompareProj(shadowArrays[2], shadowSamplers[2], uvLayerQ, depth);
+            float arrayOffset = textureCompareProjOffset(shadowArrays[layer], shadowSamplers[layer], uvLayerQ, depth, offset);
+            float arrayGrad = textureCompareProjGrad(shadowArrays[1], shadowSamplers[1], uvLayerQ, depth, ddx, ddy);
+            return planar + planarOffset + planarLod + planarGradOffset + arrayProjected + arrayOffset + arrayGrad;
+        }
+
+        float projectedWrapper(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            sampler shadowSamplers[],
+            int layer,
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            return projectedLeaf(shadowMaps, shadowArrays, shadowSamplers, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return projectedWrapper(
+                    shadowMaps,
+                    shadowArrays,
+                    shadowSamplers,
+                    input.layer,
+                    input.uvq,
+                    input.uvLayerQ,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMaps[4] : register(t0);" in generated_code
+    assert "Texture2DArray shadowArrays[4] : register(t4);" in generated_code
+    assert "SamplerComparisonState shadowSamplers[4] : register(s0);" in generated_code
+    assert (
+        "float projectedLeaf(Texture2D shadowMaps[4], Texture2DArray shadowArrays[4], SamplerComparisonState shadowSamplers[4], int layer, float3 uvq, float4 uvLayerQ, float depth, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float planar = shadowMaps[layer].SampleCmp(shadowSamplers[layer], uvq.xy / uvq.z, depth);"
+        in generated_code
+    )
+    assert (
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowSamplers[2], uvq.xy / uvq.z, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowSamplers[layer], uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayProjected = shadowArrays[2].SampleCmp(shadowSamplers[2], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        in generated_code
+    )
+    assert (
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowSamplers[1], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float projectedWrapper(Texture2D shadowMaps[4], Texture2DArray shadowArrays[4], SamplerComparisonState shadowSamplers[4], int layer, float3 uvq, float4 uvLayerQ, float depth, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "projectedLeaf(shadowMaps, shadowArrays, shadowSamplers, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
+        in generated_code
+    )
+    assert (
+        "projectedWrapper(shadowMaps, shadowArrays, shadowSamplers, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "textureCompareProj" not in generated_code
+
+
+def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_samplers():
+    shader = """
+    shader ImplicitProjectedShadowResourceArrays {
+        sampler2DShadow shadowMaps[4];
+        sampler2DArrayShadow shadowArrays[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec3 uvq @ TEXCOORD1;
+            vec4 uvLayerQ @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        float projectedLeaf(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            int layer,
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            float planar = textureCompareProj(shadowMaps[layer], uvq, depth);
+            float planarOffset = textureCompareProjOffset(shadowMaps[1], uvq, depth, offset);
+            float planarLod = textureCompareProjLod(shadowMaps[2], uvq, depth, lod);
+            float planarGradOffset = textureCompareProjGradOffset(shadowMaps[layer], uvq, depth, ddx, ddy, offset);
+            float arrayProjected = textureCompareProj(shadowArrays[2], uvLayerQ, depth);
+            float arrayOffset = textureCompareProjOffset(shadowArrays[layer], uvLayerQ, depth, offset);
+            float arrayGrad = textureCompareProjGrad(shadowArrays[1], uvLayerQ, depth, ddx, ddy);
+            return planar + planarOffset + planarLod + planarGradOffset + arrayProjected + arrayOffset + arrayGrad;
+        }
+
+        float projectedWrapper(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            int layer,
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            return projectedLeaf(shadowMaps, shadowArrays, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return projectedWrapper(
+                    shadowMaps,
+                    shadowArrays,
+                    input.layer,
+                    input.uvq,
+                    input.uvLayerQ,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMaps[4] : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapsSampler : register(s0);" in generated_code
+    assert "Texture2DArray shadowArrays[4] : register(t4);" in generated_code
+    assert "SamplerComparisonState shadowArraysSampler : register(s1);" in generated_code
+    assert (
+        "float projectedLeaf(Texture2D shadowMaps[4], SamplerComparisonState shadowMapsSampler, Texture2DArray shadowArrays[4], SamplerComparisonState shadowArraysSampler, int layer, float3 uvq, float4 uvLayerQ, float depth, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float planar = shadowMaps[layer].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth);"
+        in generated_code
+    )
+    assert (
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "float planarLod = shadowMaps[2].SampleCmpLevel(shadowMapsSampler, uvq.xy / uvq.z, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float planarGradOffset = shadowMaps[layer].SampleCmpGrad(shadowMapsSampler, uvq.xy / uvq.z, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayProjected = shadowArrays[2].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth);"
+        in generated_code
+    )
+    assert (
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayGrad = shadowArrays[1].SampleCmpGrad(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float projectedWrapper(Texture2D shadowMaps[4], SamplerComparisonState shadowMapsSampler, Texture2DArray shadowArrays[4], SamplerComparisonState shadowArraysSampler, int layer, float3 uvq, float4 uvLayerQ, float depth, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "projectedLeaf(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
+        in generated_code
+    )
+    assert (
+        "projectedWrapper(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "SamplerComparisonState shadowMapsSampler[" not in generated_code
+    assert "SamplerComparisonState shadowArraysSampler[" not in generated_code
+    assert "textureCompareProj" not in generated_code
+
+
+def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_constant_size():
+    shader = """
+    shader UnsizedProjectedShadowResources {
+        const int LAYER = 4;
+        sampler2DShadow shadowMaps[];
+        sampler2DArrayShadow shadowArrays[];
+        sampler shadowSamplers[];
+        sampler2DShadow afterShadow;
+        sampler afterSampler;
+
+        struct FSInput {
+            vec3 uvq @ TEXCOORD0;
+            vec4 uvLayerQ @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD2;
+            vec2 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        float shadowDeep(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            sampler shadowSamplers[],
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            float planarHigh = textureCompareProj(shadowMaps[LAYER], shadowSamplers[LAYER], uvq, depth);
+            float planarLow = textureCompareProjOffset(shadowMaps[1], shadowSamplers[1], uvq, depth, offset);
+            float arrayHigh = textureCompareProjGrad(shadowArrays[2 * 2], shadowSamplers[2 * 2], uvLayerQ, depth, ddx, ddy);
+            float arrayLow = textureCompareProjOffset(shadowArrays[3], shadowSamplers[3], uvLayerQ, depth, offset);
+            return planarHigh + planarLow + arrayHigh + arrayLow;
+        }
+
+        float shadowMid(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            sampler shadowSamplers[],
+            vec3 uvq,
+            vec4 uvLayerQ,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            return shadowDeep(shadowMaps, shadowArrays, shadowSamplers, uvq, uvLayerQ, depth, lod, ddx, ddy, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float arrayShadow = shadowMid(
+                    shadowMaps,
+                    shadowArrays,
+                    shadowSamplers,
+                    input.uvq,
+                    input.uvLayerQ,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+                float singleShadow = textureCompare(afterShadow, afterSampler, input.uvq.xy, input.depth);
+                return vec4(arrayShadow + singleShadow);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMaps[5] : register(t0);" in generated_code
+    assert "Texture2DArray shadowArrays[5] : register(t5);" in generated_code
+    assert "SamplerComparisonState shadowSamplers[5] : register(s0);" in generated_code
+    assert "Texture2D afterShadow : register(t10);" in generated_code
+    assert "SamplerComparisonState afterSampler : register(s5);" in generated_code
+    assert (
+        "float shadowDeep(Texture2D shadowMaps[5], Texture2DArray shadowArrays[5], SamplerComparisonState shadowSamplers[5], float3 uvq, float4 uvLayerQ, float depth, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float planarHigh = shadowMaps[LAYER].SampleCmp(shadowSamplers[LAYER], uvq.xy / uvq.z, depth);"
+        in generated_code
+    )
+    assert (
+        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayHigh = shadowArrays[(2 * 2)].SampleCmpGrad(shadowSamplers[(2 * 2)], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        in generated_code
+    )
+    assert (
+        "float shadowMid(Texture2D shadowMaps[5], Texture2DArray shadowArrays[5], SamplerComparisonState shadowSamplers[5], float3 uvq, float4 uvLayerQ, float depth, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "shadowDeep(shadowMaps, shadowArrays, shadowSamplers, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
+        in generated_code
+    )
+    assert (
+        "shadowMid(shadowMaps, shadowArrays, shadowSamplers, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert (
+        "float singleShadow = afterShadow.SampleCmp(afterSampler, input.uvq.xy, input.depth);"
+        in generated_code
+    )
+    assert "Texture2D shadowMaps[] : register(t0);" not in generated_code
+    assert "SamplerState shadowSamplers[]" not in generated_code
+    assert "textureCompareProj" not in generated_code
+
+
+def test_directx_projected_cube_shadow_compare_reports_unsupported():
+    shader = """
+    shader ProjectedCubeShadowDiagnostics {
+        samplerCubeShadow cubeMap;
+        samplerCubeArrayShadow cubeArray;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec4 cubeLayerProj @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec3 ddx @ TEXCOORD2;
+            vec3 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        float cubeProjected(
+            samplerCubeShadow tex,
+            sampler s,
+            vec4 cubeProj,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            float projected = textureCompareProj(tex, s, cubeProj, depth);
+            float offsetProjected = textureCompareProjOffset(tex, s, cubeProj, depth, offset);
+            float lodOffsetProjected = textureCompareProjLodOffset(tex, s, cubeProj, depth, lod, offset);
+            float gradOffsetProjected = textureCompareProjGradOffset(tex, s, cubeProj, depth, ddx, ddy, offset);
+            return projected + offsetProjected + lodOffsetProjected + gradOffsetProjected;
+        }
+
+        float cubeArrayProjected(
+            samplerCubeArrayShadow tex,
+            sampler s,
+            vec4 cubeLayerProj,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            float projected = textureCompareProj(tex, s, cubeLayerProj, depth);
+            float offsetProjected = textureCompareProjOffset(tex, s, cubeLayerProj, depth, offset);
+            float lodOffsetProjected = textureCompareProjLodOffset(tex, s, cubeLayerProj, depth, lod, offset);
+            float gradOffsetProjected = textureCompareProjGradOffset(tex, s, cubeLayerProj, depth, ddx, ddy, offset);
+            return projected + offsetProjected + lodOffsetProjected + gradOffsetProjected;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return cubeProjected(
+                    cubeMap,
+                    compareSampler,
+                    input.cubeProj,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                ) + cubeArrayProjected(
+                    cubeArray,
+                    compareSampler,
+                    input.cubeLayerProj,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCube cubeMap : register(t0);" in generated_code
+    assert "TextureCubeArray cubeArray : register(t1);" in generated_code
+    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert (
+        "float cubeProjected(TextureCube tex, SamplerComparisonState s, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float cubeArrayProjected(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    reasons = {
+        "textureCompareProj",
+        "textureCompareProjOffset",
+        "textureCompareProjLodOffset",
+        "textureCompareProjGradOffset",
+    }
+    for func_name in reasons:
+        assert (
+            generated_code.count(
+                f"/* unsupported DirectX texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
+            )
+            == 2
+        )
+    assert "textureCompareProj(" not in generated_code
+    assert "textureCompareProjOffset(" not in generated_code
+    assert "textureCompareProjLodOffset(" not in generated_code
+    assert "textureCompareProjGradOffset(" not in generated_code
+    assert ".SampleCmp(s, cubeProj" not in generated_code
+    assert ".SampleCmpLevel(s, cubeProj" not in generated_code
+    assert ".SampleCmpGrad(s, cubeProj" not in generated_code
+
+
 def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
     shader = """
     shader ShadowGatherCompareOffsets {
         sampler2DShadow shadowMap;
         sampler2DArrayShadow shadowArray;
+        samplerCubeArrayShadow cubeShadowArray;
         sampler compareSampler;
 
         struct FSInput {
             vec2 uv @ TEXCOORD0;
             vec3 uvLayer @ TEXCOORD1;
+            vec4 cubeLayer @ TEXCOORD2;
             float depth;
-            ivec2 offset @ TEXCOORD2;
+            ivec2 offset @ TEXCOORD3;
         };
 
         vec4 implicitShadow(sampler2DShadow tex, vec2 uv, float depth, ivec2 offset) {
@@ -5365,11 +5938,16 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
             return gathered + offsetGathered + vec4(offsetCompared);
         }
 
+        vec4 gatherCubeShadowArray(samplerCubeArrayShadow tex, sampler s, vec4 cubeLayer, float depth) {
+            return textureGatherCompare(tex, s, cubeLayer, depth);
+        }
+
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 return implicitShadow(shadowMap, input.uv, input.depth, input.offset)
                     + gatherShadow(shadowMap, compareSampler, input.uv, input.depth, input.offset)
-                    + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset);
+                    + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset)
+                    + gatherCubeShadowArray(cubeShadowArray, compareSampler, input.cubeLayer, input.depth);
             }
         }
     }
@@ -5381,6 +5959,7 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
 
     assert "Texture2D shadowMap : register(t0);" in generated_code
     assert "Texture2DArray shadowArray : register(t1);" in generated_code
+    assert "TextureCubeArray cubeShadowArray : register(t2);" in generated_code
     assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
     assert "SamplerComparisonState compareSampler : register(s1);" in generated_code
     assert (
@@ -5410,6 +5989,11 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
     assert "tex.GatherCmp(s, uvLayer, depth, offset)" in generated_code
     assert "tex.SampleCmp(s, uvLayer, depth, offset)" in generated_code
     assert (
+        "float4 gatherCubeShadowArray(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayer, float depth)"
+        in generated_code
+    )
+    assert "return tex.GatherCmp(s, cubeLayer, depth);" in generated_code
+    assert (
         "implicitShadow(shadowMap, shadowMapSampler, input.uv, input.depth, input.offset)"
         in generated_code
     )
@@ -5419,6 +6003,78 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
     )
     assert (
         "gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset)"
+        in generated_code
+    )
+    assert (
+        "gatherCubeShadowArray(cubeShadowArray, compareSampler, input.cubeLayer, input.depth)"
+        in generated_code
+    )
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
+
+
+def test_directx_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_arrays():
+    shader = """
+    shader ImplicitShadowGatherCompare {
+        sampler2DArrayShadow shadowArray;
+        samplerCubeArrayShadow cubeShadowArray;
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+            ivec2 offset @ TEXCOORD2;
+        };
+
+        vec4 implicitArray(sampler2DArrayShadow tex, vec3 uvLayer, float depth, ivec2 offset) {
+            return textureGatherCompare(tex, uvLayer, depth)
+                + textureGatherCompareOffset(tex, uvLayer, depth, offset)
+                + vec4(textureCompareOffset(tex, uvLayer, depth, offset));
+        }
+
+        vec4 implicitCubeArray(samplerCubeArrayShadow tex, vec4 cubeLayer, float depth) {
+            return textureGatherCompare(tex, cubeLayer, depth);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return implicitArray(shadowArray, input.uvLayer, input.depth, input.offset)
+                    + implicitCubeArray(cubeShadowArray, input.cubeLayer, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DArray shadowArray : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowArraySampler : register(s0);" in generated_code
+    assert "TextureCubeArray cubeShadowArray : register(t1);" in generated_code
+    assert (
+        "SamplerComparisonState cubeShadowArraySampler : register(s1)"
+        in generated_code
+    )
+    assert (
+        "float4 implicitArray(Texture2DArray tex, SamplerComparisonState texSampler, float3 uvLayer, float depth, int2 offset)"
+        in generated_code
+    )
+    assert "tex.GatherCmp(texSampler, uvLayer, depth)" in generated_code
+    assert "tex.GatherCmp(texSampler, uvLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmp(texSampler, uvLayer, depth, offset)" in generated_code
+    assert (
+        "float4 implicitCubeArray(TextureCubeArray tex, SamplerComparisonState texSampler, float4 cubeLayer, float depth)"
+        in generated_code
+    )
+    assert "return tex.GatherCmp(texSampler, cubeLayer, depth);" in generated_code
+    assert (
+        "implicitArray(shadowArray, shadowArraySampler, input.uvLayer, input.depth, input.offset)"
+        in generated_code
+    )
+    assert (
+        "implicitCubeArray(cubeShadowArray, cubeShadowArraySampler, input.cubeLayer, input.depth)"
         in generated_code
     )
     assert "textureGatherCompare(" not in generated_code
@@ -5431,6 +6087,7 @@ def test_directx_shadow_compare_lod_grad_use_comparison_samplers():
     shader ShadowCompareLodGrad {
         sampler2DShadow shadowMap;
         sampler2DArrayShadow shadowArray;
+        samplerCubeArrayShadow cubeShadowArray;
         sampler compareSampler;
 
         struct FSInput {
@@ -5441,6 +6098,9 @@ def test_directx_shadow_compare_lod_grad_use_comparison_samplers():
             vec2 ddx @ TEXCOORD2;
             vec2 ddy @ TEXCOORD3;
             ivec2 offset @ TEXCOORD4;
+            vec4 cubeLayer @ TEXCOORD5;
+            vec3 cubeDdx @ TEXCOORD6;
+            vec3 cubeDdy @ TEXCOORD7;
         };
 
         float implicitShadow(
@@ -5493,6 +6153,20 @@ def test_directx_shadow_compare_lod_grad_use_comparison_samplers():
             return lodValue + lodOffsetValue + gradValue + gradOffsetValue;
         }
 
+        float compareCubeArrayShadow(
+            samplerCubeArrayShadow tex,
+            sampler s,
+            vec4 cubeLayer,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy
+        ) {
+            float lodValue = textureCompareLod(tex, s, cubeLayer, depth, lod);
+            float gradValue = textureCompareGrad(tex, s, cubeLayer, depth, ddx, ddy);
+            return lodValue + gradValue;
+        }
+
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 float implicitValue = implicitShadow(
@@ -5524,7 +6198,16 @@ def test_directx_shadow_compare_lod_grad_use_comparison_samplers():
                     input.ddy,
                     input.offset
                 );
-                return vec4(implicitValue + explicitValue + arrayValue);
+                float cubeArrayValue = compareCubeArrayShadow(
+                    cubeShadowArray,
+                    compareSampler,
+                    input.cubeLayer,
+                    input.depth,
+                    input.lod,
+                    input.cubeDdx,
+                    input.cubeDdy
+                );
+                return vec4(implicitValue + explicitValue + arrayValue + cubeArrayValue);
             }
         }
     }
@@ -5536,6 +6219,7 @@ def test_directx_shadow_compare_lod_grad_use_comparison_samplers():
 
     assert "Texture2D shadowMap : register(t0);" in generated_code
     assert "Texture2DArray shadowArray : register(t1);" in generated_code
+    assert "TextureCubeArray cubeShadowArray : register(t2);" in generated_code
     assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
     assert "SamplerComparisonState compareSampler : register(s1);" in generated_code
     assert (
@@ -5583,6 +6267,12 @@ def test_directx_shadow_compare_lod_grad_use_comparison_samplers():
     assert "tex.SampleCmpGrad(s, uvLayer, depth, ddx, ddy)" in generated_code
     assert "tex.SampleCmpGrad(s, uvLayer, depth, ddx, ddy, offset)" in generated_code
     assert (
+        "float compareCubeArrayShadow(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert "tex.SampleCmpLevel(s, cubeLayer, depth, lod)" in generated_code
+    assert "tex.SampleCmpGrad(s, cubeLayer, depth, ddx, ddy)" in generated_code
+    assert (
         "implicitShadow(shadowMap, shadowMapSampler, input.uv, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
@@ -5594,10 +6284,128 @@ def test_directx_shadow_compare_lod_grad_use_comparison_samplers():
         "compareShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
+    assert (
+        "compareCubeArrayShadow(cubeShadowArray, compareSampler, input.cubeLayer, input.depth, input.lod, input.cubeDdx, input.cubeDdy)"
+        in generated_code
+    )
     assert "textureCompareLod(" not in generated_code
     assert "textureCompareLodOffset(" not in generated_code
     assert "textureCompareGrad(" not in generated_code
     assert "textureCompareGradOffset(" not in generated_code
+
+
+def test_directx_cube_shadow_compare_offsets_report_unsupported():
+    shader = """
+    shader CubeShadowCompareOffsetDiagnostics {
+        samplerCubeShadow cubeMap;
+        samplerCubeArrayShadow cubeArray;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec3 direction @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec3 ddx @ TEXCOORD2;
+            vec3 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        float cubeOffsets(
+            samplerCubeShadow tex,
+            sampler s,
+            vec3 direction,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            float compareOffset = textureCompareOffset(tex, s, direction, depth, offset);
+            float lodOffset = textureCompareLodOffset(tex, s, direction, depth, lod, offset);
+            float gradOffset = textureCompareGradOffset(tex, s, direction, depth, ddx, ddy, offset);
+            return compareOffset + lodOffset + gradOffset;
+        }
+
+        float cubeArrayOffsets(
+            samplerCubeArrayShadow tex,
+            sampler s,
+            vec4 cubeLayer,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            float compareOffset = textureCompareOffset(tex, s, cubeLayer, depth, offset);
+            float lodOffset = textureCompareLodOffset(tex, s, cubeLayer, depth, lod, offset);
+            float gradOffset = textureCompareGradOffset(tex, s, cubeLayer, depth, ddx, ddy, offset);
+            return compareOffset + lodOffset + gradOffset;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return cubeOffsets(
+                    cubeMap,
+                    compareSampler,
+                    input.direction,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                ) + cubeArrayOffsets(
+                    cubeArray,
+                    compareSampler,
+                    input.cubeLayer,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCube cubeMap : register(t0);" in generated_code
+    assert "TextureCubeArray cubeArray : register(t1);" in generated_code
+    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert (
+        "float cubeOffsets(TextureCube tex, SamplerComparisonState s, float3 direction, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float cubeArrayOffsets(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported DirectX texture compare: textureCompareOffset offsets require 2D or 2D-array textures */ 0.0"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported DirectX texture compare: textureCompareLodOffset offsets require 2D or 2D-array textures */ 0.0"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported DirectX texture compare: textureCompareGradOffset offsets require 2D or 2D-array textures */ 0.0"
+        )
+        == 2
+    )
+    assert "textureCompareOffset(" not in generated_code
+    assert "textureCompareLodOffset(" not in generated_code
+    assert "textureCompareGradOffset(" not in generated_code
+    assert ".SampleCmp(s, direction, depth, offset)" not in generated_code
+    assert ".SampleCmpLevel(s, direction, depth, lod, offset)" not in generated_code
+    assert ".SampleCmpGrad(s, direction, depth, ddx, ddy, offset)" not in generated_code
 
 
 def test_directx_array_shadow_texture_resource_arrays_keep_compare_coordinates():
@@ -5659,6 +6467,185 @@ def test_directx_array_shadow_texture_resource_arrays_keep_compare_coordinates()
     )
     assert "Texture2DArray shadowArrays[] : register(t0);" not in generated_code
     assert "textureCompare(" not in generated_code
+
+
+def test_directx_array_shadow_compare_lod_grad_resource_arrays():
+    shader = """
+    shader ShadowCompareResourceArrays {
+        sampler2DShadow shadowMaps[4];
+        sampler2DArrayShadow shadowArrays[4];
+        sampler shadowSamplers[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            vec3 uvLayer @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        float shadowLayer(
+            sampler2DShadow shadowMaps[],
+            sampler2DArrayShadow shadowArrays[],
+            sampler shadowSamplers[],
+            int layer,
+            vec2 uv,
+            vec3 uvLayer,
+            float depth,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            float planarLod = textureCompareLod(shadowMaps[layer], shadowSamplers[layer], uv, depth, lod);
+            float planarGrad = textureCompareGradOffset(shadowMaps[1], shadowSamplers[1], uv, depth, ddx, ddy, offset);
+            float arrayLod = textureCompareLod(shadowArrays[2], shadowSamplers[2], uvLayer, depth, lod);
+            float arrayGrad = textureCompareGradOffset(shadowArrays[layer], shadowSamplers[layer], uvLayer, depth, ddx, ddy, offset);
+            return planarLod + planarGrad + arrayLod + arrayGrad;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return shadowLayer(
+                    shadowMaps,
+                    shadowArrays,
+                    shadowSamplers,
+                    input.layer,
+                    input.uv,
+                    input.uvLayer,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMaps[4] : register(t0);" in generated_code
+    assert "Texture2DArray shadowArrays[4] : register(t4);" in generated_code
+    assert "SamplerComparisonState shadowSamplers[4] : register(s0);" in generated_code
+    assert (
+        "float shadowLayer(Texture2D shadowMaps[4], Texture2DArray shadowArrays[4], SamplerComparisonState shadowSamplers[4], int layer, float2 uv, float3 uvLayer, float depth, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float planarLod = shadowMaps[layer].SampleCmpLevel(shadowSamplers[layer], uv, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float planarGrad = shadowMaps[1].SampleCmpGrad(shadowSamplers[1], uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "float arrayLod = shadowArrays[2].SampleCmpLevel(shadowSamplers[2], uvLayer, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float arrayGrad = shadowArrays[layer].SampleCmpGrad(shadowSamplers[layer], uvLayer, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "shadowLayer(shadowMaps, shadowArrays, shadowSamplers, input.layer, input.uv, input.uvLayer, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGradOffset(" not in generated_code
+
+
+def test_directx_cube_shadow_compare_lod_grad_resource_arrays():
+    shader = """
+    shader CubeShadowCompareResourceArrays {
+        samplerCubeShadow cubeMaps[4];
+        samplerCubeArrayShadow cubeArrays[4];
+        sampler shadowSamplers[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec3 direction @ TEXCOORD1;
+            vec4 cubeLayer @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec3 ddx @ TEXCOORD3;
+            vec3 ddy @ TEXCOORD4;
+        };
+
+        float cubeShadowLayer(
+            samplerCubeShadow cubeMaps[],
+            samplerCubeArrayShadow cubeArrays[],
+            sampler shadowSamplers[],
+            int layer,
+            vec3 direction,
+            vec4 cubeLayer,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy
+        ) {
+            float cubeLod = textureCompareLod(cubeMaps[layer], shadowSamplers[layer], direction, depth, lod);
+            float cubeGrad = textureCompareGrad(cubeMaps[1], shadowSamplers[1], direction, depth, ddx, ddy);
+            float cubeArrayLod = textureCompareLod(cubeArrays[2], shadowSamplers[2], cubeLayer, depth, lod);
+            float cubeArrayGrad = textureCompareGrad(cubeArrays[layer], shadowSamplers[layer], cubeLayer, depth, ddx, ddy);
+            return cubeLod + cubeGrad + cubeArrayLod + cubeArrayGrad;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return cubeShadowLayer(
+                    cubeMaps,
+                    cubeArrays,
+                    shadowSamplers,
+                    input.layer,
+                    input.direction,
+                    input.cubeLayer,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCube cubeMaps[4] : register(t0);" in generated_code
+    assert "TextureCubeArray cubeArrays[4] : register(t4);" in generated_code
+    assert "SamplerComparisonState shadowSamplers[4] : register(s0);" in generated_code
+    assert (
+        "float cubeShadowLayer(TextureCube cubeMaps[4], TextureCubeArray cubeArrays[4], SamplerComparisonState shadowSamplers[4], int layer, float3 direction, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert (
+        "float cubeLod = cubeMaps[layer].SampleCmpLevel(shadowSamplers[layer], direction, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float cubeGrad = cubeMaps[1].SampleCmpGrad(shadowSamplers[1], direction, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float cubeArrayLod = cubeArrays[2].SampleCmpLevel(shadowSamplers[2], cubeLayer, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float cubeArrayGrad = cubeArrays[layer].SampleCmpGrad(shadowSamplers[layer], cubeLayer, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "cubeShadowLayer(cubeMaps, cubeArrays, shadowSamplers, input.layer, input.direction, input.cubeLayer, input.depth, input.lod, input.ddx, input.ddy)"
+        in generated_code
+    )
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGrad(" not in generated_code
 
 
 def test_directx_array_shadow_texture_resource_arrays_reject_mismatched_fixed_helper_size():
@@ -6023,6 +7010,233 @@ def test_directx_shadow_array_texture_query_lod_uses_non_layer_coordinates():
     )
     assert "CalculateLevelOfDetailUnclamped(s, uvLayer)" not in generated_code
     assert "CalculateLevelOfDetailUnclamped(s, cubeLayer)" not in generated_code
+
+
+def test_directx_implicit_array_texture_query_lod_synthesizes_regular_samplers():
+    shader = """
+    shader ImplicitArrayTextureQueryLodGlobals {
+        sampler2DArray layerMap;
+        samplerCubeArray cubeArray;
+        sampler2DArrayShadow shadowArray;
+        samplerCubeArrayShadow cubeShadowArray;
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 a = textureQueryLod(layerMap, input.uvLayer);
+                vec2 b = textureQueryLod(cubeArray, input.cubeLayer);
+                vec2 c = textureQueryLod(shadowArray, input.uvLayer);
+                vec2 d = textureQueryLod(cubeShadowArray, input.cubeLayer);
+                return vec4(a.x + b.y, c.x + d.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2DArray layerMap : register(t0);" in generated_code
+    assert "SamplerState layerMapSampler : register(s0);" in generated_code
+    assert "TextureCubeArray cubeArray : register(t1);" in generated_code
+    assert "SamplerState cubeArraySampler : register(s1);" in generated_code
+    assert "Texture2DArray shadowArray : register(t2);" in generated_code
+    assert "SamplerState shadowArraySampler : register(s2);" in generated_code
+    assert "TextureCubeArray cubeShadowArray : register(t3);" in generated_code
+    assert "SamplerState cubeShadowArraySampler : register(s3);" in generated_code
+    assert "SamplerComparisonState" not in generated_code
+    assert (
+        "layerMap.CalculateLevelOfDetailUnclamped(layerMapSampler, input.uvLayer.xy)"
+        in generated_code
+    )
+    assert (
+        "cubeArray.CalculateLevelOfDetailUnclamped(cubeArraySampler, input.cubeLayer.xyz)"
+        in generated_code
+    )
+    assert (
+        "shadowArray.CalculateLevelOfDetailUnclamped(shadowArraySampler, input.uvLayer.xy)"
+        in generated_code
+    )
+    assert (
+        "cubeShadowArray.CalculateLevelOfDetailUnclamped(cubeShadowArraySampler, input.cubeLayer.xyz)"
+        in generated_code
+    )
+
+
+def test_directx_implicit_texture_query_lod_parameter_threads_regular_sampler():
+    shader = """
+    shader ImplicitQueryLodParameter {
+        samplerCubeArrayShadow cubeShadowArray;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+        };
+
+        vec2 queryCubeShadow(samplerCubeArrayShadow tex, vec4 cubeLayer) {
+            return textureQueryLod(tex, cubeLayer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 lod = queryCubeShadow(cubeShadowArray, input.cubeLayer);
+                return vec4(lod, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCubeArray cubeShadowArray : register(t0);" in generated_code
+    assert "SamplerState cubeShadowArraySampler : register(s0);" in generated_code
+    assert "SamplerComparisonState" not in generated_code
+    assert (
+        "float2 queryCubeShadow(TextureCubeArray tex, SamplerState texSampler, float4 cubeLayer)"
+        in generated_code
+    )
+    assert "tex.CalculateLevelOfDetailUnclamped(texSampler, cubeLayer.xyz)" in generated_code
+    assert "tex.CalculateLevelOfDetail(texSampler, cubeLayer.xyz)" in generated_code
+    assert (
+        "queryCubeShadow(cubeShadowArray, cubeShadowArraySampler, input.cubeLayer)"
+        in generated_code
+    )
+
+
+def test_directx_mixed_implicit_shadow_query_lod_and_compare_split_samplers():
+    shader = """
+    shader MixedShadowQueryLodCompare {
+        sampler2DShadow shadowMap;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        };
+
+        float inspectShadow(sampler2DShadow tex, vec2 uv, float depth) {
+            vec2 lod = textureQueryLod(tex, uv);
+            float cmp = textureCompare(tex, uv, depth);
+            return lod.x + cmp;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspectShadow(shadowMap, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMap : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapQuerySampler : register(s1);" in generated_code
+    assert (
+        "float inspectShadow(Texture2D tex, SamplerComparisonState texSampler, SamplerState texQuerySampler, float2 uv, float depth)"
+        in generated_code
+    )
+    assert (
+        "float2 lod = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv), tex.CalculateLevelOfDetail(texQuerySampler, uv));"
+        in generated_code
+    )
+    assert "float cmp = tex.SampleCmp(texSampler, uv, depth);" in generated_code
+    assert (
+        "inspectShadow(shadowMap, shadowMapSampler, shadowMapQuerySampler, input.uv, input.depth)"
+        in generated_code
+    )
+
+
+def test_directx_nested_implicit_shadow_compare_lod_grad_threads_split_samplers():
+    shader = """
+    shader NestedShadowCompareQuery {
+        sampler2DShadow shadowMap;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+            vec2 ddx @ TEXCOORD1;
+            vec2 ddy @ TEXCOORD2;
+            ivec2 offset @ TEXCOORD3;
+        };
+
+        float shadowOps(
+            sampler2DShadow tex,
+            vec2 uv,
+            float depth,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            vec2 lod = textureQueryLod(tex, uv);
+            float cmp = textureCompareLod(tex, uv, depth, lod.x);
+            float grad = textureCompareGradOffset(tex, uv, depth, ddx, ddy, offset);
+            return cmp + grad + lod.y;
+        }
+
+        float wrappedShadow(
+            sampler2DShadow tex,
+            vec2 uv,
+            float depth,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            return shadowOps(tex, uv, depth, ddx, ddy, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(wrappedShadow(
+                    shadowMap,
+                    input.uv,
+                    input.depth,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                ));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D shadowMap : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapQuerySampler : register(s1);" in generated_code
+    assert (
+        "float shadowOps(Texture2D tex, SamplerComparisonState texSampler, SamplerState texQuerySampler, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float2 lod = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv), tex.CalculateLevelOfDetail(texQuerySampler, uv));"
+        in generated_code
+    )
+    assert "float cmp = tex.SampleCmpLevel(texSampler, uv, depth, lod.x);" in generated_code
+    assert (
+        "float grad = tex.SampleCmpGrad(texSampler, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "float wrappedShadow(Texture2D tex, SamplerComparisonState texSampler, SamplerState texQuerySampler, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "return shadowOps(tex, texSampler, texQuerySampler, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "wrappedShadow(shadowMap, shadowMapSampler, shadowMapQuerySampler, input.uv, input.depth, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "textureQueryLod(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGradOffset(" not in generated_code
 
 
 def test_directx_texture_operation_variants():

@@ -720,6 +720,53 @@ def test_generic_vector_constructors_emit_rust_names():
     assert "vec4<" not in generated_code
 
 
+def test_scalar_vector_constructors_splat_rust_values():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float weight = 0.5;
+                int index = 1;
+                bool enabled = true;
+                vec4 base = vec4(1.0);
+                vec3 scaled = vec3(weight);
+                ivec2 pixel = ivec2(index);
+                bvec4 mask = bvec4(enabled);
+                vec4 offset = vec4(0.25, 0.5, 0.75, 1.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "let mut base: Vec4<f32> = Vec4<f32>::new(1.0, 1.0, 1.0, 1.0);"
+        in generated_code
+    )
+    assert (
+        "let mut scaled: Vec3<f32> = Vec3<f32>::new(weight, weight, weight);"
+        in generated_code
+    )
+    assert "let mut pixel: Vec2<i32> = Vec2<i32>::new(index, index);" in generated_code
+    assert (
+        "let mut mask: Vec4<bool> = "
+        "Vec4<bool>::new(enabled, enabled, enabled, enabled);"
+        in generated_code
+    )
+    assert (
+        "let mut offset: Vec4<f32> = "
+        "Vec4<f32>::new(0.25, 0.5, 0.75, 1.0);"
+        in generated_code
+    )
+    assert "Vec4<f32>::new(1.0);" not in generated_code
+    assert "Vec3<f32>::new(weight);" not in generated_code
+    assert "Vec2<i32>::new(index);" not in generated_code
+    assert "Vec4<bool>::new(enabled);" not in generated_code
+
+
 def test_generic_vector_composite_types_emit_rust_names():
     code = """
     shader GenericComposite {

@@ -1,3 +1,5 @@
+import ast
+from pathlib import Path
 import shutil
 import subprocess
 
@@ -5,6 +7,7 @@ import pytest
 
 import crosstl.translator
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 
@@ -46,6 +49,54 @@ shader FragmentStructInputValidation {
     fragment {
         vec4 main(VSOutput input) @ gl_FragColor {
             return vec4(input.uv, input.normal.x, 1.0);
+        }
+    }
+}
+"""
+
+
+SPIRV_COMPLEX_RESOURCE_COMPUTE_SHADER = """
+struct SampleEnvelope {
+    vec4 color;
+    vec4 scaled;
+};
+
+shader SpirvComplexResourceValidation {
+    sampler2d textureGrid[2][3];
+    image2D imageGrid @rgba16f[2][3];
+
+    SampleEnvelope chooseSample(
+        sampler2d dynTex[][3],
+        image2D dynImages[][3] @rgba16f,
+        int layer,
+        int slot,
+        bool preferSampled,
+        float weight,
+        vec2 uv,
+        ivec2 pixel
+    ) {
+        SampleEnvelope result;
+        result.color = vec4(0.0);
+        vec4 sampled = texture(dynTex[layer][slot], uv);
+        vec4 loaded = imageLoad(dynImages[layer][slot], pixel);
+        result.scaled = (preferSampled ? sampled : loaded) * weight;
+        return result;
+    }
+
+    compute {
+        void main() {
+            vec2 uv = vec2(0.5, 0.25);
+            ivec2 pixel = ivec2(0);
+            SampleEnvelope envelope = chooseSample(
+                textureGrid,
+                imageGrid,
+                1,
+                2,
+                true,
+                0.5,
+                uv,
+                pixel
+            );
         }
     }
 }
@@ -313,6 +364,49 @@ shader ShadowArrayTextureQueryLodValidation {
             vec2 c = queryArrayElementLod(shadowArrays, linearSamplers, input.uvLayer);
             vec2 d = queryCubeArrayElementLod(cubeShadowArrays, linearSamplers, input.cubeLayer);
             return vec4(a.x + b.y, c.x + d.y, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+
+IMPLICIT_SHADOW_ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER = """
+shader ImplicitShadowArrayTextureQueryLodValidation {
+    sampler2DArrayShadow shadowArray;
+    samplerCubeArrayShadow cubeShadowArray;
+    sampler2DArrayShadow shadowArrays[4];
+    samplerCubeArrayShadow cubeShadowArrays[4];
+
+    struct FSInput {
+        vec3 uvLayer @ TEXCOORD0;
+        vec4 cubeLayer @ TEXCOORD1;
+    };
+
+    vec2 queryArrayLod(sampler2DArrayShadow tex, vec3 uvLayer) {
+        return textureQueryLod(tex, uvLayer);
+    }
+
+    vec2 queryCubeArrayLod(samplerCubeArrayShadow tex, vec4 cubeLayer) {
+        return textureQueryLod(tex, cubeLayer);
+    }
+
+    vec2 queryArrayElementLod(sampler2DArrayShadow shadowArrays[], vec3 uvLayer) {
+        return textureQueryLod(shadowArrays[2], uvLayer);
+    }
+
+    vec2 queryCubeArrayElementLod(samplerCubeArrayShadow cubeShadowArrays[], vec4 cubeLayer) {
+        return textureQueryLod(cubeShadowArrays[3], cubeLayer);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            vec2 a = textureQueryLod(shadowArray, input.uvLayer);
+            vec2 b = textureQueryLod(cubeShadowArray, input.cubeLayer);
+            vec2 c = queryArrayLod(shadowArray, input.uvLayer);
+            vec2 d = queryCubeArrayLod(cubeShadowArray, input.cubeLayer);
+            vec2 e = queryArrayElementLod(shadowArrays, input.uvLayer);
+            vec2 f = queryCubeArrayElementLod(cubeShadowArrays, input.cubeLayer);
+            return vec4(a.x + b.y, c.x + d.y, e.x + f.y, 1.0);
         }
     }
 }
@@ -663,13 +757,15 @@ SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER = """
 shader ShadowGatherCompareOffsetValidation {
     sampler2DShadow shadowMap;
     sampler2DArrayShadow shadowArray;
+    samplerCubeArrayShadow cubeShadowArray;
     sampler compareSampler;
 
     struct FSInput {
         vec2 uv @ TEXCOORD0;
         vec3 uvLayer @ TEXCOORD1;
+        vec4 cubeLayer @ TEXCOORD2;
         float depth;
-        ivec2 offset @ TEXCOORD2;
+        ivec2 offset @ TEXCOORD3;
     };
 
     vec4 gatherShadow(sampler2DShadow tex, sampler s, vec2 uv, float depth, ivec2 offset) {
@@ -686,10 +782,15 @@ shader ShadowGatherCompareOffsetValidation {
         return gathered + offsetGathered + vec4(offsetCompared);
     }
 
+    vec4 gatherCubeShadowArray(samplerCubeArrayShadow tex, sampler s, vec4 cubeLayer, float depth) {
+        return textureGatherCompare(tex, s, cubeLayer, depth);
+    }
+
     fragment {
         vec4 main(FSInput input) @ gl_FragColor {
             return gatherShadow(shadowMap, compareSampler, input.uv, input.depth, input.offset)
-                + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset);
+                + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset)
+                + gatherCubeShadowArray(cubeShadowArray, compareSampler, input.cubeLayer, input.depth);
         }
     }
 }
@@ -700,6 +801,7 @@ SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = """
 shader ShadowCompareLodGradValidation {
     sampler2DShadow shadowMap;
     sampler2DArrayShadow shadowArray;
+    samplerCubeArrayShadow cubeShadowArray;
     sampler compareSampler;
 
     struct FSInput {
@@ -709,6 +811,9 @@ shader ShadowCompareLodGradValidation {
         float lod;
         vec2 ddx @ TEXCOORD2;
         vec2 ddy @ TEXCOORD3;
+        vec4 cubeLayer @ TEXCOORD4;
+        vec3 cubeDdx @ TEXCOORD5;
+        vec3 cubeDdy @ TEXCOORD6;
     };
 
     float compareShadow(
@@ -741,6 +846,20 @@ shader ShadowCompareLodGradValidation {
         return gradValue + gradOffsetValue;
     }
 
+    float compareCubeArrayShadow(
+        samplerCubeArrayShadow tex,
+        sampler s,
+        vec4 cubeLayer,
+        float depth,
+        float lod,
+        vec3 ddx,
+        vec3 ddy
+    ) {
+        float lodValue = textureCompareLod(tex, s, cubeLayer, depth, lod);
+        float gradValue = textureCompareGrad(tex, s, cubeLayer, depth, ddx, ddy);
+        return lodValue + gradValue;
+    }
+
     fragment {
         vec4 main(FSInput input) @ gl_FragColor {
             float shadow = compareShadow(
@@ -761,7 +880,16 @@ shader ShadowCompareLodGradValidation {
                 input.ddx,
                 input.ddy
             );
-            return vec4(shadow + arrayShadow);
+            float cubeArrayShadow = compareCubeArrayShadow(
+                cubeShadowArray,
+                compareSampler,
+                input.cubeLayer,
+                input.depth,
+                input.lod,
+                input.cubeDdx,
+                input.cubeDdy
+            );
+            return vec4(shadow + arrayShadow + cubeArrayShadow);
         }
     }
 }
@@ -1349,6 +1477,92 @@ def run_validator(command):
     )
 
 
+def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        pytest.skip("spirv-as and spirv-val are not installed")
+
+    source = tmp_path / "complex_resource_compute.spvasm"
+    output = tmp_path / "complex_resource_compute.spv"
+    code = VulkanSPIRVCodeGen().generate(
+        crosstl.translator.parse(SPIRV_COMPLEX_RESOURCE_COMPUTE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([spirv_as, str(source), "-o", str(output)])
+    run_validator([spirv_val, str(output)])
+
+
+def test_generated_spirv_codegen_examples_validate_with_spirv_tools(tmp_path):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        pytest.skip("spirv-as and spirv-val are not installed")
+
+    test_file = Path(__file__).with_name("test_SPIRV_codegen.py")
+    module = ast.parse(test_file.read_text(encoding="utf-8"))
+    failures = []
+    validated = 0
+
+    for node in ast.walk(module):
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+
+        source_code = None
+        for stmt in ast.walk(node):
+            if not isinstance(stmt, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "source_code"
+                for target in stmt.targets
+            ):
+                continue
+            if isinstance(stmt.value, ast.Constant) and isinstance(
+                stmt.value.value, str
+            ):
+                source_code = stmt.value.value
+                break
+
+        if source_code is None or "shader" not in source_code:
+            continue
+
+        code = VulkanSPIRVCodeGen().generate(crosstl.translator.parse(source_code))
+        if "OpEntryPoint " not in code:
+            continue
+
+        source = tmp_path / f"{node.name}.spvasm"
+        output = tmp_path / f"{node.name}.spv"
+        source.write_text(code, encoding="utf-8")
+
+        assemble = subprocess.run(
+            [spirv_as, str(source), "-o", str(output)],
+            capture_output=True,
+            text=True,
+        )
+        if assemble.returncode != 0:
+            failures.append((node.name, "spirv-as", assemble.stderr))
+            continue
+
+        validate = subprocess.run(
+            [spirv_val, str(output)],
+            capture_output=True,
+            text=True,
+        )
+        if validate.returncode != 0:
+            failures.append((node.name, "spirv-val", validate.stderr))
+            continue
+
+        validated += 1
+
+    assert not failures, "\n".join(
+        f"{name} failed {stage}:\n{message}" for name, stage, message in failures
+    )
+    assert validated >= 50
+
+
 def dxc_supports_sample_cmp_lod_grad(dxc, tmp_path):
     source = tmp_path / "sample_cmp_lod_grad_probe.hlsl"
     output = tmp_path / "sample_cmp_lod_grad_probe.dxil"
@@ -1546,6 +1760,28 @@ def test_generated_metal_fragment_shadow_array_texture_query_lod_compiles_with_m
     output = tmp_path / "fragment_shadow_array_texture_query_lod.air"
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(SHADOW_ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_implicit_shadow_array_texture_query_lod_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_implicit_shadow_array_texture_query_lod.metal"
+    output = tmp_path / "fragment_implicit_shadow_array_texture_query_lod.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            IMPLICIT_SHADOW_ARRAY_TEXTURE_QUERY_LOD_FRAGMENT_SHADER
+        ),
         "fragment",
     )
     source.write_text(code, encoding="utf-8")

@@ -320,6 +320,49 @@ class TestCudaCodeGen:
         assert " = ivec3(" not in cuda_code
         assert " = uvec4(" not in cuda_code
 
+    def test_vector_scalar_arithmetic_expands_cuda_components(self):
+        """Test CUDA lowers vector math through component-wise helpers."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float weight = 0.5;
+                    vec4 base = vec4(1.0);
+                    vec4 offset = vec4(0.25, 0.5, 0.75, 1.0);
+                    vec4 scaled = base * weight;
+                    vec4 biased = weight + base;
+                    vec4 shifted = base - 1.0;
+                    vec4 divided = base / weight;
+                    vec4 combined = base + offset;
+                    base *= weight;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "float4 base = make_float4(1.0, 1.0, 1.0, 1.0);" in cuda_code
+        assert "__device__ inline float4 cgl_float4_mul_scalar" in cuda_code
+        assert "__device__ inline float4 cgl_scalar_add_float4" in cuda_code
+        assert "__device__ inline float4 cgl_float4_sub_scalar" in cuda_code
+        assert "__device__ inline float4 cgl_float4_div_scalar" in cuda_code
+        assert "__device__ inline float4 cgl_float4_add" in cuda_code
+        assert "float4 scaled = cgl_float4_mul_scalar(base, weight);" in cuda_code
+        assert "float4 biased = cgl_scalar_add_float4(weight, base);" in cuda_code
+        assert "float4 shifted = cgl_float4_sub_scalar(base, 1.0);" in cuda_code
+        assert "float4 divided = cgl_float4_div_scalar(base, weight);" in cuda_code
+        assert "float4 combined = cgl_float4_add(base, offset);" in cuda_code
+        assert "base = cgl_float4_mul_scalar(base, weight);" in cuda_code
+        assert "(base * weight)" not in cuda_code
+        assert "(weight + base)" not in cuda_code
+        assert "make_float4(1.0);" not in cuda_code
+
     def test_matrix_types_and_constructors_emit_cuda_names(self):
         """Test CUDA maps parser-produced matrix types and constructors."""
         source_code = """
@@ -2090,10 +2133,15 @@ class TestCudaCodeGen:
             "int2 imageSizeValue = cgl_imageSize_image2D"
             "(dynImages_metadata[layer][slot]);" in cuda_code
         )
-        assert "accum = (accum + tex2D(fixedTex[fixedSlot], uv));" in cuda_code
+        assert "__device__ inline float4 cgl_float4_add(float4 lhs, float4 rhs)" in cuda_code
         assert (
-            "accum = (accum + surf2Dread<float4>"
-            "(fixedImages[fixedSlot], pixel.x * sizeof(float4), pixel.y));" in cuda_code
+            "accum = cgl_float4_add(accum, tex2D(fixedTex[fixedSlot], uv));"
+            in cuda_code
+        )
+        assert (
+            "accum = cgl_float4_add(accum, surf2Dread<float4>"
+            "(fixedImages[fixedSlot], pixel.x * sizeof(float4), pixel.y));"
+            in cuda_code
         )
         assert (
             "int2 fixedTexSize = cgl_textureSize_sampler2D"
@@ -2604,8 +2652,9 @@ class TestCudaCodeGen:
             "envelope.result.imageSizeValue = cgl_imageSize_image2D"
             "(dynImages_metadata[layer][slot]);" in cuda_code
         )
+        assert "__device__ inline float4 cgl_float4_add(float4 lhs, float4 rhs)" in cuda_code
         assert (
-            "envelope.bias = (tex2D(dynTex[layer][slot], uv) + "
+            "envelope.bias = cgl_float4_add(tex2D(dynTex[layer][slot], uv), "
             "surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y));" in cuda_code
         )
@@ -2748,6 +2797,822 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
         assert "imageLoad(" not in cuda_code
+
+    def test_control_flow_struct_resource_assignments_emit_cuda_metadata_arguments(self):
+        """Test CUDA keeps metadata aligned through branch and loop struct writes."""
+        source_code = """
+        struct SampleResult {
+            vec4 sampled;
+            vec4 loaded;
+            ivec2 texSize;
+            ivec2 imageSizeValue;
+        };
+
+        struct SampleEnvelope {
+            SampleResult result;
+            vec4 accum;
+            int chosen;
+        };
+
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            SampleEnvelope fillControlled(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                bool useAlternate,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope;
+                envelope.accum = vec4(0.0);
+                envelope.chosen = slot;
+
+                if (useAlternate) {
+                    envelope.result.sampled = texture(dynTex[layer][slot], uv);
+                    envelope.result.loaded = imageLoad(dynImages[layer][slot], pixel);
+                } else {
+                    int fallback = 0;
+                    envelope.result.sampled = texture(dynTex[fallback][slot], uv);
+                    envelope.result.loaded = imageLoad(dynImages[fallback][slot], pixel);
+                }
+
+                for (int i = 0; i < 3; i++) {
+                    if (i == 1) {
+                        continue;
+                    }
+                    envelope.result.texSize = textureSize(dynTex[layer][i], 0);
+                    envelope.result.imageSizeValue = imageSize(dynImages[layer][i]);
+                    envelope.accum = envelope.accum + texture(dynTex[layer][i], uv);
+                    if (i == slot) {
+                        break;
+                    }
+                }
+
+                return envelope;
+            }
+
+            vec4 consumeControlled(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope = fillControlled(
+                    dynTex,
+                    dynImages,
+                    layer,
+                    slot,
+                    true,
+                    uv,
+                    pixel
+                );
+                return envelope.result.sampled + envelope.result.loaded +
+                    envelope.accum;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = consumeControlled(
+                        textureGrid,
+                        imageGrid,
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert (
+            "__device__ SampleEnvelope fillControlled("
+            "texture<float4, 2> (*dynTex)[3], "
+            "CglResourceQueryInfo (*dynTex_metadata)[3], "
+            "cudaSurfaceObject_t (*dynImages)[3], "
+            "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
+            "bool useAlternate, float2 uv, int2 pixel)"
+            in cuda_code
+        )
+        assert "if (useAlternate)" in cuda_code
+        assert "else {" in cuda_code
+        assert "for (int i = 0; (i < 3); i++)" in cuda_code
+        assert "continue;" in cuda_code
+        assert "break;" in cuda_code
+        assert "envelope.accum = make_float4(0.0, 0.0, 0.0, 0.0);" in cuda_code
+        assert "envelope.chosen = slot;" in cuda_code
+        assert (
+            "envelope.result.sampled = tex2D(dynTex[layer][slot], uv);"
+            in cuda_code
+        )
+        assert (
+            "envelope.result.loaded = surf2Dread<float4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "envelope.result.sampled = tex2D(dynTex[fallback][slot], uv);"
+            in cuda_code
+        )
+        assert (
+            "envelope.result.loaded = surf2Dread<float4>"
+            "(dynImages[fallback][slot], pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "envelope.result.texSize = cgl_textureSize_sampler2D"
+            "(dynTex_metadata[layer][i], 0);"
+            in cuda_code
+        )
+        assert (
+            "envelope.result.imageSizeValue = cgl_imageSize_image2D"
+            "(dynImages_metadata[layer][i]);"
+            in cuda_code
+        )
+        assert (
+            "envelope.accum = cgl_float4_add(envelope.accum, tex2D(dynTex[layer][i], uv));"
+            in cuda_code
+        )
+        assert (
+            "fillControlled(dynTex, dynTex_metadata, dynImages, "
+            "dynImages_metadata, layer, slot, true, uv, pixel);"
+            in cuda_code
+        )
+        assert (
+            "consumeControlled(textureGrid, textureGrid_metadata, imageGrid, "
+            "imageGrid_metadata, 1, 2, uv, pixel);"
+            in cuda_code
+        )
+        assert "texture(" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+
+    def test_struct_parameter_resource_values_round_trip_cuda_metadata_arguments(self):
+        """Test CUDA forwards resource-derived structs through helper parameters."""
+        source_code = """
+        struct SampleResult {
+            vec4 sampled;
+            vec4 loaded;
+            ivec2 texSize;
+            ivec2 imageSizeValue;
+        };
+
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            SampleResult buildResourceResult(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleResult result;
+                result.sampled = texture(dynTex[layer][slot], uv);
+                result.loaded = imageLoad(dynImages[layer][slot], pixel);
+                result.texSize = textureSize(dynTex[layer][slot], 0);
+                result.imageSizeValue = imageSize(dynImages[layer][slot]);
+                return result;
+            }
+
+            SampleResult adjustResult(SampleResult payload, float weight) {
+                payload.sampled = payload.sampled * weight;
+                payload.loaded = payload.loaded + payload.sampled;
+                return payload;
+            }
+
+            vec4 consumeAdjusted(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleResult raw = buildResourceResult(
+                    dynTex,
+                    dynImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+                SampleResult adjusted = adjustResult(raw, 0.5);
+                return adjusted.sampled + adjusted.loaded;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = consumeAdjusted(textureGrid, imageGrid, 1, 2, uv, pixel);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert (
+            "__device__ SampleResult buildResourceResult("
+            "texture<float4, 2> (*dynTex)[3], "
+            "CglResourceQueryInfo (*dynTex_metadata)[3], "
+            "cudaSurfaceObject_t (*dynImages)[3], "
+            "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
+            "float2 uv, int2 pixel)"
+            in cuda_code
+        )
+        assert "__device__ SampleResult adjustResult(SampleResult payload, float weight)" in cuda_code
+        assert (
+            "__device__ float4 consumeAdjusted(texture<float4, 2> (*dynTex)[3], "
+            "CglResourceQueryInfo (*dynTex_metadata)[3], "
+            "cudaSurfaceObject_t (*dynImages)[3], "
+            "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
+            "float2 uv, int2 pixel)"
+            in cuda_code
+        )
+        assert "__device__ inline float4 cgl_float4_mul_scalar" in cuda_code
+        assert "__device__ inline float4 cgl_float4_add(float4 lhs, float4 rhs)" in cuda_code
+        assert "payload.sampled = cgl_float4_mul_scalar(payload.sampled, weight);" in cuda_code
+        assert "payload.loaded = cgl_float4_add(payload.loaded, payload.sampled);" in cuda_code
+        assert "return payload;" in cuda_code
+        assert (
+            "SampleResult raw = buildResourceResult("
+            "dynTex, dynTex_metadata, dynImages, dynImages_metadata, "
+            "layer, slot, uv, pixel);"
+            in cuda_code
+        )
+        assert "SampleResult adjusted = adjustResult(raw, 0.5);" in cuda_code
+        assert (
+            "consumeAdjusted(textureGrid, textureGrid_metadata, imageGrid, "
+            "imageGrid_metadata, 1, 2, uv, pixel);"
+            in cuda_code
+        )
+        assert "texture(" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+
+    def test_mutable_scalar_and_array_params_emit_cuda_updates(self):
+        """Test CUDA emits scalar and array parameter updates directly."""
+        source_code = """
+        shader MutableParams {
+            float bumpScalar(float weight) {
+                weight = weight + 1.0;
+                return weight * 2.0;
+            }
+
+            float bumpArray(float values[3], int slot) {
+                values[slot] = values[slot] + 1.0;
+                values[0] = values[slot] * 0.5;
+                return values[slot] + values[0];
+            }
+
+            compute {
+                void main() {
+                    float values[3];
+                    values[0] = 1.0;
+                    values[1] = 2.0;
+                    values[2] = 3.0;
+                    float a = bumpScalar(0.5);
+                    float b = bumpArray(values, 1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__device__ float bumpScalar(float weight)" in cuda_code
+        assert "weight = (weight + 1.0);" in cuda_code
+        assert "return (weight * 2.0);" in cuda_code
+        assert "__device__ float bumpArray(float values[3], int slot)" in cuda_code
+        assert "values[slot] = (values[slot] + 1.0);" in cuda_code
+        assert "values[0] = (values[slot] * 0.5);" in cuda_code
+        assert "return (values[slot] + values[0]);" in cuda_code
+        assert "float values[3];" in cuda_code
+        assert "float a = bumpScalar(0.5);" in cuda_code
+        assert "float b = bumpArray(values, 1);" in cuda_code
+
+    def test_nested_array_and_struct_member_params_emit_cuda_updates(self):
+        """Test CUDA emits nested array and struct-member array parameter updates."""
+        source_code = """
+        struct Payload {
+            float values[3];
+            float bias;
+        };
+
+        shader NestedMutableParams {
+            float bumpNested(float values[2][3], int row, int col) {
+                values[row][col] = values[row][col] + 1.0;
+                values[0][col] = values[row][col] * 0.5;
+                return values[row][col] + values[0][col];
+            }
+
+            float bumpPayload(Payload payload, int slot) {
+                payload.values[slot] = payload.values[slot] + payload.bias;
+                payload.bias = payload.values[slot] * 0.5;
+                return payload.values[slot] + payload.bias;
+            }
+
+            compute {
+                void main() {
+                    float grid[2][3];
+                    grid[0][0] = 1.0;
+                    grid[1][2] = 3.0;
+                    Payload payload;
+                    payload.values[0] = 2.0;
+                    payload.values[1] = 4.0;
+                    payload.bias = 0.25;
+                    float a = bumpNested(grid, 1, 2);
+                    float b = bumpPayload(payload, 1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "struct Payload {" in cuda_code
+        assert "float values[3];" in cuda_code
+        assert "__device__ float bumpNested(float values[2][3], int row, int col)" in cuda_code
+        assert "values[row][col] = (values[row][col] + 1.0);" in cuda_code
+        assert "values[0][col] = (values[row][col] * 0.5);" in cuda_code
+        assert "return (values[row][col] + values[0][col]);" in cuda_code
+        assert "__device__ float bumpPayload(Payload payload, int slot)" in cuda_code
+        assert (
+            "payload.values[slot] = (payload.values[slot] + payload.bias);"
+            in cuda_code
+        )
+        assert "payload.bias = (payload.values[slot] * 0.5);" in cuda_code
+        assert "return (payload.values[slot] + payload.bias);" in cuda_code
+        assert "float grid[2][3];" in cuda_code
+        assert "float a = bumpNested(grid, 1, 2);" in cuda_code
+        assert "float b = bumpPayload(payload, 1);" in cuda_code
+
+    def test_returned_nested_struct_params_emit_cuda_updates(self):
+        """Test CUDA mutates nested struct params built from returned values."""
+        source_code = """
+        struct InnerPayload {
+            float values[3];
+            float bias;
+        };
+
+        struct OuterPayload {
+            InnerPayload inner;
+            float scale;
+        };
+
+        shader ReturnedParamPayloads {
+            OuterPayload makeOuter(float first, float second, float bias, float scale) {
+                OuterPayload outer;
+                outer.inner.values[0] = first;
+                outer.inner.values[1] = second;
+                outer.inner.values[2] = first + second;
+                outer.inner.bias = bias;
+                outer.scale = scale;
+                return outer;
+            }
+
+            OuterPayload adjustOuter(OuterPayload payload, int slot) {
+                payload.inner.values[slot] = payload.inner.values[slot] + payload.inner.bias;
+                payload.inner.values[0] = payload.inner.values[slot] * payload.scale;
+                payload.scale = payload.inner.values[0] + payload.inner.bias;
+                return payload;
+            }
+
+            float consumeAdjustedOuter(int slot) {
+                OuterPayload adjusted = adjustOuter(makeOuter(1.0, 2.0, 0.25, 4.0), slot);
+                return adjusted.inner.values[slot] + adjusted.inner.values[0] + adjusted.scale;
+            }
+
+            compute {
+                void main() {
+                    float value = consumeAdjustedOuter(1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__device__ OuterPayload adjustOuter(OuterPayload payload, int slot)" in cuda_code
+        assert (
+            "payload.inner.values[slot] = "
+            "(payload.inner.values[slot] + payload.inner.bias);"
+            in cuda_code
+        )
+        assert (
+            "payload.inner.values[0] = (payload.inner.values[slot] * payload.scale);"
+            in cuda_code
+        )
+        assert "payload.scale = (payload.inner.values[0] + payload.inner.bias);" in cuda_code
+        assert "return payload;" in cuda_code
+        assert "__device__ float consumeAdjustedOuter(int slot)" in cuda_code
+        assert (
+            "OuterPayload adjusted = adjustOuter("
+            "makeOuter(1.0, 2.0, 0.25, 4.0), slot);"
+            in cuda_code
+        )
+        assert (
+            "return ((adjusted.inner.values[slot] + adjusted.inner.values[0]) + "
+            "adjusted.scale);"
+            in cuda_code
+        )
+        assert "float value = consumeAdjustedOuter(1);" in cuda_code
+
+    def test_conditional_returned_nested_structs_emit_cuda_expressions(self):
+        """Test CUDA preserves branch and ternary selected returned structs."""
+        source_code = """
+        struct InnerPayload {
+            float values[3];
+            float bias;
+        };
+
+        struct OuterPayload {
+            InnerPayload inner;
+            float scale;
+        };
+
+        shader ConditionalReturnedPayloads {
+            OuterPayload makeOuter(float first, float second, float bias, float scale) {
+                OuterPayload outer;
+                outer.inner.values[0] = first;
+                outer.inner.values[1] = second;
+                outer.inner.values[2] = first + second;
+                outer.inner.bias = bias;
+                outer.scale = scale;
+                return outer;
+            }
+
+            OuterPayload chooseBranch(bool useSecond) {
+                if (useSecond) {
+                    return makeOuter(3.0, 4.0, 0.5, 5.0);
+                }
+                return makeOuter(1.0, 2.0, 0.25, 4.0);
+            }
+
+            OuterPayload chooseTernary(bool useSecond) {
+                return useSecond
+                    ? makeOuter(3.0, 4.0, 0.5, 5.0)
+                    : makeOuter(1.0, 2.0, 0.25, 4.0);
+            }
+
+            float consumeConditional(int slot, bool useSecond) {
+                OuterPayload branchPayload = chooseBranch(useSecond);
+                OuterPayload ternaryPayload = chooseTernary(useSecond);
+                ternaryPayload.inner.values[slot] =
+                    ternaryPayload.inner.values[slot] + ternaryPayload.inner.bias;
+                branchPayload.scale =
+                    branchPayload.inner.values[slot] + ternaryPayload.scale;
+                return branchPayload.scale + ternaryPayload.inner.values[slot];
+            }
+
+            compute {
+                void main() {
+                    float value = consumeConditional(1, true);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__device__ OuterPayload chooseBranch(bool useSecond)" in cuda_code
+        assert "return makeOuter(3.0, 4.0, 0.5, 5.0);" in cuda_code
+        assert "return makeOuter(1.0, 2.0, 0.25, 4.0);" in cuda_code
+        assert "__device__ OuterPayload chooseTernary(bool useSecond)" in cuda_code
+        assert (
+            "return (useSecond ? makeOuter(3.0, 4.0, 0.5, 5.0) : "
+            "makeOuter(1.0, 2.0, 0.25, 4.0));"
+            in cuda_code
+        )
+        assert "OuterPayload branchPayload = chooseBranch(useSecond);" in cuda_code
+        assert "OuterPayload ternaryPayload = chooseTernary(useSecond);" in cuda_code
+        assert (
+            "ternaryPayload.inner.values[slot] = "
+            "(ternaryPayload.inner.values[slot] + ternaryPayload.inner.bias);"
+            in cuda_code
+        )
+        assert (
+            "branchPayload.scale = "
+            "(branchPayload.inner.values[slot] + ternaryPayload.scale);"
+            in cuda_code
+        )
+        assert (
+            "return (branchPayload.scale + ternaryPayload.inner.values[slot]);"
+            in cuda_code
+        )
+        assert "float value = consumeConditional(1, true);" in cuda_code
+
+    def test_temporary_struct_array_member_reads_emit_cuda_expressions(self):
+        """Test CUDA emits array-field reads from returned struct temporaries."""
+        source_code = """
+        struct Payload {
+            float values[3];
+            float bias;
+        };
+
+        shader TemporaryPayloads {
+            Payload makePayload(float first, float second, float bias) {
+                Payload payload;
+                payload.values[0] = first;
+                payload.values[1] = second;
+                payload.values[2] = first + second;
+                payload.bias = bias;
+                return payload;
+            }
+
+            float readTemporary(int slot) {
+                float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];
+                float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];
+                float biasValue = makePayload(5.0, 6.0, 0.75).bias;
+                return dynamicValue + fixedValue + biasValue;
+            }
+
+            compute {
+                void main() {
+                    float value = readTemporary(1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__device__ Payload makePayload(float first, float second, float bias)" in cuda_code
+        assert "payload.values[2] = (first + second);" in cuda_code
+        assert "__device__ float readTemporary(int slot)" in cuda_code
+        assert (
+            "float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];"
+            in cuda_code
+        )
+        assert "float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];" in cuda_code
+        assert "float biasValue = makePayload(5.0, 6.0, 0.75).bias;" in cuda_code
+        assert "return ((dynamicValue + fixedValue) + biasValue);" in cuda_code
+        assert "float value = readTemporary(1);" in cuda_code
+
+    def test_nested_temporary_struct_array_member_reads_emit_cuda_expressions(self):
+        """Test CUDA emits nested array-field reads from returned struct temporaries."""
+        source_code = """
+        struct InnerPayload {
+            float values[3];
+            float bias;
+        };
+
+        struct OuterPayload {
+            InnerPayload inner;
+            float scale;
+        };
+
+        shader NestedTemporaryPayloads {
+            OuterPayload makeOuter(float first, float second, float bias, float scale) {
+                OuterPayload outer;
+                outer.inner.values[0] = first;
+                outer.inner.values[1] = second;
+                outer.inner.values[2] = first + second;
+                outer.inner.bias = bias;
+                outer.scale = scale;
+                return outer;
+            }
+
+            float readNestedTemporary(int slot) {
+                float dynamicValue = makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];
+                float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];
+                float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;
+                float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;
+                return dynamicValue + fixedValue + biasValue + scaleValue;
+            }
+
+            compute {
+                void main() {
+                    float value = readNestedTemporary(1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "struct InnerPayload {" in cuda_code
+        assert "struct OuterPayload {" in cuda_code
+        assert (
+            "__device__ OuterPayload makeOuter("
+            "float first, float second, float bias, float scale)"
+            in cuda_code
+        )
+        assert "outer.inner.values[2] = (first + second);" in cuda_code
+        assert "outer.inner.bias = bias;" in cuda_code
+        assert "outer.scale = scale;" in cuda_code
+        assert "__device__ float readNestedTemporary(int slot)" in cuda_code
+        assert (
+            "float dynamicValue = "
+            "makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];"
+            in cuda_code
+        )
+        assert (
+            "float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];"
+            in cuda_code
+        )
+        assert (
+            "float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;"
+            in cuda_code
+        )
+        assert "float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;" in cuda_code
+        assert "return (((dynamicValue + fixedValue) + biasValue) + scaleValue);" in cuda_code
+
+    def test_returned_local_nested_struct_array_writes_emit_cuda_expressions(self):
+        """Test CUDA mutates locals initialized from returned nested structs."""
+        source_code = """
+        struct InnerPayload {
+            float values[3];
+            float bias;
+        };
+
+        struct OuterPayload {
+            InnerPayload inner;
+            float scale;
+        };
+
+        shader LocalReturnedPayloads {
+            OuterPayload makeOuter(float first, float second, float bias, float scale) {
+                OuterPayload outer;
+                outer.inner.values[0] = first;
+                outer.inner.values[1] = second;
+                outer.inner.values[2] = first + second;
+                outer.inner.bias = bias;
+                outer.scale = scale;
+                return outer;
+            }
+
+            float mutateReturnedLocal(int slot) {
+                OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+                outer.inner.values[slot] = outer.inner.values[slot] + outer.inner.bias;
+                outer.inner.values[0] = outer.inner.values[slot] * outer.scale;
+                outer.scale = outer.inner.values[0] + outer.inner.bias;
+                return outer.inner.values[slot] + outer.inner.values[0] + outer.scale;
+            }
+
+            compute {
+                void main() {
+                    float value = mutateReturnedLocal(1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in cuda_code
+        assert (
+            "outer.inner.values[slot] = "
+            "(outer.inner.values[slot] + outer.inner.bias);"
+            in cuda_code
+        )
+        assert (
+            "outer.inner.values[0] = (outer.inner.values[slot] * outer.scale);"
+            in cuda_code
+        )
+        assert "outer.scale = (outer.inner.values[0] + outer.inner.bias);" in cuda_code
+        assert (
+            "return ((outer.inner.values[slot] + outer.inner.values[0]) + outer.scale);"
+            in cuda_code
+        )
+        assert "float value = mutateReturnedLocal(1);" in cuda_code
+
+    def test_returned_local_nested_struct_array_writes_in_control_flow_emit_cuda(
+        self,
+    ):
+        """Test CUDA preserves returned nested struct mutations inside control flow."""
+        source_code = """
+        struct InnerPayload {
+            float values[3];
+            float bias;
+        };
+
+        struct OuterPayload {
+            InnerPayload inner;
+            float scale;
+        };
+
+        shader ControlFlowReturnedPayloads {
+            OuterPayload makeOuter(float first, float second, float bias, float scale) {
+                OuterPayload outer;
+                outer.inner.values[0] = first;
+                outer.inner.values[1] = second;
+                outer.inner.values[2] = first + second;
+                outer.inner.bias = bias;
+                outer.scale = scale;
+                return outer;
+            }
+
+            float mutateReturnedLocalControl(int slot) {
+                OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+                for (int i = 0; i < 3; i++) {
+                    outer.inner.values[i] = outer.inner.values[i] + outer.inner.bias;
+                    if (i == slot) {
+                        outer.inner.values[i] = outer.inner.values[i] * outer.scale;
+                    }
+                }
+                if (slot > 1) {
+                    outer.scale = outer.inner.values[slot] + outer.inner.bias;
+                } else {
+                    outer.scale = outer.inner.values[0] - outer.inner.bias;
+                }
+                return outer.inner.values[slot] + outer.scale;
+            }
+
+            compute {
+                void main() {
+                    float value = mutateReturnedLocalControl(1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__device__ float mutateReturnedLocalControl(int slot)" in cuda_code
+        assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in cuda_code
+        assert "for (int i = 0; (i < 3); i++)" in cuda_code
+        assert (
+            "outer.inner.values[i] = "
+            "(outer.inner.values[i] + outer.inner.bias);"
+            in cuda_code
+        )
+        assert "if ((i == slot))" in cuda_code
+        assert (
+            "outer.inner.values[i] = (outer.inner.values[i] * outer.scale);"
+            in cuda_code
+        )
+        assert "if ((slot > 1))" in cuda_code
+        assert "outer.scale = (outer.inner.values[slot] + outer.inner.bias);" in cuda_code
+        assert "outer.scale = (outer.inner.values[0] - outer.inner.bias);" in cuda_code
+        assert "return (outer.inner.values[slot] + outer.scale);" in cuda_code
+        assert "float value = mutateReturnedLocalControl(1);" in cuda_code
 
     def test_image_atomic_builtins_emit_cuda_diagnostics(self):
         """Test CUDA makes unsupported storage image atomics explicit."""

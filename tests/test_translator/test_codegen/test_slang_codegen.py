@@ -3059,6 +3059,769 @@ def test_struct_member_array_resource_assignments_emit_slang_operations():
     assert "unsupported Slang" not in generated_code
 
 
+def test_control_flow_struct_resource_assignments_emit_slang_operations():
+    code = """
+    struct SampleResult {
+        vec4 sampled;
+        vec4 loaded;
+        ivec2 texSize;
+        ivec2 imageSizeValue;
+    };
+
+    struct SampleEnvelope {
+        SampleResult result;
+        vec4 accum;
+        int chosen;
+    };
+
+    shader Resources {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        SampleEnvelope fillControlled(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            bool useAlternate,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleEnvelope envelope;
+            envelope.accum = vec4(0.0);
+            envelope.chosen = slot;
+
+            if (useAlternate) {
+                envelope.result.sampled = texture(dynTex[layer][slot], uv);
+                envelope.result.loaded = imageLoad(dynImages[layer][slot], pixel);
+            } else {
+                int fallback = 0;
+                envelope.result.sampled = texture(dynTex[fallback][slot], uv);
+                envelope.result.loaded = imageLoad(dynImages[fallback][slot], pixel);
+            }
+
+            for (int i = 0; i < 3; i++) {
+                if (i == 1) {
+                    continue;
+                }
+                envelope.result.texSize = textureSize(dynTex[layer][i], 0);
+                envelope.result.imageSizeValue = imageSize(dynImages[layer][i]);
+                envelope.accum = envelope.accum + texture(dynTex[layer][i], uv);
+                if (i == slot) {
+                    break;
+                }
+            }
+
+            return envelope;
+        }
+
+        vec4 consumeControlled(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleEnvelope envelope = fillControlled(
+                dynTex,
+                dynImages,
+                layer,
+                slot,
+                true,
+                uv,
+                pixel
+            );
+            return envelope.result.sampled + envelope.result.loaded +
+                envelope.accum;
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 value = consumeControlled(
+                    textureGrid,
+                    imageGrid,
+                    1,
+                    2,
+                    uv,
+                    pixel
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "SampleEnvelope fillControlled(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "bool useAlternate, float2 uv, int2 pixel)"
+        in generated_code
+    )
+    assert "if (useAlternate)" in generated_code
+    assert "else" in generated_code
+    assert "for (int i = 0; i < 3; i++)" in generated_code
+    assert "continue;" in generated_code
+    assert "break;" in generated_code
+    assert "envelope.accum = float4(0.0);" in generated_code
+    assert "envelope.chosen = slot;" in generated_code
+    assert (
+        "envelope.result.sampled = dynTex[layer][slot].Sample(uv);"
+        in generated_code
+    )
+    assert "envelope.result.loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert (
+        "envelope.result.sampled = dynTex[fallback][slot].Sample(uv);"
+        in generated_code
+    )
+    assert "envelope.result.loaded = dynImages[fallback][slot][pixel];" in generated_code
+    assert (
+        "envelope.result.texSize = cgl_textureSize_sampler2D(dynTex[layer][i], 0);"
+        in generated_code
+    )
+    assert (
+        "envelope.result.imageSizeValue = cgl_imageSize_image2D(dynImages[layer][i]);"
+        in generated_code
+    )
+    assert "envelope.accum = envelope.accum + dynTex[layer][i].Sample(uv);" in generated_code
+    assert (
+        "fillControlled(dynTex, dynImages, layer, slot, true, uv, pixel);"
+        in generated_code
+    )
+    assert (
+        "consumeControlled(textureGrid, imageGrid, 1, 2, uv, pixel);"
+        in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_struct_parameter_resource_values_round_trip_slang_operations():
+    code = """
+    struct SampleResult {
+        vec4 sampled;
+        vec4 loaded;
+        ivec2 texSize;
+        ivec2 imageSizeValue;
+    };
+
+    shader Resources {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        SampleResult buildResourceResult(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleResult result;
+            result.sampled = texture(dynTex[layer][slot], uv);
+            result.loaded = imageLoad(dynImages[layer][slot], pixel);
+            result.texSize = textureSize(dynTex[layer][slot], 0);
+            result.imageSizeValue = imageSize(dynImages[layer][slot]);
+            return result;
+        }
+
+        SampleResult adjustResult(SampleResult payload, float weight) {
+            payload.sampled = payload.sampled * weight;
+            payload.loaded = payload.loaded + payload.sampled;
+            return payload;
+        }
+
+        vec4 consumeAdjusted(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleResult raw = buildResourceResult(
+                dynTex,
+                dynImages,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+            SampleResult adjusted = adjustResult(raw, 0.5);
+            return adjusted.sampled + adjusted.loaded;
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 value = consumeAdjusted(textureGrid, imageGrid, 1, 2, uv, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "SampleResult buildResourceResult(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "float2 uv, int2 pixel)"
+        in generated_code
+    )
+    assert "SampleResult adjustResult(SampleResult payload, float weight)" in generated_code
+    assert (
+        "float4 consumeAdjusted(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "float2 uv, int2 pixel)"
+        in generated_code
+    )
+    assert "payload.sampled = payload.sampled * weight;" in generated_code
+    assert "payload.loaded = payload.loaded + payload.sampled;" in generated_code
+    assert "return payload;" in generated_code
+    assert (
+        "SampleResult raw = buildResourceResult(dynTex, dynImages, layer, slot, "
+        "uv, pixel);"
+        in generated_code
+    )
+    assert "SampleResult adjusted = adjustResult(raw, 0.5);" in generated_code
+    assert (
+        "consumeAdjusted(textureGrid, imageGrid, 1, 2, uv, pixel);"
+        in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_mutable_scalar_and_array_params_emit_slang_updates():
+    code = """
+    shader MutableParams {
+        float bumpScalar(float weight) {
+            weight = weight + 1.0;
+            return weight * 2.0;
+        }
+
+        float bumpArray(float values[3], int slot) {
+            values[slot] = values[slot] + 1.0;
+            values[0] = values[slot] * 0.5;
+            return values[slot] + values[0];
+        }
+
+        compute {
+            void main() {
+                float values[3];
+                values[0] = 1.0;
+                values[1] = 2.0;
+                values[2] = 3.0;
+                float a = bumpScalar(0.5);
+                float b = bumpArray(values, 1);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float bumpScalar(float weight)" in generated_code
+    assert "weight = weight + 1.0;" in generated_code
+    assert "return weight * 2.0;" in generated_code
+    assert "float bumpArray(float values[3], int slot)" in generated_code
+    assert "values[slot] = values[slot] + 1.0;" in generated_code
+    assert "values[0] = values[slot] * 0.5;" in generated_code
+    assert "return values[slot] + values[0];" in generated_code
+    assert "float values[3];" in generated_code
+    assert "float a = bumpScalar(0.5);" in generated_code
+    assert "float b = bumpArray(values, 1);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_nested_array_and_struct_member_params_emit_slang_updates():
+    code = """
+    struct Payload {
+        float values[3];
+        float bias;
+    };
+
+    shader NestedMutableParams {
+        float bumpNested(float values[2][3], int row, int col) {
+            values[row][col] = values[row][col] + 1.0;
+            values[0][col] = values[row][col] * 0.5;
+            return values[row][col] + values[0][col];
+        }
+
+        float bumpPayload(Payload payload, int slot) {
+            payload.values[slot] = payload.values[slot] + payload.bias;
+            payload.bias = payload.values[slot] * 0.5;
+            return payload.values[slot] + payload.bias;
+        }
+
+        compute {
+            void main() {
+                float grid[2][3];
+                grid[0][0] = 1.0;
+                grid[1][2] = 3.0;
+                Payload payload;
+                payload.values[0] = 2.0;
+                payload.values[1] = 4.0;
+                payload.bias = 0.25;
+                float a = bumpNested(grid, 1, 2);
+                float b = bumpPayload(payload, 1);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Payload" in generated_code
+    assert "float values[3];" in generated_code
+    assert "float bumpNested(float values[2][3], int row, int col)" in generated_code
+    assert "values[row][col] = values[row][col] + 1.0;" in generated_code
+    assert "values[0][col] = values[row][col] * 0.5;" in generated_code
+    assert "return values[row][col] + values[0][col];" in generated_code
+    assert "float bumpPayload(Payload payload, int slot)" in generated_code
+    assert (
+        "payload.values[slot] = payload.values[slot] + payload.bias;"
+        in generated_code
+    )
+    assert "payload.bias = payload.values[slot] * 0.5;" in generated_code
+    assert "return payload.values[slot] + payload.bias;" in generated_code
+    assert "float grid[2][3];" in generated_code
+    assert "float a = bumpNested(grid, 1, 2);" in generated_code
+    assert "float b = bumpPayload(payload, 1);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_returned_nested_struct_params_emit_slang_updates():
+    code = """
+    struct InnerPayload {
+        float values[3];
+        float bias;
+    };
+
+    struct OuterPayload {
+        InnerPayload inner;
+        float scale;
+    };
+
+    shader ReturnedParamPayloads {
+        OuterPayload makeOuter(float first, float second, float bias, float scale) {
+            OuterPayload outer;
+            outer.inner.values[0] = first;
+            outer.inner.values[1] = second;
+            outer.inner.values[2] = first + second;
+            outer.inner.bias = bias;
+            outer.scale = scale;
+            return outer;
+        }
+
+        OuterPayload adjustOuter(OuterPayload payload, int slot) {
+            payload.inner.values[slot] = payload.inner.values[slot] + payload.inner.bias;
+            payload.inner.values[0] = payload.inner.values[slot] * payload.scale;
+            payload.scale = payload.inner.values[0] + payload.inner.bias;
+            return payload;
+        }
+
+        float consumeAdjustedOuter(int slot) {
+            OuterPayload adjusted = adjustOuter(makeOuter(1.0, 2.0, 0.25, 4.0), slot);
+            return adjusted.inner.values[slot] + adjusted.inner.values[0] + adjusted.scale;
+        }
+
+        compute {
+            void main() {
+                float value = consumeAdjustedOuter(1);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "OuterPayload adjustOuter(OuterPayload payload, int slot)" in generated_code
+    assert (
+        "payload.inner.values[slot] = payload.inner.values[slot] + payload.inner.bias;"
+        in generated_code
+    )
+    assert (
+        "payload.inner.values[0] = payload.inner.values[slot] * payload.scale;"
+        in generated_code
+    )
+    assert "payload.scale = payload.inner.values[0] + payload.inner.bias;" in generated_code
+    assert "return payload;" in generated_code
+    assert "float consumeAdjustedOuter(int slot)" in generated_code
+    assert (
+        "OuterPayload adjusted = adjustOuter(makeOuter(1.0, 2.0, 0.25, 4.0), slot);"
+        in generated_code
+    )
+    assert (
+        "return adjusted.inner.values[slot] + adjusted.inner.values[0] + "
+        "adjusted.scale;"
+        in generated_code
+    )
+    assert "float value = consumeAdjustedOuter(1);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_conditional_returned_nested_structs_emit_slang_expressions():
+    code = """
+    struct InnerPayload {
+        float values[3];
+        float bias;
+    };
+
+    struct OuterPayload {
+        InnerPayload inner;
+        float scale;
+    };
+
+    shader ConditionalReturnedPayloads {
+        OuterPayload makeOuter(float first, float second, float bias, float scale) {
+            OuterPayload outer;
+            outer.inner.values[0] = first;
+            outer.inner.values[1] = second;
+            outer.inner.values[2] = first + second;
+            outer.inner.bias = bias;
+            outer.scale = scale;
+            return outer;
+        }
+
+        OuterPayload chooseBranch(bool useSecond) {
+            if (useSecond) {
+                return makeOuter(3.0, 4.0, 0.5, 5.0);
+            }
+            return makeOuter(1.0, 2.0, 0.25, 4.0);
+        }
+
+        OuterPayload chooseTernary(bool useSecond) {
+            return useSecond
+                ? makeOuter(3.0, 4.0, 0.5, 5.0)
+                : makeOuter(1.0, 2.0, 0.25, 4.0);
+        }
+
+        float consumeConditional(int slot, bool useSecond) {
+            OuterPayload branchPayload = chooseBranch(useSecond);
+            OuterPayload ternaryPayload = chooseTernary(useSecond);
+            ternaryPayload.inner.values[slot] =
+                ternaryPayload.inner.values[slot] + ternaryPayload.inner.bias;
+            branchPayload.scale =
+                branchPayload.inner.values[slot] + ternaryPayload.scale;
+            return branchPayload.scale + ternaryPayload.inner.values[slot];
+        }
+
+        compute {
+            void main() {
+                float value = consumeConditional(1, true);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "OuterPayload chooseBranch(bool useSecond)" in generated_code
+    assert "return makeOuter(3.0, 4.0, 0.5, 5.0);" in generated_code
+    assert "return makeOuter(1.0, 2.0, 0.25, 4.0);" in generated_code
+    assert "OuterPayload chooseTernary(bool useSecond)" in generated_code
+    assert (
+        "return (useSecond ? makeOuter(3.0, 4.0, 0.5, 5.0) : "
+        "makeOuter(1.0, 2.0, 0.25, 4.0));"
+        in generated_code
+    )
+    assert "OuterPayload branchPayload = chooseBranch(useSecond);" in generated_code
+    assert "OuterPayload ternaryPayload = chooseTernary(useSecond);" in generated_code
+    assert (
+        "ternaryPayload.inner.values[slot] = "
+        "ternaryPayload.inner.values[slot] + ternaryPayload.inner.bias;"
+        in generated_code
+    )
+    assert (
+        "branchPayload.scale = branchPayload.inner.values[slot] + "
+        "ternaryPayload.scale;"
+        in generated_code
+    )
+    assert (
+        "return branchPayload.scale + ternaryPayload.inner.values[slot];"
+        in generated_code
+    )
+    assert "float value = consumeConditional(1, true);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_temporary_struct_array_member_reads_emit_slang_expressions():
+    code = """
+    struct Payload {
+        float values[3];
+        float bias;
+    };
+
+    shader TemporaryPayloads {
+        Payload makePayload(float first, float second, float bias) {
+            Payload payload;
+            payload.values[0] = first;
+            payload.values[1] = second;
+            payload.values[2] = first + second;
+            payload.bias = bias;
+            return payload;
+        }
+
+        float readTemporary(int slot) {
+            float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];
+            float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];
+            float biasValue = makePayload(5.0, 6.0, 0.75).bias;
+            return dynamicValue + fixedValue + biasValue;
+        }
+
+        compute {
+            void main() {
+                float value = readTemporary(1);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Payload makePayload(float first, float second, float bias)" in generated_code
+    assert "payload.values[2] = first + second;" in generated_code
+    assert "float readTemporary(int slot)" in generated_code
+    assert (
+        "float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];"
+        in generated_code
+    )
+    assert "float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];" in generated_code
+    assert "float biasValue = makePayload(5.0, 6.0, 0.75).bias;" in generated_code
+    assert "return dynamicValue + fixedValue + biasValue;" in generated_code
+    assert "float value = readTemporary(1);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_nested_temporary_struct_array_member_reads_emit_slang_expressions():
+    code = """
+    struct InnerPayload {
+        float values[3];
+        float bias;
+    };
+
+    struct OuterPayload {
+        InnerPayload inner;
+        float scale;
+    };
+
+    shader NestedTemporaryPayloads {
+        OuterPayload makeOuter(float first, float second, float bias, float scale) {
+            OuterPayload outer;
+            outer.inner.values[0] = first;
+            outer.inner.values[1] = second;
+            outer.inner.values[2] = first + second;
+            outer.inner.bias = bias;
+            outer.scale = scale;
+            return outer;
+        }
+
+        float readNestedTemporary(int slot) {
+            float dynamicValue = makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];
+            float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];
+            float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;
+            float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;
+            return dynamicValue + fixedValue + biasValue + scaleValue;
+        }
+
+        compute {
+            void main() {
+                float value = readNestedTemporary(1);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct InnerPayload" in generated_code
+    assert "struct OuterPayload" in generated_code
+    assert (
+        "OuterPayload makeOuter(float first, float second, float bias, float scale)"
+        in generated_code
+    )
+    assert "outer.inner.values[2] = first + second;" in generated_code
+    assert "outer.inner.bias = bias;" in generated_code
+    assert "outer.scale = scale;" in generated_code
+    assert "float readNestedTemporary(int slot)" in generated_code
+    assert (
+        "float dynamicValue = "
+        "makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];"
+        in generated_code
+    )
+    assert (
+        "float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];"
+        in generated_code
+    )
+    assert (
+        "float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;"
+        in generated_code
+    )
+    assert "float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;" in generated_code
+    assert (
+        "return dynamicValue + fixedValue + biasValue + scaleValue;"
+        in generated_code
+    )
+    assert "float value = readNestedTemporary(1);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_returned_local_nested_struct_array_writes_emit_slang_expressions():
+    code = """
+    struct InnerPayload {
+        float values[3];
+        float bias;
+    };
+
+    struct OuterPayload {
+        InnerPayload inner;
+        float scale;
+    };
+
+    shader LocalReturnedPayloads {
+        OuterPayload makeOuter(float first, float second, float bias, float scale) {
+            OuterPayload outer;
+            outer.inner.values[0] = first;
+            outer.inner.values[1] = second;
+            outer.inner.values[2] = first + second;
+            outer.inner.bias = bias;
+            outer.scale = scale;
+            return outer;
+        }
+
+        float mutateReturnedLocal(int slot) {
+            OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+            outer.inner.values[slot] = outer.inner.values[slot] + outer.inner.bias;
+            outer.inner.values[0] = outer.inner.values[slot] * outer.scale;
+            outer.scale = outer.inner.values[0] + outer.inner.bias;
+            return outer.inner.values[slot] + outer.inner.values[0] + outer.scale;
+        }
+
+        compute {
+            void main() {
+                float value = mutateReturnedLocal(1);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in generated_code
+    assert (
+        "outer.inner.values[slot] = outer.inner.values[slot] + outer.inner.bias;"
+        in generated_code
+    )
+    assert (
+        "outer.inner.values[0] = outer.inner.values[slot] * outer.scale;"
+        in generated_code
+    )
+    assert "outer.scale = outer.inner.values[0] + outer.inner.bias;" in generated_code
+    assert (
+        "return outer.inner.values[slot] + outer.inner.values[0] + outer.scale;"
+        in generated_code
+    )
+    assert "float value = mutateReturnedLocal(1);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
+def test_returned_local_nested_struct_array_writes_in_control_flow_emit_slang():
+    code = """
+    struct InnerPayload {
+        float values[3];
+        float bias;
+    };
+
+    struct OuterPayload {
+        InnerPayload inner;
+        float scale;
+    };
+
+    shader ControlFlowReturnedPayloads {
+        OuterPayload makeOuter(float first, float second, float bias, float scale) {
+            OuterPayload outer;
+            outer.inner.values[0] = first;
+            outer.inner.values[1] = second;
+            outer.inner.values[2] = first + second;
+            outer.inner.bias = bias;
+            outer.scale = scale;
+            return outer;
+        }
+
+        float mutateReturnedLocalControl(int slot) {
+            OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+            for (int i = 0; i < 3; i++) {
+                outer.inner.values[i] = outer.inner.values[i] + outer.inner.bias;
+                if (i == slot) {
+                    outer.inner.values[i] = outer.inner.values[i] * outer.scale;
+                }
+            }
+            if (slot > 1) {
+                outer.scale = outer.inner.values[slot] + outer.inner.bias;
+            } else {
+                outer.scale = outer.inner.values[0] - outer.inner.bias;
+            }
+            return outer.inner.values[slot] + outer.scale;
+        }
+
+        compute {
+            void main() {
+                float value = mutateReturnedLocalControl(1);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float mutateReturnedLocalControl(int slot)" in generated_code
+    assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in generated_code
+    assert "for (int i = 0; i < 3; i++)" in generated_code
+    assert (
+        "outer.inner.values[i] = outer.inner.values[i] + outer.inner.bias;"
+        in generated_code
+    )
+    assert "if (i == slot)" in generated_code
+    assert "outer.inner.values[i] = outer.inner.values[i] * outer.scale;" in generated_code
+    assert "if (slot > 1)" in generated_code
+    assert "outer.scale = outer.inner.values[slot] + outer.inner.bias;" in generated_code
+    assert "outer.scale = outer.inner.values[0] - outer.inner.bias;" in generated_code
+    assert "return outer.inner.values[slot] + outer.scale;" in generated_code
+    assert "float value = mutateReturnedLocalControl(1);" in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
 def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     code = """
     shader Resources {

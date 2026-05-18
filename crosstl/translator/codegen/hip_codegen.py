@@ -19,9 +19,10 @@ from ..ast import (
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 from .resource_arrays import format_array_declarator
+from .vector_arithmetic import VectorArithmeticMixin
 
 
-class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
+class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     resource_diagnostic_backend = "HIP"
 
     def __init__(self):
@@ -30,6 +31,8 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
         self.current_function = None
         self.variable_counter = 0
         self.variable_types = {}
+        self.struct_member_types = {}
+        self.function_return_types = {}
         self.helper_functions = {}
         self.query_resource_names = set()
         self.query_metadata_function_params = {}
@@ -185,30 +188,45 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
             "vec2": "make_float2",
             "vec3": "make_float3",
             "vec4": "make_float4",
+            "float2": "make_float2",
+            "float3": "make_float3",
+            "float4": "make_float4",
             "vec2<f32>": "make_float2",
             "vec3<f32>": "make_float3",
             "vec4<f32>": "make_float4",
             "ivec2": "make_int2",
             "ivec3": "make_int3",
             "ivec4": "make_int4",
+            "int2": "make_int2",
+            "int3": "make_int3",
+            "int4": "make_int4",
             "vec2<i32>": "make_int2",
             "vec3<i32>": "make_int3",
             "vec4<i32>": "make_int4",
             "uvec2": "make_uint2",
             "uvec3": "make_uint3",
             "uvec4": "make_uint4",
+            "uint2": "make_uint2",
+            "uint3": "make_uint3",
+            "uint4": "make_uint4",
             "vec2<u32>": "make_uint2",
             "vec3<u32>": "make_uint3",
             "vec4<u32>": "make_uint4",
             "dvec2": "make_double2",
             "dvec3": "make_double3",
             "dvec4": "make_double4",
+            "double2": "make_double2",
+            "double3": "make_double3",
+            "double4": "make_double4",
             "vec2<f64>": "make_double2",
             "vec3<f64>": "make_double3",
             "vec4<f64>": "make_double4",
             "bvec2": "make_uchar2",
             "bvec3": "make_uchar3",
             "bvec4": "make_uchar4",
+            "uchar2": "make_uchar2",
+            "uchar3": "make_uchar3",
+            "uchar4": "make_uchar4",
             "vec2<bool>": "make_uchar2",
             "vec3<bool>": "make_uchar3",
             "vec4<bool>": "make_uchar4",
@@ -269,6 +287,8 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
         self.code_lines = []
         self.indent_level = 0
         self.variable_types = {}
+        self.struct_member_types = {}
+        self.function_return_types = self.collect_function_return_types(node)
         self.helper_functions = {}
         self.resource_query_info_required = False
         (
@@ -449,6 +469,7 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
         self.indent_level += 1
 
         members = getattr(node, "members", [])
+        member_types = {}
         for member in members:
             if hasattr(member, "member_type"):
                 member_type = member.member_type
@@ -459,8 +480,10 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
             else:
                 member_type = "float"
 
+            member_types[member.name] = member_type
             self.add_line(f"{self.format_typed_declarator(member_type, member.name)};")
 
+        self.struct_member_types[node.name] = member_types
         self.indent_level -= 1
         self.add_line("};")
         self.add_line()
@@ -619,6 +642,16 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "="))
+        if operator in {"+=", "-=", "*=", "/="}:
+            lowered_right = self.lower_vector_binary_operation(
+                node.left,
+                left,
+                node.right,
+                right,
+                operator[0],
+            )
+            if lowered_right is not None:
+                return f"{left} = {lowered_right}"
         return f"{left} {operator} {right}"
 
     def visit_BinaryOpNode(self, node) -> str:
@@ -630,6 +663,15 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
             return f"({left} && {right})"
         elif node.op == "or":
             return f"({left} || {right})"
+        lowered = self.lower_vector_binary_operation(
+            node.left,
+            left,
+            node.right,
+            right,
+            node.op,
+        )
+        if lowered is not None:
+            return lowered
         else:
             return f"({left} {node.op} {right})"
 
@@ -667,6 +709,11 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
             return resource_call
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
+        vector_info = self.vector_type_info(func_name)
+        if vector_info and len(args) == 1:
+            arg_type = self.expression_result_type(raw_args[0])
+            if arg_type is not None and not self.vector_type_info(arg_type):
+                args = args * len(vector_info["components"])
 
         # Map function name
         mapped_name = self.function_map.get(func_name, func_name)
@@ -735,6 +782,9 @@ class HipCodeGen(ResourceQueryMixin, ResourceDiagnosticMixin):
         if name is None:
             return None
         return self.variable_types.get(name)
+
+    def map_vector_arithmetic_type(self, type_name):
+        return self.map_type(type_name)
 
     def require_surface_read_helper(self, helper_name):
         helpers = {

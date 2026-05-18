@@ -54,6 +54,8 @@ class HLSLCodeGen:
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.current_implicit_texture_samplers = {}
+        self.current_implicit_texture_query_lod_samplers = {}
+        self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.comparison_sampler_parameters = {}
@@ -157,6 +159,8 @@ class HLSLCodeGen:
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.current_implicit_texture_samplers = {}
+        self.current_implicit_texture_query_lod_samplers = {}
+        self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.comparison_sampler_parameters = {}
@@ -281,6 +285,14 @@ class HLSLCodeGen:
                 self.implicit_texture_sampler_parameters,
             )
         )
+        global_implicit_query_lod_texture_names = (
+            self.collect_global_implicit_query_lod_texture_names(
+                ast,
+                self.collect_global_texture_names(ast),
+                declared_sampler_names | sampler_parameter_names,
+                self.implicit_texture_sampler_parameters,
+            )
+        )
 
         texture_register = 0
         sampler_register = 0
@@ -356,20 +368,45 @@ class HLSLCodeGen:
 
             if mapped_type.startswith("Texture"):
                 sampler_name = f"{var_name}Sampler"
+                needs_implicit_sampler = var_name in global_implicit_sampler_texture_names
+                needs_query_lod_sampler = (
+                    var_name in global_implicit_query_lod_texture_names
+                )
+                needs_comparison_sampler = var_name in comparison_texture_names or (
+                    self.is_shadow_sampler_type(vtype)
+                    and needs_implicit_sampler
+                    and not needs_query_lod_sampler
+                )
                 if (
-                    var_name in global_implicit_sampler_texture_names
+                    needs_implicit_sampler
                     and sampler_name not in explicit_sampler_names
                     and not self.is_multisample_sampler_type(vtype)
                 ):
                     sampler_type = (
                         "SamplerComparisonState"
-                        if self.is_shadow_sampler_type(vtype)
-                        or var_name in comparison_texture_names
+                        if needs_comparison_sampler
                         else "SamplerState"
                     )
                     self.sampler_variables.add(sampler_name)
                     code += f"{sampler_type} {sampler_name} : register(s{sampler_register});\n"
                     sampler_register += 1
+                if needs_query_lod_sampler:
+                    query_sampler_name = (
+                        f"{var_name}QuerySampler"
+                        if needs_comparison_sampler
+                        else sampler_name
+                    )
+                    self.global_implicit_texture_query_lod_samplers[
+                        var_name
+                    ] = query_sampler_name
+                    if (
+                        needs_comparison_sampler
+                        and query_sampler_name not in explicit_sampler_names
+                        and not self.is_multisample_sampler_type(vtype)
+                    ):
+                        self.sampler_variables.add(query_sampler_name)
+                        code += f"SamplerState {query_sampler_name} : register(s{sampler_register});\n"
+                        sampler_register += 1
 
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
@@ -527,6 +564,7 @@ class HLSLCodeGen:
             for data in implicit_texture_samplers.values()
             if data["comparison"] and not data["synthetic"]
         }
+        param_names = {getattr(param, "name", None) for param in param_list}
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
         self.local_variable_types = {}
@@ -579,6 +617,16 @@ class HLSLCodeGen:
                     sampler_name = sampler_info["sampler_name"]
                     params.append(f"{sampler_type} {sampler_name}")
                     sampler_parameters.add(sampler_name)
+                query_sampler_name = self.implicit_query_lod_sampler_name(
+                    p.name, sampler_info
+                )
+                if (
+                    sampler_info.get("query_lod")
+                    and query_sampler_name != sampler_info["sampler_name"]
+                    and query_sampler_name not in param_names
+                ):
+                    params.append(f"SamplerState {query_sampler_name}")
+                    sampler_parameters.add(query_sampler_name)
 
         params_str = ", ".join(params)
         shader_map = {"vertex": "VSMain", "fragment": "PSMain", "compute": "CSMain"}
@@ -628,11 +676,21 @@ class HLSLCodeGen:
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
         previous_implicit_texture_samplers = self.current_implicit_texture_samplers
+        previous_implicit_texture_query_lod_samplers = (
+            self.current_implicit_texture_query_lod_samplers
+        )
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = texture_parameters
         self.current_implicit_texture_samplers = {
             texture_name: sampler_info["sampler_name"]
             for texture_name, sampler_info in implicit_texture_samplers.items()
+        }
+        self.current_implicit_texture_query_lod_samplers = {
+            texture_name: self.implicit_query_lod_sampler_name(
+                texture_name, sampler_info
+            )
+            for texture_name, sampler_info in implicit_texture_samplers.items()
+            if sampler_info.get("query_lod")
         }
         body = getattr(func, "body", [])
         if hasattr(body, "statements"):
@@ -644,6 +702,9 @@ class HLSLCodeGen:
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_implicit_texture_samplers = previous_implicit_texture_samplers
+        self.current_implicit_texture_query_lod_samplers = (
+            previous_implicit_texture_query_lod_samplers
+        )
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
 
@@ -1340,6 +1401,7 @@ class HLSLCodeGen:
             "textureGather",
             "textureGatherOffset",
             "textureGatherOffsets",
+            "textureQueryLod",
             "textureCompare",
             "textureCompareOffset",
             "textureCompareLod",
@@ -1387,6 +1449,57 @@ class HLSLCodeGen:
                 args = getattr(node, "arguments", getattr(node, "args", []))
                 callee_params = self.function_parameter_names.get(callee_name, [])
                 for texture_param in callee_implicit:
+                    try:
+                        texture_index = callee_params.index(texture_param)
+                    except ValueError:
+                        continue
+                    if texture_index >= len(args):
+                        continue
+                    texture_name = self.expression_name(args[texture_index])
+                    if texture_name in global_texture_names:
+                        texture_names.add(texture_name)
+
+        return texture_names
+
+    def collect_global_implicit_query_lod_texture_names(
+        self, root, global_texture_names, sampler_names, implicit_params
+    ):
+        texture_names = set()
+        functions = self.collect_functions(root)
+
+        for func in functions:
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_expr = getattr(node, "function", getattr(node, "name", None))
+                func_name = self.expression_name(func_expr)
+                if func_name != "textureQueryLod":
+                    continue
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                if len(args) < 2:
+                    continue
+                texture_name = self.expression_name(args[0])
+                if texture_name not in global_texture_names:
+                    continue
+                if self.has_explicit_sampler_argument(func_name, args, sampler_names):
+                    continue
+                texture_names.add(texture_name)
+
+        for func in functions:
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_expr = getattr(node, "function", getattr(node, "name", None))
+                callee_name = self.expression_name(func_expr)
+                callee_implicit = implicit_params.get(callee_name, {})
+                if not callee_implicit:
+                    continue
+
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                callee_params = self.function_parameter_names.get(callee_name, [])
+                for texture_param, sampler_info in callee_implicit.items():
+                    if not sampler_info.get("query_lod"):
+                        continue
                     try:
                         texture_index = callee_params.index(texture_param)
                     except ValueError:
@@ -1583,6 +1696,7 @@ class HLSLCodeGen:
             "textureGather",
             "textureGatherOffset",
             "textureGatherOffsets",
+            "textureQueryLod",
             "textureCompare",
             "textureCompareOffset",
             "textureCompareLod",
@@ -1642,28 +1756,34 @@ class HLSLCodeGen:
                 ):
                     continue
 
-                comparison = texture_func in {
-                    "textureCompare",
-                    "textureCompareOffset",
-                    "textureCompareLod",
-                    "textureCompareLodOffset",
-                    "textureCompareGrad",
-                    "textureCompareGradOffset",
-                    "textureCompareProj",
-                    "textureCompareProjOffset",
-                    "textureCompareProjLod",
-                    "textureCompareProjLodOffset",
-                    "textureCompareProjGrad",
-                    "textureCompareProjGradOffset",
-                    "textureGatherCompare",
-                    "textureGatherCompareOffset",
-                } or self.is_shadow_sampler_type(texture_param_types[texture_name])
+                query_lod = texture_func == "textureQueryLod"
+                comparison = not query_lod and (
+                    texture_func
+                    in {
+                        "textureCompare",
+                        "textureCompareOffset",
+                        "textureCompareLod",
+                        "textureCompareLodOffset",
+                        "textureCompareGrad",
+                        "textureCompareGradOffset",
+                        "textureCompareProj",
+                        "textureCompareProjOffset",
+                        "textureCompareProjLod",
+                        "textureCompareProjLodOffset",
+                        "textureCompareProjGrad",
+                        "textureCompareProjGradOffset",
+                        "textureGatherCompare",
+                        "textureGatherCompareOffset",
+                    }
+                    or self.is_shadow_sampler_type(texture_param_types[texture_name])
+                )
                 self.add_implicit_texture_sampler_parameter(
                     implicit_params,
                     func_name,
                     texture_name,
                     comparison,
                     param_names,
+                    query_lod=query_lod,
                 )
 
         changed = True
@@ -1713,27 +1833,39 @@ class HLSLCodeGen:
                             arg_name,
                             sampler_info["comparison"],
                             param_names,
+                            query_lod=sampler_info.get("query_lod", False),
                         )
 
         return implicit_params
 
     def add_implicit_texture_sampler_parameter(
-        self, implicit_params, func_name, texture_name, comparison, param_names
+        self,
+        implicit_params,
+        func_name,
+        texture_name,
+        comparison,
+        param_names,
+        query_lod=False,
     ):
         sampler_name = f"{texture_name}Sampler"
         new_info = {
             "sampler_name": sampler_name,
             "comparison": comparison,
             "synthetic": sampler_name not in param_names,
+            "query_lod": query_lod,
         }
         current = implicit_params.setdefault(func_name, {}).get(texture_name)
         if current is None:
             implicit_params[func_name][texture_name] = new_info
             return True
+        changed = False
         if comparison and not current["comparison"]:
             current["comparison"] = True
-            return True
-        return False
+            changed = True
+        if query_lod and not current.get("query_lod"):
+            current["query_lod"] = True
+            changed = True
+        return changed
 
     def has_explicit_sampler_argument(self, func_name, args, sampler_names):
         if func_name in {
@@ -2057,7 +2189,18 @@ class HLSLCodeGen:
             texture_param = param_names[index]
             if texture_param not in implicit_samplers:
                 continue
+            sampler_info = implicit_samplers[texture_param]
             generated_args.append(self.generate_implicit_sampler_argument(arg))
+            query_sampler_name = self.implicit_query_lod_sampler_name(
+                texture_param, sampler_info
+            )
+            if (
+                sampler_info.get("query_lod")
+                and query_sampler_name != sampler_info["sampler_name"]
+            ):
+                generated_args.append(
+                    self.generate_implicit_query_lod_sampler_argument(arg, sampler_info)
+                )
 
         return generated_args
 
@@ -2069,6 +2212,27 @@ class HLSLCodeGen:
             return f"{texture_name}Sampler"
 
         texture_expr = self.generate_expression(texture_arg)
+        return f"{texture_expr}Sampler"
+
+    def implicit_query_lod_sampler_name(self, texture_name, sampler_info):
+        if sampler_info.get("query_lod") and sampler_info.get("comparison"):
+            return f"{texture_name}QuerySampler"
+        return sampler_info["sampler_name"]
+
+    def generate_implicit_query_lod_sampler_argument(self, texture_arg, sampler_info=None):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name in self.current_implicit_texture_query_lod_samplers:
+            return self.current_implicit_texture_query_lod_samplers[texture_name]
+        if texture_name in self.global_implicit_texture_query_lod_samplers:
+            return self.global_implicit_texture_query_lod_samplers[texture_name]
+        if texture_name:
+            if sampler_info and sampler_info.get("comparison"):
+                return f"{texture_name}QuerySampler"
+            return f"{texture_name}Sampler"
+
+        texture_expr = self.generate_expression(texture_arg)
+        if sampler_info and sampler_info.get("comparison"):
+            return f"{texture_expr}QuerySampler"
         return f"{texture_expr}Sampler"
 
     def texture_resource_type(self, texture_arg):
@@ -3190,6 +3354,8 @@ class HLSLCodeGen:
             if parts is None:
                 return None
             texture_name, sampler_name, coord, _ = parts
+            if not self.is_explicit_sampler_argument(args):
+                sampler_name = self.generate_implicit_query_lod_sampler_argument(args[0])
             coord = self.texture_query_lod_coordinate(
                 self.texture_resource_type(args[0]), coord
             )
