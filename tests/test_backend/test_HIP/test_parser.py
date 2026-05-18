@@ -48,6 +48,36 @@ class TestHipParser:
         assert ast.statements[2].body[0].vtype == "float[2]"
         assert isinstance(ast.statements[2].body[0].value, InitializerListNode)
 
+    def test_constructor_style_vector_declarations_parsing(self):
+        """Test HIP constructor-style local vector declarations"""
+        code = """
+        void launch() {
+            dim3 grid(16, 8, 1);
+            dim3 block(32);
+            float3 v(1.0f, 2.0f, 3.0f);
+            uint4 ids = make_uint4(1u, 2u, 3u, 4u);
+            uchar2 bytes(1, 2);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        assert body[0].vtype == "dim3"
+        assert body[0].name == "grid"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "dim3"
+        assert body[0].value.args == ["16", "8", "1"]
+        assert body[1].value.args == ["32"]
+        assert body[2].vtype == "float3"
+        assert body[2].value.name == "float3"
+        assert body[3].vtype == "uint4"
+        assert body[3].value.name == "make_uint4"
+        assert body[4].vtype == "uchar2"
+        assert body[4].value.name == "uchar2"
+
     def test_qualified_declarations_parsing(self):
         """Test const, unsigned, and static declarations"""
         code = """
@@ -204,6 +234,33 @@ class TestHipParser:
         assert body[2].value == "0777u"
         assert body[3].value == "1e-3f"
         assert body[4].value == ".5f"
+
+    def test_boolean_null_and_character_literal_parsing(self):
+        """Test bool, null, nullptr, and character literals parse intact"""
+        code = r"""
+        bool helper(int* ptr) {
+            bool yes = true;
+            bool no = false;
+            char c = 'x';
+            char escaped = '\n';
+            int* p = nullptr;
+            int* q = NULL;
+            return yes && !no;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        assert body[0].value == "true"
+        assert body[1].value == "false"
+        assert body[2].value == "'x'"
+        assert body[3].value == "'\\n'"
+        assert body[4].value == "nullptr"
+        assert body[5].value == "NULL"
+        assert body[6].value.op == "&&"
 
     def test_control_flow_and_cast_expression_parsing(self):
         """Test HIP control-flow nodes and cast expressions"""

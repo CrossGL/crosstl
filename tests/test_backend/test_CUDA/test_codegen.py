@@ -77,6 +77,33 @@ class TestCudaCodeGen:
         assert codegen.convert_cuda_type_to_crossgl("bool") == "bool"
         assert codegen.convert_cuda_type_to_crossgl("void") == "void"
 
+    def test_constructor_style_vector_declaration_conversion(self):
+        """Test CUDA constructor-style vector declarations convert"""
+        code = """
+        void launch() {
+            dim3 grid(16, 8, 1);
+            dim3 block(32);
+            float3 v(1.0f, 2.0f, 3.0f);
+            double2 d = make_double2(1.0, 2.0);
+            uint4 ids = make_uint4(1u, 2u, 3u, 4u);
+            uchar2 bytes(1, 2);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var grid: vec3<u32> = vec3<u32>(16, 8, 1);" in result
+        assert "var block: vec3<u32> = vec3<u32>(32);" in result
+        assert "var v: vec3<f32> = vec3<f32>(1.0f, 2.0f, 3.0f);" in result
+        assert "var d: vec2<f64> = vec2<f64>(1.0, 2.0);" in result
+        assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
+        assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
+
     def test_empty_program(self):
         """Test empty program conversion"""
         code = ""

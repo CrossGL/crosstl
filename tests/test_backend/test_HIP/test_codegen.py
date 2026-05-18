@@ -132,6 +132,33 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("int3") == "vec3<i32>"
         assert codegen.convert_hip_type_to_crossgl("int4") == "vec4<i32>"
 
+    def test_constructor_style_vector_declaration_conversion(self):
+        """Test HIP constructor-style vector declarations convert"""
+        code = """
+        void launch() {
+            dim3 grid(16, 8, 1);
+            dim3 block(32);
+            float3 v(1.0f, 2.0f, 3.0f);
+            double2 d = make_double2(1.0, 2.0);
+            uint4 ids = make_uint4(1u, 2u, 3u, 4u);
+            uchar2 bytes(1, 2);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var grid: vec3<u32> = vec3<u32>(16, 8, 1);" in result
+        assert "var block: vec3<u32> = vec3<u32>(32);" in result
+        assert "var v: vec3<f32> = vec3<f32>(1.0f, 2.0f, 3.0f);" in result
+        assert "var d: vec2<f64> = vec2<f64>(1.0, 2.0);" in result
+        assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
+        assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
+
     def test_fixed_array_initializer_conversion(self):
         """Test fixed arrays and brace initializer conversion"""
         code = """
@@ -344,6 +371,35 @@ class TestHipCodeGen:
         assert "var x: f32 = 1e-3f;" in result
         assert "var y: f32 = .5f;" in result
         assert "return ((mask | bits) | oct);" in result
+
+    def test_boolean_null_and_character_literal_conversion(self):
+        """Test bool, null, nullptr, and character literals are preserved"""
+        code = r"""
+        bool helper(int* ptr) {
+            bool yes = true;
+            bool no = false;
+            char c = 'x';
+            char escaped = '\n';
+            int* p = nullptr;
+            int* q = NULL;
+            return yes && !no;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var yes: bool = true;" in result
+        assert "var no: bool = false;" in result
+        assert "var c: i8 = 'x';" in result
+        assert "var escaped: i8 = '\\n';" in result
+        assert "var p: ptr<i32> = nullptr;" in result
+        assert "var q: ptr<i32> = NULL;" in result
+        assert "return (yes && (!no));" in result
 
     def test_control_flow_and_cast_expression_conversion(self):
         """Test while, do-while, switch, ternary, and casts are emitted"""

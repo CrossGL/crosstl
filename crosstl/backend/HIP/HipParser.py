@@ -69,12 +69,40 @@ class HipParser:
         "DOUBLE2",
         "DOUBLE3",
         "DOUBLE4",
+        "UINT2",
+        "UINT3",
+        "UINT4",
+        "CHAR2",
+        "CHAR3",
+        "CHAR4",
+        "UCHAR2",
+        "UCHAR3",
+        "UCHAR4",
+        "SHORT2",
+        "SHORT3",
+        "SHORT4",
+        "USHORT2",
+        "USHORT3",
+        "USHORT4",
+        "LONG2",
+        "LONG3",
+        "LONG4",
+        "ULONG2",
+        "ULONG3",
+        "ULONG4",
+        "LONGLONG2",
+        "LONGLONG3",
+        "LONGLONG4",
+        "ULONGLONG2",
+        "ULONGLONG3",
+        "ULONGLONG4",
     }
 
     def __init__(self, tokens: List[Token]):
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[0] if tokens else None
+        self.block_depth = 0
 
     def error(self, message: str):
         token_info = (
@@ -211,7 +239,9 @@ class HipParser:
             return self.parse_block()
 
         # Try to parse function or variable declaration
-        if self.is_function_declaration():
+        if self.block_depth > 0 and self.is_variable_declaration():
+            return self.parse_variable_declaration()
+        elif self.is_function_declaration():
             return self.parse_simple_function()
         elif self.is_variable_declaration():
             return self.parse_variable_declaration()
@@ -381,6 +411,8 @@ class HipParser:
         if self.match("ASSIGN"):
             self.advance()
             value = self.parse_expression()
+        elif self.match("LPAREN"):
+            value = FunctionCallNode(var_type, self.parse_parenthesized_argument_list())
 
         if consume_semicolon and self.match("SEMICOLON"):
             self.advance()
@@ -400,6 +432,12 @@ class HipParser:
             self.consume("RBRACKET")
 
         return "".join(suffixes)
+
+    def parse_parenthesized_argument_list(self):
+        self.consume("LPAREN")
+        args = self.parse_argument_list()
+        self.consume("RPAREN")
+        return args
 
     def parse_type(self):
         type_parts = []
@@ -603,10 +641,14 @@ class HipParser:
         self.consume("LBRACE")
         statements = []
 
-        while self.current_token and not self.match("RBRACE"):
-            stmt = self.parse_statement()
-            if stmt:
-                statements.append(stmt)
+        self.block_depth += 1
+        try:
+            while self.current_token and not self.match("RBRACE"):
+                stmt = self.parse_statement()
+                if stmt:
+                    statements.append(stmt)
+        finally:
+            self.block_depth -= 1
 
         self.consume("RBRACE")
         return statements
@@ -853,6 +895,16 @@ class HipParser:
             self.advance()
             return value
 
+        elif self.match("TRUE", "FALSE", "NULL", "NULLPTR"):
+            value = self.current_token.value
+            self.advance()
+            return value
+
+        elif self.match("CHAR") and self.current_token.value != "char":
+            value = self.current_token.value
+            self.advance()
+            return value
+
         elif self.match("LPAREN"):
             if self.is_cast_expression():
                 self.consume("LPAREN")
@@ -998,7 +1050,7 @@ class HipParser:
                         self.advance()
                 if self.match("IDENTIFIER"):
                     self.advance()
-                    if not self.match("LPAREN"):
+                    if self.match("SEMICOLON", "ASSIGN", "LBRACKET", "LPAREN"):
                         return True
         except Exception:
             pass

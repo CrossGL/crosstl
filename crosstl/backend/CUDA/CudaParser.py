@@ -77,6 +77,33 @@ class CudaParser:
         "DOUBLE2",
         "DOUBLE3",
         "DOUBLE4",
+        "UINT2",
+        "UINT3",
+        "UINT4",
+        "CHAR2",
+        "CHAR3",
+        "CHAR4",
+        "UCHAR2",
+        "UCHAR3",
+        "UCHAR4",
+        "SHORT2",
+        "SHORT3",
+        "SHORT4",
+        "USHORT2",
+        "USHORT3",
+        "USHORT4",
+        "LONG2",
+        "LONG3",
+        "LONG4",
+        "ULONG2",
+        "ULONG3",
+        "ULONG4",
+        "LONGLONG2",
+        "LONGLONG3",
+        "LONGLONG4",
+        "ULONGLONG2",
+        "ULONGLONG3",
+        "ULONGLONG4",
         "SIZE_T",
         "IDENTIFIER",
     }
@@ -301,26 +328,10 @@ class CudaParser:
             type_parts.append(self.current_token[1])
             self.eat(self.current_token[0])
 
-        if self.current_token[0] in [
-            "VOID",
-            "CHAR",
-            "SHORT",
-            "INT",
-            "LONG",
-            "FLOAT",
-            "DOUBLE",
-            "BOOL",
-            "FLOAT2",
-            "FLOAT3",
-            "FLOAT4",
-            "INT2",
-            "INT3",
-            "INT4",
-            "DOUBLE2",
-            "DOUBLE3",
-            "DOUBLE4",
-            "SIZE_T",
-        ]:
+        if (
+            self.current_token[0] in self.TYPE_TOKENS
+            and self.current_token[0] != "IDENTIFIER"
+        ):
             type_parts.append(self.current_token[1])
             self.eat(self.current_token[0])
         elif self.current_token[0] == "IDENTIFIER":
@@ -384,6 +395,9 @@ class CudaParser:
         if self.current_token[0] == "ASSIGN":
             self.eat("ASSIGN")
             value = self.parse_expression()
+        elif self.current_token[0] == "LPAREN":
+            args = self.parse_argument_list()
+            value = FunctionCallNode(vtype, args)
 
         var = VariableNode(vtype, name, value, qualifiers)
 
@@ -408,6 +422,17 @@ class CudaParser:
             self.eat("RBRACKET")
 
         return "".join(suffixes)
+
+    def parse_argument_list(self):
+        self.eat("LPAREN")
+        args = []
+        if self.current_token[0] != "RPAREN":
+            args.append(self.parse_expression())
+            while self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                args.append(self.parse_expression())
+        self.eat("RPAREN")
+        return args
 
     def parse_block(self):
         """Parse a block of statements"""
@@ -492,6 +517,7 @@ class CudaParser:
                     "SEMICOLON",
                     "ASSIGN",
                     "LBRACKET",
+                    "LPAREN",
                 ]
         return False
 

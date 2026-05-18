@@ -8,6 +8,7 @@ from crosstl.backend.CUDA.CudaAst import (
     BinaryOpNode,
     CastNode,
     DoWhileNode,
+    FunctionCallNode,
     InitializerListNode,
     ShaderNode,
     SwitchNode,
@@ -96,6 +97,36 @@ class TestCudaParser:
 
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
+
+    def test_constructor_style_vector_declarations_parsing(self):
+        """Test CUDA constructor-style local vector declarations"""
+        code = """
+        void launch() {
+            dim3 grid(16, 8, 1);
+            dim3 block(32);
+            float3 v(1.0f, 2.0f, 3.0f);
+            uint4 ids = make_uint4(1u, 2u, 3u, 4u);
+            uchar2 bytes(1, 2);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert body[0].vtype == "dim3"
+        assert body[0].name == "grid"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "dim3"
+        assert body[0].value.args == ["16", "8", "1"]
+        assert body[1].value.args == ["32"]
+        assert body[2].vtype == "float3"
+        assert body[2].value.name == "float3"
+        assert body[3].vtype == "uint4"
+        assert body[3].value.name == "make_uint4"
+        assert body[4].vtype == "uchar2"
+        assert body[4].value.name == "uchar2"
 
     def test_atomic_operations_parsing(self):
         """Test parsing atomic operations"""

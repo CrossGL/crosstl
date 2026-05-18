@@ -35,6 +35,49 @@ from .HipAst import (
 class HipToCrossGLConverter:
     """Converts HIP AST to CrossGL format"""
 
+    VECTOR_TYPE_MAPPING = {
+        "float2": "vec2<f32>",
+        "float3": "vec3<f32>",
+        "float4": "vec4<f32>",
+        "double2": "vec2<f64>",
+        "double3": "vec3<f64>",
+        "double4": "vec4<f64>",
+        "int2": "vec2<i32>",
+        "int3": "vec3<i32>",
+        "int4": "vec4<i32>",
+        "uint2": "vec2<u32>",
+        "uint3": "vec3<u32>",
+        "uint4": "vec4<u32>",
+        "char2": "vec2<i8>",
+        "char3": "vec3<i8>",
+        "char4": "vec4<i8>",
+        "uchar2": "vec2<u8>",
+        "uchar3": "vec3<u8>",
+        "uchar4": "vec4<u8>",
+        "short2": "vec2<i16>",
+        "short3": "vec3<i16>",
+        "short4": "vec4<i16>",
+        "ushort2": "vec2<u16>",
+        "ushort3": "vec3<u16>",
+        "ushort4": "vec4<u16>",
+        "long2": "vec2<i64>",
+        "long3": "vec3<i64>",
+        "long4": "vec4<i64>",
+        "ulong2": "vec2<u64>",
+        "ulong3": "vec3<u64>",
+        "ulong4": "vec4<u64>",
+        "longlong2": "vec2<i64>",
+        "longlong3": "vec3<i64>",
+        "longlong4": "vec4<i64>",
+        "ulonglong2": "vec2<u64>",
+        "ulonglong3": "vec3<u64>",
+        "ulonglong4": "vec4<u64>",
+    }
+    VECTOR_CONSTRUCTOR_MAPPING = {
+        **VECTOR_TYPE_MAPPING,
+        **{f"make_{name}": mapped for name, mapped in VECTOR_TYPE_MAPPING.items()},
+    }
+
     def __init__(self):
         self.indent_level = 0
         self.output = []
@@ -464,18 +507,8 @@ class HipToCrossGLConverter:
             "double": "f64",
             "size_t": "u32",
             # HIP vector types
-            "float2": "vec2<f32>",
-            "float3": "vec3<f32>",
-            "float4": "vec4<f32>",
-            "double2": "vec2<f64>",
-            "double3": "vec3<f64>",
-            "double4": "vec4<f64>",
-            "int2": "vec2<i32>",
-            "int3": "vec3<i32>",
-            "int4": "vec4<i32>",
-            "uint2": "vec2<u32>",
-            "uint3": "vec3<u32>",
-            "uint4": "vec4<u32>",
+            **self.VECTOR_TYPE_MAPPING,
+            "dim3": "vec3<u32>",
         }
 
         # Handle arrays
@@ -548,12 +581,8 @@ class HipToCrossGLConverter:
             "floor": "floor",
             "ceil": "ceil",
             # Vector functions
-            "make_float2": "vec2<f32>",
-            "make_float3": "vec3<f32>",
-            "make_float4": "vec4<f32>",
-            "make_int2": "vec2<i32>",
-            "make_int3": "vec3<i32>",
-            "make_int4": "vec4<i32>",
+            **self.VECTOR_CONSTRUCTOR_MAPPING,
+            "dim3": "vec3<u32>",
             # Sync functions
             "__syncthreads": "workgroupBarrier",
             "__threadfence": "memoryBarrier",
