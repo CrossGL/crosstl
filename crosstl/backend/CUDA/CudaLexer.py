@@ -133,13 +133,18 @@ TOKENS = tuple(
         ("NULLPTR", r"\bnullptr\b"),
         # Identifiers and literals (must come after keywords)
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("NUMBER", r"\d+(\.\d+)?([fFdDlLuU]*|[eE][+-]?\d+[fFdDlLuU]*)?"),
+        (
+            "NUMBER",
+            r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFdDlLuU]*",
+        ),
         ("STRING", r'"([^"\\]|\\.)*"'),
         ("CHAR_LIT", r"'([^'\\]|\\.)'"),
         # Preprocessor
         ("PREPROCESSOR", r"#[^\n]*"),
         # Operators (multi-character first)
         ("SCOPE", r"::"),
+        ("SHIFT_LEFT_EQUALS", r"<<="),
+        ("SHIFT_RIGHT_EQUALS", r">>="),
         ("SHIFT_LEFT", r"<<"),
         ("SHIFT_RIGHT", r">>"),
         ("PLUS_EQUALS", r"\+="),
@@ -150,8 +155,6 @@ TOKENS = tuple(
         ("AND_EQUALS", r"&="),
         ("OR_EQUALS", r"\|="),
         ("XOR_EQUALS", r"\^="),
-        ("SHIFT_LEFT_EQUALS", r"<<="),
-        ("SHIFT_RIGHT_EQUALS", r">>="),
         ("LOGICAL_AND", r"&&"),
         ("LOGICAL_OR", r"\|\|"),
         ("EQUAL", r"=="),

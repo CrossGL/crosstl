@@ -14,6 +14,10 @@ from .HipAst import (
     UnaryOpNode,
     FunctionCallNode,
     AtomicOperationNode,
+    CastNode,
+    CaseNode,
+    DoWhileNode,
+    InitializerListNode,
     SyncNode,
     MemberAccessNode,
     ArrayAccessNode,
@@ -24,6 +28,8 @@ from .HipAst import (
     BreakNode,
     ContinueNode,
     PreprocessorNode,
+    SwitchNode,
+    TernaryOpNode,
     HipBuiltinNode,
 )
 
@@ -40,6 +46,30 @@ class HipProgramNode(ASTNode):
 
 class HipParser:
     """Parser for HIP language constructs"""
+
+    FUNCTION_SPECIFIER_TOKENS = {"STATIC", "INLINE", "EXTERN"}
+    TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED"}
+    BUILTIN_TYPE_TOKENS = {
+        "INT",
+        "FLOAT",
+        "DOUBLE",
+        "BOOL",
+        "VOID",
+        "CHAR",
+        "SHORT",
+        "LONG",
+    }
+    VECTOR_TYPE_TOKENS = {
+        "FLOAT2",
+        "FLOAT3",
+        "FLOAT4",
+        "INT2",
+        "INT3",
+        "INT4",
+        "DOUBLE2",
+        "DOUBLE3",
+        "DOUBLE4",
+    }
 
     def __init__(self, tokens: List[Token]):
         self.tokens = tokens
@@ -83,6 +113,30 @@ class HipParser:
         if not self.current_token:
             return False
         return self.current_token.type in token_types
+
+    def skip_newlines(self):
+        while self.match("NEWLINE"):
+            self.advance()
+
+    def is_builtin_type_token(self, token=None):
+        token = token or self.current_token
+        if not token:
+            return False
+        if token.type == "FLOAT":
+            return token.value == "float"
+        if token.type == "CHAR":
+            return token.value == "char"
+        return token.type in self.BUILTIN_TYPE_TOKENS
+
+    def is_type_token(self, token=None, allow_identifier=True):
+        token = token or self.current_token
+        if not token:
+            return False
+        if self.is_builtin_type_token(token):
+            return True
+        if token.type in self.VECTOR_TYPE_TOKENS:
+            return True
+        return allow_identifier and token.type == "IDENTIFIER"
 
     def parse(self):
         """Parse the entire HIP program"""
@@ -136,6 +190,25 @@ class HipParser:
             return self.parse_for_statement()
         elif self.match("WHILE"):
             return self.parse_while_statement()
+        elif self.match("DO"):
+            return self.parse_do_while_statement()
+        elif self.match("SWITCH"):
+            return self.parse_switch_statement()
+
+        if self.match("BREAK"):
+            self.advance()
+            if self.match("SEMICOLON"):
+                self.advance()
+            return BreakNode()
+        if self.match("CONTINUE"):
+            self.advance()
+            if self.match("SEMICOLON"):
+                self.advance()
+            return ContinueNode()
+        if self.match("SYNCTHREADS", "SYNCWARP"):
+            return self.parse_sync_statement()
+        if self.match("LBRACE"):
+            return self.parse_block()
 
         # Try to parse function or variable declaration
         if self.is_function_declaration():
@@ -195,6 +268,11 @@ class HipParser:
         return function
 
     def parse_simple_function(self):
+        qualifiers = []
+        while self.match(*self.FUNCTION_SPECIFIER_TOKENS):
+            qualifiers.append(self.current_token.value)
+            self.advance()
+
         return_type = self.parse_type()
         name = self.consume("IDENTIFIER").value
 
@@ -208,7 +286,7 @@ class HipParser:
         elif self.match("SEMICOLON"):
             self.advance()
 
-        return FunctionNode(return_type, name, params, body)
+        return FunctionNode(return_type, name, params, body, qualifiers)
 
     def parse_struct(self):
         self.consume("STRUCT")
@@ -273,12 +351,7 @@ class HipParser:
         try:
             member_type = self.parse_type()
             name = self.consume("IDENTIFIER").value
-
-            if self.match("LBRACKET"):
-                self.consume("LBRACKET")
-                while self.current_token and not self.match("RBRACKET"):
-                    self.advance()
-                self.consume("RBRACKET")
+            member_type += self.parse_array_suffix()
 
             if self.match("SEMICOLON"):
                 self.advance()
@@ -291,7 +364,7 @@ class HipParser:
                 self.advance()
             return None
 
-    def parse_variable_declaration(self):
+    def parse_variable_declaration(self, consume_semicolon=True):
         qualifiers = []
 
         while self.match(
@@ -302,64 +375,56 @@ class HipParser:
 
         var_type = self.parse_type()
         name = self.consume("IDENTIFIER").value
+        var_type += self.parse_array_suffix()
 
         value = None
         if self.match("ASSIGN"):
             self.advance()
             value = self.parse_expression()
 
-        if self.match("LBRACKET"):
-            self.consume("LBRACKET")
-            while self.current_token and not self.match("RBRACKET"):
-                self.advance()
-            self.consume("RBRACKET")
-
-        if self.match("SEMICOLON"):
+        if consume_semicolon and self.match("SEMICOLON"):
             self.advance()
 
         return VariableNode(var_type, name, value, qualifiers)
 
-    def parse_type(self):
-        type_name = ""
+    def parse_array_suffix(self):
+        suffixes = []
 
-        if self.match(
-            "INT",
-            "FLOAT",
-            "DOUBLE",
-            "BOOL",
-            "VOID",
-            "CHAR",
-            "SHORT",
-            "LONG",
-            "UNSIGNED",
-            "SIGNED",
-        ):
-            type_name = self.current_token.value
+        while self.match("LBRACKET"):
+            self.consume("LBRACKET")
+            if not self.match("RBRACKET"):
+                size = self.parse_expression()
+                suffixes.append(f"[{self.expression_to_text(size)}]")
+            else:
+                suffixes.append("[]")
+            self.consume("RBRACKET")
+
+        return "".join(suffixes)
+
+    def parse_type(self):
+        type_parts = []
+
+        while self.match(*self.TYPE_QUALIFIER_TOKENS):
+            type_parts.append(self.current_token.value)
             self.advance()
-        elif self.match(
-            "FLOAT2",
-            "FLOAT3",
-            "FLOAT4",
-            "INT2",
-            "INT3",
-            "INT4",
-            "DOUBLE2",
-            "DOUBLE3",
-            "DOUBLE4",
-        ):
-            type_name = self.current_token.value
+
+        if self.is_builtin_type_token():
+            type_parts.append(self.current_token.value)
+            self.advance()
+        elif self.match(*self.VECTOR_TYPE_TOKENS):
+            type_parts.append(self.current_token.value)
             self.advance()
         elif self.match("IDENTIFIER"):
-            type_name = self.current_token.value
+            type_parts.append(self.current_token.value)
             self.advance()
         else:
-            type_name = "int"  # Default type
+            type_parts.append("int")  # Default type
 
         while self.match("ASTERISK", "STAR"):
-            type_name += "*"
+            type_parts.append("*")
             self.advance()
 
-        return type_name
+        return " ".join(type_parts)
 
     def parse_parameter_list(self):
         params = []
@@ -375,6 +440,7 @@ class HipParser:
                 param_name = self.current_token.value
                 self.advance()
 
+            param_type += self.parse_array_suffix()
             params.append({"type": param_type, "name": param_name})
 
             if self.match("COMMA"):
@@ -403,6 +469,7 @@ class HipParser:
         self.consume("RPAREN")
 
         if_body = None
+        self.skip_newlines()
         if self.match("LBRACE"):
             if_body = self.parse_block()
         else:
@@ -411,6 +478,7 @@ class HipParser:
         else_body = None
         if self.match("ELSE"):
             self.advance()
+            self.skip_newlines()
             if self.match("LBRACE"):
                 else_body = self.parse_block()
             else:
@@ -424,7 +492,10 @@ class HipParser:
 
         init = None
         if not self.match("SEMICOLON"):
-            init = self.parse_expression()
+            if self.is_variable_declaration():
+                init = self.parse_variable_declaration(consume_semicolon=False)
+            else:
+                init = self.parse_expression()
         self.consume("SEMICOLON")
 
         condition = None
@@ -437,6 +508,7 @@ class HipParser:
             update = self.parse_expression()
         self.consume("RPAREN")
 
+        self.skip_newlines()
         body = self.parse_statement()
 
         return ForNode(init, condition, update, body)
@@ -447,9 +519,85 @@ class HipParser:
         condition = self.parse_expression()
         self.consume("RPAREN")
 
+        self.skip_newlines()
         body = self.parse_statement()
 
         return WhileNode(condition, body)
+
+    def parse_do_while_statement(self):
+        self.consume("DO")
+        self.skip_newlines()
+        body = self.parse_statement()
+        self.skip_newlines()
+        self.consume("WHILE")
+        self.consume("LPAREN")
+        condition = self.parse_expression()
+        self.consume("RPAREN")
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        return DoWhileNode(body, condition)
+
+    def parse_switch_statement(self):
+        self.consume("SWITCH")
+        self.consume("LPAREN")
+        expression = self.parse_expression()
+        self.consume("RPAREN")
+        self.skip_newlines()
+        self.consume("LBRACE")
+
+        cases = []
+        default_case = None
+
+        while self.current_token and not self.match("RBRACE"):
+            if self.match("NEWLINE", "SEMICOLON"):
+                self.advance()
+                continue
+
+            if self.match("CASE"):
+                self.advance()
+                value = self.parse_expression()
+                self.consume("COLON")
+                body = []
+                while self.current_token and not self.match(
+                    "CASE", "DEFAULT", "RBRACE"
+                ):
+                    stmt = self.parse_statement()
+                    if stmt:
+                        body.append(stmt)
+                cases.append(CaseNode(value, body))
+            elif self.match("DEFAULT"):
+                self.advance()
+                self.consume("COLON")
+                default_case = []
+                while self.current_token and not self.match("CASE", "RBRACE"):
+                    stmt = self.parse_statement()
+                    if stmt:
+                        default_case.append(stmt)
+            else:
+                self.advance()
+
+        self.consume("RBRACE")
+        return SwitchNode(expression, cases, default_case)
+
+    def parse_sync_statement(self):
+        sync_type = self.current_token.value
+        self.advance()
+
+        self.consume("LPAREN")
+        args = []
+        if not self.match("RPAREN"):
+            args.append(self.parse_expression())
+            while self.match("COMMA"):
+                self.advance()
+                args.append(self.parse_expression())
+        self.consume("RPAREN")
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        return SyncNode(sync_type, args)
 
     def parse_block(self):
         self.consume("LBRACE")
@@ -475,10 +623,22 @@ class HipParser:
         return self.parse_assignment_expression()
 
     def parse_assignment_expression(self):
-        left = self.parse_logical_or_expression()
+        left = self.parse_ternary_expression()
 
         if self.match(
-            "ASSIGN", "PLUS_ASSIGN", "MINUS_ASSIGN", "MULTIPLY_ASSIGN", "DIVIDE_ASSIGN"
+            "ASSIGN",
+            "PLUS_ASSIGN",
+            "MINUS_ASSIGN",
+            "MULTIPLY_ASSIGN",
+            "DIVIDE_ASSIGN",
+            "STAR_ASSIGN",
+            "SLASH_ASSIGN",
+            "PERCENT_ASSIGN",
+            "AND_ASSIGN",
+            "OR_ASSIGN",
+            "XOR_ASSIGN",
+            "LSHIFT_ASSIGN",
+            "RSHIFT_ASSIGN",
         ):
             op = self.current_token.value
             self.advance()
@@ -487,10 +647,22 @@ class HipParser:
 
         return left
 
+    def parse_ternary_expression(self):
+        expr = self.parse_logical_or_expression()
+
+        if self.match("QUESTION"):
+            self.advance()
+            true_expr = self.parse_expression()
+            self.consume("COLON")
+            false_expr = self.parse_expression()
+            return TernaryOpNode(expr, true_expr, false_expr)
+
+        return expr
+
     def parse_logical_or_expression(self):
         left = self.parse_logical_and_expression()
 
-        while self.match("LOGICAL_OR"):
+        while self.match("LOGICAL_OR", "OR"):
             op = self.current_token.value
             self.advance()
             right = self.parse_logical_and_expression()
@@ -499,9 +671,42 @@ class HipParser:
         return left
 
     def parse_logical_and_expression(self):
+        left = self.parse_bitwise_or_expression()
+
+        while self.match("LOGICAL_AND", "AND"):
+            op = self.current_token.value
+            self.advance()
+            right = self.parse_bitwise_or_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_or_expression(self):
+        left = self.parse_bitwise_xor_expression()
+
+        while self.match("BITWISE_OR", "PIPE"):
+            op = self.current_token.value
+            self.advance()
+            right = self.parse_bitwise_xor_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_xor_expression(self):
+        left = self.parse_bitwise_and_expression()
+
+        while self.match("BITWISE_XOR", "XOR"):
+            op = self.current_token.value
+            self.advance()
+            right = self.parse_bitwise_and_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_and_expression(self):
         left = self.parse_equality_expression()
 
-        while self.match("LOGICAL_AND"):
+        while self.match("BITWISE_AND", "AMPERSAND"):
             op = self.current_token.value
             self.advance()
             right = self.parse_equality_expression()
@@ -521,9 +726,20 @@ class HipParser:
         return left
 
     def parse_relational_expression(self):
-        left = self.parse_additive_expression()
+        left = self.parse_shift_expression()
 
         while self.match("LT", "LE", "GT", "GE"):
+            op = self.current_token.value
+            self.advance()
+            right = self.parse_shift_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_shift_expression(self):
+        left = self.parse_additive_expression()
+
+        while self.match("SHIFT_LEFT", "SHIFT_RIGHT", "LSHIFT", "RSHIFT"):
             op = self.current_token.value
             self.advance()
             right = self.parse_additive_expression()
@@ -555,7 +771,14 @@ class HipParser:
 
     def parse_unary_expression(self):
         if self.match(
-            "PLUS", "MINUS", "NOT", "BITWISE_NOT", "INCREMENT", "DECREMENT", "STAR"
+            "PLUS",
+            "MINUS",
+            "NOT",
+            "BITWISE_NOT",
+            "INCREMENT",
+            "DECREMENT",
+            "STAR",
+            "AMPERSAND",
         ):
             op = self.current_token.value
             self.advance()
@@ -631,14 +854,78 @@ class HipParser:
             return value
 
         elif self.match("LPAREN"):
+            if self.is_cast_expression():
+                self.consume("LPAREN")
+                target_type = self.parse_type()
+                self.consume("RPAREN")
+                expr = self.parse_unary_expression()
+                return CastNode(target_type, expr)
+
             self.consume("LPAREN")
             expr = self.parse_expression()
             self.consume("RPAREN")
             return expr
+        elif self.match("LBRACE"):
+            return self.parse_initializer_list()
 
         else:
             self.error(
                 f"Unexpected token in expression: {self.current_token.type if self.current_token else 'EOF'}"
+            )
+
+    def parse_initializer_list(self):
+        self.consume("LBRACE")
+        elements = []
+
+        while self.current_token and not self.match("RBRACE"):
+            elements.append(self.parse_expression())
+            if self.match("COMMA"):
+                self.advance()
+                if self.match("RBRACE"):
+                    break
+            else:
+                break
+
+        self.consume("RBRACE")
+        return InitializerListNode(elements)
+
+    def expression_to_text(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, HipBuiltinNode):
+            if expr.component:
+                return f"{expr.builtin_name}.{expr.component}"
+            return expr.builtin_name
+        if isinstance(expr, BinaryOpNode):
+            left = self.expression_to_text(expr.left)
+            right = self.expression_to_text(expr.right)
+            return f"({left} {expr.op} {right})"
+        if isinstance(expr, UnaryOpNode):
+            return f"{expr.op}{self.expression_to_text(expr.operand)}"
+        return str(expr)
+
+    def is_cast_expression(self):
+        if not self.match("LPAREN"):
+            return False
+
+        saved_pos = self.pos
+        try:
+            self.advance()
+            while self.match(*self.TYPE_QUALIFIER_TOKENS):
+                self.advance()
+
+            if not self.is_type_token(allow_identifier=False):
+                return False
+
+            self.advance()
+            while self.match("ASTERISK", "STAR"):
+                self.advance()
+
+            return self.match("RPAREN")
+        finally:
+            self.pos = saved_pos
+            self.current_token = (
+                self.tokens[self.pos] if self.pos < len(self.tokens) else None
             )
 
     def parse_argument_list(self):
@@ -662,10 +949,16 @@ class HipParser:
         # Simple heuristic: type followed by identifier followed by (
         saved_pos = self.pos
         try:
-            if self.match(
-                "IDENTIFIER", "INT", "FLOAT", "DOUBLE", "VOID", "BOOL", "CHAR"
-            ):
+            while self.match(*self.FUNCTION_SPECIFIER_TOKENS):
                 self.advance()
+
+            while self.match(*self.TYPE_QUALIFIER_TOKENS):
+                self.advance()
+
+            if self.is_type_token():
+                self.advance()
+                while self.match("ASTERISK", "STAR"):
+                    self.advance()
                 if self.match("IDENTIFIER"):
                     self.advance()
                     if self.match("LPAREN"):
@@ -685,23 +978,24 @@ class HipParser:
         saved_pos = self.pos
         try:
             while self.match(
-                "__SHARED__", "__CONSTANT__", "__DEVICE__", "STATIC", "EXTERN"
+                "__SHARED__",
+                "__CONSTANT__",
+                "__DEVICE__",
+                "STATIC",
+                "EXTERN",
+                "CONST",
+                "VOLATILE",
+                "UNSIGNED",
+                "SIGNED",
             ):
                 self.advance()
 
-            if self.match(
-                "IDENTIFIER",
-                "INT",
-                "FLOAT",
-                "DOUBLE",
-                "VOID",
-                "BOOL",
-                "CHAR",
-                "FLOAT2",
-                "FLOAT3",
-                "FLOAT4",
-            ):
+            if self.is_type_token():
+                type_token = self.current_token.type
                 self.advance()
+                if type_token != "IDENTIFIER":
+                    while self.match("ASTERISK", "STAR"):
+                        self.advance()
                 if self.match("IDENTIFIER"):
                     self.advance()
                     if not self.match("LPAREN"):

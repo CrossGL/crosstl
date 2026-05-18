@@ -14,10 +14,7 @@ class ResourceQueryMixin:
 
     def collect_resource_query_requirements(self, node):
         functions = self.query_collect_functions(node)
-        functions_by_name = {
-            getattr(func, "name", None): func
-            for func in functions
-        }
+        functions_by_name = {getattr(func, "name", None): func for func in functions}
         functions_by_name = {
             name: func for name, func in functions_by_name.items() if name
         }
@@ -94,7 +91,8 @@ class ResourceQueryMixin:
                             function_param_query_names[caller_name].add(arg_name)
                             changed = (
                                 changed
-                                or len(function_param_query_names[caller_name]) != before
+                                or len(function_param_query_names[caller_name])
+                                != before
                             )
                         else:
                             before = len(global_query_names)
@@ -134,13 +132,17 @@ class ResourceQueryMixin:
             if isinstance(current, FunctionCallNode):
                 func_name = self.raw_function_call_name(current)
                 raw_args = getattr(current, "arguments", getattr(current, "args", []))
-                if func_name in {
-                    "textureSize",
-                    "imageSize",
-                    "textureSamples",
-                    "imageSamples",
-                    "textureQueryLevels",
-                } and raw_args:
+                if (
+                    func_name
+                    in {
+                        "textureSize",
+                        "imageSize",
+                        "textureSamples",
+                        "imageSamples",
+                        "textureQueryLevels",
+                    }
+                    and raw_args
+                ):
                     resource_name = self.get_expression_name(raw_args[0])
                     if resource_name:
                         query_names.add(resource_name)

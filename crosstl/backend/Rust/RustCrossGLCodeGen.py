@@ -188,18 +188,26 @@ class RustToCrossGLConverter:
 
         for global_var in ast.global_variables:
             if isinstance(global_var, ConstNode):
-                code += f"    const {self.map_type(global_var.vtype)} {global_var.name} = {self.generate_expression(global_var.value)};\n"
+                declarator = self.format_typed_declarator(
+                    global_var.vtype, global_var.name
+                )
+                value = self.generate_expression(global_var.value)
+                code += f"    const {declarator} = {value};\n"
             elif isinstance(global_var, StaticNode):
                 mutability = "mut " if global_var.is_mutable else ""
-                code += f"    static {mutability}{self.map_type(global_var.vtype)} {global_var.name} = {self.generate_expression(global_var.value)};\n"
+                declarator = self.format_typed_declarator(
+                    global_var.vtype, global_var.name
+                )
+                value = self.generate_expression(global_var.value)
+                code += f"    static {mutability}{declarator} = {value};\n"
 
         for struct in ast.structs:
             if isinstance(struct, StructNode):
                 code += f"    struct {struct.name} {{\n"
                 for member in struct.members:
                     semantic = self.get_semantic_from_attributes(member.attributes)
-                    type_str = self.map_type(member.vtype)
-                    code += f"        {type_str} {member.name}{semantic};\n"
+                    declarator = self.format_typed_declarator(member.vtype, member.name)
+                    code += f"        {declarator}{semantic};\n"
                 code += "    }\n\n"
 
         for func in ast.functions:
@@ -228,8 +236,7 @@ class RustToCrossGLConverter:
 
         params = []
         for param in func.params:
-            param_type = self.map_type(param.vtype)
-            params.append(f"{param_type} {param.name}")
+            params.append(self.format_typed_declarator(param.vtype, param.name))
 
         params_str = ", ".join(params)
         return_type = self.map_type(func.return_type)
@@ -293,15 +300,19 @@ class RustToCrossGLConverter:
         type_str = ""
 
         if stmt.vtype:
-            type_str = f"{self.map_type(stmt.vtype)} "
+            type_str = self.format_typed_declarator(stmt.vtype, stmt.name)
         elif stmt.value:
             type_str = ""
 
         if stmt.value:
             value_str = self.generate_expression(stmt.value)
-            return f"{indent_str}{type_str}{stmt.name} = {value_str};\n"
+            if stmt.vtype:
+                return f"{indent_str}{type_str} = {value_str};\n"
+            return f"{indent_str}{stmt.name} = {value_str};\n"
         else:
-            return f"{indent_str}{type_str}{stmt.name};\n"
+            if stmt.vtype:
+                return f"{indent_str}{type_str};\n"
+            return f"{indent_str}{stmt.name};\n"
 
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
@@ -436,6 +447,13 @@ class RustToCrossGLConverter:
             )
             return f"({elements})"
         elif isinstance(expr, ArrayNode):
+            if expr.size is not None and len(expr.elements) == 1:
+                repeated = self.expand_repeated_array_literal(
+                    expr.elements[0], expr.size
+                )
+                if repeated is not None:
+                    return repeated
+
             elements = ", ".join(
                 self.generate_expression(elem) for elem in expr.elements
             )
@@ -455,6 +473,15 @@ class RustToCrossGLConverter:
         if not rust_type:
             return "void"
 
+        referenced_type = self.strip_reference_type(rust_type)
+        if referenced_type != rust_type:
+            return self.map_type(referenced_type)
+
+        array_parts = self.split_array_type(rust_type)
+        if array_parts:
+            base_type, array_suffix = array_parts
+            return f"{self.map_type(base_type)}{array_suffix}"
+
         if "<" in rust_type and ">" in rust_type:
             base_type = rust_type.split("<")[0]
             if base_type in ["Vec2", "Vec3", "Vec4"]:
@@ -463,6 +490,43 @@ class RustToCrossGLConverter:
                 )
 
         return self.type_map.get(rust_type, rust_type)
+
+    def strip_reference_type(self, type_name):
+        if type_name.startswith("&mut "):
+            return type_name[5:].strip()
+        if type_name.startswith("&"):
+            return type_name[1:].strip()
+        return type_name
+
+    def split_array_type(self, type_name):
+        if not type_name or "[" not in type_name:
+            return None
+
+        base_type = type_name.split("[", 1)[0]
+        array_suffix = type_name[len(base_type) :]
+        if not base_type or not array_suffix:
+            return None
+        return base_type, array_suffix
+
+    def format_typed_declarator(self, type_name, name):
+        mapped_type = self.map_type(type_name)
+        array_parts = self.split_array_type(mapped_type)
+        if array_parts:
+            base_type, array_suffix = array_parts
+            return f"{base_type} {name}{array_suffix}"
+        return f"{mapped_type} {name}"
+
+    def expand_repeated_array_literal(self, element, size):
+        try:
+            count = int(self.generate_expression(size))
+        except (TypeError, ValueError):
+            return None
+
+        if count < 0:
+            return None
+
+        value = self.generate_expression(element)
+        return "{" + ", ".join(value for _ in range(count)) + "}"
 
     def map_function(self, rust_func):
         return self.function_map.get(rust_func, rust_func)

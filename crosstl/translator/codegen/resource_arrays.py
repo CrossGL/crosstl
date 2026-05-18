@@ -35,7 +35,9 @@ def format_array_declarator(
         if not trailing_dimensions:
             return f"{mapped_base}* {name}"
         if all(dimension != "" for dimension in trailing_dimensions):
-            trailing_suffix = "".join(f"[{dimension}]" for dimension in trailing_dimensions)
+            trailing_suffix = "".join(
+                f"[{dimension}]" for dimension in trailing_dimensions
+            )
             return f"{mapped_base} (*{name}){trailing_suffix}"
 
     collapsed_suffix = "".join(
@@ -67,13 +69,8 @@ def collect_resource_array_size_hints(
         for func_name, params in function_arrays.items()
     }
     fixed_requirements = {}
-    functions_by_name = {
-        getattr(func, "name", None): func
-        for func in functions
-    }
-    functions_by_name = {
-        name: func for name, func in functions_by_name.items() if name
-    }
+    functions_by_name = {getattr(func, "name", None): func for func in functions}
+    functions_by_name = {name: func for name, func in functions_by_name.items() if name}
 
     def assert_not_larger_than_known_fixed(name, fixed_size, required_size):
         if required_size > fixed_size:
@@ -190,9 +187,7 @@ def collect_resource_array_size_hints(
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
                     if arg_scope_key is not None:
-                        register_fixed_requirement(
-                            arg_scope_key, fixed_size, arg_size
-                        )
+                        register_fixed_requirement(arg_scope_key, fixed_size, arg_size)
                     if (
                         callee_param_name in callee_param_hints
                         and arg_size

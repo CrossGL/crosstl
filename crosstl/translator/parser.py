@@ -53,6 +53,7 @@ from .ast import (
     MemberAccessNode,
     PointerAccessNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     SwizzleNode,
     CastNode,
     ConstructorNode,
@@ -1773,10 +1774,29 @@ class Parser:
             self.eat("RPAREN")
             return expr
 
+        elif self.current_token[0] == "LBRACE":
+            return self.parse_array_literal()
+
         else:
             name = str(self.current_token[1]) if self.current_token[1] else "unknown"
             self.eat(self.current_token[0])
             return IdentifierNode(name)
+
+    def parse_array_literal(self):
+        self.eat("LBRACE")
+        elements = []
+
+        while self.current_token[0] != "RBRACE":
+            elements.append(self.parse_expression())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                if self.current_token[0] == "RBRACE":
+                    break
+            elif self.current_token[0] != "RBRACE":
+                break
+
+        self.eat("RBRACE")
+        return ArrayLiteralNode(elements)
 
     def parse_literal(self):
         token_type, value = self.current_token

@@ -12,6 +12,10 @@ from .HipAst import (
     UnaryOpNode,
     FunctionCallNode,
     AtomicOperationNode,
+    CaseNode,
+    CastNode,
+    DoWhileNode,
+    InitializerListNode,
     SyncNode,
     MemberAccessNode,
     ArrayAccessNode,
@@ -22,6 +26,8 @@ from .HipAst import (
     BreakNode,
     ContinueNode,
     PreprocessorNode,
+    SwitchNode,
+    TernaryOpNode,
     HipBuiltinNode,
 )
 
@@ -57,6 +63,29 @@ class HipToCrossGLConverter:
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
+
+    def emit_statement(self, stmt):
+        result = self.visit(stmt)
+        if isinstance(result, str) and result.strip():
+            self.emit(f"{result};")
+
+    def format_statement_fragment(self, stmt):
+        if stmt is None:
+            return ""
+        if isinstance(stmt, VariableNode):
+            var_type = self.convert_hip_type_to_crossgl(getattr(stmt, "vtype", "int"))
+            if hasattr(stmt, "value") and stmt.value:
+                value = self.visit(stmt.value)
+                return f"var {stmt.name}: {var_type} = {value}"
+            return f"var {stmt.name}: {var_type}"
+        if isinstance(stmt, AssignmentNode):
+            left = self.visit(stmt.left)
+            right = self.visit(stmt.right)
+            operator = getattr(stmt, "operator", "=")
+            return f"{left} {operator} {right}"
+
+        result = self.visit(stmt)
+        return result if isinstance(result, str) else ""
 
     def visit_HipProgramNode(self, node):
         self.emit("// HIP to CrossGL conversion")
@@ -115,9 +144,9 @@ class HipToCrossGLConverter:
         if hasattr(node, "body") and node.body:
             if isinstance(node.body, list):
                 for stmt in node.body:
-                    self.visit(stmt)
+                    self.emit_statement(stmt)
             else:
-                self.visit(node.body)
+                self.emit_statement(node.body)
         self.indent_level -= 1
 
         self.emit("}")
@@ -130,27 +159,27 @@ class HipToCrossGLConverter:
         if hasattr(kernel, "params") and kernel.params:
             for param in kernel.params:
                 if isinstance(param, dict):
-                    param_type = self.convert_hip_type_to_crossgl(
-                        param.get("type", "int")
-                    )
+                    raw_type = param.get("type", "int")
                     param_name = param.get("name", "param")
                     # Add storage buffer qualifiers for pointer parameters
-                    if "*" in param.get("type", ""):
+                    if "*" in raw_type:
+                        element_type = self.convert_hip_pointer_element_type(raw_type)
                         params.append(
-                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{param_type.replace('*', '').strip()}>"
+                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{element_type}>"
                         )
                     else:
+                        param_type = self.convert_hip_type_to_crossgl(raw_type)
                         params.append(f"{param_type} {param_name}")
                 else:
-                    param_type = self.convert_hip_type_to_crossgl(
-                        getattr(param, "vtype", "int")
-                    )
+                    raw_type = getattr(param, "vtype", "int")
                     param_name = getattr(param, "name", "param")
-                    if "*" in getattr(param, "vtype", ""):
+                    if "*" in raw_type:
+                        element_type = self.convert_hip_pointer_element_type(raw_type)
                         params.append(
-                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{param_type.replace('*', '').strip()}>"
+                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{element_type}>"
                         )
                     else:
+                        param_type = self.convert_hip_type_to_crossgl(raw_type)
                         params.append(f"{param_type} {param_name}")
 
         self.emit(f"fn {kernel.name}(")
@@ -174,9 +203,9 @@ class HipToCrossGLConverter:
         if hasattr(kernel, "body") and kernel.body:
             if isinstance(kernel.body, list):
                 for stmt in kernel.body:
-                    self.visit(stmt)
+                    self.emit_statement(stmt)
             else:
-                self.visit(kernel.body)
+                self.emit_statement(kernel.body)
 
         self.indent_level -= 1
         self.emit("}")
@@ -218,7 +247,9 @@ class HipToCrossGLConverter:
 
     def visit_UnaryOpNode(self, node):
         operand = self.visit(node.operand)
-        if hasattr(node, "postfix") and node.postfix:
+        if isinstance(node.op, str) and node.op.endswith("_POST"):
+            return f"({operand}{node.op[:-5]})"
+        elif hasattr(node, "postfix") and node.postfix:
             return f"({operand}{node.op})"
         else:
             return f"({node.op}{operand})"
@@ -249,6 +280,18 @@ class HipToCrossGLConverter:
         array = self.visit(node.array)
         index = self.visit(node.index)
         return f"{array}[{index}]"
+
+    def visit_InitializerListNode(self, node):
+        elements = ", ".join(self.visit(element) for element in node.elements)
+        return f"{{{elements}}}"
+
+    def visit_SyncNode(self, node):
+        if node.sync_type in {"__syncthreads", "hipDeviceSynchronize"}:
+            self.emit("workgroupBarrier();")
+        elif node.sync_type == "__syncwarp":
+            self.emit("// Warp sync not directly supported in CrossGL")
+        else:
+            self.emit(f"// {node.sync_type}();")
 
     def visit_HipBuiltinNode(self, node):
         builtin_map = {
@@ -285,9 +328,9 @@ class HipToCrossGLConverter:
         if hasattr(node, "if_body") and node.if_body:
             if isinstance(node.if_body, list):
                 for stmt in node.if_body:
-                    self.visit(stmt)
+                    self.emit_statement(stmt)
             else:
-                self.visit(node.if_body)
+                self.emit_statement(node.if_body)
         self.indent_level -= 1
 
         if hasattr(node, "else_body") and node.else_body:
@@ -295,22 +338,24 @@ class HipToCrossGLConverter:
             self.indent_level += 1
             if isinstance(node.else_body, list):
                 for stmt in node.else_body:
-                    self.visit(stmt)
+                    self.emit_statement(stmt)
             else:
-                self.visit(node.else_body)
+                self.emit_statement(node.else_body)
             self.indent_level -= 1
 
         self.emit("}")
 
     def visit_ForNode(self, node):
-        init = self.visit(node.init) if hasattr(node, "init") and node.init else ""
+        init = self.format_statement_fragment(
+            node.init if hasattr(node, "init") else None
+        )
         condition = (
             self.visit(node.condition)
             if hasattr(node, "condition") and node.condition
             else ""
         )
-        update = (
-            self.visit(node.update) if hasattr(node, "update") and node.update else ""
+        update = self.format_statement_fragment(
+            node.update if hasattr(node, "update") else None
         )
 
         self.emit(f"for ({init}; {condition}; {update}) {{")
@@ -319,12 +364,80 @@ class HipToCrossGLConverter:
         if hasattr(node, "body") and node.body:
             if isinstance(node.body, list):
                 for stmt in node.body:
-                    self.visit(stmt)
+                    self.emit_statement(stmt)
             else:
-                self.visit(node.body)
+                self.emit_statement(node.body)
         self.indent_level -= 1
 
         self.emit("}")
+
+    def visit_WhileNode(self, node):
+        condition = self.visit(node.condition)
+        self.emit(f"while ({condition}) {{")
+
+        self.indent_level += 1
+        if hasattr(node, "body") and node.body:
+            if isinstance(node.body, list):
+                for stmt in node.body:
+                    self.emit_statement(stmt)
+            else:
+                self.emit_statement(node.body)
+        self.indent_level -= 1
+
+        self.emit("}")
+
+    def visit_DoWhileNode(self, node):
+        condition = self.visit(node.condition)
+        self.emit("do {")
+
+        self.indent_level += 1
+        if hasattr(node, "body") and node.body:
+            if isinstance(node.body, list):
+                for stmt in node.body:
+                    self.emit_statement(stmt)
+            else:
+                self.emit_statement(node.body)
+        self.indent_level -= 1
+
+        self.emit(f"}} while ({condition});")
+
+    def visit_SwitchNode(self, node):
+        expression = self.visit(node.expression)
+        self.emit(f"switch ({expression}) {{")
+
+        self.indent_level += 1
+        for case in getattr(node, "cases", []):
+            self.visit(case)
+
+        if getattr(node, "default_case", None):
+            self.emit("default:")
+            self.indent_level += 1
+            for stmt in node.default_case:
+                self.emit_statement(stmt)
+            self.indent_level -= 1
+
+        self.indent_level -= 1
+        self.emit("}")
+
+    def visit_CaseNode(self, node):
+        value = self.visit(node.value)
+        self.emit(f"case {value}:")
+
+        self.indent_level += 1
+        for stmt in getattr(node, "body", []):
+            self.emit_statement(stmt)
+        self.indent_level -= 1
+
+    def visit_TernaryOpNode(self, node):
+        condition = self.visit(node.condition)
+        true_expr = self.visit(node.true_expr)
+        false_expr = self.visit(node.false_expr)
+        return f"({condition} ? {true_expr} : {false_expr})"
+
+    def visit_CastNode(self, node):
+        target_type = self.convert_hip_type_to_crossgl(node.target_type)
+        expression = self.visit(node.expression)
+        return f"{target_type}({expression})"
 
     def convert_hip_type_to_crossgl(self, hip_type):
         if hip_type is None:
@@ -332,6 +445,8 @@ class HipToCrossGLConverter:
 
         if not isinstance(hip_type, str):
             hip_type = str(hip_type)
+
+        hip_type = self.strip_type_qualifiers(hip_type)
 
         type_mapping = {
             # Basic types
@@ -363,21 +478,46 @@ class HipToCrossGLConverter:
             "uint4": "vec4<u32>",
         }
 
-        # Handle pointers
-        if "*" in hip_type:
-            base_type = hip_type.replace("*", "").strip()
-            mapped_base = type_mapping.get(base_type, base_type)
-            return f"ptr<{mapped_base}>"
-
         # Handle arrays
         if "[" in hip_type and "]" in hip_type:
-            parts = hip_type.split("[")
-            base_type = parts[0].strip()
-            size = parts[1].split("]")[0]
-            mapped_base = type_mapping.get(base_type, base_type)
-            return f"array<{mapped_base}, {size}>"
+            return self.convert_hip_array_type(hip_type, type_mapping)
+
+        # Handle pointers
+        if "*" in hip_type:
+            return f"ptr<{self.convert_hip_pointer_element_type(hip_type)}>"
 
         return type_mapping.get(hip_type, hip_type)
+
+    def convert_hip_pointer_element_type(self, hip_type):
+        base_type = hip_type.replace("*", "").strip()
+        return self.convert_hip_type_to_crossgl(base_type)
+
+    def strip_type_qualifiers(self, type_name):
+        qualifiers = {"const", "volatile", "__restrict__", "restrict"}
+        return " ".join(
+            part for part in str(type_name).split() if part not in qualifiers
+        )
+
+    def convert_hip_array_type(self, hip_type, type_mapping):
+        base_type = hip_type.split("[", 1)[0].strip()
+        dimensions = []
+        remainder = hip_type[len(base_type) :]
+
+        while remainder.startswith("["):
+            close_index = remainder.find("]")
+            if close_index == -1:
+                break
+            dimensions.append(remainder[1:close_index].strip())
+            remainder = remainder[close_index + 1 :]
+
+        mapped_type = type_mapping.get(base_type, base_type)
+        for size in reversed(dimensions):
+            if size:
+                mapped_type = f"array<{mapped_type}, {size}>"
+            else:
+                mapped_type = f"array<{mapped_type}>"
+
+        return mapped_type
 
     def convert_hip_builtin_function(self, func_name):
         function_mapping = {

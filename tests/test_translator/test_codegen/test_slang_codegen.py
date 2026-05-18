@@ -3025,28 +3025,27 @@ def test_struct_member_array_resource_assignments_emit_slang_operations():
     assert (
         "SampleEnvelope buildArrayEnvelope(Sampler2D<float4> dynTex[][3], "
         "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
-        "float2 uv, int2 pixel)"
-        in generated_code
+        "float2 uv, int2 pixel)" in generated_code
     )
     assert (
         "envelope.results[slot].sampled = dynTex[layer][slot].Sample(uv);"
         in generated_code
     )
-    assert "envelope.results[slot].loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert (
+        "envelope.results[slot].loaded = dynImages[layer][slot][pixel];"
+        in generated_code
+    )
     assert (
         "envelope.results[slot].texSize = "
-        "cgl_textureSize_sampler2D(dynTex[layer][slot], 0);"
-        in generated_code
+        "cgl_textureSize_sampler2D(dynTex[layer][slot], 0);" in generated_code
     )
     assert (
         "envelope.results[slot].imageSizeValue = "
-        "cgl_imageSize_image2D(dynImages[layer][slot]);"
-        in generated_code
+        "cgl_imageSize_image2D(dynImages[layer][slot]);" in generated_code
     )
     assert (
         "SampleEnvelope envelope = buildArrayEnvelope("
-        "dynTex, dynImages, layer, slot, uv, pixel);"
-        in generated_code
+        "dynTex, dynImages, layer, slot, uv, pixel);" in generated_code
     )
     assert (
         "consumeArrayEnvelope(textureGrid, imageGrid, 1, 2, uv, pixel);"
@@ -3160,8 +3159,7 @@ def test_control_flow_struct_resource_assignments_emit_slang_operations():
     assert (
         "SampleEnvelope fillControlled(Sampler2D<float4> dynTex[][3], "
         "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
-        "bool useAlternate, float2 uv, int2 pixel)"
-        in generated_code
+        "bool useAlternate, float2 uv, int2 pixel)" in generated_code
     )
     assert "if (useAlternate)" in generated_code
     assert "else" in generated_code
@@ -3170,16 +3168,14 @@ def test_control_flow_struct_resource_assignments_emit_slang_operations():
     assert "break;" in generated_code
     assert "envelope.accum = float4(0.0);" in generated_code
     assert "envelope.chosen = slot;" in generated_code
-    assert (
-        "envelope.result.sampled = dynTex[layer][slot].Sample(uv);"
-        in generated_code
-    )
+    assert "envelope.result.sampled = dynTex[layer][slot].Sample(uv);" in generated_code
     assert "envelope.result.loaded = dynImages[layer][slot][pixel];" in generated_code
     assert (
-        "envelope.result.sampled = dynTex[fallback][slot].Sample(uv);"
-        in generated_code
+        "envelope.result.sampled = dynTex[fallback][slot].Sample(uv);" in generated_code
     )
-    assert "envelope.result.loaded = dynImages[fallback][slot][pixel];" in generated_code
+    assert (
+        "envelope.result.loaded = dynImages[fallback][slot][pixel];" in generated_code
+    )
     assert (
         "envelope.result.texSize = cgl_textureSize_sampler2D(dynTex[layer][i], 0);"
         in generated_code
@@ -3188,14 +3184,16 @@ def test_control_flow_struct_resource_assignments_emit_slang_operations():
         "envelope.result.imageSizeValue = cgl_imageSize_image2D(dynImages[layer][i]);"
         in generated_code
     )
-    assert "envelope.accum = envelope.accum + dynTex[layer][i].Sample(uv);" in generated_code
+    assert (
+        "envelope.accum = envelope.accum + dynTex[layer][i].Sample(uv);"
+        in generated_code
+    )
     assert (
         "fillControlled(dynTex, dynImages, layer, slot, true, uv, pixel);"
         in generated_code
     )
     assert (
-        "consumeControlled(textureGrid, imageGrid, 1, 2, uv, pixel);"
-        in generated_code
+        "consumeControlled(textureGrid, imageGrid, 1, 2, uv, pixel);" in generated_code
     )
     assert "texture(" not in generated_code
     assert "textureSize(" not in generated_code
@@ -3276,29 +3274,26 @@ def test_struct_parameter_resource_values_round_trip_slang_operations():
     assert (
         "SampleResult buildResourceResult(Sampler2D<float4> dynTex[][3], "
         "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
-        "float2 uv, int2 pixel)"
+        "float2 uv, int2 pixel)" in generated_code
+    )
+    assert (
+        "SampleResult adjustResult(SampleResult payload, float weight)"
         in generated_code
     )
-    assert "SampleResult adjustResult(SampleResult payload, float weight)" in generated_code
     assert (
         "float4 consumeAdjusted(Sampler2D<float4> dynTex[][3], "
         "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
-        "float2 uv, int2 pixel)"
-        in generated_code
+        "float2 uv, int2 pixel)" in generated_code
     )
     assert "payload.sampled = payload.sampled * weight;" in generated_code
     assert "payload.loaded = payload.loaded + payload.sampled;" in generated_code
     assert "return payload;" in generated_code
     assert (
         "SampleResult raw = buildResourceResult(dynTex, dynImages, layer, slot, "
-        "uv, pixel);"
-        in generated_code
+        "uv, pixel);" in generated_code
     )
     assert "SampleResult adjusted = adjustResult(raw, 0.5);" in generated_code
-    assert (
-        "consumeAdjusted(textureGrid, imageGrid, 1, 2, uv, pixel);"
-        in generated_code
-    )
+    assert "consumeAdjusted(textureGrid, imageGrid, 1, 2, uv, pixel);" in generated_code
     assert "texture(" not in generated_code
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
@@ -3350,6 +3345,33 @@ def test_mutable_scalar_and_array_params_emit_slang_updates():
     assert "unsupported Slang" not in generated_code
 
 
+def test_array_literals_emit_slang_brace_initializers():
+    code = """
+    float globalWeights[4] = {1.0, 2.0};
+
+    float pickScalar(int index) {
+        float values[4] = {1.0, 2.0, 3.0, 4.0};
+        return values[index];
+    }
+
+    vec3 pickColor(int index) {
+        vec3 colors[2] = {vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0)};
+        return colors[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float globalWeights[4] = {1.0, 2.0};" in generated_code
+    assert "float values[4] = {1.0, 2.0, 3.0, 4.0};" in generated_code
+    assert (
+        "float3 colors[2] = {float3(1.0, 2.0, 3.0), " "float3(4.0, 5.0, 6.0)};"
+    ) in generated_code
+    assert "ArrayLiteralNode" not in generated_code
+
+
 def test_nested_array_and_struct_member_params_emit_slang_updates():
     code = """
     struct Payload {
@@ -3398,8 +3420,7 @@ def test_nested_array_and_struct_member_params_emit_slang_updates():
     assert "return values[row][col] + values[0][col];" in generated_code
     assert "float bumpPayload(Payload payload, int slot)" in generated_code
     assert (
-        "payload.values[slot] = payload.values[slot] + payload.bias;"
-        in generated_code
+        "payload.values[slot] = payload.values[slot] + payload.bias;" in generated_code
     )
     assert "payload.bias = payload.values[slot] * 0.5;" in generated_code
     assert "return payload.values[slot] + payload.bias;" in generated_code
@@ -3465,7 +3486,10 @@ def test_returned_nested_struct_params_emit_slang_updates():
         "payload.inner.values[0] = payload.inner.values[slot] * payload.scale;"
         in generated_code
     )
-    assert "payload.scale = payload.inner.values[0] + payload.inner.bias;" in generated_code
+    assert (
+        "payload.scale = payload.inner.values[0] + payload.inner.bias;"
+        in generated_code
+    )
     assert "return payload;" in generated_code
     assert "float consumeAdjustedOuter(int slot)" in generated_code
     assert (
@@ -3474,8 +3498,7 @@ def test_returned_nested_struct_params_emit_slang_updates():
     )
     assert (
         "return adjusted.inner.values[slot] + adjusted.inner.values[0] + "
-        "adjusted.scale;"
-        in generated_code
+        "adjusted.scale;" in generated_code
     )
     assert "float value = consumeAdjustedOuter(1);" in generated_code
     assert "unsupported Slang" not in generated_code
@@ -3545,8 +3568,7 @@ def test_conditional_returned_nested_structs_emit_slang_expressions():
     assert "OuterPayload chooseTernary(bool useSecond)" in generated_code
     assert (
         "return (useSecond ? makeOuter(3.0, 4.0, 0.5, 5.0) : "
-        "makeOuter(1.0, 2.0, 0.25, 4.0));"
-        in generated_code
+        "makeOuter(1.0, 2.0, 0.25, 4.0));" in generated_code
     )
     assert "OuterPayload branchPayload = chooseBranch(useSecond);" in generated_code
     assert "OuterPayload ternaryPayload = chooseTernary(useSecond);" in generated_code
@@ -3557,8 +3579,7 @@ def test_conditional_returned_nested_structs_emit_slang_expressions():
     )
     assert (
         "branchPayload.scale = branchPayload.inner.values[slot] + "
-        "ternaryPayload.scale;"
-        in generated_code
+        "ternaryPayload.scale;" in generated_code
     )
     assert (
         "return branchPayload.scale + ternaryPayload.inner.values[slot];"
@@ -3604,7 +3625,9 @@ def test_temporary_struct_array_member_reads_emit_slang_expressions():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Payload makePayload(float first, float second, float bias)" in generated_code
+    assert (
+        "Payload makePayload(float first, float second, float bias)" in generated_code
+    )
     assert "payload.values[2] = first + second;" in generated_code
     assert "float readTemporary(int slot)" in generated_code
     assert (
@@ -3673,21 +3696,18 @@ def test_nested_temporary_struct_array_member_reads_emit_slang_expressions():
     assert "float readNestedTemporary(int slot)" in generated_code
     assert (
         "float dynamicValue = "
-        "makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];"
-        in generated_code
+        "makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];" in generated_code
     )
     assert (
         "float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];"
         in generated_code
     )
     assert (
-        "float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;"
-        in generated_code
+        "float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;" in generated_code
     )
     assert "float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;" in generated_code
     assert (
-        "return dynamicValue + fixedValue + biasValue + scaleValue;"
-        in generated_code
+        "return dynamicValue + fixedValue + biasValue + scaleValue;" in generated_code
     )
     assert "float value = readNestedTemporary(1);" in generated_code
     assert "unsupported Slang" not in generated_code
@@ -3813,9 +3833,13 @@ def test_returned_local_nested_struct_array_writes_in_control_flow_emit_slang():
         in generated_code
     )
     assert "if (i == slot)" in generated_code
-    assert "outer.inner.values[i] = outer.inner.values[i] * outer.scale;" in generated_code
+    assert (
+        "outer.inner.values[i] = outer.inner.values[i] * outer.scale;" in generated_code
+    )
     assert "if (slot > 1)" in generated_code
-    assert "outer.scale = outer.inner.values[slot] + outer.inner.bias;" in generated_code
+    assert (
+        "outer.scale = outer.inner.values[slot] + outer.inner.bias;" in generated_code
+    )
     assert "outer.scale = outer.inner.values[0] - outer.inner.bias;" in generated_code
     assert "return outer.inner.values[slot] + outer.scale;" in generated_code
     assert "float value = mutateReturnedLocalControl(1);" in generated_code

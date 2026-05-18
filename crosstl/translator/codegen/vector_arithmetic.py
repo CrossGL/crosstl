@@ -37,7 +37,9 @@ class VectorArithmeticMixin:
 
         resource_type = None
         if raw_args:
-            resource_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            resource_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
 
         if func_name in {"textureSize", "imageSize"} and resource_type:
             spec = self.dimension_query_spec(resource_type)
@@ -121,9 +123,9 @@ class VectorArithmeticMixin:
         if isinstance(node, UnaryOpNode):
             return self.expression_result_type(node.operand)
         if isinstance(node, TernaryOpNode):
-            return self.expression_result_type(node.true_expr) or self.expression_result_type(
-                node.false_expr
-            )
+            return self.expression_result_type(
+                node.true_expr
+            ) or self.expression_result_type(node.false_expr)
         if isinstance(node, MemberAccessNode):
             object_expr = getattr(node, "object_expr", getattr(node, "object", None))
             object_type = self.expression_result_type(object_expr)

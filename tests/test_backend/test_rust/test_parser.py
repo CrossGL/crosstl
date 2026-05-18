@@ -8,6 +8,7 @@ from crosstl.backend.Rust.RustAst import (
     StaticNode,
     StructNode,
     UseNode,
+    ArrayNode,
 )
 
 
@@ -206,6 +207,52 @@ def test_const_static_parsing():
         assert isinstance(static_var, StaticNode)
     except Exception as e:
         pytest.fail(f"Const/static parsing failed: {e}")
+
+
+def test_fixed_array_type_and_repeated_literal_parsing():
+    code = """
+    fn test_arrays() {
+        let weights: [f32; 4] = [0.25, 0.25, 0.25, 0.25];
+        let zeros: [f32; 3] = [0.0; 3];
+        let matrix: [[f32; 2]; 3] = [[1.0, 2.0]; 3];
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert body[0].vtype == "f32[4]"
+        assert isinstance(body[0].value, ArrayNode)
+        assert body[0].value.size is None
+        assert body[0].value.elements == ["0.25", "0.25", "0.25", "0.25"]
+
+        assert body[1].vtype == "f32[3]"
+        assert isinstance(body[1].value, ArrayNode)
+        assert body[1].value.size == "3"
+        assert body[1].value.elements == ["0.0"]
+
+        assert body[2].vtype == "f32[3][2]"
+        assert isinstance(body[2].value, ArrayNode)
+        assert body[2].value.size == "3"
+        assert isinstance(body[2].value.elements[0], ArrayNode)
+    except Exception as e:
+        pytest.fail(f"Fixed array parsing failed: {e}")
+
+
+def test_reference_array_type_parsing():
+    code = """
+    fn sample_arrays(weights: &[f32; 4], output: &mut [Vec3<f32>; 2]) {
+        let first = weights[0];
+    }
+    """
+    try:
+        ast = parse_code(code)
+        params = ast.functions[0].params
+
+        assert params[0].vtype == "&f32[4]"
+        assert params[1].vtype == "&mut Vec3<f32>[2]"
+    except Exception as e:
+        pytest.fail(f"Reference array type parsing failed: {e}")
 
 
 def test_function_call_parsing():

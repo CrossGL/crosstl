@@ -8,6 +8,7 @@ from ..ast import (
     StructNode,
     VariableNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     ArrayNode,
     ShaderNode,
     FunctionNode,
@@ -459,6 +460,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             index = self.visit(node.index)
 
         return f"{array}[{index}]"
+
+    def visit_ArrayLiteralNode(self, node):
+        elements = ", ".join(self.visit(element) for element in node.elements)
+        return f"{{{elements}}}"
 
     def visit_IfNode(self, node):
         """Visit if statement"""

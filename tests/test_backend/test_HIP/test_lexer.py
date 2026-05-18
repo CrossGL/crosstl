@@ -129,13 +129,15 @@ class TestHipLexer:
         assert "NE" in token_types
         assert "AND" in token_types
         assert "OR" in token_types
+        assert "LSHIFT_ASSIGN" in token_types
+        assert "RSHIFT_ASSIGN" in token_types
         assert "ARROW" in token_types
         assert "SCOPE" in token_types
 
     def test_numeric_literals(self):
         """Test numeric literal tokenization"""
         code = """
-        42 3.14f 2.71828 0xFF 0777 1e5 2.5e-3f
+        42 3.14f 2.71828 0xFFu 0XCAFEull 0b1010u 0777u 1e5 2.5e-3f .5f
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -144,8 +146,15 @@ class TestHipLexer:
         integers = [token for token in tokens if token.type == "INTEGER"]
         floats = [token for token in tokens if token.type == "FLOAT"]
 
-        assert len(integers) >= 2  # At least decimal and hex
-        assert len(floats) >= 2  # At least regular float and scientific notation
+        integer_values = [token.value for token in integers]
+        float_values = [token.value for token in floats]
+
+        assert "0xFFu" in integer_values
+        assert "0XCAFEull" in integer_values
+        assert "0b1010u" in integer_values
+        assert "0777u" in integer_values
+        assert "2.5e-3f" in float_values
+        assert ".5f" in float_values
 
     def test_string_literals(self):
         """Test string literal tokenization"""

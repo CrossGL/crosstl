@@ -7,6 +7,7 @@ from .array_utils import parse_array_type, detect_array_element_type
 from ..ast import (
     AssignmentNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     ArrayNode,
     BinaryOpNode,
     BreakNode,
@@ -86,6 +87,7 @@ class VulkanSPIRVCodeGen:
         self.value_types = {}
         self.constants = {}
         self.vector_constants = {}
+        self.composite_constants = {}
         self.resource_type_metadata = {}
 
         self.functions = {}
@@ -94,6 +96,7 @@ class VulkanSPIRVCodeGen:
         self.function_resource_array_type_hints = {}
         self.function_execution_models = {}
         self.current_execution_model = None
+        self.current_return_type = None
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -420,11 +423,36 @@ class VulkanSPIRVCodeGen:
         self.vector_constants[key] = spirv_id
         return spirv_id
 
+    def register_composite_constant(
+        self, composite_type: SpirvId, components: List[SpirvId]
+    ) -> SpirvId:
+        """Create and register a composite constant."""
+        key = (composite_type.id, tuple(component.id for component in components))
+        if key in self.composite_constants:
+            return self.composite_constants[key]
+
+        id_value = self.get_id()
+        component_list = " ".join(f"%{component.id}" for component in components)
+        self.emit(
+            f"%{id_value} = OpConstantComposite %{composite_type.id} {component_list}"
+        )
+
+        spirv_id = SpirvId(id_value, composite_type.type)
+        self.value_types[id_value] = composite_type
+        self.composite_constants[key] = spirv_id
+        return spirv_id
+
     def is_constant_instruction(self, value_id: SpirvId) -> bool:
-        return any(
-            constant.id == value_id.id for constant in self.constants.values()
-        ) or any(
-            constant.id == value_id.id for constant in self.vector_constants.values()
+        return (
+            any(constant.id == value_id.id for constant in self.constants.values())
+            or any(
+                constant.id == value_id.id
+                for constant in self.vector_constants.values()
+            )
+            or any(
+                constant.id == value_id.id
+                for constant in self.composite_constants.values()
+            )
         )
 
     def image_offset_operand(self, offset_id: SpirvId) -> str:
@@ -448,13 +476,21 @@ class VulkanSPIRVCodeGen:
         return " ".join(["|".join(masks)] + values)
 
     def create_variable(
-        self, type_id: SpirvId, storage_class: str, name: Optional[str] = None
+        self,
+        type_id: SpirvId,
+        storage_class: str,
+        name: Optional[str] = None,
+        initializer: Optional[SpirvId] = None,
     ) -> SpirvId:
         """Create a new variable."""
         pointer_type = self.register_pointer_type(type_id, storage_class)
 
         id_value = self.get_id()
-        self.emit(f"%{id_value} = OpVariable %{pointer_type.id} {storage_class}")
+        initializer_operand = f" %{initializer.id}" if initializer is not None else ""
+        self.emit(
+            f"%{id_value} = OpVariable %{pointer_type.id} "
+            f"{storage_class}{initializer_operand}"
+        )
 
         if name:
             self.emit(f'OpName %{id_value} "{name}"')
@@ -699,11 +735,7 @@ class VulkanSPIRVCodeGen:
             spv_op = None
         elif op == "-":
             component_type = self.scalar_or_vector_component_type(result_type.type)
-            spv_op = (
-                "OpSNegate"
-                if component_type in {"int", "uint"}
-                else "OpFNegate"
-            )
+            spv_op = "OpSNegate" if component_type in {"int", "uint"} else "OpFNegate"
         else:
             spv_op = {
                 "!": "OpLogicalNot",
@@ -964,9 +996,7 @@ class VulkanSPIRVCodeGen:
     ) -> SpirvId:
         offsets, component_id = self.texture_gather_offsets_arguments(extra_args)
         if len(offsets) != 4:
-            self.emit(
-                "; WARNING: textureGatherOffsets requires four offset operands"
-            )
+            self.emit("; WARNING: textureGatherOffsets requires four offset operands")
             return self.register_constant(0.0, self.register_primitive_type("float"))
 
         if component_id is None:
@@ -994,8 +1024,7 @@ class VulkanSPIRVCodeGen:
             f"%{component.id}" for component in gathered_components
         )
         self.emit(
-            f"%{id_value} = OpCompositeConstruct %{result_type.id} "
-            f"{component_list}"
+            f"%{id_value} = OpCompositeConstruct %{result_type.id} " f"{component_list}"
         )
         self.value_types[id_value] = result_type
         return SpirvId(id_value, result_type.type)
@@ -1671,9 +1700,10 @@ class VulkanSPIRVCodeGen:
                     default_args[0] = component_one
 
                 arg_list = " ".join([f"%{arg.id}" for arg in default_args])
-            elif len(args) == 1 and self.vector_component_type_and_count(
-                args[0].type.base_type
-            ) is None:
+            elif (
+                len(args) == 1
+                and self.vector_component_type_and_count(args[0].type.base_type) is None
+            ):
                 arg_list = " ".join(f"%{args[0].id}" for _ in range(component_count))
             else:
                 arg_list = " ".join([f"%{arg.id}" for arg in args])
@@ -2441,6 +2471,8 @@ class VulkanSPIRVCodeGen:
     def process_function_node(self, function_node: "FunctionNode"):
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
+        previous_return_type = self.current_return_type
+        self.current_return_type = return_type
 
         param_types = []
         param_value_types = []
@@ -2509,6 +2541,7 @@ class VulkanSPIRVCodeGen:
         self.end_function()
 
         self.current_execution_model = previous_execution_model
+        self.current_return_type = previous_return_type
         self.local_variables.clear()
         return function_id
 
@@ -2564,7 +2597,10 @@ class VulkanSPIRVCodeGen:
 
         initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
-            rhs_value = self.process_expression(initial_value)
+            if isinstance(initial_value, ArrayLiteralNode):
+                rhs_value = self.process_array_literal(initial_value, var_type)
+            else:
+                rhs_value = self.process_expression(initial_value)
             if rhs_value is not None:
                 self.store_to_variable(var_id, rhs_value)
 
@@ -2579,6 +2615,13 @@ class VulkanSPIRVCodeGen:
             node, default_storage_class, var_type_name
         )
 
+        initializer = None
+        initial_value = getattr(node, "initial_value", None)
+        if storage_class == "Private" and isinstance(initial_value, ArrayLiteralNode):
+            initializer = self.process_array_literal(
+                initial_value, var_type, constant=True
+            )
+
         if storage_class == "Input":
             location = self.next_input_location
             self.next_input_location += 1
@@ -2588,7 +2631,9 @@ class VulkanSPIRVCodeGen:
             self.next_output_location += 1
             var_id = self.register_output(node.name, var_type, location, 0)
         else:
-            var_id = self.create_variable(var_type, storage_class, node.name)
+            var_id = self.create_variable(
+                var_type, storage_class, node.name, initializer
+            )
             if storage_class == "UniformConstant":
                 binding = self.next_resource_binding
                 self.next_resource_binding += 1
@@ -2990,6 +3035,187 @@ class VulkanSPIRVCodeGen:
 
         return None
 
+    def array_type_info_from_type(self, array_type: Optional[SpirvId]):
+        if array_type is None:
+            return None
+
+        for (element_type_id, size), arr_type_id in self.array_types.items():
+            if arr_type_id.id == array_type.id:
+                return self.find_registered_type_by_id(element_type_id), size
+
+        return None
+
+    def vector_type_info_from_type(self, vector_type: Optional[SpirvId]):
+        if vector_type is None:
+            return None
+
+        for (component_type_id, count), vec_type_id in self.vector_types.items():
+            if vec_type_id.id == vector_type.id:
+                return self.find_registered_type_by_id(component_type_id), count
+
+        return None
+
+    def matrix_type_info_from_type(self, matrix_type: Optional[SpirvId]):
+        if matrix_type is None:
+            return None
+
+        for (column_type_id, count), mat_type_id in self.matrix_types.items():
+            if mat_type_id.id == matrix_type.id:
+                return self.find_registered_type_by_id(column_type_id), count
+
+        return None
+
+    def default_value_for_type(self, type_id: SpirvId) -> SpirvId:
+        primitive_name = self.normalize_primitive_name(type_id.type.base_type)
+        if primitive_name in {"float", "double"}:
+            return self.register_constant(0.0, type_id)
+        if primitive_name in {"int", "uint"}:
+            return self.register_constant(0, type_id)
+        if primitive_name == "bool":
+            return self.register_constant(False, type_id)
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, count = vector_info
+            components = [
+                self.default_value_for_type(component_type) for _ in range(count)
+            ]
+            return self.register_vector_constant(type_id, components)
+
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, count = matrix_info
+            columns = [self.default_value_for_type(column_type) for _ in range(count)]
+            return self.register_composite_constant(type_id, columns)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            elements = [
+                self.default_value_for_type(element_type) for _ in range(size or 0)
+            ]
+            return self.register_composite_constant(type_id, elements)
+
+        members = self.current_struct_members.get(type_id.type.base_type)
+        if members is not None:
+            values = [
+                self.default_value_for_type(member_type) for member_type, _ in members
+            ]
+            return self.register_composite_constant(type_id, values)
+
+        return self.register_constant(0.0, self.register_primitive_type("float"))
+
+    def process_array_literal(
+        self,
+        expr: ArrayLiteralNode,
+        target_type: Optional[SpirvId] = None,
+        constant: bool = False,
+    ) -> Optional[SpirvId]:
+        array_type = target_type
+        element_type = None
+        target_size = None
+
+        if array_type is not None:
+            array_type = self.ensure_registered_type(array_type)
+            array_info = self.array_type_info_from_type(array_type)
+            if array_info is not None:
+                element_type, target_size = array_info
+
+        values = []
+        for element in expr.elements:
+            value = self.process_array_literal_element(element, element_type, constant)
+            if value is None:
+                return None
+            values.append(value)
+
+        if array_type is None:
+            if values:
+                element_type = self.value_types.get(
+                    values[0].id
+                ) or self.find_registered_type_by_base(values[0].type.base_type)
+            if element_type is None:
+                element_type = self.register_primitive_type("float")
+            target_size = len(values)
+            array_type = self.register_array_type(element_type, target_size)
+
+        if target_size is not None:
+            values = values[:target_size]
+            if element_type is not None:
+                while len(values) < target_size:
+                    values.append(self.default_value_for_type(element_type))
+
+        if constant:
+            if not all(self.is_constant_instruction(value) for value in values):
+                return None
+            return self.register_composite_constant(array_type, values)
+
+        id_value = self.get_id()
+        component_list = " ".join(f"%{value.id}" for value in values)
+        self.emit(
+            f"%{id_value} = OpCompositeConstruct %{array_type.id} {component_list}"
+        )
+        spirv_id = SpirvId(id_value, array_type.type)
+        self.value_types[id_value] = array_type
+        return spirv_id
+
+    def process_array_literal_element(
+        self,
+        element,
+        target_type: Optional[SpirvId],
+        constant: bool,
+    ) -> Optional[SpirvId]:
+        if isinstance(element, ArrayLiteralNode):
+            return self.process_array_literal(element, target_type, constant)
+
+        if constant:
+            return self.process_constant_expression(element, target_type)
+
+        return self.process_expression(element)
+
+    def process_constant_expression(
+        self,
+        expr,
+        target_type: Optional[SpirvId] = None,
+    ) -> Optional[SpirvId]:
+        if isinstance(expr, ArrayLiteralNode):
+            return self.process_array_literal(expr, target_type, constant=True)
+
+        if isinstance(expr, LiteralNode):
+            return self.process_expression(expr)
+
+        if isinstance(expr, FunctionCallNode):
+            callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+            callee_name = getattr(callee_expr, "name", callee_expr)
+            vector_type = target_type
+            if vector_type is None and isinstance(callee_name, str):
+                if self.vector_component_type_and_count(callee_name) is not None:
+                    vector_type = self.map_crossgl_type(callee_name)
+
+            if vector_type is not None:
+                vector_info = self.vector_type_info_from_type(vector_type)
+                if vector_info is not None:
+                    component_type, component_count = vector_info
+                    components = []
+                    for arg in getattr(expr, "args", []):
+                        value = self.process_constant_expression(arg, component_type)
+                        if value is None:
+                            return None
+                        components.append(value)
+
+                    if len(components) == 1 and component_count > 1:
+                        components *= component_count
+
+                    components = components[:component_count]
+                    while len(components) < component_count:
+                        components.append(self.default_value_for_type(component_type))
+
+                    return self.register_vector_constant(vector_type, components)
+
+        value = self.process_expression(expr)
+        if value is not None and self.is_constant_instruction(value):
+            return value
+        return None
+
     def ensure_assignable_pointer_for_name(self, name: str) -> Optional[SpirvId]:
         var_id = self.local_variables.get(name)
         if var_id is not None:
@@ -3079,9 +3305,9 @@ class VulkanSPIRVCodeGen:
         if element_type is None:
             return None, None
 
-        array_type = self.value_types.get(array.id) or self.find_registered_type_by_base(
-            array.type.base_type
-        )
+        array_type = self.value_types.get(
+            array.id
+        ) or self.find_registered_type_by_base(array.type.base_type)
         if array_type is not None and not array.type.storage_class:
             array_variable = self.create_variable(array_type, "Function")
             self.store_to_variable(array_variable, array)
@@ -3099,13 +3325,23 @@ class VulkanSPIRVCodeGen:
 
     def process_assignment(self, node: AssignmentNode):
         """Process a CrossGL assignment statement."""
-        rhs_value = self.process_expression(node.value)
-        if rhs_value is None:
-            return
-
         target = getattr(
             node, "name", getattr(node, "target", getattr(node, "left", None))
         )
+
+        if isinstance(node.value, ArrayLiteralNode):
+            target_pointer = self.assignable_pointer_from_expression(target)
+            target_type = (
+                self.variable_value_types.get(target_pointer.id)
+                if target_pointer is not None
+                else None
+            )
+            rhs_value = self.process_array_literal(node.value, target_type)
+        else:
+            rhs_value = self.process_expression(node.value)
+
+        if rhs_value is None:
+            return
 
         if isinstance(target, IdentifierNode):
             target = target.name
@@ -3170,7 +3406,12 @@ class VulkanSPIRVCodeGen:
                 else:
                     self.create_return()
             else:
-                return_value = self.process_expression(node.value)
+                if isinstance(node.value, ArrayLiteralNode):
+                    return_value = self.process_array_literal(
+                        node.value, self.current_return_type
+                    )
+                else:
+                    return_value = self.process_expression(node.value)
                 if return_value:
                     self.create_return_value(return_value)
                 else:
@@ -3404,6 +3645,9 @@ class VulkanSPIRVCodeGen:
                 # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
+
+        elif isinstance(expr, ArrayLiteralNode):
+            return self.process_array_literal(expr)
 
         # Array access
         elif isinstance(expr, ArrayAccessNode):
@@ -3775,9 +4019,7 @@ class VulkanSPIRVCodeGen:
                 debug_names.append(line)
             elif line.startswith(("OpDecorate ", "OpMemberDecorate ")):
                 annotations.append(line)
-            elif re.match(
-                r"%\d+ = (OpType|OpConstant|OpSpecConstant|OpUndef)", line
-            ):
+            elif re.match(r"%\d+ = (OpType|OpConstant|OpSpecConstant|OpUndef)", line):
                 declarations.append(line)
             elif re.match(r"%\d+ = OpVariable %\d+ (?!Function\b)", line):
                 global_variables.append(line)

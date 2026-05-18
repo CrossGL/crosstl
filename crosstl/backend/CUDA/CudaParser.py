@@ -16,6 +16,7 @@ from .CudaAst import (
     FunctionCallNode,
     FunctionNode,
     IfNode,
+    InitializerListNode,
     KernelLaunchNode,
     KernelNode,
     MemberAccessNode,
@@ -35,6 +36,51 @@ from .CudaLexer import CudaLexer
 
 
 class CudaParser:
+    TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED"}
+    DECLARATION_QUALIFIER_TOKENS = {
+        "CONST",
+        "VOLATILE",
+        "STATIC",
+        "EXTERN",
+        "SHARED",
+        "CONSTANT",
+        "DEVICE",
+        "MANAGED",
+        "UNSIGNED",
+        "SIGNED",
+    }
+    FUNCTION_SPECIFIER_TOKENS = {
+        "GLOBAL",
+        "DEVICE",
+        "HOST",
+        "INLINE",
+        "STATIC",
+        "EXTERN",
+        "FORCEINLINE",
+        "NOINLINE",
+    }
+    TYPE_TOKENS = {
+        "VOID",
+        "CHAR",
+        "SHORT",
+        "INT",
+        "LONG",
+        "FLOAT",
+        "DOUBLE",
+        "BOOL",
+        "FLOAT2",
+        "FLOAT3",
+        "FLOAT4",
+        "INT2",
+        "INT3",
+        "INT4",
+        "DOUBLE2",
+        "DOUBLE3",
+        "DOUBLE4",
+        "SIZE_T",
+        "IDENTIFIER",
+    }
+
     def __init__(self, tokens):
         self.tokens = tokens
         self.current_index = 0
@@ -77,28 +123,30 @@ class CudaParser:
         # Look ahead for function pattern: [qualifiers] type name (
         saved_index = self.current_index
 
-        while saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
-            "CONST",
-            "STATIC",
-            "INLINE",
-            "EXTERN",
-        ]:
+        while (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.FUNCTION_SPECIFIER_TOKENS
+        ):
             saved_index += 1
 
-        if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
-            "VOID",
-            "INT",
-            "FLOAT",
-            "DOUBLE",
-            "CHAR",
-            "SHORT",
-            "LONG",
-            "BOOL",
-            "IDENTIFIER",
-            "UNSIGNED",
-            "SIGNED",
-        ]:
+        while (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.TYPE_QUALIFIER_TOKENS
+        ):
             saved_index += 1
+
+        if (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.TYPE_TOKENS
+        ):
+            type_token = self.tokens[saved_index][0]
+            saved_index += 1
+            if type_token != "IDENTIFIER":
+                while (
+                    saved_index < len(self.tokens)
+                    and self.tokens[saved_index][0] == "MULTIPLY"
+                ):
+                    saved_index += 1
 
         if (
             saved_index < len(self.tokens) - 1
@@ -113,34 +161,46 @@ class CudaParser:
         """Check if the next tokens form a variable declaration"""
         saved_index = self.current_index
 
-        while saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
-            "CONST",
-            "STATIC",
-            "EXTERN",
-        ]:
+        while (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.DECLARATION_QUALIFIER_TOKENS
+        ):
             saved_index += 1
 
-        if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
-            "INT",
-            "FLOAT",
-            "DOUBLE",
-            "CHAR",
-            "SHORT",
-            "LONG",
-            "BOOL",
-            "IDENTIFIER",
-            "UNSIGNED",
-            "SIGNED",
-            "FLOAT2",
-            "FLOAT3",
-            "FLOAT4",
-        ]:
+        if (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.TYPE_TOKENS
+        ):
+            type_token = self.tokens[saved_index][0]
             saved_index += 1
+            if type_token != "IDENTIFIER":
+                while (
+                    saved_index < len(self.tokens)
+                    and self.tokens[saved_index][0] == "MULTIPLY"
+                ):
+                    saved_index += 1
+
             if (
                 saved_index < len(self.tokens)
                 and self.tokens[saved_index][0] == "IDENTIFIER"
             ):
                 saved_index += 1
+                while (
+                    saved_index < len(self.tokens)
+                    and self.tokens[saved_index][0] == "LBRACKET"
+                ):
+                    saved_index += 1
+                    while (
+                        saved_index < len(self.tokens)
+                        and self.tokens[saved_index][0] != "RBRACKET"
+                    ):
+                        saved_index += 1
+                    if (
+                        saved_index < len(self.tokens)
+                        and self.tokens[saved_index][0] == "RBRACKET"
+                    ):
+                        saved_index += 1
+
                 if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
                     "SEMICOLON",
                     "ASSIGN",
@@ -197,7 +257,7 @@ class CudaParser:
         """Parse function declaration including kernels"""
         qualifiers = []
 
-        while self.current_token[0] in ["GLOBAL", "DEVICE", "HOST", "INLINE", "STATIC"]:
+        while self.current_token[0] in self.FUNCTION_SPECIFIER_TOKENS:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
 
@@ -230,13 +290,14 @@ class CudaParser:
         """Parse a single parameter"""
         param_type = self.parse_type()
         param_name = self.eat("IDENTIFIER")[1]
+        param_type += self.parse_array_suffix()
         return VariableNode(param_type, param_name)
 
     def parse_type(self):
         """Parse type specification"""
         type_parts = []
 
-        while self.current_token[0] in ["CONST", "VOLATILE", "UNSIGNED", "SIGNED"]:
+        while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
             type_parts.append(self.current_token[1])
             self.eat(self.current_token[0])
 
@@ -304,22 +365,20 @@ class CudaParser:
         """Parse variable declaration"""
         qualifiers = []
 
-        while self.current_token[0] in ["SHARED", "CONSTANT"]:
+        while self.current_token[0] in [
+            "SHARED",
+            "CONSTANT",
+            "STATIC",
+            "EXTERN",
+            "DEVICE",
+            "MANAGED",
+        ]:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
 
         vtype = self.parse_type()
         name = self.eat("IDENTIFIER")[1]
-
-        if self.current_token[0] == "LBRACKET":
-            self.eat("LBRACKET")
-            if self.current_token[0] == "NUMBER":
-                size = self.current_token[1]
-                vtype += f"[{size}]"
-                self.eat("NUMBER")
-            else:
-                vtype += "[]"
-            self.eat("RBRACKET")
+        vtype += self.parse_array_suffix()
 
         value = None
         if self.current_token[0] == "ASSIGN":
@@ -334,6 +393,21 @@ class CudaParser:
             return ConstantMemoryNode(vtype, name, value)
         else:
             return var
+
+    def parse_array_suffix(self):
+        """Parse one or more C-style array declarator suffixes."""
+        suffixes = []
+
+        while self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+                suffixes.append(f"[{self.expression_to_text(size)}]")
+            else:
+                suffixes.append("[]")
+            self.eat("RBRACKET")
+
+        return "".join(suffixes)
 
     def parse_block(self):
         """Parse a block of statements"""
@@ -386,49 +460,39 @@ class CudaParser:
 
     def is_variable_declaration(self):
         """Check if current position is a variable declaration"""
-        # Simple heuristic: type followed by identifier
-        if self.current_token[0] in [
-            "INT",
-            "FLOAT",
-            "DOUBLE",
-            "CHAR",
-            "BOOL",
-            "VOID",
-            "FLOAT2",
-            "FLOAT3",
-            "FLOAT4",
-            "IDENTIFIER",
-            "SHARED",
-            "CONSTANT",
-        ]:
-            # Look ahead for identifier
-            saved_index = self.current_index
+        saved_index = self.current_index
 
-            while saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
-                "SHARED",
-                "CONSTANT",
-            ]:
-                saved_index += 1
+        while (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.DECLARATION_QUALIFIER_TOKENS
+        ):
+            saved_index += 1
 
-            if saved_index < len(self.tokens) and self.tokens[saved_index][0] in [
-                "INT",
-                "FLOAT",
-                "DOUBLE",
-                "CHAR",
-                "BOOL",
-                "VOID",
-                "FLOAT2",
-                "FLOAT3",
-                "FLOAT4",
-                "IDENTIFIER",
-            ]:
-                saved_index += 1
-
-                if (
+        if (
+            saved_index < len(self.tokens)
+            and self.tokens[saved_index][0] in self.TYPE_TOKENS
+        ):
+            type_token = self.tokens[saved_index][0]
+            saved_index += 1
+            if type_token != "IDENTIFIER":
+                while (
                     saved_index < len(self.tokens)
-                    and self.tokens[saved_index][0] == "IDENTIFIER"
+                    and self.tokens[saved_index][0] == "MULTIPLY"
                 ):
+                    saved_index += 1
+
+            if (
+                saved_index < len(self.tokens)
+                and self.tokens[saved_index][0] == "IDENTIFIER"
+            ):
+                saved_index += 1
+                if saved_index >= len(self.tokens):
                     return True
+                return self.tokens[saved_index][0] in [
+                    "SEMICOLON",
+                    "ASSIGN",
+                    "LBRACKET",
+                ]
         return False
 
     def parse_if_statement(self):
@@ -587,11 +651,47 @@ class CudaParser:
 
     def parse_logical_and_expression(self):
         """Parse logical AND expression"""
-        left = self.parse_equality_expression()
+        left = self.parse_bitwise_or_expression()
 
         while self.current_token[0] == "LOGICAL_AND":
             op = self.current_token[1]
             self.eat("LOGICAL_AND")
+            right = self.parse_bitwise_or_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_or_expression(self):
+        """Parse bitwise OR expression"""
+        left = self.parse_bitwise_xor_expression()
+
+        while self.current_token[0] == "BITWISE_OR":
+            op = self.current_token[1]
+            self.eat("BITWISE_OR")
+            right = self.parse_bitwise_xor_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_xor_expression(self):
+        """Parse bitwise XOR expression"""
+        left = self.parse_bitwise_and_expression()
+
+        while self.current_token[0] == "BITWISE_XOR":
+            op = self.current_token[1]
+            self.eat("BITWISE_XOR")
+            right = self.parse_bitwise_and_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_bitwise_and_expression(self):
+        """Parse bitwise AND expression"""
+        left = self.parse_equality_expression()
+
+        while self.current_token[0] == "BITWISE_AND":
+            op = self.current_token[1]
+            self.eat("BITWISE_AND")
             right = self.parse_equality_expression()
             left = BinaryOpNode(left, op, right)
 
@@ -611,7 +711,7 @@ class CudaParser:
 
     def parse_relational_expression(self):
         """Parse relational expression"""
-        left = self.parse_additive_expression()
+        left = self.parse_shift_expression()
 
         while self.current_token[0] in [
             "LESS_THAN",
@@ -619,6 +719,18 @@ class CudaParser:
             "LESS_EQUAL",
             "GREATER_EQUAL",
         ]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_shift_expression()
+            left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_shift_expression(self):
+        """Parse bit shift expression"""
+        left = self.parse_additive_expression()
+
+        while self.current_token[0] in ["SHIFT_LEFT", "SHIFT_RIGHT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_additive_expression()
@@ -652,7 +764,14 @@ class CudaParser:
 
     def parse_unary_expression(self):
         """Parse unary expression"""
-        if self.current_token[0] in ["PLUS", "MINUS", "LOGICAL_NOT", "BITWISE_NOT"]:
+        if self.current_token[0] in [
+            "PLUS",
+            "MINUS",
+            "LOGICAL_NOT",
+            "BITWISE_NOT",
+            "MULTIPLY",
+            "BITWISE_AND",
+        ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             operand = self.parse_unary_expression()
@@ -810,10 +929,43 @@ class CudaParser:
                 expr = self.parse_expression()
                 self.eat("RPAREN")
                 return expr
+        elif self.current_token[0] == "LBRACE":
+            return self.parse_initializer_list()
         else:
             raise SyntaxError(
                 f"Unexpected token in primary expression: {self.current_token}"
             )
+
+    def parse_initializer_list(self):
+        self.eat("LBRACE")
+        elements = []
+
+        while self.current_token[0] != "RBRACE":
+            elements.append(self.parse_expression())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                if self.current_token[0] == "RBRACE":
+                    break
+            else:
+                break
+
+        self.eat("RBRACE")
+        return InitializerListNode(elements)
+
+    def expression_to_text(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, CudaBuiltinNode):
+            if expr.component:
+                return f"{expr.builtin_name}.{expr.component}"
+            return expr.builtin_name
+        if isinstance(expr, BinaryOpNode):
+            left = self.expression_to_text(expr.left)
+            right = self.expression_to_text(expr.right)
+            return f"({left} {expr.op} {right})"
+        if isinstance(expr, UnaryOpNode):
+            return f"{expr.op}{self.expression_to_text(expr.operand)}"
+        return str(expr)
 
     def parse_assignment_expression(self):
         """Parse assignment expression"""
@@ -829,6 +981,8 @@ class CudaParser:
             "AND_EQUALS",
             "OR_EQUALS",
             "XOR_EQUALS",
+            "SHIFT_LEFT_EQUALS",
+            "SHIFT_RIGHT_EQUALS",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])

@@ -346,6 +346,52 @@ def test_const_static_conversion():
         pytest.fail(f"Const/static conversion failed: {e}")
 
 
+def test_fixed_array_conversion():
+    code = """
+    const KERNEL: [f32; 3] = [1.0; 3];
+
+    pub struct Filter {
+        taps: [f32; 3],
+    }
+
+    fn test_arrays() {
+        let weights: [f32; 4] = [0.25, 0.25, 0.25, 0.25];
+        let zeros: [f32; 3] = [0.0; 3];
+        let matrix: [[f32; 2]; 2] = [[1.0, 2.0]; 2];
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "const float KERNEL[3] = {1.0, 1.0, 1.0};" in result
+        assert "float taps[3];" in result
+        assert "float weights[4] = {0.25, 0.25, 0.25, 0.25};" in result
+        assert "float zeros[3] = {0.0, 0.0, 0.0};" in result
+        assert "float matrix[2][2] = {{1.0, 2.0}, {1.0, 2.0}};" in result
+    except Exception as e:
+        pytest.fail(f"Fixed array conversion failed: {e}")
+
+
+def test_reference_array_conversion():
+    code = """
+    pub struct Filter {
+        taps: [f32; 3],
+    }
+
+    fn sample_arrays(filter: &Filter, weights: &[f32; 4], output: &mut [Vec3<f32>; 2]) {
+        let first = weights[0];
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert (
+            "void sample_arrays(Filter filter, float weights[4], vec3 output[2])"
+            in result
+        )
+        assert "first = weights[0];" in result
+    except Exception as e:
+        pytest.fail(f"Reference array conversion failed: {e}")
+
+
 def test_use_statement_conversion():
     code = """
     use std::collections::HashMap;

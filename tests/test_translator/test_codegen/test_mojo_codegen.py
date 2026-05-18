@@ -653,21 +653,283 @@ def test_double_vector_and_matrix_types_emit_mojo_names():
         "var mask: SIMD[DType.bool, 2] = " "SIMD[DType.bool, 2](True, False)"
     ) in generated_code
     assert "var flags: SIMD[DType.bool, 4]" in generated_code
+    assert "struct CrossGLMatrixF32C2R2:" in generated_code
+    assert "struct CrossGLMatrixF32C3R4:" in generated_code
+    assert "struct CrossGLMatrixF64C2R2:" in generated_code
+    assert "struct CrossGLMatrixF64C4R3:" in generated_code
     assert (
-        "var transform: Matrix[DType.float32, 2, 2] = "
-        "Matrix[DType.float32, 2, 2](1.0, 0.0, 0.0, 1.0)"
+        "var transform: CrossGLMatrixF32C2R2 = "
+        "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](1.0, 0.0), "
+        "SIMD[DType.float32, 2](0.0, 1.0))"
     ) in generated_code
-    assert "var affine: Matrix[DType.float32, 3, 4]" in generated_code
+    assert "var affine: CrossGLMatrixF32C3R4" in generated_code
     assert (
-        "var precise: Matrix[DType.float64, 2, 2] = "
-        "Matrix[DType.float64, 2, 2](1.0, 0.0, 0.0, 1.0)"
+        "var precise: CrossGLMatrixF64C2R2 = "
+        "CrossGLMatrixF64C2R2(SIMD[DType.float64, 2](1.0, 0.0), "
+        "SIMD[DType.float64, 2](0.0, 1.0))"
     ) in generated_code
-    assert "var jacobian: Matrix[DType.float64, 4, 3]" in generated_code
+    assert "var jacobian: CrossGLMatrixF64C4R3" in generated_code
     assert "dvec2(" not in generated_code
     assert "bvec2(" not in generated_code
     assert "bool2" not in generated_code
     assert "dmat2(" not in generated_code
+    assert "Matrix[DType" not in generated_code
     assert "MatrixType(" not in generated_code
+
+
+def test_matrix_constructors_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    mat2 makeMat2() {
+        return mat2(1.0, 2.0, 3.0, 4.0);
+    }
+
+    dmat2 makeDMat2() {
+        return dmat2(1.0, 2.0, 3.0, 4.0);
+    }
+
+    mat3x4 makeMat3x4() {
+        return mat3x4(
+            1.0, 2.0, 3.0, 4.0,
+            5.0, 6.0, 7.0, 8.0,
+            9.0, 10.0, 11.0, 12.0
+        );
+    }
+
+    mat4x3 makeMat4x3() {
+        return mat4x3(
+            1.0, 2.0, 3.0,
+            4.0, 5.0, 6.0,
+            7.0, 8.0, 9.0,
+            10.0, 11.0, 12.0
+        );
+    }
+
+    mat3 diagonal(float value) {
+        return mat3(value);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(makeMat2().c0)
+    print(makeMat2().c1)
+    print(makeDMat2().c1)
+    print(makeMat3x4().c2)
+    print(makeMat4x3().c3)
+    print(diagonal(2.0).c0)
+    print(diagonal(2.0).c1)
+    print(diagonal(2.0).c2)
+"""
+
+    source_path = tmp_path / "matrix_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0]" in result.stdout
+    assert "[3.0, 4.0]" in result.stdout
+    assert "[9.0, 10.0, 11.0, 12.0]" in result.stdout
+    assert "[10.0, 11.0, 12.0, 0.0]" in result.stdout
+    assert "[2.0, 0.0, 0.0, 0.0]" in result.stdout
+    assert "[0.0, 2.0, 0.0, 0.0]" in result.stdout
+    assert "[0.0, 0.0, 2.0, 0.0]" in result.stdout
+
+
+def test_vector_fed_matrix_constructors_use_helpers_and_index_fields():
+    code = """
+    vec2 makeUv() {
+        return vec2(1.0, 2.0);
+    }
+
+    ivec2 makeIndex() {
+        return ivec2(3, 4);
+    }
+
+    vec3 makeColor() {
+        return vec3(5.0, 6.0, 7.0);
+    }
+
+    mat2 fromPairs() {
+        return mat2(makeUv(), makeIndex());
+    }
+
+    mat3 fromColumns() {
+        return mat3(makeColor(), makeColor(), makeColor());
+    }
+
+    vec2 firstColumn(mat2 value) {
+        return value[0];
+    }
+
+    float firstElement(mat2 value) {
+        return value[0][1];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_construct_matrix_f32_c2_r2" in generated_code
+    assert "fn _crossgl_construct_matrix_f32_c3_r3" in generated_code
+    assert "var v1_cast = v1.cast[DType.float32]()" in generated_code
+    assert (
+        "return _crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vi322_01("
+        "makeUv(), makeIndex())"
+    ) in generated_code
+    assert (
+        "return _crossgl_construct_matrix_f32_c3_r3_3_vf324_012_vf324_012_vf324_012("
+        "makeColor(), makeColor(), makeColor())"
+    ) in generated_code
+    assert "return value.c0" in generated_code
+    assert "return value.c0[1]" in generated_code
+    assert "makeUv()[0]" not in generated_code
+    assert "makeIndex()[0]" not in generated_code
+    assert "makeColor()[0]" not in generated_code
+    assert "return value[0]" not in generated_code
+
+
+def test_vector_fed_matrix_constructors_and_indexing_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    vec2 makeUv() {
+        return vec2(1.0, 2.0);
+    }
+
+    ivec2 makeIndex() {
+        return ivec2(3, 4);
+    }
+
+    vec3 makeColor() {
+        return vec3(5.0, 6.0, 7.0);
+    }
+
+    mat2 fromPairs() {
+        return mat2(makeUv(), makeIndex());
+    }
+
+    mat3 fromColumns() {
+        return mat3(makeColor(), makeColor(), makeColor());
+    }
+
+    vec2 firstColumn(mat2 value) {
+        return value[0];
+    }
+
+    float firstElement(mat2 value) {
+        return value[0][1];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(fromPairs().c0)
+    print(fromPairs().c1)
+    print(fromColumns().c2)
+    var matrix = fromPairs()
+    print(firstColumn(matrix))
+    print(firstElement(matrix))
+"""
+
+    source_path = tmp_path / "vector_fed_matrix_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0]" in result.stdout
+    assert "[3.0, 4.0]" in result.stdout
+    assert "[5.0, 6.0, 7.0, 0.0]" in result.stdout
+    assert "2.0" in result.stdout
+
+
+def test_dynamic_matrix_indexing_emits_getitem_and_vector_index_casts():
+    code = """
+    mat2 mutateLocal(int column, int row) {
+        mat2 value = mat2(1.0, 2.0, 3.0, 4.0);
+        vec2 current = value[column];
+        value[column] = vec2(current.x + 1.0, current.y + 2.0);
+        value[0][1] = 9.0;
+        float selected = value[column][row];
+        return value;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn __getitem__(self, index: Int32)" in generated_code
+    assert (
+        "fn __setitem__(inout self, index: Int32, " "value: SIMD[DType.float32, 2])"
+    ) in generated_code
+    assert "var current: SIMD[DType.float32, 2] = value[column]" in generated_code
+    assert "value[column] = SIMD[DType.float32, 2]" in generated_code
+    assert "value.c0[1] = 9.0" in generated_code
+    assert "var selected: Float32 = value[column][int(row)]" in generated_code
+
+
+def test_dynamic_matrix_indexing_and_assignment_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    mat2 mutateLocal(int column, int row) {
+        mat2 value = mat2(1.0, 2.0, 3.0, 4.0);
+        vec2 current = value[column];
+        value[column] = vec2(current.x + 1.0, current.y + 2.0);
+        value[0][1] = 9.0;
+        float selected = value[column][row];
+        value[0][0] = selected;
+        return value;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    var matrix = mutateLocal(1, 0)
+    print(matrix.c0)
+    print(matrix.c1)
+"""
+
+    source_path = tmp_path / "dynamic_matrix_indexing.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[4.0, 9.0]" in result.stdout
+    assert "[4.0, 6.0]" in result.stdout
 
 
 def test_generic_vector_constructors_emit_mojo_names():
@@ -733,21 +995,15 @@ def test_three_component_vectors_emit_power_of_two_simd_storage():
     generated_code = generate_code(ast)
 
     assert "fn buildColor() -> SIMD[DType.float32, 4]:" in generated_code
-    assert (
-        "return SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0)" in generated_code
-    )
+    assert "return SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0)" in generated_code
     assert "fn buildPrecise() -> SIMD[DType.float64, 4]:" in generated_code
-    assert (
-        "return SIMD[DType.float64, 4](1.0, 2.0, 3.0, 0.0)" in generated_code
-    )
+    assert "return SIMD[DType.float64, 4](1.0, 2.0, 3.0, 0.0)" in generated_code
     assert "fn buildIndex() -> SIMD[DType.int32, 4]:" in generated_code
     assert "return SIMD[DType.int32, 4](1, 2, 3, 0)" in generated_code
     assert "fn buildMask() -> SIMD[DType.uint32, 4]:" in generated_code
     assert "return SIMD[DType.uint32, 4](1, 2, 3, 0)" in generated_code
     assert "fn buildFlags() -> SIMD[DType.bool, 4]:" in generated_code
-    assert (
-        "return SIMD[DType.bool, 4](True, False, True, False)" in generated_code
-    )
+    assert "return SIMD[DType.bool, 4](True, False, True, False)" in generated_code
     assert ", 3]" not in generated_code
 
 
@@ -823,8 +1079,7 @@ def test_swizzles_and_composite_vector_constructors_emit_indexed_lanes():
     generated_code = generate_code(ast)
 
     assert (
-        "return SIMD[DType.float32, 4](uv[0], uv[1], color[2], 1.0)"
-        in generated_code
+        "return SIMD[DType.float32, 4](uv[0], uv[1], color[2], 1.0)" in generated_code
     )
     assert (
         "return SIMD[DType.float32, 4](input.color[0], input.color[1], "
@@ -907,19 +1162,12 @@ def test_scalar_three_component_constructors_pad_hidden_lane():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert (
-        "return SIMD[DType.float32, 4](bloom, bloom, bloom, 0.0)"
-        in generated_code
-    )
-    assert (
-        "return SIMD[DType.float64, 4](value, value, value, 0.0)"
-        in generated_code
-    )
+    assert "return SIMD[DType.float32, 4](bloom, bloom, bloom, 0.0)" in generated_code
+    assert "return SIMD[DType.float64, 4](value, value, value, 0.0)" in generated_code
     assert "return SIMD[DType.int32, 4](value, value, value, 0)" in generated_code
     assert "return SIMD[DType.uint32, 4](value, value, value, 0)" in generated_code
     assert (
-        "return SIMD[DType.bool, 4](enabled, enabled, enabled, False)"
-        in generated_code
+        "return SIMD[DType.bool, 4](enabled, enabled, enabled, False)" in generated_code
     )
 
 
@@ -948,14 +1196,8 @@ def test_later_function_call_swizzles_use_precollected_return_types():
 
     assert "fn _crossgl_swizzle_i32_4_xy" in generated_code
     assert "fn _crossgl_swizzle_f64_4_xy" in generated_code
-    assert (
-        "return _crossgl_swizzle_i32_4_xy(laterIndex())"
-        in generated_code
-    )
-    assert (
-        "return _crossgl_swizzle_f64_4_xy(laterPrecise())"
-        in generated_code
-    )
+    assert "return _crossgl_swizzle_i32_4_xy(laterIndex())" in generated_code
+    assert "return _crossgl_swizzle_f64_4_xy(laterPrecise())" in generated_code
     assert "laterIndex()[0]" not in generated_code
     assert "laterPrecise()[0]" not in generated_code
     assert "SIMD[DType.float32, 2](laterIndex()" not in generated_code
@@ -1091,8 +1333,7 @@ def test_duplicate_sensitive_composite_constructors_use_helpers():
     assert "fn _crossgl_construct_f32_4_vf324_012_s" in generated_code
     assert "fn _crossgl_construct_f32_4_vf324_012" in generated_code
     assert (
-        "return _crossgl_construct_f32_4_vf322_01_s_s(makeUv(), z, w)"
-        in generated_code
+        "return _crossgl_construct_f32_4_vf322_01_s_s(makeUv(), z, w)" in generated_code
     )
     assert (
         "return _crossgl_construct_f32_4_vf324_012_s(makeColor(), alpha)"
@@ -1436,6 +1677,867 @@ fn main():
     assert "[4, 5, 6, 12]" in result.stdout
 
 
+def test_mixed_dtype_vector_constructors_cast_and_preserve_single_eval():
+    code = """
+    int nextIndex() {
+        return 7;
+    }
+
+    ivec3 makeIndex() {
+        return ivec3(1, 2, 3);
+    }
+
+    uvec3 makeMask() {
+        return uvec3(4, 5, 6);
+    }
+
+    vec3 makeWeight() {
+        return vec3(1.25, 2.25, 3.25);
+    }
+
+    vec3 fromIndex() {
+        return vec3(makeIndex());
+    }
+
+    ivec3 fromWeight() {
+        return ivec3(makeWeight());
+    }
+
+    vec4 packFromIndex(float tail) {
+        return vec4(makeIndex().rgb, tail);
+    }
+
+    vec4 packFromIndexScalar() {
+        return vec4(makeIndex().rgb, nextIndex());
+    }
+
+    ivec4 packFromMask(int tail) {
+        return ivec4(makeMask().rgb, tail);
+    }
+
+    uvec4 packFromIndexUnsigned(uint tail) {
+        return uvec4(makeIndex().rgb, tail);
+    }
+
+    vec3 fromLocal(ivec3 index) {
+        return vec3(index);
+    }
+
+    vec3 splatIndex() {
+        return vec3(nextIndex());
+    }
+
+    vec3 splatLocal(int value) {
+        return vec3(value);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_construct_f32_4_vi324_012" in generated_code
+    assert "fn _crossgl_construct_i32_4_vf324_012" in generated_code
+    assert "fn _crossgl_construct_f32_4_vi324_012_si32" in generated_code
+    assert "fn _crossgl_construct_i32_4_vu324_012_s" in generated_code
+    assert "fn _crossgl_construct_u32_4_vi324_012_s" in generated_code
+    assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
+    assert "var v0_cast = v0.cast[DType.int32]()" in generated_code
+    assert "var v0_cast = v0.cast[DType.uint32]()" in generated_code
+    assert "return _crossgl_construct_f32_4_vi324_012(makeIndex())" in generated_code
+    assert "return _crossgl_construct_i32_4_vf324_012(makeWeight())" in generated_code
+    assert (
+        "return _crossgl_construct_f32_4_vi324_012_s(makeIndex(), tail)"
+        in generated_code
+    )
+    assert (
+        "return _crossgl_construct_f32_4_vi324_012_si32(makeIndex(), nextIndex())"
+        in generated_code
+    )
+    assert (
+        "return _crossgl_construct_i32_4_vu324_012_s(makeMask(), tail)"
+        in generated_code
+    )
+    assert (
+        "return _crossgl_construct_u32_4_vi324_012_s(makeIndex(), tail)"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float32, 4](index[0].cast[DType.float32](), "
+        "index[1].cast[DType.float32](), index[2].cast[DType.float32](), 0.0)"
+    ) in generated_code
+    assert (
+        "return _crossgl_vec3_splat_f32((nextIndex()).cast[DType.float32]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float32, 4]((value).cast[DType.float32](), "
+        "(value).cast[DType.float32](), (value).cast[DType.float32](), 0.0)"
+    ) in generated_code
+    assert "makeIndex()[0]" not in generated_code
+    assert "makeWeight()[0]" not in generated_code
+    assert "makeMask()[0]" not in generated_code
+
+
+def test_mixed_dtype_vector_constructors_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    int nextIndex() {
+        return 7;
+    }
+
+    ivec3 makeIndex() {
+        return ivec3(1, 2, 3);
+    }
+
+    uvec3 makeMask() {
+        return uvec3(4, 5, 6);
+    }
+
+    vec3 makeWeight() {
+        return vec3(1.25, 2.25, 3.25);
+    }
+
+    vec3 fromIndex() {
+        return vec3(makeIndex());
+    }
+
+    ivec3 fromWeight() {
+        return ivec3(makeWeight());
+    }
+
+    vec4 packFromIndex(float tail) {
+        return vec4(makeIndex().rgb, tail);
+    }
+
+    vec4 packFromIndexScalar() {
+        return vec4(makeIndex().rgb, nextIndex());
+    }
+
+    ivec4 packFromMask(int tail) {
+        return ivec4(makeMask().rgb, tail);
+    }
+
+    uvec4 packFromIndexUnsigned(uint tail) {
+        return uvec4(makeIndex().rgb, tail);
+    }
+
+    vec3 fromLocal(ivec3 index) {
+        return vec3(index);
+    }
+
+    vec3 splatIndex() {
+        return vec3(nextIndex());
+    }
+
+    vec3 splatLocal(int value) {
+        return vec3(value);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(fromIndex())
+    print(fromWeight())
+    print(packFromIndex(9.0))
+    print(packFromIndexScalar())
+    print(packFromMask(10))
+    print(packFromIndexUnsigned(11))
+    print(fromLocal(SIMD[DType.int32, 4](8, 9, 10, 0)))
+    print(splatIndex())
+    print(splatLocal(12))
+"""
+
+    source_path = tmp_path / "mixed_dtype_vector_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0, 3.0, 0.0]" in result.stdout
+    assert "[1, 2, 3, 0]" in result.stdout
+    assert "[1.0, 2.0, 3.0, 9.0]" in result.stdout
+    assert "[1.0, 2.0, 3.0, 7.0]" in result.stdout
+    assert "[4, 5, 6, 10]" in result.stdout
+    assert "[1, 2, 3, 11]" in result.stdout
+    assert "[8.0, 9.0, 10.0, 0.0]" in result.stdout
+    assert "[7.0, 7.0, 7.0, 0.0]" in result.stdout
+    assert "[12.0, 12.0, 12.0, 0.0]" in result.stdout
+
+
+def test_scalar_vec2_vec4_constructors_emit_splat_form():
+    code = """
+    float nextFloat() {
+        return 1.25;
+    }
+
+    double nextDouble() {
+        return 2.5;
+    }
+
+    int nextInt() {
+        return 3;
+    }
+
+    bool nextBool() {
+        return true;
+    }
+
+    vec2 splatVec2Float() {
+        return vec2(nextFloat());
+    }
+
+    vec4 splatVec4Float() {
+        return vec4(nextFloat());
+    }
+
+    vec2 splatVec2Int() {
+        return vec2(nextInt());
+    }
+
+    vec4 splatVec4Int() {
+        return vec4(nextInt());
+    }
+
+    dvec2 splatDvec2Float() {
+        return dvec2(nextFloat());
+    }
+
+    dvec4 splatDvec4Float() {
+        return dvec4(nextFloat());
+    }
+
+    vec2 splatVec2Double() {
+        return vec2(nextDouble());
+    }
+
+    vec4 splatVec4Double() {
+        return vec4(nextDouble());
+    }
+
+    ivec2 splatIvec2Float() {
+        return ivec2(nextFloat());
+    }
+
+    ivec4 splatIvec4Float() {
+        return ivec4(nextFloat());
+    }
+
+    bvec2 splatBvec2() {
+        return bvec2(nextBool());
+    }
+
+    bvec4 splatBvec4() {
+        return bvec4(nextBool());
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return SIMD[DType.float32, 2](nextFloat())" in generated_code
+    assert "return SIMD[DType.float32, 4](nextFloat())" in generated_code
+    assert (
+        "return SIMD[DType.float32, 2]((nextInt()).cast[DType.float32]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float32, 4]((nextInt()).cast[DType.float32]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float64, 2]((nextFloat()).cast[DType.float64]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float64, 4]((nextFloat()).cast[DType.float64]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float32, 2]((nextDouble()).cast[DType.float32]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float32, 4]((nextDouble()).cast[DType.float32]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.int32, 2]((nextFloat()).cast[DType.int32]())"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.int32, 4]((nextFloat()).cast[DType.int32]())"
+        in generated_code
+    )
+    assert "return SIMD[DType.bool, 2](nextBool())" in generated_code
+    assert "return SIMD[DType.bool, 4](nextBool())" in generated_code
+    assert "fn _crossgl_vec3_splat" not in generated_code
+
+
+def test_scalar_vec2_vec4_constructors_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    float nextFloat() {
+        return 1.25;
+    }
+
+    double nextDouble() {
+        return 2.5;
+    }
+
+    int nextInt() {
+        return 3;
+    }
+
+    bool nextBool() {
+        return true;
+    }
+
+    vec2 splatVec2Float() {
+        return vec2(nextFloat());
+    }
+
+    vec4 splatVec4Float() {
+        return vec4(nextFloat());
+    }
+
+    vec2 splatVec2Int() {
+        return vec2(nextInt());
+    }
+
+    vec4 splatVec4Int() {
+        return vec4(nextInt());
+    }
+
+    dvec2 splatDvec2Float() {
+        return dvec2(nextFloat());
+    }
+
+    dvec4 splatDvec4Float() {
+        return dvec4(nextFloat());
+    }
+
+    vec2 splatVec2Double() {
+        return vec2(nextDouble());
+    }
+
+    vec4 splatVec4Double() {
+        return vec4(nextDouble());
+    }
+
+    ivec2 splatIvec2Float() {
+        return ivec2(nextFloat());
+    }
+
+    ivec4 splatIvec4Float() {
+        return ivec4(nextFloat());
+    }
+
+    bvec2 splatBvec2() {
+        return bvec2(nextBool());
+    }
+
+    bvec4 splatBvec4() {
+        return bvec4(nextBool());
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(splatVec2Float())
+    print(splatVec4Float())
+    print(splatVec2Int())
+    print(splatVec4Int())
+    print(splatDvec2Float())
+    print(splatDvec4Float())
+    print(splatVec2Double())
+    print(splatVec4Double())
+    print(splatIvec2Float())
+    print(splatIvec4Float())
+    print(splatBvec2())
+    print(splatBvec4())
+"""
+
+    source_path = tmp_path / "scalar_vec2_vec4_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.25, 1.25]" in result.stdout
+    assert "[1.25, 1.25, 1.25, 1.25]" in result.stdout
+    assert "[3.0, 3.0]" in result.stdout
+    assert "[3.0, 3.0, 3.0, 3.0]" in result.stdout
+    assert "[2.5, 2.5]" in result.stdout
+    assert "[2.5, 2.5, 2.5, 2.5]" in result.stdout
+    assert "[1, 1]" in result.stdout
+    assert "[1, 1, 1, 1]" in result.stdout
+    assert "[True, True]" in result.stdout
+    assert "[True, True, True, True]" in result.stdout
+
+
+def test_nested_composite_vector_constructors_use_helpers_and_casts():
+    code = """
+    float nextFloat() {
+        return 1.25;
+    }
+
+    double nextDouble() {
+        return 2.5;
+    }
+
+    int nextInt() {
+        return 3;
+    }
+
+    uint nextUint() {
+        return 4;
+    }
+
+    bool nextBool() {
+        return true;
+    }
+
+    vec2 makeUv() {
+        return vec2(0.25, 0.75);
+    }
+
+    ivec2 makeIndexPair() {
+        return ivec2(1, 2);
+    }
+
+    uvec2 makeMaskPair() {
+        return uvec2(3, 4);
+    }
+
+    dvec2 makePrecisePair() {
+        return dvec2(5.5, 6.5);
+    }
+
+    bvec2 makeFlagPair() {
+        return bvec2(true, false);
+    }
+
+    vec4 packTwoNestedVec2() {
+        return vec4(vec2(nextFloat()), vec2(nextDouble()));
+    }
+
+    vec4 packNestedVec2Scalars() {
+        return vec4(vec2(nextFloat()), nextInt(), nextDouble());
+    }
+
+    vec4 packMixedIvec2() {
+        return vec4(ivec2(nextInt()), nextFloat(), nextInt());
+    }
+
+    ivec4 packMixedUvec2() {
+        return ivec4(uvec2(nextUint()), nextFloat(), nextInt());
+    }
+
+    dvec4 packMixedVec2() {
+        return dvec4(vec2(nextFloat()), nextDouble(), nextInt());
+    }
+
+    bvec4 packNestedBvec2() {
+        return bvec4(bvec2(nextBool()), false, nextBool());
+    }
+
+    vec4 packLocal(vec2 uv, ivec2 index) {
+        return vec4(uv, index);
+    }
+
+    vec4 packFunctionPairs() {
+        return vec4(makeUv(), makeIndexPair());
+    }
+
+    ivec4 packUnsignedPair() {
+        return ivec4(makeMaskPair(), makeIndexPair());
+    }
+
+    dvec4 packPrecisePair() {
+        return dvec4(makePrecisePair(), makeUv());
+    }
+
+    bvec4 packFlagPair() {
+        return bvec4(makeFlagPair(), nextBool(), false);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_construct_f32_4_vf322_01_vf322_01" in generated_code
+    assert "fn _crossgl_construct_f32_4_vf322_01_si32_sf64" in generated_code
+    assert "fn _crossgl_construct_f32_4_vi322_01_s_si32" in generated_code
+    assert "fn _crossgl_construct_i32_4_vu322_01_sf32_s" in generated_code
+    assert "fn _crossgl_construct_f64_4_vf322_01_s_si32" in generated_code
+    assert "fn _crossgl_construct_bool_4_vbool2_01_s_s" in generated_code
+    assert "fn _crossgl_construct_f32_4_vf322_01_vi322_01" in generated_code
+    assert "fn _crossgl_construct_i32_4_vu322_01_vi322_01" in generated_code
+    assert "fn _crossgl_construct_f64_4_vf642_01_vf322_01" in generated_code
+    assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
+    assert "var v0_cast = v0.cast[DType.int32]()" in generated_code
+    assert "var v1_cast = v1.cast[DType.float64]()" in generated_code
+    assert (
+        "return _crossgl_construct_f32_4_vf322_01_vf322_01("
+        "SIMD[DType.float32, 2](nextFloat()), "
+        "SIMD[DType.float32, 2]((nextDouble()).cast[DType.float32]()))"
+    ) in generated_code
+    assert (
+        "return _crossgl_construct_f32_4_vf322_01_si32_sf64("
+        "SIMD[DType.float32, 2](nextFloat()), nextInt(), nextDouble())"
+    ) in generated_code
+    assert (
+        "return _crossgl_construct_f32_4_vi322_01_s_si32("
+        "SIMD[DType.int32, 2](nextInt()), nextFloat(), nextInt())"
+    ) in generated_code
+    assert (
+        "return _crossgl_construct_i32_4_vu322_01_sf32_s("
+        "SIMD[DType.uint32, 2](nextUint()), nextFloat(), nextInt())"
+    ) in generated_code
+    assert (
+        "return SIMD[DType.float32, 4](uv[0], uv[1], "
+        "index[0].cast[DType.float32](), index[1].cast[DType.float32]())"
+    ) in generated_code
+    assert (
+        "return _crossgl_construct_f32_4_vf322_01_vi322_01("
+        "makeUv(), makeIndexPair())"
+    ) in generated_code
+    assert "SIMD[DType.float32, 2](nextFloat())[0]" not in generated_code
+    assert "makeUv()[0]" not in generated_code
+    assert "makeIndexPair()[0]" not in generated_code
+    assert "makeMaskPair()[0]" not in generated_code
+
+
+def test_nested_composite_vector_constructors_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    float nextFloat() {
+        return 1.25;
+    }
+
+    double nextDouble() {
+        return 2.5;
+    }
+
+    int nextInt() {
+        return 3;
+    }
+
+    uint nextUint() {
+        return 4;
+    }
+
+    bool nextBool() {
+        return true;
+    }
+
+    vec2 makeUv() {
+        return vec2(0.25, 0.75);
+    }
+
+    ivec2 makeIndexPair() {
+        return ivec2(1, 2);
+    }
+
+    uvec2 makeMaskPair() {
+        return uvec2(3, 4);
+    }
+
+    dvec2 makePrecisePair() {
+        return dvec2(5.5, 6.5);
+    }
+
+    bvec2 makeFlagPair() {
+        return bvec2(true, false);
+    }
+
+    vec4 packTwoNestedVec2() {
+        return vec4(vec2(nextFloat()), vec2(nextDouble()));
+    }
+
+    vec4 packNestedVec2Scalars() {
+        return vec4(vec2(nextFloat()), nextInt(), nextDouble());
+    }
+
+    vec4 packMixedIvec2() {
+        return vec4(ivec2(nextInt()), nextFloat(), nextInt());
+    }
+
+    ivec4 packMixedUvec2() {
+        return ivec4(uvec2(nextUint()), nextFloat(), nextInt());
+    }
+
+    dvec4 packMixedVec2() {
+        return dvec4(vec2(nextFloat()), nextDouble(), nextInt());
+    }
+
+    bvec4 packNestedBvec2() {
+        return bvec4(bvec2(nextBool()), false, nextBool());
+    }
+
+    vec4 packLocal(vec2 uv, ivec2 index) {
+        return vec4(uv, index);
+    }
+
+    vec4 packFunctionPairs() {
+        return vec4(makeUv(), makeIndexPair());
+    }
+
+    ivec4 packUnsignedPair() {
+        return ivec4(makeMaskPair(), makeIndexPair());
+    }
+
+    dvec4 packPrecisePair() {
+        return dvec4(makePrecisePair(), makeUv());
+    }
+
+    bvec4 packFlagPair() {
+        return bvec4(makeFlagPair(), nextBool(), false);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(packTwoNestedVec2())
+    print(packNestedVec2Scalars())
+    print(packMixedIvec2())
+    print(packMixedUvec2())
+    print(packMixedVec2())
+    print(packNestedBvec2())
+    print(packFunctionPairs())
+    print(packUnsignedPair())
+    print(packPrecisePair())
+    print(packFlagPair())
+    print(packLocal(SIMD[DType.float32, 2](8.0, 9.0), SIMD[DType.int32, 2](10, 11)))
+"""
+
+    source_path = tmp_path / "nested_composite_vector_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.25, 1.25, 2.5, 2.5]" in result.stdout
+    assert "[1.25, 1.25, 3.0, 2.5]" in result.stdout
+    assert "[3.0, 3.0, 1.25, 3.0]" in result.stdout
+    assert "[4, 4, 1, 3]" in result.stdout
+    assert "[1.25, 1.25, 2.5, 3.0]" in result.stdout
+    assert "[True, True, False, True]" in result.stdout
+    assert "[0.25, 0.75, 1.0, 2.0]" in result.stdout
+    assert "[3, 4, 1, 2]" in result.stdout
+    assert "[5.5, 6.5, 0.25, 0.75]" in result.stdout
+    assert "[True, False, True, False]" in result.stdout
+    assert "[8.0, 9.0, 10.0, 11.0]" in result.stdout
+
+
+def test_truncating_vector_constructors_use_helpers_and_pad_hidden_lane():
+    code = """
+    vec4 makeColor() {
+        return vec4(1.0, 2.0, 3.0, 4.0);
+    }
+
+    ivec4 makeIndex() {
+        return ivec4(5, 6, 7, 8);
+    }
+
+    uvec4 makeMask() {
+        return uvec4(9, 10, 11, 12);
+    }
+
+    bvec4 makeFlags() {
+        return bvec4(true, false, true, false);
+    }
+
+    vec2 narrowColor() {
+        return vec2(makeColor());
+    }
+
+    vec3 narrowColor3() {
+        return vec3(makeColor());
+    }
+
+    vec2 narrowIndexToFloat() {
+        return vec2(makeIndex());
+    }
+
+    ivec3 narrowMaskToInt() {
+        return ivec3(makeMask());
+    }
+
+    bvec3 narrowFlags() {
+        return bvec3(makeFlags());
+    }
+
+    vec3 localNarrow(vec4 color) {
+        return vec3(color);
+    }
+
+    vec3 overfull(vec2 xy, vec2 zw) {
+        return vec3(xy, zw);
+    }
+
+    vec3 overfullDuplicate() {
+        return vec3(vec2(1.0, 2.0), vec2(3.0, 4.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_construct_f32_2_vf324_01" in generated_code
+    assert "fn _crossgl_construct_f32_2_vi324_01" in generated_code
+    assert "fn _crossgl_construct_f32_4_vf324_012" in generated_code
+    assert "fn _crossgl_construct_i32_4_vu324_012" in generated_code
+    assert "fn _crossgl_construct_bool_4_vbool4_012" in generated_code
+    assert "fn _crossgl_construct_f32_4_vf322_01_vf322_0" in generated_code
+    assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
+    assert "var v0_cast = v0.cast[DType.int32]()" in generated_code
+    assert "return _crossgl_construct_f32_2_vf324_01(makeColor())" in generated_code
+    assert "return _crossgl_construct_f32_4_vf324_012(makeColor())" in generated_code
+    assert "return _crossgl_construct_f32_2_vi324_01(makeIndex())" in generated_code
+    assert "return _crossgl_construct_i32_4_vu324_012(makeMask())" in generated_code
+    assert "return _crossgl_construct_bool_4_vbool4_012(makeFlags())" in generated_code
+    assert (
+        "return SIMD[DType.float32, 4](color[0], color[1], color[2], 0.0)"
+        in generated_code
+    )
+    assert "return SIMD[DType.float32, 4](xy[0], xy[1], zw[0], 0.0)" in generated_code
+    assert (
+        "return _crossgl_construct_f32_4_vf322_01_vf322_0("
+        "SIMD[DType.float32, 2](1.0, 2.0), "
+        "SIMD[DType.float32, 2](3.0, 4.0))"
+    ) in generated_code
+    assert "makeColor()[0]" not in generated_code
+    assert "makeIndex()[0]" not in generated_code
+    assert "makeMask()[0]" not in generated_code
+    assert "makeFlags()[0]" not in generated_code
+    assert "zw[1]" not in generated_code
+
+
+def test_truncating_vector_constructors_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    vec4 makeColor() {
+        return vec4(1.0, 2.0, 3.0, 4.0);
+    }
+
+    ivec4 makeIndex() {
+        return ivec4(5, 6, 7, 8);
+    }
+
+    uvec4 makeMask() {
+        return uvec4(9, 10, 11, 12);
+    }
+
+    bvec4 makeFlags() {
+        return bvec4(true, false, true, false);
+    }
+
+    vec2 narrowColor() {
+        return vec2(makeColor());
+    }
+
+    vec3 narrowColor3() {
+        return vec3(makeColor());
+    }
+
+    vec2 narrowIndexToFloat() {
+        return vec2(makeIndex());
+    }
+
+    ivec3 narrowMaskToInt() {
+        return ivec3(makeMask());
+    }
+
+    bvec3 narrowFlags() {
+        return bvec3(makeFlags());
+    }
+
+    vec3 localNarrow(vec4 color) {
+        return vec3(color);
+    }
+
+    vec3 overfull(vec2 xy, vec2 zw) {
+        return vec3(xy, zw);
+    }
+
+    vec3 overfullDuplicate() {
+        return vec3(vec2(1.0, 2.0), vec2(3.0, 4.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(narrowColor())
+    print(narrowColor3())
+    print(narrowIndexToFloat())
+    print(narrowMaskToInt())
+    print(narrowFlags())
+    print(localNarrow(SIMD[DType.float32, 4](13.0, 14.0, 15.0, 16.0)))
+    print(overfull(SIMD[DType.float32, 2](17.0, 18.0), SIMD[DType.float32, 2](19.0, 20.0)))
+    print(overfullDuplicate())
+"""
+
+    source_path = tmp_path / "truncating_vector_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0]" in result.stdout
+    assert "[1.0, 2.0, 3.0, 0.0]" in result.stdout
+    assert "[5.0, 6.0]" in result.stdout
+    assert "[9, 10, 11, 0]" in result.stdout
+    assert "[True, False, True, False]" in result.stdout
+    assert "[13.0, 14.0, 15.0, 0.0]" in result.stdout
+    assert "[17.0, 18.0, 19.0, 0.0]" in result.stdout
+    assert "[1.0, 2.0, 3.0, 0.0]" in result.stdout
+
+
 def test_vec3_arithmetic_helpers_preserve_hidden_lane():
     code = """
     vec3 addScalar(vec3 color, float bloom) {
@@ -1587,10 +2689,533 @@ def test_generic_vector_composite_types_emit_mojo_names():
         "index: SIMD[DType.int32, 4], mask: SIMD[DType.uint32, 4], "
         "flags: SIMD[DType.bool, 2]) -> SIMD[DType.float64, 2]:"
     ) in generated_code
-    assert "var localValues: StaticTuple[SIMD[DType.float64, 2], 2]" in generated_code
-    assert "var values: StaticTuple[SIMD[DType.float64, 2], 2]" in generated_code
+    assert (
+        "var localValues = InlineArray[SIMD[DType.float64, 2], 2]"
+        "(unsafe_uninitialized=True)"
+    ) in generated_code
+    assert (
+        "var values = InlineArray[SIMD[DType.float64, 2], 2]"
+        "(unsafe_uninitialized=True)"
+    ) in generated_code
+    assert "StaticTuple" not in generated_code
     assert "LiteralNode(" not in generated_code
     assert "vec2<" not in generated_code
+
+
+def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices():
+    code = """
+    struct Packed {
+        mat2 transforms[2];
+        vec2 samples[2];
+    };
+
+    vec2 vectorArray(vec2 value, int index) {
+        vec2 values[2];
+        values[0] = vec2(1.0, 2.0);
+        values[index] = value;
+        return values[index];
+    }
+
+    mat2 matrixArray(int index) {
+        mat2 values[2];
+        values[0] = mat2(1.0, 2.0, 3.0, 4.0);
+        values[index] = mat2(5.0, 6.0, 7.0, 8.0);
+        return values[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var transforms: InlineArray[CrossGLMatrixF32C2R2, 2]" in generated_code
+    assert "var samples: InlineArray[SIMD[DType.float32, 2], 2]" in generated_code
+    assert (
+        "var values = InlineArray[SIMD[DType.float32, 2], 2]"
+        "(unsafe_uninitialized=True)"
+    ) in generated_code
+    assert (
+        "var values = InlineArray[CrossGLMatrixF32C2R2, 2]"
+        "(unsafe_uninitialized=True)"
+    ) in generated_code
+    assert "values[int(index)] = value" in generated_code
+    assert "return values[int(index)]" in generated_code
+    assert "StaticTuple" not in generated_code
+    assert "DynamicVector" not in generated_code
+
+
+def test_fixed_size_arrays_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    vec4 scalarArray(int index) {
+        float values[4];
+        values[0] = 1.0;
+        values[1] = 2.0;
+        values[2] = 4.0;
+        values[3] = 5.0;
+        values[index] = 3.0;
+        return vec4(values[0], values[index], values[2], values[3]);
+    }
+
+    vec2 vectorArray(vec2 value, int index) {
+        vec2 values[2];
+        values[0] = vec2(1.0, 2.0);
+        values[index] = value;
+        return values[index];
+    }
+
+    mat2 matrixArray(int index) {
+        mat2 values[2];
+        values[0] = mat2(1.0, 2.0, 3.0, 4.0);
+        values[index] = mat2(5.0, 6.0, 7.0, 8.0);
+        return values[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(scalarArray(1))
+    print(vectorArray(SIMD[DType.float32, 2](8.0, 9.0), 1))
+    print(matrixArray(1).c1)
+"""
+
+    source_path = tmp_path / "fixed_size_arrays.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 3.0, 4.0, 5.0]" in result.stdout
+    assert "[8.0, 9.0]" in result.stdout
+    assert "[7.0, 8.0]" in result.stdout
+
+
+def test_struct_array_fields_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    struct Packed {
+        vec2 samples[2];
+        mat2 transforms[2];
+    };
+
+    Packed makePacked() {
+        vec2 samples[2] = {vec2(1.0, 2.0), vec2(3.0, 4.0)};
+        mat2 transforms[2] = {
+            mat2(1.0, 2.0, 3.0, 4.0),
+            mat2(5.0, 6.0, 7.0, 8.0)
+        };
+        return Packed(samples, transforms);
+    }
+
+    vec2 readSample(Packed packed, int index) {
+        return packed.samples[index];
+    }
+
+    vec2 readColumn(Packed packed, int index) {
+        return packed.transforms[index][1];
+    }
+
+    float readElement(Packed packed, int matrixIndex, int row) {
+        return packed.transforms[matrixIndex][1][row];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    var packed = makePacked()
+    print(readSample(packed, 1))
+    print(readColumn(packed, 1))
+    print(readElement(packed, 1, 0))
+"""
+
+    source_path = tmp_path / "struct_array_fields.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[3.0, 4.0]" in result.stdout
+    assert "[7.0, 8.0]" in result.stdout
+    assert "7.0" in result.stdout
+
+
+def test_local_struct_array_fields_default_initialize_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    struct Packed {
+        float weights[4];
+        vec2 sample;
+        mat2 transforms[2];
+    };
+
+    Packed buildPacked(int index) {
+        Packed packed;
+        packed.weights = {1.0, 2.0};
+        packed.weights[index] = 5.0;
+        packed.sample = vec2(3.0, 4.0);
+        packed.transforms = {mat2(6.0, 7.0, 8.0, 9.0)};
+        return packed;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var packed: Packed" not in generated_code
+    assert "var packed = Packed(" in generated_code
+    assert "InlineArray[Float32, 4](0.0, 0.0, 0.0, 0.0)" in generated_code
+
+    generated_code += """
+fn main():
+    var packed = buildPacked(1)
+    print(packed.weights[0])
+    print(packed.weights[1])
+    print(packed.weights[3])
+    print(packed.sample)
+    print(packed.transforms[1].c1)
+"""
+
+    source_path = tmp_path / "local_struct_array_fields.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "1.0" in result.stdout
+    assert "5.0" in result.stdout
+    assert "0.0" in result.stdout
+    assert "[3.0, 4.0]" in result.stdout
+    assert "[0.0, 0.0]" in result.stdout
+
+
+def test_nested_struct_arrays_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    struct Inner {
+        vec2 sample;
+        float weights[2];
+    };
+
+    struct Outer {
+        Inner primary;
+        Inner entries[2];
+    };
+
+    Inner makeInner(float base) {
+        Inner inner;
+        inner.sample = vec2(base, base + 1.0);
+        inner.weights = {base + 2.0, base + 3.0};
+        return inner;
+    }
+
+    Outer buildOuter(int index) {
+        Outer outer;
+        outer.primary = makeInner(1.0);
+        outer.entries = {makeInner(5.0)};
+        outer.entries[index] = makeInner(9.0);
+        outer.entries[index].sample = vec2(13.0, 14.0);
+        outer.entries[index].weights[1] = 15.0;
+        return outer;
+    }
+
+    vec4 readOuter(Outer outer, int index) {
+        return vec4(outer.primary.sample, outer.entries[index].sample);
+    }
+
+    float readNestedWeight(Outer outer, int index) {
+        return outer.entries[index].weights[1];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var entries: InlineArray[Inner, 2]" in generated_code
+    assert "var inner = Inner(" in generated_code
+    assert "var outer = Outer(" in generated_code
+    assert "outer.entries[int(index)].weights[1] = 15.0" in generated_code
+
+    generated_code += """
+fn main():
+    var outer = buildOuter(1)
+    print(readOuter(outer, 1))
+    print(readNestedWeight(outer, 1))
+    print(outer.entries[0].sample)
+    print(outer.entries[0].weights[1])
+"""
+
+    source_path = tmp_path / "nested_struct_arrays.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0, 13.0, 14.0]" in result.stdout
+    assert "15.0" in result.stdout
+    assert "[5.0, 6.0]" in result.stdout
+    assert "8.0" in result.stdout
+
+
+def test_array_literals_emit_inlinearray_and_zero_padding():
+    code = """
+    float globalWeights[4] = {1.0, 2.0};
+
+    float pickScalar(int index) {
+        float values[4] = {1.0, 2.0};
+        return values[index] + values[3];
+    }
+
+    vec2 pickVector(int index) {
+        vec2 values[2] = {vec2(1.0, 2.0), vec2(3.0, 4.0)};
+        return values[index];
+    }
+
+    float[4] makeValues() {
+        return {1.0, 2.0, 3.0, 4.0};
+    }
+
+    mat2 pickMatrix() {
+        mat2 values[2] = {mat2(1.0, 2.0, 3.0, 4.0)};
+        return values[1];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "var globalWeights: InlineArray[Float32, 4] = "
+        "InlineArray[Float32, 4](1.0, 2.0, 0.0, 0.0)"
+    ) in generated_code
+    assert (
+        "var values: InlineArray[Float32, 4] = "
+        "InlineArray[Float32, 4](1.0, 2.0, 0.0, 0.0)"
+    ) in generated_code
+    assert (
+        "InlineArray[SIMD[DType.float32, 2], 2]("
+        "SIMD[DType.float32, 2](1.0, 2.0), "
+        "SIMD[DType.float32, 2](3.0, 4.0))"
+    ) in generated_code
+    assert "return InlineArray[Float32, 4](1.0, 2.0, 3.0, 4.0)" in generated_code
+    assert (
+        "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
+        "SIMD[DType.float32, 2](0.0, 0.0))"
+    ) in generated_code
+    assert "IdentifierNode(name={)" not in generated_code
+
+
+def test_array_literals_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    float globalWeights[4] = {1.0, 2.0};
+
+    float pickGlobal(int index) {
+        return globalWeights[index];
+    }
+
+    float pickScalar(int index) {
+        float values[4] = {1.0, 2.0};
+        return values[index] + values[3];
+    }
+
+    vec2 pickVector(int index) {
+        vec2 values[2] = {vec2(1.0, 2.0), vec2(3.0, 4.0)};
+        return values[index];
+    }
+
+    float[4] makeValues() {
+        return {1.0, 2.0, 3.0, 4.0};
+    }
+
+    mat2 pickMatrix() {
+        mat2 values[2] = {mat2(1.0, 2.0, 3.0, 4.0)};
+        return values[1];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(pickGlobal(3))
+    print(pickScalar(1))
+    print(pickScalar(3))
+    print(pickVector(1))
+    print(makeValues()[2])
+    print(pickMatrix().c1)
+"""
+
+    source_path = tmp_path / "array_literals.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "0.0" in result.stdout
+    assert "2.0" in result.stdout
+    assert "[3.0, 4.0]" in result.stdout
+    assert "3.0" in result.stdout
+    assert "[0.0, 0.0]" in result.stdout
+
+
+def test_mutated_parameters_emit_owned_only_when_needed():
+    code = """
+    float writeArray(float values[4], int index) {
+        values[index] = 9.0;
+        return values[index];
+    }
+
+    mat2 writeMatrix(mat2 value, int column) {
+        value[column] = vec2(9.0, 10.0);
+        return value;
+    }
+
+    float bumpScalar(float value) {
+        value += 1.0;
+        return value;
+    }
+
+    vec2 tweakVector(vec2 value) {
+        value[0] = 5.0;
+        return value;
+    }
+
+    float readArray(float values[4], int index) {
+        return values[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "fn writeArray(owned values: InlineArray[Float32, 4], index: Int32)"
+        in generated_code
+    )
+    assert (
+        "fn writeMatrix(owned value: CrossGLMatrixF32C2R2, column: Int32)"
+        in generated_code
+    )
+    assert "fn bumpScalar(owned value: Float32)" in generated_code
+    assert "fn tweakVector(owned value: SIMD[DType.float32, 2])" in generated_code
+    assert (
+        "fn readArray(values: InlineArray[Float32, 4], index: Int32)" in generated_code
+    )
+    assert "fn readArray(owned values" not in generated_code
+
+
+def test_mutated_array_matrix_vector_parameters_compile_with_mojo(tmp_path):
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    code = """
+    float writeArray(float values[4], int index) {
+        values[index] = 9.0;
+        return values[index];
+    }
+
+    mat2 writeMatrix(mat2 value, int column) {
+        value[column] = vec2(9.0, 10.0);
+        return value;
+    }
+
+    float bumpScalar(float value) {
+        value += 1.0;
+        return value;
+    }
+
+    vec2 tweakVector(vec2 value) {
+        value[0] = 5.0;
+        return value;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    var values = InlineArray[Float32, 4](unsafe_uninitialized=True)
+    values[0] = 1.0
+    values[1] = 2.0
+    print(writeArray(values, 1))
+    print(values[1])
+
+    var matrix = CrossGLMatrixF32C2R2(
+        SIMD[DType.float32, 2](1.0, 2.0),
+        SIMD[DType.float32, 2](3.0, 4.0),
+    )
+    var changed = writeMatrix(matrix, 1)
+    print(changed.c1)
+    print(matrix.c1)
+
+    print(bumpScalar(2.0))
+    print(tweakVector(SIMD[DType.float32, 2](1.0, 2.0)))
+"""
+
+    source_path = tmp_path / "mutated_parameters.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "9.0" in result.stdout
+    assert "2.0" in result.stdout
+    assert "[9.0, 10.0]" in result.stdout
+    assert "[3.0, 4.0]" in result.stdout
+    assert "3.0" in result.stdout
+    assert "[5.0, 2.0]" in result.stdout
 
 
 def test_array_access():

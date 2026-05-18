@@ -753,13 +753,11 @@ def test_scalar_vector_constructors_splat_rust_values():
     assert "let mut pixel: Vec2<i32> = Vec2<i32>::new(index, index);" in generated_code
     assert (
         "let mut mask: Vec4<bool> = "
-        "Vec4<bool>::new(enabled, enabled, enabled, enabled);"
-        in generated_code
+        "Vec4<bool>::new(enabled, enabled, enabled, enabled);" in generated_code
     )
     assert (
         "let mut offset: Vec4<f32> = "
-        "Vec4<f32>::new(0.25, 0.5, 0.75, 1.0);"
-        in generated_code
+        "Vec4<f32>::new(0.25, 0.5, 0.75, 1.0);" in generated_code
     )
     assert "Vec4<f32>::new(1.0);" not in generated_code
     assert "Vec3<f32>::new(weight);" not in generated_code
@@ -848,6 +846,45 @@ def test_array_access():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Array access codegen not implemented")
+
+
+def test_array_literals_emit_rust_array_initializers():
+    code = """
+    float globalWeights[4] = {1.0, 2.0};
+
+    float pickScalar(int index) {
+        float values[4] = {1.0, 2.0, 3.0, 4.0};
+        return values[index];
+    }
+
+    float[4] makeValues() {
+        return {1.0, 2.0};
+    }
+
+    vec3 pickColor(int index) {
+        vec3 colors[2] = {vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0)};
+        return colors[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "static globalWeights: [f32; 4] = "
+        "[1.0, 2.0, Default::default(), Default::default()];"
+    ) in generated_code
+    assert "let mut values: [f32; 4] = [1.0, 2.0, 3.0, 4.0];" in generated_code
+    assert (
+        "return [1.0, 2.0, Default::default(), Default::default()];"
+    ) in generated_code
+    assert (
+        "let mut colors: [Vec3<f32>; 2] = "
+        "[Vec3<f32>::new(1.0, 2.0, 3.0), "
+        "Vec3<f32>::new(4.0, 5.0, 6.0)];"
+    ) in generated_code
+    assert "ArrayLiteralNode" not in generated_code
 
 
 def test_rust_imports():

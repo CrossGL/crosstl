@@ -336,15 +336,24 @@ class RustParser:
         return generics
 
     def parse_type(self):
-        type_parts = []
-
         if self.current_token[0] == "AMPERSAND":
             self.eat("AMPERSAND")
             if self.current_token[0] == "MUT":
                 self.eat("MUT")
-                type_parts.append("&mut")
-            else:
-                type_parts.append("&")
+                return f"&mut {self.parse_type()}"
+            return f"&{self.parse_type()}"
+
+        if self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            element_type = self.parse_type()
+            size = None
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                size = self.parse_array_type_size()
+            self.eat("RBRACKET")
+            return self.format_array_type(element_type, size)
+
+        type_parts = []
 
         type_parts.append(self.current_token[1])
         self.eat(self.current_token[0])
@@ -370,6 +379,33 @@ class RustParser:
             self.eat("RBRACKET")
 
         return "".join(type_parts)
+
+    def parse_array_type_size(self):
+        parts = []
+        depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type == "RBRACKET" and depth == 0:
+                break
+
+            if token_type in ["LPAREN", "LBRACKET", "LBRACE"]:
+                depth += 1
+            elif token_type in ["RPAREN", "RBRACKET", "RBRACE"]:
+                depth -= 1
+
+            parts.append(str(token_value))
+            self.eat(token_type)
+
+        return "".join(parts).strip() or None
+
+    def format_array_type(self, element_type, size):
+        suffix = f"[{size}]" if size is not None else "[]"
+        if "[" not in element_type:
+            return f"{element_type}{suffix}"
+
+        base_type, existing_suffix = element_type.split("[", 1)
+        return f"{base_type}{suffix}[{existing_suffix}"
 
     def parse_where_clause(self):
         self.eat("WHERE")
@@ -1042,11 +1078,23 @@ class RustParser:
                 return expr
         elif self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
-            elements = []
+            if self.current_token[0] == "RBRACKET":
+                self.eat("RBRACKET")
+                return ArrayNode([])
+
+            first_element = self.parse_expression()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                size = self.parse_expression()
+                self.eat("RBRACKET")
+                return ArrayNode([first_element], size)
+
+            elements = [first_element]
             while self.current_token[0] != "RBRACKET":
-                elements.append(self.parse_expression())
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
+                    if self.current_token[0] != "RBRACKET":
+                        elements.append(self.parse_expression())
                 else:
                     break
             self.eat("RBRACKET")

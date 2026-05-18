@@ -1901,6 +1901,14 @@ class MetalCodeGen:
             "texture2d_ms_array<float>",
         }
 
+    def is_storage_image_resource(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            texture_type.startswith("texture2d<")
+            or texture_type.startswith("texture3d<")
+            or texture_type.startswith("texture2d_array<")
+        ) and "access::read_write" in texture_type
+
     def vector_component(self, expression, component):
         if all(char.isalnum() or char in "_.[]" for char in expression):
             return f"{expression}.{component}"
@@ -1935,6 +1943,14 @@ class MetalCodeGen:
 
     def texture_gather_supports_offset(self, texture_type):
         return texture_type in {"texture2d<float>", "texture2d_array<float>"}
+
+    def texture_gather_supported(self, texture_type):
+        return texture_type in {
+            "texture2d<float>",
+            "texture2d_array<float>",
+            "texturecube<float>",
+            "texturecube_array<float>",
+        }
 
     def texture_sample_supports_offset(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
@@ -2015,6 +2031,10 @@ class MetalCodeGen:
                 "vec4": ("xy", "w"),
                 "float4": ("xy", "w"),
             },
+            "texture2d_array<float>": {
+                "vec4": ("xy", "w"),
+                "float4": ("xy", "w"),
+            },
             "texture3d<float>": {
                 "vec4": ("xyz", "w"),
                 "float4": ("xyz", "w"),
@@ -2027,14 +2047,17 @@ class MetalCodeGen:
         if coord_spec is None:
             return None
         numerator, divisor = coord_spec
-        return (
+        projected_coord = (
             f"{self.vector_component(coord, numerator)} / "
             f"{self.vector_component(coord, divisor)}"
         )
+        if texture_type == "texture2d_array<float>":
+            return f"{projected_coord}, " f"uint({self.vector_component(coord, 'z')})"
+        return projected_coord
 
     def projected_texture_offset_supported(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return texture_type == "texture2d<float>"
+        return texture_type in {"texture2d<float>", "texture2d_array<float>"}
 
     def generate_texture_projected_call(
         self,
@@ -2240,9 +2263,110 @@ class MetalCodeGen:
             f"/* unsupported Metal texture gather: {func_name} {reason} */ float4(0.0)"
         )
 
+    def unsupported_multisample_texture_call(self, func_name, texture_type):
+        return (
+            f"/* unsupported Metal multisample texture call: "
+            f"{func_name} on {texture_type} */ float4(0.0)"
+        )
+
+    def unsupported_multisample_texture_query_lod_call(self, texture_type):
+        return (
+            "/* unsupported Metal multisample texture query: "
+            f"textureQueryLod on {texture_type} */ float2(0.0)"
+        )
+
+    def unsupported_texture_query_levels_call(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported Metal texture query: "
+            f"textureQueryLevels on {texture_type} */ 0"
+        )
+
+    def unsupported_texture_query_lod_call(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported Metal texture query: "
+            f"textureQueryLod on {texture_type} */ float2(0.0)"
+        )
+
+    def storage_image_texture_operation_expression(self, func_name, texture_type):
+        if not self.is_storage_image_resource(texture_type):
+            return None
+
+        texture_type = self.resource_base_type(texture_type)
+        if func_name in {
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }:
+            return (
+                "/* unsupported Metal storage image texture comparison: "
+                f"{func_name} on {texture_type} */ 0.0"
+            )
+
+        if func_name in {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+            "texelFetch",
+            "texelFetchOffset",
+        }:
+            return (
+                "/* unsupported Metal storage image texture operation: "
+                f"{func_name} on {texture_type} */ float4(0.0)"
+            )
+
+        return None
+
+    def is_cube_texture_resource(self, texture_type):
+        return texture_type in {
+            "texturecube<float>",
+            "texturecube_array<float>",
+            "depthcube<float>",
+            "depthcube_array<float>",
+        }
+
+    def unsupported_cube_texel_fetch_call(self, func_name, texture_type):
+        return (
+            f"/* unsupported Metal texel fetch: {func_name} on "
+            f"{texture_type} */ float4(0.0)"
+        )
+
     def generate_texture_gather_call(
         self, func_name, texture_name, sampler_arg, coord, extra_args, texture_type
     ):
+        if self.is_multisample_texture_resource(texture_type):
+            return self.unsupported_multisample_texture_call(func_name, texture_type)
+        if func_name == "textureGather" and not self.texture_gather_supported(
+            texture_type
+        ):
+            return self.unsupported_texture_gather_call(
+                func_name, "requires 2D, 2D-array, cube, or cube-array textures"
+            )
+
         coord_args = self.texture_gather_coord_args(texture_type, coord)
         supports_offset = self.texture_gather_supports_offset(texture_type)
         offset_args = []
@@ -2595,6 +2719,22 @@ class MetalCodeGen:
         lod = self.generate_expression(lod_arg) if lod_arg is not None else "0"
         lod_arg_string = f"uint({lod})"
 
+        if self.is_storage_image_resource(texture_type):
+            texture_type = self.resource_base_type(texture_type)
+            if texture_type.startswith("texture2d_array<"):
+                return (
+                    f"int3({texture_name}.get_width(), "
+                    f"{texture_name}.get_height(), "
+                    f"{texture_name}.get_array_size())"
+                )
+            if texture_type.startswith("texture3d<"):
+                return (
+                    f"int3({texture_name}.get_width(), "
+                    f"{texture_name}.get_height(), "
+                    f"{texture_name}.get_depth())"
+                )
+            return f"int2({texture_name}.get_width(), " f"{texture_name}.get_height())"
+
         if texture_type in {"texture1d<float>"}:
             return f"int({texture_name}.get_width({lod_arg_string}))"
         if texture_type in {
@@ -2636,9 +2776,18 @@ class MetalCodeGen:
     def texture_query_levels_expression(self, texture_arg):
         texture_name = self.generate_expression(texture_arg)
         texture_type = self.texture_resource_type(texture_arg)
+        if self.is_storage_image_resource(texture_type):
+            return self.unsupported_texture_query_levels_call(texture_type)
         if self.is_multisample_texture_resource(texture_type):
             return "1"
         return f"int({texture_name}.get_num_mip_levels())"
+
+    def texture_samples_expression(self, texture_arg):
+        texture_name = self.generate_expression(texture_arg)
+        texture_type = self.texture_resource_type(texture_arg)
+        if not self.is_multisample_texture_resource(texture_type):
+            return "/* unsupported Metal texture samples query: requires multisample texture */ 0"
+        return f"int({texture_name}.get_num_samples())"
 
     def image_coordinate_expression(self, image_type, coord):
         if image_type in {
@@ -2982,12 +3131,15 @@ class MetalCodeGen:
         if image_call is not None:
             return image_call
 
-        if func_name == "textureSize" and args:
+        if func_name in {"textureSize", "imageSize"} and args:
             lod_arg = args[1] if len(args) > 1 else None
             return self.texture_query_size_expression(args[0], lod_arg)
 
         if func_name == "textureQueryLevels" and args:
             return self.texture_query_levels_expression(args[0])
+
+        if func_name in {"textureSamples", "imageSamples"} and args:
+            return self.texture_samples_expression(args[0])
 
         if len(args) < 2:
             return None
@@ -2998,9 +3150,22 @@ class MetalCodeGen:
 
         texture_name, sampler_arg, coord, extra_args = parts
         texture_type = self.texture_resource_type(args[0])
+        storage_image_operation = self.storage_image_texture_operation_expression(
+            func_name, texture_type
+        )
+        if storage_image_operation is not None:
+            return storage_image_operation
+
         is_array_texture = self.is_array_texture_resource(texture_type)
         if is_array_texture:
             coord_xy, layer = self.texture_coordinate_parts(texture_type, coord)
+
+        if func_name in {
+            "texture",
+            "textureLod",
+            "textureGrad",
+        } and self.is_multisample_texture_resource(texture_type):
+            return self.unsupported_multisample_texture_call(func_name, texture_type)
 
         if func_name == "texture":
             if is_array_texture:
@@ -3084,6 +3249,10 @@ class MetalCodeGen:
                 func_name, texture_name, sampler_arg, coord, extra_args, texture_type
             )
         if func_name == "textureQueryLod":
+            if self.is_multisample_texture_resource(texture_type):
+                return self.unsupported_multisample_texture_query_lod_call(texture_type)
+            if self.is_storage_image_resource(texture_type):
+                return self.unsupported_texture_query_lod_call(texture_type)
             lod_coord = coord_xy if is_array_texture else coord
             return (
                 f"float2({texture_name}.calculate_unclamped_lod({sampler_arg}, {lod_coord}), "
@@ -3091,6 +3260,8 @@ class MetalCodeGen:
             )
         if func_name == "texelFetch" and len(args) >= 3:
             lod = self.generate_expression(args[2])
+            if self.is_cube_texture_resource(texture_type):
+                return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
                 if texture_type == "texture2d_ms_array<float>":
                     texel_xy, layer = self.array_texture_coordinate_parts(coord)
@@ -3104,6 +3275,8 @@ class MetalCodeGen:
         if func_name == "texelFetchOffset" and len(args) >= 4:
             lod = self.generate_expression(args[2])
             offset = self.generate_expression(args[3])
+            if self.is_cube_texture_resource(texture_type):
+                return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
                 return "/* unsupported Metal texel fetch offset: multisample textures do not support offsets */ float4(0.0)"
             if is_array_texture:

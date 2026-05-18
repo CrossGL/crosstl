@@ -1641,7 +1641,9 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
         "fragment float4 fragment_main(FSInput input [[stage_in]], texture2d<float, access::read_write> scalarFloat [[texture(0)]], texture2d<float, access::read_write> rgFloat [[texture(1)]], texture2d<uint, access::read_write> unsignedScalar [[texture(2)]], texture2d_array<uint, access::read_write> unsignedLayers [[texture(3)]], texture3d<int, access::read_write> signedVolume [[texture(4)]])"
         in generated_code
     )
-    assert "float scalarValue = scalarFloat.read(uint2(input.pixel)).x;" in generated_code
+    assert (
+        "float scalarValue = scalarFloat.read(uint2(input.pixel)).x;" in generated_code
+    )
     assert "float2 rgValue = rgFloat.read(uint2(input.pixel)).xy;" in generated_code
     assert (
         "uint unsignedValue = unsignedScalar.read(uint2(input.pixel)).x;"
@@ -1651,7 +1653,9 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
         "uint2 layerValue = unsignedLayers.read(uint2(input.pixelLayer.xy), uint(input.pixelLayer.z)).xy;"
         in generated_code
     )
-    assert "int signedValue = signedVolume.read(uint3(input.voxel)).x;" in generated_code
+    assert (
+        "int signedValue = signedVolume.read(uint3(input.voxel)).x;" in generated_code
+    )
     assert (
         "scalarFloat.write(float4(scalarValue + input.amount), uint2(input.pixel));"
         in generated_code
@@ -5779,6 +5783,177 @@ def test_metal_texture_gather_offset_variants_use_metal_overloads():
     )
 
 
+def test_metal_cube_texture_gather_offsets_emit_diagnostics():
+    shader = """
+    shader UnsupportedCubeGatherOffsets {
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+        sampler cubeSampler;
+
+        struct FSInput {
+            vec3 direction @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            ivec2 offset0 @ TEXCOORD3;
+            ivec2 offset1 @ TEXCOORD4;
+            ivec2 offset2 @ TEXCOORD5;
+            ivec2 offset3 @ TEXCOORD6;
+            int component @ TEXCOORD7;
+        };
+
+        vec4 gatherCube(
+            samplerCube tex,
+            sampler s,
+            vec3 direction,
+            ivec2 offset,
+            ivec2 offset0,
+            ivec2 offset1,
+            ivec2 offset2,
+            ivec2 offset3,
+            int component
+        ) {
+            vec4 offsetGather = textureGatherOffset(tex, s, direction, offset, component);
+            vec4 offsetsGather = textureGatherOffsets(tex, s, direction, offset0, offset1, offset2, offset3, component);
+            return offsetGather + offsetsGather;
+        }
+
+        vec4 gatherCubeArray(
+            samplerCubeArray tex,
+            sampler s,
+            vec4 cubeLayer,
+            ivec2 offset,
+            ivec2 offset0,
+            ivec2 offset1,
+            ivec2 offset2,
+            ivec2 offset3,
+            int component
+        ) {
+            vec4 offsetGather = textureGatherOffset(tex, s, cubeLayer, offset, component);
+            vec4 offsetsGather = textureGatherOffsets(tex, s, cubeLayer, offset0, offset1, offset2, offset3, component);
+            return offsetGather + offsetsGather;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherCube(
+                    cubeMap,
+                    cubeSampler,
+                    input.direction,
+                    input.offset,
+                    input.offset0,
+                    input.offset1,
+                    input.offset2,
+                    input.offset3,
+                    input.component
+                ) + gatherCubeArray(
+                    cubeArray,
+                    cubeSampler,
+                    input.cubeLayer,
+                    input.offset,
+                    input.offset0,
+                    input.offset1,
+                    input.offset2,
+                    input.offset3,
+                    input.component
+                ) + textureGatherOffset(cubeMap, input.direction, input.offset, input.component)
+                    + textureGatherOffset(cubeArray, input.cubeLayer, input.offset, input.component)
+                    + textureGatherOffsets(cubeMap, input.direction, input.offset0, input.offset1, input.offset2, input.offset3, input.component)
+                    + textureGatherOffsets(cubeArray, input.cubeLayer, input.offset0, input.offset1, input.offset2, input.offset3, input.component);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    offset_diagnostic = (
+        "/* unsupported Metal texture gather: textureGatherOffset "
+        "offsets require 2D or 2D-array textures */ float4(0.0)"
+    )
+    offsets_diagnostic = (
+        "/* unsupported Metal texture gather: textureGatherOffsets "
+        "offsets require 2D or 2D-array textures */ float4(0.0)"
+    )
+    assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
+    assert "texturecube_array<float> cubeArray [[texture(1)]]" in generated_code
+    assert "sampler cubeSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float4 gatherCube(texturecube<float> tex, sampler s, float3 direction, int2 offset, int2 offset0, int2 offset1, int2 offset2, int2 offset3, int component)"
+        in generated_code
+    )
+    assert (
+        "float4 gatherCubeArray(texturecube_array<float> tex, sampler s, float4 cubeLayer, int2 offset, int2 offset0, int2 offset1, int2 offset2, int2 offset3, int component)"
+        in generated_code
+    )
+    assert generated_code.count(offset_diagnostic) == 4
+    assert generated_code.count(offsets_diagnostic) == 4
+    assert ".gather(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+
+
+def test_metal_unsupported_dimension_texture_gather_emits_diagnostics():
+    shader = """
+    shader UnsupportedDimensionGather {
+        sampler1D lineMap;
+        sampler3D volumeMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec3 volumeUv @ TEXCOORD1;
+            int component @ TEXCOORD2;
+        };
+
+        vec4 gatherLine(sampler1D tex, sampler s, float u, int component) {
+            vec4 fixedGather = textureGather(tex, s, u, 2);
+            vec4 dynamicGather = textureGather(tex, s, u, component);
+            return fixedGather + dynamicGather;
+        }
+
+        vec4 gatherVolume(sampler3D tex, sampler s, vec3 volumeUv, int component) {
+            vec4 fixedGather = textureGather(tex, s, volumeUv, 1);
+            vec4 dynamicGather = textureGather(tex, s, volumeUv, component);
+            return fixedGather + dynamicGather;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherLine(lineMap, linearSampler, input.u, input.component)
+                    + gatherVolume(volumeMap, linearSampler, input.volumeUv, input.component)
+                    + textureGather(lineMap, input.u, input.component)
+                    + textureGather(volumeMap, input.volumeUv, input.component);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported Metal texture gather: textureGather requires 2D, "
+        "2D-array, cube, or cube-array textures */ float4(0.0)"
+    )
+    assert "texture1d<float> lineMap [[texture(0)]]" in generated_code
+    assert "texture3d<float> volumeMap [[texture(1)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float4 gatherLine(texture1d<float> tex, sampler s, float u, int component)"
+        in generated_code
+    )
+    assert (
+        "float4 gatherVolume(texture3d<float> tex, sampler s, float3 volumeUv, int component)"
+        in generated_code
+    )
+    assert generated_code.count(diagnostic) == 6
+    assert ".gather(" not in generated_code
+    assert "textureGather(" not in generated_code
+
+
 def test_metal_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     shader = """
     shader GatherOffsetMixed {
@@ -6063,6 +6238,147 @@ def test_metal_texture_sample_offset_variants_use_sample_offsets():
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
+
+
+def test_metal_cube_texture_sample_offsets_emit_diagnostics():
+    shader = """
+    shader CubeTextureSampleOffsetDiagnostics {
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+        samplerCubeShadow shadowMap;
+        samplerCubeArrayShadow shadowArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 direction @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec3 ddx @ TEXCOORD2;
+            vec3 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        vec4 cubeOffsets(
+            samplerCube tex,
+            sampler s,
+            vec3 direction,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            vec4 plain = textureOffset(tex, s, direction, offset);
+            vec4 lodSample = textureLodOffset(tex, s, direction, lod, offset);
+            vec4 gradSample = textureGradOffset(tex, s, direction, ddx, ddy, offset);
+            return plain + lodSample + gradSample;
+        }
+
+        vec4 cubeArrayOffsets(
+            samplerCubeArray tex,
+            sampler s,
+            vec4 cubeLayer,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            vec4 plain = textureOffset(tex, s, cubeLayer, offset);
+            vec4 lodSample = textureLodOffset(tex, s, cubeLayer, lod, offset);
+            vec4 gradSample = textureGradOffset(tex, s, cubeLayer, ddx, ddy, offset);
+            return plain + lodSample + gradSample;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 sampled = cubeOffsets(
+                    cubeMap,
+                    linearSampler,
+                    input.direction,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                ) + cubeArrayOffsets(
+                    cubeArray,
+                    linearSampler,
+                    input.cubeLayer,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                )
+                    + textureOffset(cubeMap, input.direction, input.offset)
+                    + textureLodOffset(cubeMap, input.direction, input.lod, input.offset)
+                    + textureGradOffset(cubeMap, input.direction, input.ddx, input.ddy, input.offset)
+                    + textureOffset(cubeArray, input.cubeLayer, input.offset)
+                    + textureLodOffset(cubeArray, input.cubeLayer, input.lod, input.offset)
+                    + textureGradOffset(cubeArray, input.cubeLayer, input.ddx, input.ddy, input.offset);
+                float compared = textureCompareOffset(shadowMap, input.direction, input.depth, input.offset)
+                    + textureCompareLodOffset(shadowMap, input.direction, input.depth, input.lod, input.offset)
+                    + textureCompareGradOffset(shadowMap, input.direction, input.depth, input.ddx, input.ddy, input.offset)
+                    + textureCompareOffset(shadowArray, input.cubeLayer, input.depth, input.offset)
+                    + textureCompareLodOffset(shadowArray, input.cubeLayer, input.depth, input.lod, input.offset)
+                    + textureCompareGradOffset(shadowArray, input.cubeLayer, input.depth, input.ddx, input.ddy, input.offset);
+                return sampled + vec4(compared);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
+    assert "texturecube_array<float> cubeArray [[texture(1)]]" in generated_code
+    assert "depthcube<float> shadowMap [[texture(2)]]" in generated_code
+    assert "depthcube_array<float> shadowArray [[texture(3)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture offset: textureOffset offsets require 2D or 2D-array textures */ float4(0.0)"
+        )
+        == 4
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture offset: textureLodOffset offsets require 2D or 2D-array textures */ float4(0.0)"
+        )
+        == 4
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture offset: textureGradOffset offsets require 2D or 2D-array textures */ float4(0.0)"
+        )
+        == 4
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture compare: textureCompareOffset offsets require 2D or 2D-array depth textures */ 0.0"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture compare: textureCompareLodOffset offsets require 2D or 2D-array depth textures */ 0.0"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture compare: textureCompareGradOffset offsets require 2D or 2D-array depth textures */ 0.0"
+        )
+        == 2
+    )
+    assert ".sample(" not in generated_code
+    assert ".sample_compare(" not in generated_code
+    assert "textureOffset(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
+    assert "textureCompareLodOffset(" not in generated_code
+    assert "textureCompareGradOffset(" not in generated_code
 
 
 def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members():
@@ -6363,6 +6679,323 @@ def test_metal_direct_projected_texture_stage_input_members():
     assert "textureProjLodOffset(" not in generated_code
     assert "textureProjGrad(" not in generated_code
     assert "textureProjGradOffset(" not in generated_code
+
+
+def test_metal_direct_projected_array_texture_stage_input_members():
+    shader = """
+    shader DirectProjectedArrayTexture {
+        sampler2DArray layerMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec4 uvLayerQ @ TEXCOORD0;
+            float lod;
+            vec2 ddx @ TEXCOORD1;
+            vec2 ddy @ TEXCOORD2;
+            ivec2 offset @ TEXCOORD3;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projected = textureProj(layerMap, linearSampler, input.uvLayerQ);
+                vec4 projectedOffset = textureProjOffset(layerMap, linearSampler, input.uvLayerQ, input.offset);
+                vec4 projectedLod = textureProjLod(layerMap, linearSampler, input.uvLayerQ, input.lod);
+                vec4 projectedLodOffset = textureProjLodOffset(layerMap, linearSampler, input.uvLayerQ, input.lod, input.offset);
+                vec4 projectedGrad = textureProjGrad(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy);
+                vec4 projectedGradOffset = textureProjGradOffset(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy, input.offset);
+                return projected + projectedOffset + projectedLod + projectedLodOffset + projectedGrad + projectedGradOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z)"
+    assert "texture2d_array<float> layerMap [[texture(0)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    assert (
+        f"float4 projected = layerMap.sample(linearSampler, {projected_args});"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedOffset = layerMap.sample(linearSampler, {projected_args}, input.offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedLod = layerMap.sample(linearSampler, {projected_args}, level(input.lod));"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedLodOffset = layerMap.sample(linearSampler, {projected_args}, level(input.lod), input.offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedGrad = layerMap.sample(linearSampler, {projected_args}, gradient2d(input.ddx, input.ddy));"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedGradOffset = layerMap.sample(linearSampler, {projected_args}, gradient2d(input.ddx, input.ddy), input.offset);"
+        in generated_code
+    )
+    assert "unsupported Metal projected texture" not in generated_code
+    assert "textureProj(" not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLod(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGrad(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
+
+
+def test_metal_implicit_projected_array_texture_stage_input_members_use_default_sampler():
+    shader = """
+    shader DirectImplicitProjectedArrayTexture {
+        sampler2DArray layerMap;
+
+        struct FSInput {
+            vec4 uvLayerQ @ TEXCOORD0;
+            float lod;
+            vec2 ddx @ TEXCOORD1;
+            vec2 ddy @ TEXCOORD2;
+            ivec2 offset @ TEXCOORD3;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projected = textureProj(layerMap, input.uvLayerQ);
+                vec4 projectedOffset = textureProjOffset(layerMap, input.uvLayerQ, input.offset);
+                vec4 projectedLod = textureProjLod(layerMap, input.uvLayerQ, input.lod);
+                vec4 projectedLodOffset = textureProjLodOffset(layerMap, input.uvLayerQ, input.lod, input.offset);
+                vec4 projectedGrad = textureProjGrad(layerMap, input.uvLayerQ, input.ddx, input.ddy);
+                vec4 projectedGradOffset = textureProjGradOffset(layerMap, input.uvLayerQ, input.ddx, input.ddy, input.offset);
+                return projected + projectedOffset + projectedLod + projectedLodOffset + projectedGrad + projectedGradOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
+    projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(input.uvLayerQ.z)"
+    assert "texture2d_array<float> layerMap [[texture(0)]]" in generated_code
+    assert "[[sampler(" not in generated_code
+    assert (
+        f"float4 projected = layerMap.sample({default_sampler}, {projected_args});"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedOffset = layerMap.sample({default_sampler}, {projected_args}, input.offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedLod = layerMap.sample({default_sampler}, {projected_args}, level(input.lod));"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedLodOffset = layerMap.sample({default_sampler}, {projected_args}, level(input.lod), input.offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedGrad = layerMap.sample({default_sampler}, {projected_args}, gradient2d(input.ddx, input.ddy));"
+        in generated_code
+    )
+    assert (
+        f"float4 projectedGradOffset = layerMap.sample({default_sampler}, {projected_args}, gradient2d(input.ddx, input.ddy), input.offset);"
+        in generated_code
+    )
+    assert "unsupported Metal projected texture" not in generated_code
+    assert "textureProj(" not in generated_code
+
+
+def test_metal_projected_array_texture_resource_arrays_forward_samplers():
+    shader = """
+    shader ProjectedArrayTextureResourceArrays {
+        sampler2DArray layerMaps[4];
+        sampler linearSamplers[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec4 uvLayerQ @ TEXCOORD1;
+            float lod;
+            vec2 ddx @ TEXCOORD2;
+            vec2 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        vec4 projectedLeaf(
+            sampler2DArray maps[],
+            sampler samplers[],
+            int layer,
+            vec4 uvLayerQ,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            vec4 fixedProj = textureProj(maps[2], samplers[2], uvLayerQ);
+            vec4 dynamicOffset = textureProjOffset(maps[layer], samplers[layer], uvLayerQ, offset);
+            vec4 fixedLod = textureProjLod(maps[1], samplers[1], uvLayerQ, lod);
+            vec4 dynamicLodOffset = textureProjLodOffset(maps[layer], samplers[layer], uvLayerQ, lod, offset);
+            vec4 fixedGrad = textureProjGrad(maps[3], samplers[3], uvLayerQ, ddx, ddy);
+            vec4 dynamicGradOffset = textureProjGradOffset(maps[layer], samplers[layer], uvLayerQ, ddx, ddy, offset);
+            return fixedProj + dynamicOffset + fixedLod + dynamicLodOffset + fixedGrad + dynamicGradOffset;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return projectedLeaf(
+                    layerMaps,
+                    linearSamplers,
+                    input.layer,
+                    input.uvLayerQ,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    projected_args = "uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z)"
+    assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
+    assert "array<sampler, 4> linearSamplers [[sampler(0)]]" in generated_code
+    assert (
+        "float4 projectedLeaf(array<texture2d_array<float>, 4> maps, array<sampler, 4> samplers, int layer, float4 uvLayerQ, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        f"float4 fixedProj = maps[2].sample(samplers[2], {projected_args});"
+        in generated_code
+    )
+    assert (
+        f"float4 dynamicOffset = maps[layer].sample(samplers[layer], {projected_args}, offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 fixedLod = maps[1].sample(samplers[1], {projected_args}, level(lod));"
+        in generated_code
+    )
+    assert (
+        f"float4 dynamicLodOffset = maps[layer].sample(samplers[layer], {projected_args}, level(lod), offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 fixedGrad = maps[3].sample(samplers[3], {projected_args}, gradient2d(ddx, ddy));"
+        in generated_code
+    )
+    assert (
+        f"float4 dynamicGradOffset = maps[layer].sample(samplers[layer], {projected_args}, gradient2d(ddx, ddy), offset);"
+        in generated_code
+    )
+    assert (
+        "projectedLeaf(layerMaps, linearSamplers, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "unsupported Metal projected texture" not in generated_code
+    assert "textureProj(" not in generated_code
+
+
+def test_metal_implicit_projected_array_texture_resource_arrays_use_default_sampler():
+    shader = """
+    shader ImplicitProjectedArrayTextureResourceArrays {
+        sampler2DArray layerMaps[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec4 uvLayerQ @ TEXCOORD1;
+            float lod;
+            vec2 ddx @ TEXCOORD2;
+            vec2 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        vec4 projectedLeaf(
+            sampler2DArray maps[],
+            int layer,
+            vec4 uvLayerQ,
+            float lod,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            vec4 fixedProj = textureProj(maps[2], uvLayerQ);
+            vec4 dynamicOffset = textureProjOffset(maps[layer], uvLayerQ, offset);
+            vec4 fixedLod = textureProjLod(maps[1], uvLayerQ, lod);
+            vec4 dynamicLodOffset = textureProjLodOffset(maps[layer], uvLayerQ, lod, offset);
+            vec4 fixedGrad = textureProjGrad(maps[3], uvLayerQ, ddx, ddy);
+            vec4 dynamicGradOffset = textureProjGradOffset(maps[layer], uvLayerQ, ddx, ddy, offset);
+            return fixedProj + dynamicOffset + fixedLod + dynamicLodOffset + fixedGrad + dynamicGradOffset;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return projectedLeaf(
+                    layerMaps,
+                    input.layer,
+                    input.uvLayerQ,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
+    projected_args = "uvLayerQ.xy / uvLayerQ.w, uint(uvLayerQ.z)"
+    assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
+    assert "[[sampler(" not in generated_code
+    assert (
+        "float4 projectedLeaf(array<texture2d_array<float>, 4> maps, int layer, float4 uvLayerQ, float lod, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        f"float4 fixedProj = maps[2].sample({default_sampler}, {projected_args});"
+        in generated_code
+    )
+    assert (
+        f"float4 dynamicOffset = maps[layer].sample({default_sampler}, {projected_args}, offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 fixedLod = maps[1].sample({default_sampler}, {projected_args}, level(lod));"
+        in generated_code
+    )
+    assert (
+        f"float4 dynamicLodOffset = maps[layer].sample({default_sampler}, {projected_args}, level(lod), offset);"
+        in generated_code
+    )
+    assert (
+        f"float4 fixedGrad = maps[3].sample({default_sampler}, {projected_args}, gradient2d(ddx, ddy));"
+        in generated_code
+    )
+    assert (
+        f"float4 dynamicGradOffset = maps[layer].sample({default_sampler}, {projected_args}, gradient2d(ddx, ddy), offset);"
+        in generated_code
+    )
+    assert (
+        "projectedLeaf(layerMaps, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "unsupported Metal projected texture" not in generated_code
+    assert "textureProj(" not in generated_code
 
 
 def test_metal_implicit_projected_stage_input_members_use_default_sampler():
@@ -6721,8 +7354,7 @@ def test_metal_projected_shadow_compare_resource_arrays_forward_samplers():
 
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in generated_code
     assert (
-        "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]"
-        in generated_code
+        "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in generated_code
     )
     assert "array<sampler, 4> shadowSamplers [[sampler(0)]]" in generated_code
     assert (
@@ -6850,8 +7482,7 @@ def test_metal_implicit_projected_shadow_compare_resource_arrays_use_default_sam
 
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in generated_code
     assert (
-        "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]"
-        in generated_code
+        "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in generated_code
     )
     assert "array<sampler" not in generated_code
     assert (
@@ -6980,8 +7611,7 @@ def test_metal_unsized_projected_shadow_compare_arrays_infer_transitive_constant
 
     assert "array<depth2d<float>, 5> shadowMaps [[texture(0)]]" in generated_code
     assert (
-        "array<depth2d_array<float>, 5> shadowArrays [[texture(5)]]"
-        in generated_code
+        "array<depth2d_array<float>, 5> shadowArrays [[texture(5)]]" in generated_code
     )
     assert "depth2d<float> afterShadow [[texture(10)]]" in generated_code
     assert "array<sampler, 5> shadowSamplers [[sampler(0)]]" in generated_code
@@ -7137,6 +7767,270 @@ def test_metal_projected_cube_shadow_compare_reports_unsupported():
     assert ".sample_compare(s, cubeLayerProj" not in generated_code
 
 
+def test_metal_direct_projected_cube_texture_reports_unsupported():
+    shader = """
+    shader DirectProjectedCubeDiagnostics {
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec4 cubeArrayProj @ TEXCOORD1;
+            float lod;
+            vec3 ddx @ TEXCOORD2;
+            vec3 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 cubeProjected = textureProj(cubeMap, linearSampler, input.cubeProj);
+                vec4 cubeLodOffset = textureProjLodOffset(cubeMap, linearSampler, input.cubeProj, input.lod, input.offset);
+                vec4 cubeGradOffset = textureProjGradOffset(cubeMap, linearSampler, input.cubeProj, input.ddx, input.ddy, input.offset);
+                vec4 cubeArrayProjected = textureProj(cubeArray, linearSampler, input.cubeArrayProj);
+                vec4 cubeArrayLodOffset = textureProjLodOffset(cubeArray, linearSampler, input.cubeArrayProj, input.lod, input.offset);
+                vec4 cubeArrayGradOffset = textureProjGradOffset(cubeArray, linearSampler, input.cubeArrayProj, input.ddx, input.ddy, input.offset);
+                vec4 implicitCube = textureProj(cubeMap, input.cubeProj);
+                vec4 implicitCubeArray = textureProjLod(cubeArray, input.cubeArrayProj, input.lod);
+                return cubeProjected + cubeLodOffset + cubeGradOffset + cubeArrayProjected + cubeArrayLodOffset + cubeArrayGradOffset + implicitCube + implicitCubeArray;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
+    assert "texturecube_array<float> cubeArray [[texture(1)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    expected_counts = {
+        "textureProj": 3,
+        "textureProjLodOffset": 2,
+        "textureProjGradOffset": 2,
+        "textureProjLod": 1,
+    }
+    for func_name, count in expected_counts.items():
+        assert (
+            generated_code.count(
+                f"/* unsupported Metal projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+            )
+            == count
+        )
+    assert "textureProj(cubeMap" not in generated_code
+    assert "textureProj(cubeArray" not in generated_code
+    assert ".sample(linearSampler, input.cubeProj" not in generated_code
+    assert ".sample(linearSampler, input.cubeArrayProj" not in generated_code
+
+
+def test_metal_projected_cube_texture_resource_arrays_report_unsupported_without_samplers():
+    shader = """
+    shader ProjectedCubeArrayDiagnostics {
+        samplerCube cubeMaps[4];
+        samplerCubeArray cubeArrays[4];
+        samplerCubeShadow shadowCubes[4];
+        samplerCubeArrayShadow shadowCubeArrays[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec4 cubeProj @ TEXCOORD1;
+            vec4 cubeArrayProj @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec3 ddx @ TEXCOORD3;
+            vec3 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        vec4 projectedCube(
+            samplerCube maps[],
+            int layer,
+            vec4 cubeProj,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            vec4 fixedProjected = textureProj(maps[2], cubeProj);
+            vec4 dynamicLodProjected = textureProjLod(maps[layer], cubeProj, lod);
+            vec4 dynamicGradOffsetProjected = textureProjGradOffset(maps[layer], cubeProj, ddx, ddy, offset);
+            return fixedProjected + dynamicLodProjected + dynamicGradOffsetProjected;
+        }
+
+        vec4 projectedCubeArray(
+            samplerCubeArray maps[],
+            int layer,
+            vec4 cubeArrayProj,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            vec4 fixedProjected = textureProj(maps[2], cubeArrayProj);
+            vec4 dynamicLodProjected = textureProjLod(maps[layer], cubeArrayProj, lod);
+            vec4 dynamicGradOffsetProjected = textureProjGradOffset(maps[layer], cubeArrayProj, ddx, ddy, offset);
+            return fixedProjected + dynamicLodProjected + dynamicGradOffsetProjected;
+        }
+
+        vec4 projectedShadow(
+            samplerCubeShadow maps[],
+            int layer,
+            vec4 cubeProj,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            float fixedProjected = textureCompareProj(maps[2], cubeProj, depth);
+            float dynamicLodProjected = textureCompareProjLod(maps[layer], cubeProj, depth, lod);
+            float dynamicGradOffsetProjected = textureCompareProjGradOffset(maps[layer], cubeProj, depth, ddx, ddy, offset);
+            return vec4(fixedProjected + dynamicLodProjected + dynamicGradOffsetProjected);
+        }
+
+        vec4 projectedShadowArray(
+            samplerCubeArrayShadow maps[],
+            int layer,
+            vec4 cubeArrayProj,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            float fixedProjected = textureCompareProj(maps[2], cubeArrayProj, depth);
+            float dynamicLodProjected = textureCompareProjLod(maps[layer], cubeArrayProj, depth, lod);
+            float dynamicGradOffsetProjected = textureCompareProjGradOffset(maps[layer], cubeArrayProj, depth, ddx, ddy, offset);
+            return vec4(fixedProjected + dynamicLodProjected + dynamicGradOffsetProjected);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 globalProjected = textureProj(cubeMaps[input.layer], input.cubeProj);
+                vec4 globalArrayProjected = textureProjLod(cubeArrays[2], input.cubeArrayProj, input.lod);
+                float globalShadow = textureCompareProj(shadowCubes[input.layer], input.cubeProj, input.depth);
+                float globalArrayShadow = textureCompareProjLod(shadowCubeArrays[2], input.cubeArrayProj, input.depth, input.lod);
+                return globalProjected + globalArrayProjected + vec4(globalShadow + globalArrayShadow)
+                    + projectedCube(
+                        cubeMaps,
+                        input.layer,
+                        input.cubeProj,
+                        input.lod,
+                        input.ddx,
+                        input.ddy,
+                        input.offset
+                    )
+                    + projectedCubeArray(
+                        cubeArrays,
+                        input.layer,
+                        input.cubeArrayProj,
+                        input.lod,
+                        input.ddx,
+                        input.ddy,
+                        input.offset
+                    )
+                    + projectedShadow(
+                        shadowCubes,
+                        input.layer,
+                        input.cubeProj,
+                        input.depth,
+                        input.lod,
+                        input.ddx,
+                        input.ddy,
+                        input.offset
+                    )
+                    + projectedShadowArray(
+                        shadowCubeArrays,
+                        input.layer,
+                        input.cubeArrayProj,
+                        input.depth,
+                        input.lod,
+                        input.ddx,
+                        input.ddy,
+                        input.offset
+                    );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<texturecube<float>, 4> cubeMaps [[texture(0)]]" in generated_code
+    assert (
+        "array<texturecube_array<float>, 4> cubeArrays [[texture(4)]]" in generated_code
+    )
+    assert "array<depthcube<float>, 4> shadowCubes [[texture(8)]]" in generated_code
+    assert (
+        "array<depthcube_array<float>, 4> shadowCubeArrays [[texture(12)]]"
+        in generated_code
+    )
+    assert (
+        "float4 projectedCube(array<texturecube<float>, 4> maps, int layer, float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float4 projectedCubeArray(array<texturecube_array<float>, 4> maps, int layer, float4 cubeArrayProj, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float4 projectedShadow(array<depthcube<float>, 4> maps, int layer, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float4 projectedShadowArray(array<depthcube_array<float>, 4> maps, int layer, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        in generated_code
+    )
+    projected_counts = {
+        "textureProj": 3,
+        "textureProjLod": 3,
+        "textureProjGradOffset": 2,
+    }
+    for func_name, count in projected_counts.items():
+        assert (
+            generated_code.count(
+                f"/* unsupported Metal projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+            )
+            == count
+        )
+    compare_counts = {
+        "textureCompareProj": 3,
+        "textureCompareProjLod": 3,
+        "textureCompareProjGradOffset": 2,
+    }
+    for func_name, count in compare_counts.items():
+        assert (
+            generated_code.count(
+                f"/* unsupported Metal texture compare: {func_name} requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates */ 0.0"
+            )
+            == count
+        )
+    assert (
+        "projectedCube(cubeMaps, input.layer, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert (
+        "projectedCubeArray(cubeArrays, input.layer, input.cubeArrayProj, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert (
+        "projectedShadow(shadowCubes, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert (
+        "projectedShadowArray(shadowCubeArrays, input.layer, input.cubeArrayProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "[[sampler(" not in generated_code
+    assert "sampler(" not in generated_code
+    assert ".sample(" not in generated_code
+    assert ".sample_compare(" not in generated_code
+
+
 def test_metal_shadow_gather_compare_offsets_use_depth_overloads():
     shader = """
     shader ShadowGatherCompareOffsets {
@@ -7226,6 +8120,103 @@ def test_metal_shadow_gather_compare_offsets_use_depth_overloads():
     assert "textureGatherCompare(" not in generated_code
     assert "textureGatherCompareOffset(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
+
+
+def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
+    shader = """
+    shader CubeShadowGatherCompare {
+        samplerCubeShadow cubeShadow;
+        samplerCubeArrayShadow cubeShadowArray;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec3 direction @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+        };
+
+        vec4 gatherCubeShadow(samplerCubeShadow tex, sampler s, vec3 direction, float depth) {
+            return textureGatherCompare(tex, s, direction, depth);
+        }
+
+        vec4 gatherCubeArrayShadow(samplerCubeArrayShadow tex, sampler s, vec4 cubeLayer, float depth) {
+            return textureGatherCompare(tex, s, cubeLayer, depth);
+        }
+
+        vec4 implicitCubeShadow(samplerCubeShadow tex, vec3 direction, float depth) {
+            return textureGatherCompare(tex, direction, depth);
+        }
+
+        vec4 implicitCubeArrayShadow(samplerCubeArrayShadow tex, vec4 cubeLayer, float depth) {
+            return textureGatherCompare(tex, cubeLayer, depth);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherCubeShadow(cubeShadow, compareSampler, input.direction, input.depth)
+                    + gatherCubeArrayShadow(cubeShadowArray, compareSampler, input.cubeLayer, input.depth)
+                    + implicitCubeShadow(cubeShadow, input.direction, input.depth)
+                    + implicitCubeArrayShadow(cubeShadowArray, input.cubeLayer, input.depth)
+                    + textureGatherCompare(cubeShadow, compareSampler, input.direction, input.depth)
+                    + textureGatherCompare(cubeShadowArray, compareSampler, input.cubeLayer, input.depth)
+                    + textureGatherCompare(cubeShadow, input.direction, input.depth)
+                    + textureGatherCompare(cubeShadowArray, input.cubeLayer, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
+
+    assert "depthcube<float> cubeShadow [[texture(0)]]" in generated_code
+    assert "depthcube_array<float> cubeShadowArray [[texture(1)]]" in generated_code
+    assert "sampler compareSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float4 gatherCubeShadow(depthcube<float> tex, sampler s, float3 direction, float depth)"
+        in generated_code
+    )
+    assert "return tex.gather_compare(s, direction, depth);" in generated_code
+    assert (
+        "float4 gatherCubeArrayShadow(depthcube_array<float> tex, sampler s, float4 cubeLayer, float depth)"
+        in generated_code
+    )
+    assert (
+        "return tex.gather_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        in generated_code
+    )
+    assert (
+        "float4 implicitCubeShadow(depthcube<float> tex, float3 direction, float depth)"
+        in generated_code
+    )
+    assert (
+        f"return tex.gather_compare({default_sampler}, direction, depth);"
+        in generated_code
+    )
+    assert (
+        "float4 implicitCubeArrayShadow(depthcube_array<float> tex, float4 cubeLayer, float depth)"
+        in generated_code
+    )
+    assert (
+        f"return tex.gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        in generated_code
+    )
+    assert (
+        "gatherCubeShadow(cubeShadow, compareSampler, input.direction, input.depth)"
+        in generated_code
+    )
+    assert (
+        "cubeShadowArray.gather_compare(compareSampler, input.cubeLayer.xyz, uint(input.cubeLayer.w), input.depth)"
+        in generated_code
+    )
+    assert (
+        f"cubeShadow.gather_compare({default_sampler}, input.direction, input.depth)"
+        in generated_code
+    )
+    assert "unsupported Metal texture gather compare" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
 
 
 def test_metal_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_arrays():
@@ -7419,6 +8410,269 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
     )
     assert "unsupported Metal texture gather compare" not in implicit_code
     assert "textureGatherCompare(" not in implicit_code
+
+
+def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
+    explicit_shader = """
+    shader ShadowGatherCompareResourceArrays {
+        sampler2DShadow shadowMaps[4];
+        sampler2DArrayShadow shadowArrays[4];
+        samplerCubeArrayShadow cubeArrays[4];
+        sampler compareSamplers[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            vec3 uvLayer @ TEXCOORD2;
+            vec4 cubeLayer @ TEXCOORD3;
+            float depth;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        vec4 gatherLayer(
+            sampler2DShadow maps[],
+            sampler2DArrayShadow arrays[],
+            samplerCubeArrayShadow cubes[],
+            sampler samplers[],
+            int layer,
+            vec2 uv,
+            vec3 uvLayer,
+            vec4 cubeLayer,
+            float depth,
+            ivec2 offset
+        ) {
+            vec4 fixedPlanar = textureGatherCompare(maps[2], samplers[2], uv, depth);
+            vec4 dynamicPlanarOffset = textureGatherCompareOffset(maps[layer], samplers[layer], uv, depth, offset);
+            vec4 fixedArray = textureGatherCompare(arrays[1], samplers[1], uvLayer, depth);
+            vec4 dynamicArrayOffset = textureGatherCompareOffset(arrays[layer], samplers[layer], uvLayer, depth, offset);
+            vec4 fixedCubeArray = textureGatherCompare(cubes[3], samplers[3], cubeLayer, depth);
+            vec4 dynamicCubeArray = textureGatherCompare(cubes[layer], samplers[layer], cubeLayer, depth);
+            return fixedPlanar + dynamicPlanarOffset + fixedArray + dynamicArrayOffset + fixedCubeArray + dynamicCubeArray;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherLayer(
+                    shadowMaps,
+                    shadowArrays,
+                    cubeArrays,
+                    compareSamplers,
+                    input.layer,
+                    input.uv,
+                    input.uvLayer,
+                    input.cubeLayer,
+                    input.depth,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+    implicit_shader = """
+    shader ImplicitShadowGatherCompareResourceArrays {
+        sampler2DShadow shadowMaps[4];
+        sampler2DArrayShadow shadowArrays[4];
+        samplerCubeArrayShadow cubeArrays[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            vec3 uvLayer @ TEXCOORD2;
+            vec4 cubeLayer @ TEXCOORD3;
+            float depth;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        vec4 gatherLayer(
+            sampler2DShadow maps[],
+            sampler2DArrayShadow arrays[],
+            samplerCubeArrayShadow cubes[],
+            int layer,
+            vec2 uv,
+            vec3 uvLayer,
+            vec4 cubeLayer,
+            float depth,
+            ivec2 offset
+        ) {
+            vec4 fixedPlanar = textureGatherCompare(maps[2], uv, depth);
+            vec4 dynamicPlanarOffset = textureGatherCompareOffset(maps[layer], uv, depth, offset);
+            vec4 fixedArray = textureGatherCompare(arrays[1], uvLayer, depth);
+            vec4 dynamicArrayOffset = textureGatherCompareOffset(arrays[layer], uvLayer, depth, offset);
+            vec4 fixedCubeArray = textureGatherCompare(cubes[3], cubeLayer, depth);
+            vec4 dynamicCubeArray = textureGatherCompare(cubes[layer], cubeLayer, depth);
+            return fixedPlanar + dynamicPlanarOffset + fixedArray + dynamicArrayOffset + fixedCubeArray + dynamicCubeArray;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherLayer(
+                    shadowMaps,
+                    shadowArrays,
+                    cubeArrays,
+                    input.layer,
+                    input.uv,
+                    input.uvLayer,
+                    input.cubeLayer,
+                    input.depth,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    explicit_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(explicit_shader), "fragment"
+    )
+    implicit_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(implicit_shader), "fragment"
+    )
+    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
+
+    assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in explicit_code
+    assert "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in explicit_code
+    assert "array<depthcube_array<float>, 4> cubeArrays [[texture(8)]]" in explicit_code
+    assert "array<sampler, 4> compareSamplers [[sampler(0)]]" in explicit_code
+    assert (
+        "float4 gatherLayer(array<depth2d<float>, 4> maps, array<depth2d_array<float>, 4> arrays, array<depthcube_array<float>, 4> cubes, array<sampler, 4> samplers, int layer, float2 uv, float3 uvLayer, float4 cubeLayer, float depth, int2 offset)"
+        in explicit_code
+    )
+    assert "maps[2].gather_compare(samplers[2], uv, depth)" in explicit_code
+    assert (
+        "maps[layer].gather_compare(samplers[layer], uv, depth, offset)"
+        in explicit_code
+    )
+    assert (
+        "arrays[1].gather_compare(samplers[1], uvLayer.xy, uint(uvLayer.z), depth)"
+        in explicit_code
+    )
+    assert (
+        "arrays[layer].gather_compare(samplers[layer], uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        in explicit_code
+    )
+    assert (
+        "cubes[3].gather_compare(samplers[3], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        in explicit_code
+    )
+    assert (
+        "cubes[layer].gather_compare(samplers[layer], cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        in explicit_code
+    )
+    assert (
+        "gatherLayer(shadowMaps, shadowArrays, cubeArrays, compareSamplers, input.layer, input.uv, input.uvLayer, input.cubeLayer, input.depth, input.offset)"
+        in explicit_code
+    )
+    assert "textureGatherCompare" not in explicit_code
+
+    assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in implicit_code
+    assert "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in implicit_code
+    assert "array<depthcube_array<float>, 4> cubeArrays [[texture(8)]]" in implicit_code
+    assert "[[sampler(" not in implicit_code
+    assert (
+        "float4 gatherLayer(array<depth2d<float>, 4> maps, array<depth2d_array<float>, 4> arrays, array<depthcube_array<float>, 4> cubes, int layer, float2 uv, float3 uvLayer, float4 cubeLayer, float depth, int2 offset)"
+        in implicit_code
+    )
+    assert f"maps[2].gather_compare({default_sampler}, uv, depth)" in implicit_code
+    assert (
+        f"maps[layer].gather_compare({default_sampler}, uv, depth, offset)"
+        in implicit_code
+    )
+    assert (
+        f"arrays[1].gather_compare({default_sampler}, uvLayer.xy, uint(uvLayer.z), depth)"
+        in implicit_code
+    )
+    assert (
+        f"arrays[layer].gather_compare({default_sampler}, uvLayer.xy, uint(uvLayer.z), depth, offset)"
+        in implicit_code
+    )
+    assert (
+        f"cubes[3].gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        in implicit_code
+    )
+    assert (
+        f"cubes[layer].gather_compare({default_sampler}, cubeLayer.xyz, uint(cubeLayer.w), depth)"
+        in implicit_code
+    )
+    assert (
+        "gatherLayer(shadowMaps, shadowArrays, cubeArrays, input.layer, input.uv, input.uvLayer, input.cubeLayer, input.depth, input.offset)"
+        in implicit_code
+    )
+    assert "textureGatherCompare" not in implicit_code
+
+
+def test_metal_unsupported_cube_shadow_gather_compare_offsets_emit_diagnostics():
+    shader = """
+    shader UnsupportedCubeGatherCompareOffset {
+        samplerCubeShadow cubeMap;
+        samplerCubeArrayShadow cubeArray;
+
+        struct FSInput {
+            vec3 direction @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+            ivec2 offset @ TEXCOORD2;
+        };
+
+        vec4 cubeOffset(
+            samplerCubeShadow tex,
+            vec3 direction,
+            float depth,
+            ivec2 offset
+        ) {
+            return textureGatherCompareOffset(tex, direction, depth, offset);
+        }
+
+        vec4 cubeArrayOffset(
+            samplerCubeArrayShadow tex,
+            vec4 cubeLayer,
+            float depth,
+            ivec2 offset
+        ) {
+            return textureGatherCompareOffset(tex, cubeLayer, depth, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return cubeOffset(cubeMap, input.direction, input.depth, input.offset)
+                    + cubeArrayOffset(cubeArray, input.cubeLayer, input.depth, input.offset)
+                    + textureGatherCompareOffset(cubeArray, input.cubeLayer, input.depth, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported Metal texture gather compare: "
+        "textureGatherCompareOffset offsets require 2D or 2D-array depth textures */ "
+        "float4(0.0)"
+    )
+    assert "depthcube<float> cubeMap [[texture(0)]]" in generated_code
+    assert "depthcube_array<float> cubeArray [[texture(1)]]" in generated_code
+    assert "[[sampler(" not in generated_code
+    assert "sampler(" not in generated_code
+    assert (
+        "float4 cubeOffset(depthcube<float> tex, float3 direction, float depth, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float4 cubeArrayOffset(depthcube_array<float> tex, float4 cubeLayer, float depth, int2 offset)"
+        in generated_code
+    )
+    assert generated_code.count(diagnostic) == 3
+    assert (
+        "cubeOffset(cubeMap, input.direction, input.depth, input.offset)"
+        in generated_code
+    )
+    assert (
+        "cubeArrayOffset(cubeArray, input.cubeLayer, input.depth, input.offset)"
+        in generated_code
+    )
+    assert ".gather_compare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
 
 
 def test_metal_shadow_compare_lod_grad_use_depth_overloads():
@@ -7703,7 +8957,9 @@ def test_metal_cube_shadow_compare_offsets_report_unsupported():
     assert "textureCompareLodOffset(" not in generated_code
     assert "textureCompareGradOffset(" not in generated_code
     assert ".sample_compare(s, direction, depth, offset)" not in generated_code
-    assert ".sample_compare(s, direction, depth, level(lod), offset)" not in generated_code
+    assert (
+        ".sample_compare(s, direction, depth, level(lod), offset)" not in generated_code
+    )
     assert (
         ".sample_compare(s, direction, depth, gradientcube(ddx, ddy), offset)"
         not in generated_code
@@ -7930,8 +9186,7 @@ def test_metal_array_shadow_compare_lod_grad_resource_arrays():
 
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in generated_code
     assert (
-        "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]"
-        in generated_code
+        "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in generated_code
     )
     assert "array<sampler, 4> shadowSamplers [[sampler(0)]]" in generated_code
     assert (
@@ -8021,8 +9276,7 @@ def test_metal_cube_shadow_compare_lod_grad_resource_arrays():
 
     assert "array<depthcube<float>, 4> cubeMaps [[texture(0)]]" in generated_code
     assert (
-        "array<depthcube_array<float>, 4> cubeArrays [[texture(4)]]"
-        in generated_code
+        "array<depthcube_array<float>, 4> cubeArrays [[texture(4)]]" in generated_code
     )
     assert "array<sampler, 4> shadowSamplers [[sampler(0)]]" in generated_code
     assert (
@@ -8081,6 +9335,201 @@ def test_metal_array_shadow_texture_resource_arrays_reject_mismatched_fixed_help
         match="Conflicting fixed resource array sizes for 'shadowArrays': 4 and 3",
     ):
         MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_metal_storage_image_size_queries_use_texture_dimensions():
+    shader = """
+    shader StorageImageSizeQueries {
+        image2D colorImage;
+        image3D volumeImage;
+        image2DArray layerImage;
+        uimage2D uintImage;
+        iimage3D intVolume;
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        ivec2 queryImage2D(image2D image) {
+            return textureSize(image, 0) + imageSize(image);
+        }
+
+        ivec3 queryImage3D(image3D image) {
+            return textureSize(image, 0) + imageSize(image);
+        }
+
+        ivec3 queryImageArray(image2DArray image) {
+            return textureSize(image, 0) + imageSize(image);
+        }
+
+        ivec2 queryUintImage(uimage2D image) {
+            return textureSize(image, 0) + imageSize(image);
+        }
+
+        ivec3 queryIntVolume(iimage3D image) {
+            return textureSize(image, 0) + imageSize(image);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 a = textureSize(colorImage, 0) + imageSize(colorImage);
+                ivec3 b = textureSize(volumeImage, 0) + imageSize(volumeImage);
+                ivec3 c = textureSize(layerImage, 0) + imageSize(layerImage);
+                ivec2 d = textureSize(uintImage, 0) + imageSize(uintImage);
+                ivec3 e = textureSize(intVolume, 0) + imageSize(intVolume);
+                return vec4(a.x + b.x + c.z + d.x + e.z);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "texture2d<float, access::read_write> colorImage [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "texture3d<float, access::read_write> volumeImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d_array<float, access::read_write> layerImage [[texture(2)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> uintImage [[texture(3)]]" in generated_code
+    )
+    assert (
+        "texture3d<int, access::read_write> intVolume [[texture(4)]]" in generated_code
+    )
+    assert (
+        "int2 queryImage2D(texture2d<float, access::read_write> image)"
+        in generated_code
+    )
+    assert (
+        "int3 queryImageArray(texture2d_array<float, access::read_write> image)"
+        in generated_code
+    )
+    assert (
+        "return int2(image.get_width(), image.get_height()) + int2(image.get_width(), image.get_height());"
+        in generated_code
+    )
+    assert (
+        "return int3(image.get_width(), image.get_height(), image.get_depth()) + int3(image.get_width(), image.get_height(), image.get_depth());"
+        in generated_code
+    )
+    assert (
+        "return int3(image.get_width(), image.get_height(), image.get_array_size()) + int3(image.get_width(), image.get_height(), image.get_array_size());"
+        in generated_code
+    )
+    assert (
+        "int2 a = int2(colorImage.get_width(), colorImage.get_height()) + int2(colorImage.get_width(), colorImage.get_height());"
+        in generated_code
+    )
+    assert (
+        "int3 c = int3(layerImage.get_width(), layerImage.get_height(), layerImage.get_array_size()) + int3(layerImage.get_width(), layerImage.get_height(), layerImage.get_array_size());"
+        in generated_code
+    )
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "get_width(uint" not in generated_code
+
+
+def test_metal_storage_image_levels_and_lod_queries_emit_diagnostics():
+    shader = """
+    shader StorageImageInvalidQueries {
+        image2D colorImage;
+        image3D volumeImage;
+        image2DArray layerImage;
+        uimage2D uintImage;
+        iimage3D intVolume;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvw @ TEXCOORD1;
+        };
+
+        int imageLevels(image2D image) {
+            return textureQueryLevels(image);
+        }
+
+        vec2 imageLod(image2D image, vec2 uv) {
+            return textureQueryLod(image, uv);
+        }
+
+        int volumeLevels(image3D image) {
+            return textureQueryLevels(image);
+        }
+
+        vec2 volumeLod(image3D image, vec3 uvw) {
+            return textureQueryLod(image, uvw);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                int levels = textureQueryLevels(colorImage)
+                    + textureQueryLevels(volumeImage)
+                    + textureQueryLevels(layerImage)
+                    + textureQueryLevels(uintImage)
+                    + textureQueryLevels(intVolume);
+                vec2 lod = textureQueryLod(colorImage, input.uv)
+                    + textureQueryLod(volumeImage, input.uvw)
+                    + imageLod(colorImage, input.uv)
+                    + volumeLod(volumeImage, input.uvw);
+                return vec4(float(levels) + lod.x);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture query: textureQueryLevels on texture2d<float, access::read_write> */ 0"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture query: textureQueryLevels on texture3d<float, access::read_write> */ 0"
+        )
+        == 2
+    )
+    assert (
+        "/* unsupported Metal texture query: textureQueryLevels on texture2d_array<float, access::read_write> */ 0"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal texture query: textureQueryLevels on texture2d<uint, access::read_write> */ 0"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal texture query: textureQueryLevels on texture3d<int, access::read_write> */ 0"
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture query: textureQueryLod on texture2d<float, access::read_write> */ float2(0.0)"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "/* unsupported Metal texture query: textureQueryLod on texture3d<float, access::read_write> */ float2(0.0)"
+        )
+        == 2
+    )
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+    assert "calculate_unclamped_lod" not in generated_code
+    assert "calculate_clamped_lod" not in generated_code
+    assert "sampler(" not in generated_code
 
 
 def test_metal_texture_query_functions():
@@ -8142,6 +9591,794 @@ def test_metal_texture_query_functions():
         in generated_code
     )
     assert "return int2(tex.get_width(), tex.get_height());" in generated_code
+
+
+def test_metal_multisample_texture_samples_queries_use_get_num_samples():
+    shader = """
+    shader MultisampleSamplesQuery {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler2DMS msTextures[4];
+        sampler2DMSArray msArrays[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        int querySamples(sampler2DMS tex, sampler2DMSArray texArray) {
+            return textureSamples(tex) + textureSamples(texArray);
+        }
+
+        int queryArraySamples(sampler2DMS textures[], sampler2DMSArray arrays[], int layer) {
+            return textureSamples(textures[2]) + textureSamples(arrays[layer]);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return float(querySamples(msTex, msArray)
+                    + queryArraySamples(msTextures, msArrays, input.layer));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert "array<texture2d_ms<float>, 4> msTextures [[texture(2)]]" in generated_code
+    assert (
+        "array<texture2d_ms_array<float>, 4> msArrays [[texture(6)]]" in generated_code
+    )
+    assert (
+        "int querySamples(texture2d_ms<float> tex, texture2d_ms_array<float> texArray)"
+        in generated_code
+    )
+    assert (
+        "return int(tex.get_num_samples()) + int(texArray.get_num_samples());"
+        in generated_code
+    )
+    assert (
+        "int queryArraySamples(array<texture2d_ms<float>, 4> textures, array<texture2d_ms_array<float>, 4> arrays, int layer)"
+        in generated_code
+    )
+    assert (
+        "return int(textures[2].get_num_samples()) + int(arrays[layer].get_num_samples());"
+        in generated_code
+    )
+    assert (
+        "querySamples(msTex, msArray) + queryArraySamples(msTextures, msArrays, input.layer)"
+        in generated_code
+    )
+    assert "textureSamples(" not in generated_code
+
+
+def test_metal_multisample_image_samples_queries_use_get_num_samples():
+    shader = """
+    shader MultisampleImageSamplesQuery {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler2DMS msTextures[4];
+        sampler2DMSArray msArrays[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        int querySamples(sampler2DMS tex, sampler2DMSArray texArray) {
+            return imageSamples(tex) + imageSamples(texArray);
+        }
+
+        int queryArraySamples(sampler2DMS textures[], sampler2DMSArray arrays[], int layer) {
+            return imageSamples(textures[2]) + imageSamples(arrays[layer]);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return float(imageSamples(msTex)
+                    + imageSamples(msArray)
+                    + querySamples(msTex, msArray)
+                    + queryArraySamples(msTextures, msArrays, input.layer));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert "array<texture2d_ms<float>, 4> msTextures [[texture(2)]]" in generated_code
+    assert (
+        "array<texture2d_ms_array<float>, 4> msArrays [[texture(6)]]" in generated_code
+    )
+    assert (
+        "int querySamples(texture2d_ms<float> tex, texture2d_ms_array<float> texArray)"
+        in generated_code
+    )
+    assert (
+        "return int(tex.get_num_samples()) + int(texArray.get_num_samples());"
+        in generated_code
+    )
+    assert (
+        "int queryArraySamples(array<texture2d_ms<float>, 4> textures, array<texture2d_ms_array<float>, 4> arrays, int layer)"
+        in generated_code
+    )
+    assert (
+        "return int(textures[2].get_num_samples()) + int(arrays[layer].get_num_samples());"
+        in generated_code
+    )
+    assert (
+        "int(msTex.get_num_samples()) + int(msArray.get_num_samples())"
+        in generated_code
+    )
+    assert "queryArraySamples(msTextures, msArrays, input.layer)" in generated_code
+    assert generated_code.count(".get_num_samples()") == 6
+    assert "imageSamples(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "unsupported Metal texture samples query" not in generated_code
+
+
+def test_metal_non_multisample_texture_samples_emit_diagnostics():
+    shader = """
+    shader NonMultisampleSamplesQuery {
+        sampler2D colorMap;
+        sampler2DArray layerMap;
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+        sampler2DShadow shadowMap;
+        sampler2DArrayShadow shadowArray;
+        sampler2D textures[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        int querySamples(
+            sampler2D tex,
+            sampler2DArray arrayTex,
+            samplerCube cubeTex,
+            samplerCubeArray cubeArrayTex,
+            sampler2DShadow shadowTex,
+            sampler2DArrayShadow shadowArrayTex
+        ) {
+            return textureSamples(tex)
+                + textureSamples(arrayTex)
+                + textureSamples(cubeTex)
+                + textureSamples(cubeArrayTex)
+                + textureSamples(shadowTex)
+                + textureSamples(shadowArrayTex);
+        }
+
+        int queryResourceArray(sampler2D textures[], int layer) {
+            return textureSamples(textures[2]) + textureSamples(textures[layer]);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                int direct = textureSamples(colorMap) + textureSamples(shadowArray);
+                return float(querySamples(
+                    colorMap,
+                    layerMap,
+                    cubeMap,
+                    cubeArray,
+                    shadowMap,
+                    shadowArray
+                ) + queryResourceArray(textures, input.layer) + direct);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported Metal texture samples query: "
+        "requires multisample texture */ 0"
+    )
+    assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
+    assert "texture2d_array<float> layerMap [[texture(1)]]" in generated_code
+    assert "texturecube<float> cubeMap [[texture(2)]]" in generated_code
+    assert "texturecube_array<float> cubeArray [[texture(3)]]" in generated_code
+    assert "array<texture2d<float>, 4> textures" in generated_code
+    assert generated_code.count(diagnostic) == 10
+    assert "textureSamples(" not in generated_code
+    assert "get_num_samples" not in generated_code
+    assert " sampler " not in generated_code
+
+
+def test_metal_storage_image_samples_queries_emit_diagnostics():
+    shader = """
+    shader StorageImageSamplesQueries {
+        image2D colorImage;
+        image3D volumeImage;
+        image2DArray layerImage;
+        uimage2D uintImage;
+        iimage3D intVolume;
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        int samples2D(image2D image) {
+            return imageSamples(image) + textureSamples(image);
+        }
+
+        int samples3D(image3D image) {
+            return imageSamples(image) + textureSamples(image);
+        }
+
+        int samplesArray(image2DArray image) {
+            return imageSamples(image) + textureSamples(image);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                int samples = imageSamples(colorImage)
+                    + imageSamples(volumeImage)
+                    + imageSamples(layerImage)
+                    + imageSamples(uintImage)
+                    + imageSamples(intVolume)
+                    + textureSamples(colorImage)
+                    + textureSamples(volumeImage);
+                return float(samples
+                    + samples2D(colorImage)
+                    + samples3D(volumeImage)
+                    + samplesArray(layerImage));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported Metal texture samples query: "
+        "requires multisample texture */ 0"
+    )
+    assert (
+        "texture2d<float, access::read_write> colorImage [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "texture3d<float, access::read_write> volumeImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d_array<float, access::read_write> layerImage [[texture(2)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> uintImage [[texture(3)]]" in generated_code
+    )
+    assert (
+        "texture3d<int, access::read_write> intVolume [[texture(4)]]" in generated_code
+    )
+    assert generated_code.count(diagnostic) == 13
+    assert "imageSamples(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "get_num_samples" not in generated_code
+    assert " sampler " not in generated_code
+
+
+def test_metal_storage_image_sampling_and_fetch_emit_diagnostics():
+    shader = """
+    shader StorageImageInvalidSampleFetch {
+        image2D colorImage;
+        image3D volumeImage;
+        image2DArray layerImage;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvw @ TEXCOORD1;
+            vec3 uvLayer @ TEXCOORD2;
+            ivec2 pixel @ TEXCOORD3;
+            ivec3 voxel @ TEXCOORD4;
+            ivec3 pixelLayer @ TEXCOORD5;
+            ivec2 offset2 @ TEXCOORD6;
+            ivec3 offset3 @ TEXCOORD7;
+            int lod;
+        };
+
+        vec4 invalid2D(image2D image, vec2 uv, ivec2 pixel, int lod, ivec2 offset) {
+            return texture(image, uv)
+                + textureLod(image, uv, float(lod))
+                + textureGather(image, uv)
+                + texelFetch(image, pixel, lod)
+                + texelFetchOffset(image, pixel, lod, offset);
+        }
+
+        vec4 invalid3D(image3D image, vec3 uvw, ivec3 voxel, int lod, ivec3 offset) {
+            return texture(image, uvw)
+                + textureLod(image, uvw, float(lod))
+                + textureGather(image, uvw)
+                + texelFetch(image, voxel, lod)
+                + texelFetchOffset(image, voxel, lod, offset);
+        }
+
+        vec4 invalidArray(image2DArray image, vec3 uvLayer, ivec3 pixelLayer, int lod, ivec2 offset) {
+            return texture(image, uvLayer)
+                + textureLod(image, uvLayer, float(lod))
+                + textureGather(image, uvLayer)
+                + texelFetch(image, pixelLayer, lod)
+                + texelFetchOffset(image, pixelLayer, lod, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return invalid2D(colorImage, input.uv, input.pixel, input.lod, input.offset2)
+                    + invalid3D(volumeImage, input.uvw, input.voxel, input.lod, input.offset3)
+                    + invalidArray(layerImage, input.uvLayer, input.pixelLayer, input.lod, input.offset2)
+                    + texture(colorImage, input.uv)
+                    + textureLod(volumeImage, input.uvw, float(input.lod))
+                    + textureGather(layerImage, input.uvLayer)
+                    + texelFetch(colorImage, input.pixel, input.lod)
+                    + texelFetchOffset(layerImage, input.pixelLayer, input.lod, input.offset2);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = "unsupported Metal storage image texture operation"
+    assert (
+        "texture2d<float, access::read_write> colorImage [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "texture3d<float, access::read_write> volumeImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d_array<float, access::read_write> layerImage [[texture(2)]]"
+        in generated_code
+    )
+    assert generated_code.count(diagnostic) == 20
+    for operation in {
+        "texture",
+        "textureLod",
+        "textureGather",
+        "texelFetch",
+        "texelFetchOffset",
+    }:
+        assert f"{operation} on texture2d<float, access::read_write>" in generated_code
+    assert ".sample(" not in generated_code
+    assert ".read(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGather(" not in generated_code
+    assert "texelFetch(" not in generated_code
+    assert "texelFetchOffset(" not in generated_code
+    assert "sampler(mag_filter" not in generated_code
+    assert " sampler " not in generated_code
+
+
+def test_metal_storage_image_compare_calls_emit_diagnostics():
+    shader = """
+    shader StorageImageInvalidCompare {
+        image2D colorImage;
+        image3D volumeImage;
+        image2DArray layerImage;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvw @ TEXCOORD1;
+            vec3 uvLayer @ TEXCOORD2;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+            float depth;
+            float lod;
+        };
+
+        float compareImplicit(image2D image, vec2 uv, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(image, uv, depth)
+                + textureCompareOffset(image, uv, depth, offset)
+                + textureCompareLod(image, uv, depth, lod)
+                + textureCompareLodOffset(image, uv, depth, lod, offset)
+                + textureCompareGrad(image, uv, depth, ddx, ddy)
+                + textureCompareGradOffset(image, uv, depth, ddx, ddy, offset);
+        }
+
+        float compareExplicit(image3D image, sampler s, vec3 uvw, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(image, s, uvw, depth)
+                + textureCompareOffset(image, s, uvw, depth, offset)
+                + textureCompareLod(image, s, uvw, depth, lod)
+                + textureCompareLodOffset(image, s, uvw, depth, lod, offset)
+                + textureCompareGrad(image, s, uvw, depth, ddx, ddy)
+                + textureCompareGradOffset(image, s, uvw, depth, ddx, ddy, offset);
+        }
+
+        vec4 gatherExplicit(image2DArray image, sampler s, vec3 uvLayer, float depth, ivec2 offset) {
+            return textureGatherCompare(image, s, uvLayer, depth)
+                + textureGatherCompareOffset(image, s, uvLayer, depth, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float cmp = compareImplicit(colorImage, input.uv, input.depth, input.lod, input.ddx, input.ddy, input.offset)
+                    + compareExplicit(volumeImage, compareSampler, input.uvw, input.depth, input.lod, input.ddx, input.ddy, input.offset)
+                    + textureCompare(colorImage, input.uv, input.depth)
+                    + textureCompare(volumeImage, compareSampler, input.uvw, input.depth);
+                return vec4(cmp)
+                    + gatherExplicit(layerImage, compareSampler, input.uvLayer, input.depth, input.offset)
+                    + textureGatherCompare(layerImage, compareSampler, input.uvLayer, input.depth)
+                    + textureGatherCompareOffset(layerImage, compareSampler, input.uvLayer, input.depth, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    comparison_diagnostic = "unsupported Metal storage image texture comparison"
+    gather_diagnostic = "unsupported Metal storage image texture operation"
+    assert (
+        "texture2d<float, access::read_write> colorImage [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "texture3d<float, access::read_write> volumeImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d_array<float, access::read_write> layerImage [[texture(2)]]"
+        in generated_code
+    )
+    assert "sampler compareSampler [[sampler(0)]]" in generated_code
+    assert generated_code.count(comparison_diagnostic) == 14
+    assert generated_code.count(gather_diagnostic) == 4
+    assert "sample_compare" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+
+
+def test_metal_multisample_texture_query_levels_use_single_level():
+    shader = """
+    shader MultisampleLevelQueries {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler2DMS msTextures[4];
+        sampler2DMSArray msArrays[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        int levels2D(sampler2DMS tex) {
+            return textureQueryLevels(tex);
+        }
+
+        int levelsArray(sampler2DMSArray tex) {
+            return textureQueryLevels(tex);
+        }
+
+        int levelsResourceArrays(sampler2DMS textures[], sampler2DMSArray arrays[], int layer) {
+            return textureQueryLevels(textures[2]) + textureQueryLevels(arrays[layer]);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                int c = textureQueryLevels(msTex);
+                int d = textureQueryLevels(msArray);
+                int e = textureQueryLevels(msTextures[2]);
+                int f = textureQueryLevels(msArrays[input.layer]);
+                return float(c + d + e + f + levels2D(msTex) + levelsArray(msArray)
+                    + levelsResourceArrays(msTextures, msArrays, input.layer));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert "array<texture2d_ms<float>, 4> msTextures [[texture(2)]]" in generated_code
+    assert (
+        "array<texture2d_ms_array<float>, 4> msArrays [[texture(6)]]" in generated_code
+    )
+    assert "int levels2D(texture2d_ms<float> tex)" in generated_code
+    assert "int levelsArray(texture2d_ms_array<float> tex)" in generated_code
+    assert (
+        "int levelsResourceArrays(array<texture2d_ms<float>, 4> textures, array<texture2d_ms_array<float>, 4> arrays, int layer)"
+        in generated_code
+    )
+    assert generated_code.count("return 1;") == 2
+    assert "return 1 + 1;" in generated_code
+    assert "int c = 1;" in generated_code
+    assert "int d = 1;" in generated_code
+    assert "int e = 1;" in generated_code
+    assert "int f = 1;" in generated_code
+    assert "get_num_mip_levels" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+
+
+def test_metal_multisample_sampling_operations_emit_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleSampling {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec2 ddx @ TEXCOORD2;
+            vec2 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        vec4 invalid2D(sampler2DMS tex, vec2 uv, vec2 ddx, vec2 ddy, ivec2 offset) {
+            vec4 sampled = texture(tex, uv);
+            vec4 lod = textureLod(tex, uv, 0.0);
+            vec4 grad = textureGrad(tex, uv, ddx, ddy);
+            vec4 gathered = textureGather(tex, uv);
+            vec4 offsetGathered = textureGatherOffset(tex, uv, offset);
+            return sampled + lod + grad + gathered + offsetGathered;
+        }
+
+        vec4 invalidArray(sampler2DMSArray tex, vec3 uvLayer, vec2 ddx, vec2 ddy, ivec2 offset) {
+            vec4 sampled = texture(tex, uvLayer);
+            vec4 lod = textureLod(tex, uvLayer, 0.0);
+            vec4 grad = textureGrad(tex, uvLayer, ddx, ddy);
+            vec4 gathered = textureGather(tex, uvLayer);
+            vec4 offsetGathered = textureGatherOffset(tex, uvLayer, offset);
+            return sampled + lod + grad + gathered + offsetGathered;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return invalid2D(msTex, input.uv, input.ddx, input.ddy, input.offset)
+                    + invalidArray(msArray, input.uvLayer, input.ddx, input.ddy, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert (
+        "float4 invalid2D(texture2d_ms<float> tex, float2 uv, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float4 invalidArray(texture2d_ms_array<float> tex, float3 uvLayer, float2 ddx, float2 ddy, int2 offset)"
+        in generated_code
+    )
+
+    for func_name in {
+        "texture",
+        "textureLod",
+        "textureGrad",
+        "textureGather",
+        "textureGatherOffset",
+    }:
+        assert (
+            f"unsupported Metal multisample texture call: {func_name} on texture2d_ms<float>"
+            in generated_code
+        )
+        assert (
+            f"unsupported Metal multisample texture call: {func_name} on texture2d_ms_array<float>"
+            in generated_code
+        )
+
+    assert ".sample(" not in generated_code
+    assert ".gather(" not in generated_code
+
+
+def test_metal_multisample_texture_query_lod_emits_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleQueryLod {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+        };
+
+        vec2 query2D(sampler2DMS tex, vec2 uv) {
+            return textureQueryLod(tex, uv);
+        }
+
+        vec2 queryArray(sampler2DMSArray tex, vec3 uvLayer) {
+            return textureQueryLod(tex, uvLayer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 a = textureQueryLod(msTex, input.uv);
+                vec2 b = textureQueryLod(msArray, input.uvLayer);
+                vec2 c = query2D(msTex, input.uv);
+                vec2 d = queryArray(msArray, input.uvLayer);
+                return vec4(a + b + c + d, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert "float2 query2D(texture2d_ms<float> tex, float2 uv)" in generated_code
+    assert (
+        "float2 queryArray(texture2d_ms_array<float> tex, float3 uvLayer)"
+        in generated_code
+    )
+    assert "calculate_unclamped_lod" not in generated_code
+    assert "calculate_clamped_lod" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+    assert (
+        generated_code.count(
+            "unsupported Metal multisample texture query: textureQueryLod on texture2d_ms<float>"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "unsupported Metal multisample texture query: textureQueryLod on texture2d_ms_array<float>"
+        )
+        == 2
+    )
+
+
+def test_metal_multisample_texel_fetch_offsets_emit_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleTexelFetchOffset {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+
+        struct FSInput {
+            ivec2 pixel @ TEXCOORD0;
+            ivec3 pixelLayer @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            int sampleIndex;
+        };
+
+        vec4 offset2D(sampler2DMS tex, ivec2 pixel, int sampleIndex, ivec2 offset) {
+            return texelFetchOffset(tex, pixel, sampleIndex, offset);
+        }
+
+        vec4 offsetArray(sampler2DMSArray tex, ivec3 pixelLayer, int sampleIndex, ivec2 offset) {
+            return texelFetchOffset(tex, pixelLayer, sampleIndex, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return offset2D(msTex, input.pixel, input.sampleIndex, input.offset)
+                    + offsetArray(msArray, input.pixelLayer, input.sampleIndex, input.offset)
+                    + texelFetchOffset(msTex, input.pixel, input.sampleIndex, input.offset)
+                    + texelFetchOffset(msArray, input.pixelLayer, input.sampleIndex, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported Metal texel fetch offset: "
+        "multisample textures do not support offsets */ float4(0.0)"
+    )
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert (
+        "float4 offset2D(texture2d_ms<float> tex, int2 pixel, int sampleIndex, int2 offset)"
+        in generated_code
+    )
+    assert (
+        "float4 offsetArray(texture2d_ms_array<float> tex, int3 pixelLayer, int sampleIndex, int2 offset)"
+        in generated_code
+    )
+    assert generated_code.count(diagnostic) == 4
+    assert "texelFetchOffset(" not in generated_code
+    assert ".read(" not in generated_code
+
+
+def test_metal_cube_texel_fetches_emit_diagnostics():
+    shader = """
+    shader UnsupportedCubeTexelFetch {
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+
+        struct FSInput {
+            ivec3 cubeCoord @ TEXCOORD0;
+            ivec4 cubeLayerCoord @ TEXCOORD1;
+            ivec3 offset @ TEXCOORD2;
+            int lod;
+        };
+
+        vec4 fetchCube(samplerCube tex, ivec3 cubeCoord, int lod, ivec3 offset) {
+            vec4 plain = texelFetch(tex, cubeCoord, lod);
+            vec4 offsetFetch = texelFetchOffset(tex, cubeCoord, lod, offset);
+            return plain + offsetFetch;
+        }
+
+        vec4 fetchCubeArray(samplerCubeArray tex, ivec4 cubeLayerCoord, int lod, ivec3 offset) {
+            vec4 plain = texelFetch(tex, cubeLayerCoord, lod);
+            vec4 offsetFetch = texelFetchOffset(tex, cubeLayerCoord, lod, offset);
+            return plain + offsetFetch;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return fetchCube(cubeMap, input.cubeCoord, input.lod, input.offset)
+                    + fetchCubeArray(cubeArray, input.cubeLayerCoord, input.lod, input.offset)
+                    + texelFetch(cubeMap, input.cubeCoord, input.lod)
+                    + texelFetch(cubeArray, input.cubeLayerCoord, input.lod)
+                    + texelFetchOffset(cubeMap, input.cubeCoord, input.lod, input.offset)
+                    + texelFetchOffset(cubeArray, input.cubeLayerCoord, input.lod, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
+    assert "texturecube_array<float> cubeArray [[texture(1)]]" in generated_code
+    assert (
+        "float4 fetchCube(texturecube<float> tex, int3 cubeCoord, int lod, int3 offset)"
+        in generated_code
+    )
+    assert (
+        "float4 fetchCubeArray(texturecube_array<float> tex, int4 cubeLayerCoord, int lod, int3 offset)"
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            "unsupported Metal texel fetch: texelFetch on texturecube<float>"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "unsupported Metal texel fetch: texelFetchOffset on texturecube<float>"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "unsupported Metal texel fetch: texelFetch on texturecube_array<float>"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "unsupported Metal texel fetch: texelFetchOffset on texturecube_array<float>"
+        )
+        == 2
+    )
+    assert ".read(" not in generated_code
+    assert "texelFetch(" not in generated_code
+    assert "texelFetchOffset(" not in generated_code
 
 
 def test_metal_array_shadow_texture_query_functions():
@@ -8517,6 +10754,134 @@ def test_metal_shadow_array_texture_query_lod_uses_non_layer_coordinates():
     assert "calculate_unclamped_lod(s, cubeLayer)" not in generated_code
 
 
+def test_metal_mixed_cube_shadow_query_lod_and_compare_keep_coordinate_shapes():
+    shader = """
+    shader MixedCubeShadowQueryLodCompare {
+        samplerCubeShadow cubeShadow;
+        samplerCubeArrayShadow cubeShadowArray;
+        sampler shadowSampler;
+
+        struct FSInput {
+            vec3 direction @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec3 ddx @ TEXCOORD2;
+            vec3 ddy @ TEXCOORD3;
+        };
+
+        float inspectCubeShadow(
+            samplerCubeShadow tex,
+            sampler s,
+            vec3 direction,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy
+        ) {
+            vec2 lodValue = textureQueryLod(tex, s, direction);
+            float cmp = textureCompare(tex, s, direction, depth);
+            float cmpLod = textureCompareLod(tex, s, direction, depth, lod);
+            float grad = textureCompareGrad(tex, s, direction, depth, ddx, ddy);
+            return lodValue.x + cmp + cmpLod + grad;
+        }
+
+        float inspectCubeArrayShadow(
+            samplerCubeArrayShadow tex,
+            sampler s,
+            vec4 cubeLayer,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy
+        ) {
+            vec2 lodValue = textureQueryLod(tex, s, cubeLayer);
+            float cmp = textureCompare(tex, s, cubeLayer, depth);
+            float cmpLod = textureCompareLod(tex, s, cubeLayer, depth, lod);
+            float grad = textureCompareGrad(tex, s, cubeLayer, depth, ddx, ddy);
+            return lodValue.y + cmp + cmpLod + grad;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspectCubeShadow(
+                    cubeShadow,
+                    shadowSampler,
+                    input.direction,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy
+                ) + inspectCubeArrayShadow(
+                    cubeShadowArray,
+                    shadowSampler,
+                    input.cubeLayer,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "depthcube<float> cubeShadow [[texture(0)]]" in generated_code
+    assert "depthcube_array<float> cubeShadowArray [[texture(1)]]" in generated_code
+    assert "sampler shadowSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float inspectCubeShadow(depthcube<float> tex, sampler s, float3 direction, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert (
+        "float2 lodValue = float2(tex.calculate_unclamped_lod(s, direction), tex.calculate_clamped_lod(s, direction));"
+        in generated_code
+    )
+    assert "float cmp = tex.sample_compare(s, direction, depth);" in generated_code
+    assert (
+        "float cmpLod = tex.sample_compare(s, direction, depth, level(lod));"
+        in generated_code
+    )
+    assert (
+        "float grad = tex.sample_compare(s, direction, depth, gradientcube(ddx, ddy));"
+        in generated_code
+    )
+    assert (
+        "float inspectCubeArrayShadow(depthcube_array<float> tex, sampler s, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert (
+        "float2 lodValue = float2(tex.calculate_unclamped_lod(s, cubeLayer.xyz), tex.calculate_clamped_lod(s, cubeLayer.xyz));"
+        in generated_code
+    )
+    assert (
+        "float cmp = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth);"
+        in generated_code
+    )
+    assert (
+        "float cmpLod = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, level(lod));"
+        in generated_code
+    )
+    assert (
+        "float grad = tex.sample_compare(s, cubeLayer.xyz, uint(cubeLayer.w), depth, gradientcube(ddx, ddy));"
+        in generated_code
+    )
+    assert (
+        "inspectCubeShadow(cubeShadow, shadowSampler, input.direction, input.depth, input.lod, input.ddx, input.ddy)"
+        in generated_code
+    )
+    assert (
+        "inspectCubeArrayShadow(cubeShadowArray, shadowSampler, input.cubeLayer, input.depth, input.lod, input.ddx, input.ddy)"
+        in generated_code
+    )
+    assert "textureQueryLod(" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGrad(" not in generated_code
+
+
 def test_metal_implicit_shadow_array_texture_query_lod_uses_default_sampler():
     shader = """
     shader ImplicitShadowArrayTextureQueryLod {
@@ -8582,8 +10947,13 @@ def test_metal_implicit_shadow_array_texture_query_lod_uses_default_sampler():
         f"cubeShadowArray.calculate_unclamped_lod({default_sampler}, input.cubeLayer.xyz)"
         in generated_code
     )
-    assert f"tex.calculate_unclamped_lod({default_sampler}, uvLayer.xy)" in generated_code
-    assert f"tex.calculate_unclamped_lod({default_sampler}, cubeLayer.xyz)" in generated_code
+    assert (
+        f"tex.calculate_unclamped_lod({default_sampler}, uvLayer.xy)" in generated_code
+    )
+    assert (
+        f"tex.calculate_unclamped_lod({default_sampler}, cubeLayer.xyz)"
+        in generated_code
+    )
     assert (
         f"shadowArrays[2].calculate_unclamped_lod({default_sampler}, uvLayer.xy)"
         in generated_code

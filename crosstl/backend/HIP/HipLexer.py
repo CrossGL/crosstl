@@ -151,17 +151,19 @@ TOKENS = tuple(
         ("NULLPTR", r"\bnullptr\b"),
         # Identifiers and literals (must come after keywords)
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("INTEGER", r"\d+[lLuU]*"),
         (
             "FLOAT",
-            r"\d*\.\d+([fFdDlL]*|[eE][+-]?\d+[fFdDlL]*)?|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdDlL]",
+            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdDlL]",
         ),
+        ("INTEGER", r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[lLuU]*"),
         ("STRING", r'"([^"\\]|\\.)*"'),
         ("CHAR", r"'([^'\\]|\\.)'"),
         # Preprocessor
         ("HASH", r"#"),
         # Operators (multi-character first)
         ("SCOPE", r"::"),
+        ("LSHIFT_ASSIGN", r"<<="),
+        ("RSHIFT_ASSIGN", r">>="),
         ("LSHIFT", r"<<"),
         ("RSHIFT", r">>"),
         ("PLUS_ASSIGN", r"\+="),
@@ -172,8 +174,6 @@ TOKENS = tuple(
         ("AND_ASSIGN", r"&="),
         ("OR_ASSIGN", r"\|="),
         ("XOR_ASSIGN", r"\^="),
-        ("LSHIFT_ASSIGN", r"<<="),
-        ("RSHIFT_ASSIGN", r">>="),
         ("AND", r"&&"),
         ("OR", r"\|\|"),
         ("EQ", r"=="),

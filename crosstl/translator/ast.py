@@ -919,6 +919,17 @@ class ArrayAccessNode(ExpressionNode):
         return f"ArrayAccessNode(array={self.array_expr}, index={self.index_expr})"
 
 
+class ArrayLiteralNode(ExpressionNode):
+    """Array literal expression such as {1, 2, 3}."""
+
+    def __init__(self, elements: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.elements = elements
+
+    def __repr__(self):
+        return f"ArrayLiteralNode(elements={len(self.elements)})"
+
+
 class SwizzleNode(ExpressionNode):
     """Vector swizzling (vec.xyz, vec.xxyy, etc.)."""
 

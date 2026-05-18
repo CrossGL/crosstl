@@ -1,6 +1,6 @@
 """CUDA to CrossGL Code Generator"""
 
-from .CudaAst import *
+from .CudaAst import AssignmentNode, VariableNode
 
 
 class CudaToCrossGLConverter:
@@ -34,6 +34,28 @@ class CudaToCrossGLConverter:
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
+
+    def emit_statement(self, stmt):
+        result = self.visit(stmt)
+        if isinstance(result, str) and result.strip():
+            self.emit(f"{result};")
+
+    def format_statement_fragment(self, stmt):
+        if stmt is None:
+            return ""
+        if isinstance(stmt, VariableNode):
+            var_type = self.convert_cuda_type_to_crossgl(stmt.vtype)
+            if stmt.value:
+                value = self.visit(stmt.value)
+                return f"var {stmt.name}: {var_type} = {value}"
+            return f"var {stmt.name}: {var_type}"
+        if isinstance(stmt, AssignmentNode):
+            left = self.visit(stmt.left)
+            right = self.visit(stmt.right)
+            return f"{left} {stmt.operator} {right}"
+
+        result = self.visit(stmt)
+        return result if isinstance(result, str) else ""
 
     def visit_ShaderNode(self, node):
         self.emit("// CUDA to CrossGL conversion")
@@ -104,7 +126,7 @@ class CudaToCrossGLConverter:
 
         self.indent_level += 1
         for stmt in node.body:
-            self.visit(stmt)
+            self.emit_statement(stmt)
         self.indent_level -= 1
 
         self.emit("}")
@@ -116,13 +138,14 @@ class CudaToCrossGLConverter:
 
         params = []
         for param in kernel.params:
-            param_type = self.convert_cuda_type_to_crossgl(param.vtype)
             # Add storage buffer qualifiers for pointer parameters
             if "*" in param.vtype:
+                element_type = self.convert_cuda_pointer_element_type(param.vtype)
                 params.append(
-                    f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{param_type.replace('*', '').strip()}>"
+                    f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{element_type}>"
                 )
             else:
+                param_type = self.convert_cuda_type_to_crossgl(param.vtype)
                 params.append(f"{param_type} {param.name}")
 
         self.emit(f"fn {kernel.name}(")
@@ -143,7 +166,7 @@ class CudaToCrossGLConverter:
         self.emit("")
 
         for stmt in kernel.body:
-            self.visit(stmt)
+            self.emit_statement(stmt)
 
         self.indent_level -= 1
         self.emit("}")
@@ -256,6 +279,10 @@ class CudaToCrossGLConverter:
         index = self.visit(node.index)
         return f"{array}[{index}]"
 
+    def visit_InitializerListNode(self, node):
+        elements = ", ".join(self.visit(element) for element in node.elements)
+        return f"{{{elements}}}"
+
     def visit_IfNode(self, node):
         condition = self.visit(node.condition)
         self.emit(f"if ({condition}) {{")
@@ -263,9 +290,9 @@ class CudaToCrossGLConverter:
         self.indent_level += 1
         if isinstance(node.if_body, list):
             for stmt in node.if_body:
-                self.visit(stmt)
+                self.emit_statement(stmt)
         else:
-            self.visit(node.if_body)
+            self.emit_statement(node.if_body)
         self.indent_level -= 1
 
         if node.else_body:
@@ -273,26 +300,26 @@ class CudaToCrossGLConverter:
             self.indent_level += 1
             if isinstance(node.else_body, list):
                 for stmt in node.else_body:
-                    self.visit(stmt)
+                    self.emit_statement(stmt)
             else:
-                self.visit(node.else_body)
+                self.emit_statement(node.else_body)
             self.indent_level -= 1
 
         self.emit("}")
 
     def visit_ForNode(self, node):
-        init = self.visit(node.init) if node.init else ""
+        init = self.format_statement_fragment(node.init)
         condition = self.visit(node.condition) if node.condition else ""
-        update = self.visit(node.update) if node.update else ""
+        update = self.format_statement_fragment(node.update)
 
         self.emit(f"for ({init}; {condition}; {update}) {{")
 
         self.indent_level += 1
         if isinstance(node.body, list):
             for stmt in node.body:
-                self.visit(stmt)
+                self.emit_statement(stmt)
         else:
-            self.visit(node.body)
+            self.emit_statement(node.body)
         self.indent_level -= 1
 
         self.emit("}")
@@ -304,12 +331,53 @@ class CudaToCrossGLConverter:
         self.indent_level += 1
         if isinstance(node.body, list):
             for stmt in node.body:
-                self.visit(stmt)
+                self.emit_statement(stmt)
         else:
-            self.visit(node.body)
+            self.emit_statement(node.body)
         self.indent_level -= 1
 
         self.emit("}")
+
+    def visit_DoWhileNode(self, node):
+        condition = self.visit(node.condition)
+        self.emit("do {")
+
+        self.indent_level += 1
+        if isinstance(node.body, list):
+            for stmt in node.body:
+                self.emit_statement(stmt)
+        else:
+            self.emit_statement(node.body)
+        self.indent_level -= 1
+
+        self.emit(f"}} while ({condition});")
+
+    def visit_SwitchNode(self, node):
+        expression = self.visit(node.expression)
+        self.emit(f"switch ({expression}) {{")
+
+        self.indent_level += 1
+        for case in node.cases:
+            self.visit(case)
+
+        if node.default_case:
+            self.emit("default:")
+            self.indent_level += 1
+            for stmt in node.default_case:
+                self.emit_statement(stmt)
+            self.indent_level -= 1
+
+        self.indent_level -= 1
+        self.emit("}")
+
+    def visit_CaseNode(self, node):
+        value = self.visit(node.value)
+        self.emit(f"case {value}:")
+
+        self.indent_level += 1
+        for stmt in node.body:
+            self.emit_statement(stmt)
+        self.indent_level -= 1
 
     def visit_ReturnNode(self, node):
         if node.value:
@@ -324,8 +392,21 @@ class CudaToCrossGLConverter:
     def visit_ContinueNode(self, node):
         self.emit("continue;")
 
+    def visit_TernaryOpNode(self, node):
+        condition = self.visit(node.condition)
+        true_expr = self.visit(node.true_expr)
+        false_expr = self.visit(node.false_expr)
+        return f"({condition} ? {true_expr} : {false_expr})"
+
+    def visit_CastNode(self, node):
+        target_type = self.convert_cuda_type_to_crossgl(node.target_type)
+        expression = self.visit(node.expression)
+        return f"{target_type}({expression})"
+
     def convert_cuda_type_to_crossgl(self, cuda_type):
         """Convert CUDA types to CrossGL equivalents"""
+        cuda_type = self.strip_type_qualifiers(cuda_type)
+
         type_mapping = {
             "void": "void",
             "bool": "bool",
@@ -354,21 +435,46 @@ class CudaToCrossGLConverter:
             "uint4": "vec4<u32>",
         }
 
-        # Handle pointers
-        if "*" in cuda_type:
-            base_type = cuda_type.replace("*", "").strip()
-            mapped_base = type_mapping.get(base_type, base_type)
-            return f"ptr<{mapped_base}>"
-
         # Handle arrays
         if "[" in cuda_type and "]" in cuda_type:
-            parts = cuda_type.split("[")
-            base_type = parts[0].strip()
-            size = parts[1].split("]")[0]
-            mapped_base = type_mapping.get(base_type, base_type)
-            return f"array<{mapped_base}, {size}>"
+            return self.convert_cuda_array_type(cuda_type, type_mapping)
+
+        # Handle pointers
+        if "*" in cuda_type:
+            return f"ptr<{self.convert_cuda_pointer_element_type(cuda_type)}>"
 
         return type_mapping.get(cuda_type, cuda_type)
+
+    def convert_cuda_pointer_element_type(self, cuda_type):
+        base_type = cuda_type.replace("*", "").strip()
+        return self.convert_cuda_type_to_crossgl(base_type)
+
+    def strip_type_qualifiers(self, type_name):
+        qualifiers = {"const", "volatile", "__restrict__", "restrict"}
+        return " ".join(
+            part for part in str(type_name).split() if part not in qualifiers
+        )
+
+    def convert_cuda_array_type(self, cuda_type, type_mapping):
+        base_type = cuda_type.split("[", 1)[0].strip()
+        dimensions = []
+        remainder = cuda_type[len(base_type) :]
+
+        while remainder.startswith("["):
+            close_index = remainder.find("]")
+            if close_index == -1:
+                break
+            dimensions.append(remainder[1:close_index].strip())
+            remainder = remainder[close_index + 1 :]
+
+        mapped_type = type_mapping.get(base_type, base_type)
+        for size in reversed(dimensions):
+            if size:
+                mapped_type = f"array<{mapped_type}, {size}>"
+            else:
+                mapped_type = f"array<{mapped_type}>"
+
+        return mapped_type
 
     def convert_cuda_builtin_function(self, func_name):
         """Convert CUDA built-in functions to CrossGL equivalents"""

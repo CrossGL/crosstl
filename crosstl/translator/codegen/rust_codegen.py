@@ -3,6 +3,7 @@
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
     CbufferNode,
@@ -165,9 +166,11 @@ class RustCodeGen:
             "mod": "modulo",
         }
         self.variable_types = {}
+        self.current_return_type = None
 
     def generate(self, ast):
         self.variable_types = {}
+        self.current_return_type = None
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -189,7 +192,20 @@ class RustCodeGen:
                     var_type = node.vtype
                 else:
                     var_type = "float"
-                code += f"static {node.name}: {self.map_type(var_type)} = Default::default();\n"
+                self.register_variable_type(node.name, var_type)
+                initial_value = getattr(
+                    node, "initial_value", getattr(node, "value", None)
+                )
+                if initial_value is not None:
+                    init_expr = self.generate_expression_with_type(
+                        initial_value, var_type
+                    )
+                else:
+                    init_expr = "Default::default()"
+                code += (
+                    f"static {node.name}: {self.map_type(var_type)} = "
+                    f"{init_expr};\n"
+                )
 
         cbuffers = getattr(ast, "cbuffers", None) or getattr(ast, "constants", [])
         if cbuffers:
@@ -416,6 +432,7 @@ class RustCodeGen:
         code = ""
         code += "  " * indent
         saved_variable_types = self.variable_types.copy()
+        saved_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
@@ -436,6 +453,7 @@ class RustCodeGen:
             return_type = self.convert_type_node_to_string(func.return_type)
         else:
             return_type = "void"
+        self.current_return_type = return_type
 
         if shader_type == "vertex":
             code += f"#[vertex_shader]\n"
@@ -456,6 +474,7 @@ class RustCodeGen:
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
+        self.current_return_type = saved_return_type
         return code
 
     def generate_param_attributes(self, param):
@@ -496,7 +515,9 @@ class RustCodeGen:
 
             self.register_variable_type(stmt.name, vtype)
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
-                init_expr = self.generate_expression(stmt.initial_value)
+                init_expr = self.generate_expression_with_type(
+                    stmt.initial_value, vtype
+                )
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
             else:
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)};\n"
@@ -524,6 +545,11 @@ class RustCodeGen:
                     return f"{indent_str}return ({values});\n"
                 else:
                     # Single return value
+                    if isinstance(stmt.value, ArrayLiteralNode):
+                        return_expr = self.generate_expression_with_type(
+                            stmt.value, self.current_return_type
+                        )
+                        return f"{indent_str}return {return_expr};\n"
                     return (
                         f"{indent_str}return {self.generate_expression(stmt.value)};\n"
                     )
@@ -562,17 +588,41 @@ class RustCodeGen:
         else:
             return f"{indent_str}let {node.name}: [{element_type}; {size}] = [Default::default(); {size}];\n"
 
+    def generate_expression_with_type(self, expr, target_type):
+        if isinstance(expr, ArrayLiteralNode):
+            return self.generate_array_literal_expression(expr, target_type)
+        return self.generate_expression(expr)
+
+    def is_array_type_name(self, type_name):
+        return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
+
+    def generate_array_literal_expression(self, expr, target_type=None):
+        elements = [self.generate_expression(element) for element in expr.elements]
+
+        if self.is_array_type_name(target_type):
+            _, size = parse_array_type(str(target_type))
+            if size is None:
+                return f"vec![{', '.join(elements)}]"
+
+            elements = elements[:size]
+            while len(elements) < size:
+                elements.append("Default::default()")
+
+        return f"[{', '.join(elements)}]"
+
     def generate_assignment(self, node):
         # Handle both old and new AST assignment structures
         if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
             lhs = self.generate_expression(node.target)
-            rhs = self.generate_expression(node.value)
+            lhs_type = self.expression_result_type(node.target)
+            rhs = self.generate_expression_with_type(node.value, lhs_type)
             op = getattr(node, "operator", "=")
         else:
             # Old AST structure
             lhs = self.generate_expression(node.left)
-            rhs = self.generate_expression(node.right)
+            lhs_type = self.expression_result_type(node.left)
+            rhs = self.generate_expression_with_type(node.right, lhs_type)
             op = getattr(node, "operator", "=")
         return f"{lhs} {op} {rhs}"
 
@@ -715,6 +765,8 @@ class RustCodeGen:
             return f"({left} {self.map_operator(op)} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
+        elif isinstance(expr, ArrayLiteralNode):
+            return self.generate_array_literal_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             operand = self.generate_expression(getattr(expr, "operand", ""))
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
@@ -869,9 +921,9 @@ class RustCodeGen:
         if isinstance(expr, UnaryOpNode):
             return self.expression_result_type(expr.operand)
         if isinstance(expr, TernaryOpNode):
-            return self.expression_result_type(expr.true_expr) or self.expression_result_type(
-                expr.false_expr
-            )
+            return self.expression_result_type(
+                expr.true_expr
+            ) or self.expression_result_type(expr.false_expr)
         if isinstance(expr, MemberAccessNode):
             object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
             object_type = self.expression_result_type(object_expr)

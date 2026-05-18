@@ -3,6 +3,7 @@
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
@@ -273,7 +274,12 @@ class SlangCodeGen:
 
         vtype = self.get_variable_type(node)
         self.register_variable_type(node.name, vtype, node)
-        return f"{self.format_declaration(vtype, node.name, node)};\n"
+        declaration = self.format_declaration(vtype, node.name, node)
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        if initial_value is not None:
+            initial_expr = self.generate_expression_with_expected(initial_value, vtype)
+            return f"{declaration} = {initial_expr};\n"
+        return f"{declaration};\n"
 
     def generate_struct(self, node):
         result = f"struct {node.name}\n{{\n"
@@ -668,6 +674,11 @@ class SlangCodeGen:
                 getattr(node, "index", getattr(node, "index_expr", None))
             )
             return f"{array}[{index}]"
+        elif isinstance(node, ArrayLiteralNode):
+            elements = ", ".join(
+                self.generate_expression(element) for element in node.elements
+            )
+            return f"{{{elements}}}"
         elif isinstance(node, MemberAccessNode):
             obj = self.generate_expression(node.object)
             return f"{obj}.{node.member}"

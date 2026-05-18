@@ -9,6 +9,7 @@ for GPU programming.
 from ..ast import (
     ASTNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     CbufferNode,
     FunctionNode,
     IdentifierNode,
@@ -1081,6 +1082,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         array = self.visit(node.array)
         index = self.visit(node.index)
         return f"{array}[{index}]"
+
+    def visit_ArrayLiteralNode(self, node: ArrayLiteralNode) -> str:
+        elements = ", ".join(self.visit(element) for element in node.elements)
+        return f"{{{elements}}}"
 
     def visit_MemberAccessNode(self, node) -> str:
         object_expr = self.visit(node.object)

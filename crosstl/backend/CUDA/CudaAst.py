@@ -14,6 +14,7 @@ from ..common_ast import (
     FunctionCallNode,
     FunctionNode,
     IfNode,
+    InitializerListNode,
     MemberAccessNode,
     PreprocessorNode,
     ReturnNode,

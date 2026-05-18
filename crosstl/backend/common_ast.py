@@ -160,6 +160,16 @@ class VariableNode(ASTNode):
         return f"VariableNode(vtype={self.vtype}, name={self.name}, value={self.value}, qualifiers={self.qualifiers})"
 
 
+class InitializerListNode(ASTNode):
+    """Node representing C-style brace initializer lists."""
+
+    def __init__(self, elements=None):
+        self.elements = elements or []
+
+    def __repr__(self):
+        return f"InitializerListNode(elements={self.elements})"
+
+
 class AssignmentNode(ASTNode):
     """Node representing an assignment operation"""
 

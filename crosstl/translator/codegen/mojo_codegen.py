@@ -3,6 +3,7 @@
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
     CbufferNode,
@@ -19,7 +20,6 @@ from ..ast import (
     VariableNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
-
 
 MOJO_VECTOR_TYPES = {
     "vec2": ("DType.float32", 2, 2, None),
@@ -57,6 +57,33 @@ MOJO_VECTOR_TYPES = {
     "bool4": ("DType.bool", 4, 4, None),
 }
 
+MOJO_MATRIX_TYPES = {
+    "mat2": ("DType.float32", 2, 2),
+    "mat3": ("DType.float32", 3, 3),
+    "mat4": ("DType.float32", 4, 4),
+    "mat2x2": ("DType.float32", 2, 2),
+    "mat2x3": ("DType.float32", 2, 3),
+    "mat2x4": ("DType.float32", 2, 4),
+    "mat3x2": ("DType.float32", 3, 2),
+    "mat3x3": ("DType.float32", 3, 3),
+    "mat3x4": ("DType.float32", 3, 4),
+    "mat4x2": ("DType.float32", 4, 2),
+    "mat4x3": ("DType.float32", 4, 3),
+    "mat4x4": ("DType.float32", 4, 4),
+    "dmat2": ("DType.float64", 2, 2),
+    "dmat3": ("DType.float64", 3, 3),
+    "dmat4": ("DType.float64", 4, 4),
+    "dmat2x2": ("DType.float64", 2, 2),
+    "dmat2x3": ("DType.float64", 2, 3),
+    "dmat2x4": ("DType.float64", 2, 4),
+    "dmat3x2": ("DType.float64", 3, 2),
+    "dmat3x3": ("DType.float64", 3, 3),
+    "dmat3x4": ("DType.float64", 3, 4),
+    "dmat4x2": ("DType.float64", 4, 2),
+    "dmat4x3": ("DType.float64", 4, 3),
+    "dmat4x4": ("DType.float64", 4, 4),
+}
+
 SWIZZLE_SETS = {
     "xyzw": {"x": 0, "y": 1, "z": 2, "w": 3},
     "rgba": {"r": 0, "g": 1, "b": 2, "a": 3},
@@ -78,6 +105,16 @@ MOJO_DTYPE_SUFFIX = {
     "DType.bool": "bool",
 }
 
+MOJO_SCALAR_DTYPES = {
+    "float": "DType.float32",
+    "double": "DType.float64",
+    "int": "DType.int32",
+    "uint": "DType.uint32",
+    "bool": "DType.bool",
+}
+
+MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
+
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
     "-": "sub",
@@ -96,6 +133,9 @@ class MojoCodeGen:
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
         self.required_constructor_helpers = {}
+        self.required_matrix_types = set()
+        self.required_matrix_constructor_helpers = {}
+        self.current_return_type = None
         self.current_shader = None
         self.type_mapping = {
             # Scalar Types
@@ -116,31 +156,10 @@ class MojoCodeGen:
                 name: f"SIMD[{dtype}, {storage_width}]"
                 for name, (dtype, _, storage_width, _) in MOJO_VECTOR_TYPES.items()
             },
-            # Matrix Types
-            "mat2": "Matrix[DType.float32, 2, 2]",
-            "mat3": "Matrix[DType.float32, 3, 3]",
-            "mat4": "Matrix[DType.float32, 4, 4]",
-            "mat2x2": "Matrix[DType.float32, 2, 2]",
-            "mat2x3": "Matrix[DType.float32, 2, 3]",
-            "mat2x4": "Matrix[DType.float32, 2, 4]",
-            "mat3x2": "Matrix[DType.float32, 3, 2]",
-            "mat3x3": "Matrix[DType.float32, 3, 3]",
-            "mat3x4": "Matrix[DType.float32, 3, 4]",
-            "mat4x2": "Matrix[DType.float32, 4, 2]",
-            "mat4x3": "Matrix[DType.float32, 4, 3]",
-            "mat4x4": "Matrix[DType.float32, 4, 4]",
-            "dmat2": "Matrix[DType.float64, 2, 2]",
-            "dmat3": "Matrix[DType.float64, 3, 3]",
-            "dmat4": "Matrix[DType.float64, 4, 4]",
-            "dmat2x2": "Matrix[DType.float64, 2, 2]",
-            "dmat2x3": "Matrix[DType.float64, 2, 3]",
-            "dmat2x4": "Matrix[DType.float64, 2, 4]",
-            "dmat3x2": "Matrix[DType.float64, 3, 2]",
-            "dmat3x3": "Matrix[DType.float64, 3, 3]",
-            "dmat3x4": "Matrix[DType.float64, 3, 4]",
-            "dmat4x2": "Matrix[DType.float64, 4, 2]",
-            "dmat4x3": "Matrix[DType.float64, 4, 3]",
-            "dmat4x4": "Matrix[DType.float64, 4, 4]",
+            **{
+                name: self.matrix_type_name(dtype, columns, rows)
+                for name, (dtype, columns, rows) in MOJO_MATRIX_TYPES.items()
+            },
             # Texture Types (Mojo equivalents)
             "sampler2D": "Texture2D",
             "samplerCube": "TextureCube",
@@ -210,6 +229,9 @@ class MojoCodeGen:
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
         self.required_constructor_helpers = {}
+        self.required_matrix_types = set()
+        self.required_matrix_constructor_helpers = {}
+        self.current_return_type = None
         self.collect_function_return_types(ast)
 
         header = "# Generated Mojo Shader Code\n"
@@ -235,7 +257,26 @@ class MojoCodeGen:
                     vtype = node.vtype
                 else:
                     vtype = "float"
-                code += f"var {node.name}: {self.map_type(vtype)}\n"
+                self.register_variable_type(node.name, vtype)
+                if hasattr(node, "initial_value") and node.initial_value is not None:
+                    if isinstance(
+                        node.initial_value, ArrayLiteralNode
+                    ) and self.is_array_type_name(vtype):
+                        init_expr = self.generate_array_literal_expression(
+                            node.initial_value, vtype
+                        )
+                    else:
+                        init_expr = self.generate_expression(node.initial_value)
+                    code += f"var {node.name}: {self.map_type(vtype)} = {init_expr}\n"
+                elif self.is_array_type_name(vtype):
+                    code += (
+                        f"var {node.name} = "
+                        f"{self.array_initial_value_for_type(vtype)}\n"
+                    )
+                elif self.is_struct_type_name(vtype):
+                    code += f"var {node.name} = {self.zero_value_for_type(vtype)}\n"
+                else:
+                    code += f"var {node.name}: {self.map_type(vtype)}\n"
 
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
@@ -385,10 +426,14 @@ class MojoCodeGen:
                 element_type = getattr(
                     member, "element_type", getattr(member, "vtype", "float")
                 )
-                if member.size:
-                    code += f"    var {member.name}: StaticTuple[{self.map_type(element_type)}, {member.size}]\n"
-                else:
-                    code += f"    var {member.name}: DynamicVector[{self.map_type(element_type)}]\n"
+                size = get_array_size_from_node(member)
+                self.struct_types[node.name][member.name] = self.array_type_name(
+                    element_type, size
+                )
+                code += (
+                    f"    var {member.name}: "
+                    f"{self.array_storage_type(element_type, size)}\n"
+                )
             else:
                 if hasattr(member, "member_type"):
                     member_type = self.convert_type_node_to_string(member.member_type)
@@ -425,10 +470,11 @@ class MojoCodeGen:
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
-                        if member.size:
-                            code += f"    var {member.name}: StaticTuple[{self.map_type(element_type)}, {member.size}]\n"
-                        else:
-                            code += f"    var {member.name}: DynamicVector[{self.map_type(element_type)}]\n"
+                        size = get_array_size_from_node(member)
+                        code += (
+                            f"    var {member.name}: "
+                            f"{self.array_storage_type(element_type, size)}\n"
+                        )
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
@@ -446,10 +492,11 @@ class MojoCodeGen:
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
-                        if member.size:
-                            code += f"    var {member.name}: StaticTuple[{self.map_type(element_type)}, {member.size}]\n"
-                        else:
-                            code += f"    var {member.name}: DynamicVector[{self.map_type(element_type)}]\n"
+                        size = get_array_size_from_node(member)
+                        code += (
+                            f"    var {member.name}: "
+                            f"{self.array_storage_type(element_type, size)}\n"
+                        )
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
@@ -466,8 +513,13 @@ class MojoCodeGen:
         code = ""
         "    " * indent
         previous_variable_types = self.variable_types.copy()
+        previous_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
+        param_names = {p.name for p in param_list if hasattr(p, "name")}
+        mutated_params = self.collect_mutated_parameters(
+            getattr(func, "body", []), param_names
+        )
         params = []
         for p in param_list:
             if hasattr(p, "param_type"):
@@ -485,7 +537,10 @@ class MojoCodeGen:
 
             self.register_variable_type(p.name, param_type)
             param_semantic = f"  # {self.map_semantic(semantic)}" if semantic else ""
-            params.append(f"{p.name}: {self.map_type(param_type)}{param_semantic}")
+            ownership = "owned " if p.name in mutated_params else ""
+            params.append(
+                f"{ownership}{p.name}: {self.map_type(param_type)}{param_semantic}"
+            )
 
         params_str = ", ".join(params) if params else ""
 
@@ -494,6 +549,7 @@ class MojoCodeGen:
         else:
             return_type = "void"
         self.function_return_types[func.name] = return_type
+        self.current_return_type = return_type
 
         if shader_type == "vertex":
             code += f"@vertex_shader\n"
@@ -516,7 +572,93 @@ class MojoCodeGen:
 
         code += "\n"
         self.variable_types = previous_variable_types
+        self.current_return_type = previous_return_type
         return code
+
+    def collect_mutated_parameters(self, body, param_names):
+        mutated = set()
+        for stmt in self.body_statements(body):
+            self.collect_mutated_parameters_from_node(stmt, param_names, mutated)
+        return mutated
+
+    def body_statements(self, body):
+        if hasattr(body, "statements"):
+            return body.statements
+        if isinstance(body, list):
+            return body
+        if body is None:
+            return []
+        return [body]
+
+    def collect_mutated_parameters_from_node(self, node, param_names, mutated):
+        if node is None:
+            return
+
+        if isinstance(node, AssignmentNode):
+            root_name = self.assignment_target_root(node.left)
+            if root_name in param_names:
+                mutated.add(root_name)
+            self.collect_mutated_parameters_from_node(node.right, param_names, mutated)
+            return
+
+        if isinstance(node, UnaryOpNode) and self.map_operator(node.op) in ["++", "--"]:
+            root_name = self.assignment_target_root(node.operand)
+            if root_name in param_names:
+                mutated.add(root_name)
+            return
+
+        for child in self.node_children(node):
+            self.collect_mutated_parameters_from_node(child, param_names, mutated)
+
+    def node_children(self, node):
+        children = []
+        for attr in (
+            "init",
+            "condition",
+            "update",
+            "body",
+            "then_branch",
+            "if_body",
+            "else_branch",
+            "else_body",
+            "value",
+            "expression",
+            "left",
+            "right",
+            "object",
+            "object_expr",
+            "array",
+            "array_expr",
+            "index",
+            "index_expr",
+            "operand",
+            "vector_expr",
+        ):
+            if hasattr(node, attr):
+                children.append(getattr(node, attr))
+
+        for attr in ("statements", "args", "arguments"):
+            if hasattr(node, attr):
+                children.extend(getattr(node, attr))
+        if isinstance(node, ArrayLiteralNode):
+            children.extend(node.elements)
+
+        return children
+
+    def assignment_target_root(self, target):
+        if isinstance(target, str):
+            return target
+        if isinstance(target, VariableNode) and hasattr(target, "name"):
+            return target.name
+        if isinstance(target, ArrayAccessNode):
+            return self.assignment_target_root(target.array)
+        if isinstance(target, MemberAccessNode):
+            return self.assignment_target_root(target.object)
+        if hasattr(target, "__class__") and "Identifier" in str(target.__class__):
+            return getattr(target, "name", None)
+        if hasattr(target, "__class__") and "Swizzle" in str(target.__class__):
+            return self.assignment_target_root(getattr(target, "vector_expr", None))
+        return None
 
     def generate_statement(self, stmt, indent=0):
         indent_str = "    " * indent
@@ -540,15 +682,36 @@ class MojoCodeGen:
                         array_match.group(1)
                         size = array_match.group(2)
                         base_type = "Float32"  # Default, could be improved
-                        return f"{indent_str}var {stmt.name}: StaticTuple[{base_type}, {size}]\n"
+                        return (
+                            f"{indent_str}var {stmt.name} = "
+                            f"InlineArray[{base_type}, {size}]"
+                            "(unsafe_uninitialized=True)\n"
+                        )
                 var_type = stmt.vtype
             else:
                 var_type = "float"
 
             self.register_variable_type(stmt.name, var_type)
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
-                init_expr = self.generate_expression(stmt.initial_value)
+                if isinstance(
+                    stmt.initial_value, ArrayLiteralNode
+                ) and self.is_array_type_name(var_type):
+                    init_expr = self.generate_array_literal_expression(
+                        stmt.initial_value, var_type
+                    )
+                else:
+                    init_expr = self.generate_expression(stmt.initial_value)
                 return f"{indent_str}var {stmt.name}: {self.map_type(var_type)} = {init_expr}\n"
+            elif self.is_array_type_name(var_type):
+                return (
+                    f"{indent_str}var {stmt.name} = "
+                    f"{self.array_initial_value_for_type(var_type)}\n"
+                )
+            elif self.is_struct_type_name(var_type):
+                return (
+                    f"{indent_str}var {stmt.name} = "
+                    f"{self.zero_value_for_type(var_type)}\n"
+                )
             else:
                 return f"{indent_str}var {stmt.name}: {self.map_type(var_type)}\n"
         elif isinstance(stmt, ArrayNode):
@@ -564,6 +727,13 @@ class MojoCodeGen:
                 # Multiple return values
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)
                 return f"{indent_str}return {values}\n"
+            elif isinstance(stmt.value, ArrayLiteralNode) and self.is_array_type_name(
+                self.current_return_type
+            ):
+                return_value = self.generate_array_literal_expression(
+                    stmt.value, self.current_return_type
+                )
+                return f"{indent_str}return " f"{return_value}\n"
             else:
                 return f"{indent_str}return {self.generate_expression(stmt.value)}\n"
         elif isinstance(stmt, ArrayAccessNode):
@@ -580,17 +750,24 @@ class MojoCodeGen:
 
     def generate_array_declaration(self, node, indent=0):
         indent_str = "    " * indent
-        element_type = self.map_type(node.element_type)
         size = get_array_size_from_node(node)
-
-        if size is None:
-            return f"{indent_str}var {node.name}: DynamicVector[{element_type}]\n"
-        else:
-            return f"{indent_str}var {node.name}: StaticTuple[{element_type}, {size}]\n"
+        self.register_variable_type(
+            node.name, self.array_type_name(node.element_type, size)
+        )
+        return (
+            f"{indent_str}var {node.name} = "
+            f"{self.array_initial_value(node.element_type, size)}\n"
+        )
 
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
-        right = self.generate_expression(node.right)
+        left_type = self.expression_result_type(node.left)
+        if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
+            left_type
+        ):
+            right = self.generate_array_literal_expression(node.right, left_type)
+        else:
+            right = self.generate_expression(node.right)
         op = self.map_operator(node.operator)
         return f"{left} {op} {right}"
 
@@ -715,6 +892,8 @@ class MojoCodeGen:
             return f"({left} {op} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
+        elif isinstance(expr, ArrayLiteralNode):
+            return self.generate_array_literal_expression(expr)
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
@@ -725,9 +904,7 @@ class MojoCodeGen:
         elif isinstance(expr, ArrayAccessNode):
             # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
-                array = self.generate_expression(expr.array)
-                index = self.generate_expression(expr.index)
-                return f"{array}[{index}]"
+                return self.generate_array_access_expression(expr)
             else:
                 # Fallback for malformed ArrayAccessNode
                 return str(expr)
@@ -754,35 +931,8 @@ class MojoCodeGen:
             if func_name in self.vector_constructor_info:
                 return self.generate_vector_constructor(func_name, expr.args)
 
-            if func_name in [
-                "mat2",
-                "mat3",
-                "mat4",
-                "mat2x2",
-                "mat2x3",
-                "mat2x4",
-                "mat3x2",
-                "mat3x3",
-                "mat3x4",
-                "mat4x2",
-                "mat4x3",
-                "mat4x4",
-                "dmat2",
-                "dmat3",
-                "dmat4",
-                "dmat2x2",
-                "dmat2x3",
-                "dmat2x4",
-                "dmat3x2",
-                "dmat3x3",
-                "dmat3x4",
-                "dmat4x2",
-                "dmat4x3",
-                "dmat4x4",
-            ]:
-                mojo_type = self.map_type(func_name)
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"{mojo_type}({args})"
+            if func_name in MOJO_MATRIX_TYPES:
+                return self.generate_matrix_constructor(func_name, expr.args)
 
             # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
@@ -852,30 +1002,232 @@ class MojoCodeGen:
 
         if len(args) == 1:
             arg = args[0]
-            arg_components = self.vector_components_for_expression(arg)
+            arg_components = self.vector_components_for_expression(arg, dtype)
             if arg_components is not None:
                 emitted_args.extend(arg_components[:source_width])
             elif source_width == 3:
-                arg_expr = self.generate_expression(arg)
+                arg_expr = self.generate_constructor_scalar_expression(arg, dtype)
                 if self.is_duplicate_sensitive_expression(arg):
                     helper_name = self.vec3_splat_helper_name(dtype)
                     self.required_splat_helpers.add(dtype)
                     return f"{helper_name}({arg_expr})"
                 emitted_args.extend([arg_expr] * source_width)
             else:
-                emitted_args.append(self.generate_expression(arg))
+                emitted_args.append(
+                    self.generate_constructor_scalar_expression(arg, dtype)
+                )
         else:
             for arg in args:
-                arg_components = self.vector_components_for_expression(arg)
+                arg_components = self.vector_components_for_expression(arg, dtype)
                 if arg_components is not None:
                     emitted_args.extend(arg_components)
                 else:
-                    emitted_args.append(self.generate_expression(arg))
+                    emitted_args.append(
+                        self.generate_constructor_scalar_expression(arg, dtype)
+                    )
+
+        if len(emitted_args) > source_width:
+            emitted_args = emitted_args[:source_width]
 
         if source_width == 3 and len(emitted_args) == 3:
             emitted_args.append(pad_literal)
 
         return f"{mojo_type}({', '.join(emitted_args)})"
+
+    def generate_matrix_constructor(self, func_name, args):
+        dtype, columns, rows = MOJO_MATRIX_TYPES[func_name]
+        matrix_key = (dtype, columns, rows)
+        self.required_matrix_types.add(matrix_key)
+        helper_call = self.generate_matrix_constructor_helper_call(
+            dtype, columns, rows, args
+        )
+        if helper_call is not None:
+            return helper_call
+
+        component_count = columns * rows
+        components = []
+        for arg in args:
+            arg_components = self.vector_components_for_expression(arg, dtype)
+            if arg_components is not None:
+                components.extend(arg_components)
+            else:
+                components.append(
+                    self.generate_constructor_scalar_expression(arg, dtype)
+                )
+
+        if len(args) == 1 and len(components) == 1:
+            scalar = components[0]
+            components = [
+                scalar if column == row else self.matrix_zero_literal(dtype)
+                for column in range(columns)
+                for row in range(rows)
+            ]
+
+        if len(components) > component_count:
+            components = components[:component_count]
+        elif len(components) < component_count:
+            components.extend(
+                self.matrix_zero_literal(dtype)
+                for _ in range(component_count - len(components))
+            )
+
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        column_args = []
+        storage_rows = self.matrix_storage_rows(rows)
+        pad_literal = self.matrix_zero_literal(dtype)
+        for column in range(columns):
+            start = column * rows
+            column_components = components[start : start + rows]
+            if rows == 3:
+                column_components.append(pad_literal)
+            column_type = f"SIMD[{dtype}, {storage_rows}]"
+            column_args.append(f"{column_type}({', '.join(column_components)})")
+
+        return f"{matrix_type}({', '.join(column_args)})"
+
+    def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
+        component_count = columns * rows
+        pieces = []
+
+        for arg in args:
+            piece = self.constructor_piece_for_expression(arg, dtype)
+            if piece is None:
+                return None
+            pieces.append(piece)
+
+        if len(args) == 1 and pieces and pieces[0]["kind"] == "scalar":
+            return None
+
+        pieces = self.select_constructor_pieces(pieces, component_count)
+        if pieces is None:
+            return None
+
+        has_duplicate_sensitive_vector = any(
+            piece["kind"] == "vector" and piece["duplicate_sensitive"]
+            for piece in pieces
+        )
+        if not has_duplicate_sensitive_vector:
+            return None
+
+        key = self.matrix_constructor_helper_key(dtype, columns, rows, pieces)
+        helper_name = self.matrix_constructor_helper_name(key)
+        self.required_matrix_constructor_helpers[key] = {
+            "key": key,
+            "dtype": dtype,
+            "columns": columns,
+            "rows": rows,
+            "pieces": pieces,
+        }
+
+        call_args = [self.generate_expression(piece["expr"]) for piece in pieces]
+        return f"{helper_name}({', '.join(call_args)})"
+
+    def matrix_constructor_helper_key(self, dtype, columns, rows, pieces):
+        signature = self.constructor_helper_key(dtype, columns * rows, columns, pieces)
+        return (dtype, columns, rows, signature[3])
+
+    def matrix_constructor_helper_name(self, key):
+        dtype, columns, rows, signature = key
+        vector_key = (dtype, columns * rows, columns, signature)
+        suffix = self.constructor_helper_name(vector_key).split("_", 4)[4]
+        return (
+            f"_crossgl_construct_matrix_{MOJO_DTYPE_SUFFIX[dtype]}_"
+            f"c{columns}_r{rows}_{suffix}"
+        )
+
+    def matrix_type_name(self, dtype, columns, rows):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype].upper()
+        return f"CrossGLMatrix{dtype_suffix}C{columns}R{rows}"
+
+    def matrix_storage_rows(self, rows):
+        return 4 if rows == 3 else rows
+
+    def matrix_zero_literal(self, dtype):
+        return MOJO_DTYPE_INFO[dtype][2]
+
+    def generate_matrix_type(self, key):
+        dtype, columns, rows = key
+        name = self.matrix_type_name(dtype, columns, rows)
+        storage_rows = self.matrix_storage_rows(rows)
+        column_type = f"SIMD[{dtype}, {storage_rows}]"
+        code = f"@value\nstruct {name}:\n"
+        for column in range(columns):
+            code += f"    var c{column}: {column_type}\n"
+        code += "\n"
+        for index_type in ("Int", "Int32", "UInt32"):
+            code += f"    fn __getitem__(self, index: {index_type}) -> {column_type}:\n"
+            for column in range(columns - 1):
+                code += f"        if index == {column}:\n"
+                code += f"            return self.c{column}\n"
+            code += f"        return self.c{columns - 1}\n\n"
+
+            code += (
+                f"    fn __setitem__(inout self, index: {index_type}, "
+                f"value: {column_type}):\n"
+            )
+            for column in range(columns - 1):
+                code += f"        if index == {column}:\n"
+                code += f"            self.c{column} = value\n"
+                code += "            return\n"
+            code += f"        self.c{columns - 1} = value\n\n"
+        return code + "\n"
+
+    def generate_matrix_constructor_helper(self, helper):
+        dtype = helper["dtype"]
+        columns = helper["columns"]
+        rows = helper["rows"]
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        scalar_type, _, _ = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        params = []
+        components = []
+        prelude = []
+
+        for index, piece in enumerate(helper["pieces"]):
+            if piece["kind"] == "vector":
+                param_name = f"v{index}"
+                vector_type = f"SIMD[{piece['dtype']}, {piece['storage_width']}]"
+                params.append(f"{param_name}: {vector_type}")
+                vector_expr = param_name
+                if piece["dtype"] != dtype:
+                    vector_expr = f"{param_name}_cast"
+                    prelude.append(
+                        f"    var {vector_expr} = {param_name}.cast[{dtype}]()\n"
+                    )
+                components.extend(
+                    f"{vector_expr}[{component_index}]"
+                    for component_index in piece["indices"]
+                )
+            else:
+                param_name = f"s{index}"
+                piece_dtype = piece.get("dtype")
+                param_scalar_type = mojo_scalar_type
+                if piece_dtype is not None and piece_dtype != dtype:
+                    scalar_type = MOJO_DTYPE_INFO[piece_dtype][0]
+                    param_scalar_type = self.map_type(scalar_type)
+                params.append(f"{param_name}: {param_scalar_type}")
+                components.append(
+                    self.cast_scalar_text(param_name, piece_dtype, dtype)
+                    if piece_dtype is not None
+                    else param_name
+                )
+
+        column_args = []
+        storage_rows = self.matrix_storage_rows(rows)
+        pad_literal = self.matrix_zero_literal(dtype)
+        for column in range(columns):
+            start = column * rows
+            column_components = components[start : start + rows]
+            if rows == 3:
+                column_components.append(pad_literal)
+            column_type = f"SIMD[{dtype}, {storage_rows}]"
+            column_args.append(f"{column_type}({', '.join(column_components)})")
+
+        helper_name = self.matrix_constructor_helper_name(helper["key"])
+        code = f"fn {helper_name}({', '.join(params)}) -> {matrix_type}:\n"
+        code += "".join(prelude)
+        code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
+        return code
 
     def generate_vector_binary_op(self, expr):
         op = self.map_operator(expr.op)
@@ -923,10 +1275,26 @@ class MojoCodeGen:
             and not self.required_splat_helpers
             and not self.required_swizzle_helpers
             and not self.required_constructor_helpers
+            and not self.required_matrix_types
+            and not self.required_matrix_constructor_helpers
         ):
             return ""
 
-        code = "# CrossGL vector helpers\n"
+        code = ""
+        if self.required_matrix_types:
+            code += "# CrossGL matrix types\n"
+            for key in sorted(self.required_matrix_types):
+                code += self.generate_matrix_type(key)
+            code += "\n"
+
+        if (
+            self.required_helpers
+            or self.required_splat_helpers
+            or self.required_swizzle_helpers
+            or self.required_constructor_helpers
+            or self.required_matrix_constructor_helpers
+        ):
+            code += "# CrossGL vector helpers\n"
         for dtype, op, helper_kind in sorted(self.required_helpers):
             code += self.generate_vector_binary_helper(dtype, op, helper_kind)
         for dtype in sorted(self.required_splat_helpers):
@@ -936,6 +1304,10 @@ class MojoCodeGen:
         for key in sorted(self.required_constructor_helpers):
             code += self.generate_constructor_helper(
                 self.required_constructor_helpers[key]
+            )
+        for key in sorted(self.required_matrix_constructor_helpers):
+            code += self.generate_matrix_constructor_helper(
+                self.required_matrix_constructor_helpers[key]
             )
         return code + "\n"
 
@@ -1002,23 +1374,23 @@ class MojoCodeGen:
             func_name
         ]
         pieces = []
-        has_duplicate_sensitive_vector = False
-        component_count = 0
 
         for arg in args:
             piece = self.constructor_piece_for_expression(arg, dtype)
             if piece is None:
                 return None
             pieces.append(piece)
-            if piece["kind"] == "vector":
-                component_count += len(piece["indices"])
-                has_duplicate_sensitive_vector = (
-                    has_duplicate_sensitive_vector or piece["duplicate_sensitive"]
-                )
-            else:
-                component_count += 1
 
-        if not has_duplicate_sensitive_vector or component_count != source_width:
+        pieces = self.select_constructor_pieces(pieces, source_width)
+        if pieces is None:
+            return None
+
+        has_duplicate_sensitive_vector = any(
+            piece["kind"] == "vector" and piece["duplicate_sensitive"]
+            for piece in pieces
+        )
+
+        if not has_duplicate_sensitive_vector:
             return None
 
         key = self.constructor_helper_key(dtype, source_width, storage_width, pieces)
@@ -1034,13 +1406,33 @@ class MojoCodeGen:
         call_args = [self.generate_expression(piece["expr"]) for piece in pieces]
         return f"{helper_name}({', '.join(call_args)})"
 
+    def select_constructor_pieces(self, pieces, source_width):
+        selected = []
+        remaining = source_width
+
+        for piece in pieces:
+            if remaining == 0:
+                break
+            if piece["kind"] == "vector":
+                indices = piece["indices"][:remaining]
+                if indices:
+                    selected.append({**piece, "indices": tuple(indices)})
+                    remaining -= len(indices)
+            else:
+                selected.append(piece)
+                remaining -= 1
+
+        if remaining != 0:
+            return None
+        return selected
+
     def constructor_piece_for_expression(self, expr, target_dtype):
         if isinstance(expr, MemberAccessNode):
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
                 source_type = self.expression_result_type(expr.object)
                 source_info = self.vector_type_info(source_type)
-                if source_info is None or source_info[0] != target_dtype:
+                if source_info is None:
                     return None
                 return {
                     "kind": "vector",
@@ -1056,8 +1448,6 @@ class MojoCodeGen:
         expr_type = self.expression_result_type(expr)
         info = self.vector_type_info(expr_type)
         if info is not None:
-            if info[0] != target_dtype:
-                return None
             _, source_width, storage_width, _ = info
             return {
                 "kind": "vector",
@@ -1068,7 +1458,11 @@ class MojoCodeGen:
                 "duplicate_sensitive": self.is_duplicate_sensitive_expression(expr),
             }
 
-        return {"kind": "scalar", "expr": expr}
+        return {
+            "kind": "scalar",
+            "expr": expr,
+            "dtype": self.expression_mojo_dtype(expr),
+        }
 
     def constructor_helper_key(self, dtype, source_width, storage_width, pieces):
         signature = []
@@ -1083,7 +1477,11 @@ class MojoCodeGen:
                     )
                 )
             else:
-                signature.append(("s",))
+                piece_dtype = piece.get("dtype")
+                if piece_dtype is not None and piece_dtype != dtype:
+                    signature.append(("s", piece_dtype))
+                else:
+                    signature.append(("s",))
         return (dtype, source_width, storage_width, tuple(signature))
 
     def constructor_helper_name(self, key):
@@ -1096,6 +1494,8 @@ class MojoCodeGen:
                 parts.append(
                     f"v{MOJO_DTYPE_SUFFIX[piece_dtype]}{piece_storage_width}_{index_text}"
                 )
+            elif len(piece) > 1:
+                parts.append(f"s{MOJO_DTYPE_SUFFIX[piece[1]]}")
             else:
                 parts.append("s")
         suffix = "_".join(parts)
@@ -1108,26 +1508,43 @@ class MojoCodeGen:
         result_type = f"SIMD[{dtype}, {helper['storage_width']}]"
         params = []
         components = []
+        prelude = []
 
         for index, piece in enumerate(helper["pieces"]):
             if piece["kind"] == "vector":
                 param_name = f"v{index}"
                 vector_type = f"SIMD[{piece['dtype']}, {piece['storage_width']}]"
                 params.append(f"{param_name}: {vector_type}")
+                vector_expr = param_name
+                if piece["dtype"] != dtype:
+                    vector_expr = f"{param_name}_cast"
+                    prelude.append(
+                        f"    var {vector_expr} = {param_name}.cast[{dtype}]()\n"
+                    )
                 components.extend(
-                    f"{param_name}[{component_index}]"
+                    f"{vector_expr}[{component_index}]"
                     for component_index in piece["indices"]
                 )
             else:
                 param_name = f"s{index}"
-                params.append(f"{param_name}: {mojo_scalar_type}")
-                components.append(param_name)
+                piece_dtype = piece.get("dtype")
+                param_scalar_type = mojo_scalar_type
+                if piece_dtype is not None and piece_dtype != dtype:
+                    scalar_type = MOJO_DTYPE_INFO[piece_dtype][0]
+                    param_scalar_type = self.map_type(scalar_type)
+                params.append(f"{param_name}: {param_scalar_type}")
+                components.append(
+                    self.cast_scalar_text(param_name, piece_dtype, dtype)
+                    if piece_dtype is not None
+                    else param_name
+                )
 
         if helper["pad_literal"] is not None and len(components) == 3:
             components.append(helper["pad_literal"])
 
         helper_name = self.constructor_helper_name(helper["key"])
         code = f"fn {helper_name}({', '.join(params)}) -> {result_type}:\n"
+        code += "".join(prelude)
         code += f"    return {result_type}({', '.join(components)})\n\n"
         return code
 
@@ -1140,12 +1557,198 @@ class MojoCodeGen:
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
 
+    def is_array_type_name(self, type_name):
+        return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
+
+    def is_struct_type_name(self, type_name):
+        if type_name is None:
+            return False
+        return self.type_name(type_name) in self.struct_types
+
+    def array_type_name(self, element_type, size):
+        element_type_name = self.type_name(element_type)
+        if size is None:
+            return f"{element_type_name}[]"
+        return f"{element_type_name}[{size}]"
+
+    def array_storage_type(self, element_type, size):
+        element_type_name = self.map_type(element_type)
+        if size is None:
+            return f"List[{element_type_name}]"
+        return f"InlineArray[{element_type_name}, {size}]"
+
+    def array_initial_value(self, element_type, size):
+        array_type = self.array_storage_type(element_type, size)
+        if size is None:
+            return f"{array_type}()"
+        return f"{array_type}(unsafe_uninitialized=True)"
+
+    def array_initial_value_for_type(self, type_name):
+        element_type, size = parse_array_type(str(type_name))
+        return self.array_initial_value(element_type, size)
+
+    def array_element_type(self, type_name):
+        if not self.is_array_type_name(type_name):
+            return None
+        element_type, _ = parse_array_type(str(type_name))
+        return element_type
+
+    def generate_array_literal_expression(self, expr, target_type=None):
+        if target_type is not None and self.is_array_type_name(target_type):
+            element_type, size = parse_array_type(str(target_type))
+        else:
+            element_type = self.infer_array_literal_element_type(expr)
+            size = len(expr.elements)
+
+        array_type = self.array_storage_type(element_type, size)
+        elements = [
+            self.generate_array_literal_element(element, element_type)
+            for element in expr.elements
+        ]
+
+        if size is not None:
+            size = int(size)
+            elements = elements[:size]
+            while len(elements) < size:
+                elements.append(self.zero_value_for_type(element_type))
+
+        return f"{array_type}({', '.join(elements)})"
+
+    def infer_array_literal_element_type(self, expr):
+        if not expr.elements:
+            return "float"
+        return self.expression_result_type(expr.elements[0]) or "float"
+
+    def generate_array_literal_element(self, element, element_type):
+        target_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(element_type))
+        if target_dtype is not None:
+            return self.generate_constructor_scalar_expression(element, target_dtype)
+        return self.generate_expression(element)
+
+    def zero_value_for_type(self, type_name):
+        type_name = self.type_name(type_name)
+        if self.is_array_type_name(type_name):
+            element_type, size = parse_array_type(type_name)
+            return self.zero_array_value(element_type, size)
+
+        if type_name in self.struct_types:
+            return self.zero_struct_value(type_name)
+
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            dtype, source_width, storage_width, pad_literal = vector_info
+            zero = MOJO_DTYPE_INFO[dtype][2]
+            components = [zero] * source_width
+            if pad_literal is not None and len(components) == 3:
+                components.append(pad_literal)
+            return f"SIMD[{dtype}, {storage_width}]({', '.join(components)})"
+
+        matrix_info = self.matrix_type_info(type_name)
+        if matrix_info is not None:
+            dtype, columns, rows = matrix_info
+            return self.zero_matrix_value(dtype, columns, rows)
+
+        dtype = MOJO_SCALAR_DTYPES.get(type_name)
+        if dtype is not None:
+            return MOJO_DTYPE_INFO[dtype][2]
+        return f"{self.map_type(type_name)}()"
+
+    def zero_array_value(self, element_type, size):
+        array_type = self.array_storage_type(element_type, size)
+        if size is None:
+            return f"{array_type}()"
+
+        try:
+            element_count = int(size)
+        except (TypeError, ValueError):
+            return f"{array_type}(unsafe_uninitialized=True)"
+
+        values = [self.zero_value_for_type(element_type) for _ in range(element_count)]
+        return f"{array_type}({', '.join(values)})"
+
+    def zero_struct_value(self, type_name):
+        fields = self.struct_types.get(type_name, {})
+        values = [
+            self.zero_value_for_type(field_type) for field_type in fields.values()
+        ]
+        return f"{type_name}({', '.join(values)})"
+
+    def zero_matrix_value(self, dtype, columns, rows):
+        self.required_matrix_types.add((dtype, columns, rows))
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        storage_rows = self.matrix_storage_rows(rows)
+        zero = self.matrix_zero_literal(dtype)
+        column_type = f"SIMD[{dtype}, {storage_rows}]"
+        column_values = []
+        for _ in range(columns):
+            components = [zero] * rows
+            if rows == 3:
+                components.append(zero)
+            column_values.append(f"{column_type}({', '.join(components)})")
+        return f"{matrix_type}({', '.join(column_values)})"
+
+    def generate_array_access_expression(self, expr):
+        array_type = self.expression_result_type(expr.array)
+        matrix_info = self.matrix_type_info(array_type)
+        vector_info = self.vector_type_info(array_type)
+        array_element_type = self.array_element_type(array_type)
+        array = self.generate_expression(expr.array)
+        index = self.generate_array_index_expression(
+            expr.index,
+            cast_integer_index=vector_info is not None
+            or array_element_type is not None,
+        )
+
+        if matrix_info is not None:
+            column_index = self.literal_int_value(expr.index)
+            if column_index is not None:
+                return f"{array}.c{column_index}"
+
+        return f"{array}[{index}]"
+
+    def generate_array_index_expression(self, expr, cast_integer_index=False):
+        index = self.generate_expression(expr)
+        if not cast_integer_index or self.literal_int_value(expr) is not None:
+            return index
+
+        index_type = self.expression_result_type(expr)
+        if index_type in MOJO_INTEGER_INDEX_TYPES:
+            return f"int({index})"
+        return index
+
+    def literal_int_value(self, expr):
+        if hasattr(expr, "value"):
+            try:
+                return int(expr.value)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(expr, str):
+            try:
+                return int(expr)
+            except ValueError:
+                return None
+        return None
+
     def expression_result_type(self, expr):
         if isinstance(expr, str):
             return self.variable_types.get(expr)
         if isinstance(expr, VariableNode) and hasattr(expr, "name"):
             return self.variable_types.get(expr.name)
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.infer_array_literal_element_type(expr)
+            return self.array_type_name(element_type, len(expr.elements))
         if isinstance(expr, ArrayAccessNode):
+            array_type = self.expression_result_type(expr.array)
+            array_element_type = self.array_element_type(array_type)
+            if array_element_type is not None:
+                return array_element_type
+            matrix_info = self.matrix_type_info(array_type)
+            if matrix_info is not None:
+                dtype, _, rows = matrix_info
+                return self.vector_type_name_for_dtype_width(dtype, rows)
+            vector_info = self.vector_type_info(array_type)
+            if vector_info is not None:
+                return MOJO_DTYPE_INFO[vector_info[0]][0]
             return None
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
@@ -1162,6 +1765,8 @@ class MojoCodeGen:
         if isinstance(expr, FunctionCallNode):
             func_name = self.function_call_name(expr)
             if func_name in self.vector_constructor_info:
+                return func_name
+            if func_name in MOJO_MATRIX_TYPES:
                 return func_name
             return self.function_return_types.get(func_name)
         if isinstance(expr, MemberAccessNode):
@@ -1196,6 +1801,15 @@ class MojoCodeGen:
             return self.vector_constructor_info[type_name]
         return None
 
+    def matrix_type_info(self, type_name):
+        if type_name in MOJO_MATRIX_TYPES:
+            return MOJO_MATRIX_TYPES[type_name]
+        return None
+
+    def vector_type_name_for_dtype_width(self, dtype, width):
+        _, prefix, _ = MOJO_DTYPE_INFO[dtype]
+        return f"{prefix}{width}"
+
     def swizzle_result_type(self, obj_type, component_count):
         info = self.vector_type_info(obj_type)
         dtype = info[0] if info else "DType.float32"
@@ -1214,24 +1828,66 @@ class MojoCodeGen:
                 return [components[component] for component in member]
         return None
 
-    def vector_components_for_expression(self, expr):
+    def expression_mojo_dtype(self, expr):
+        expr_type = self.expression_result_type(expr)
+        info = self.vector_type_info(expr_type)
+        if info is not None:
+            return info[0]
+        return MOJO_SCALAR_DTYPES.get(expr_type)
+
+    def is_literal_expression(self, expr):
+        return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)
+
+    def cast_scalar_text(self, expr_text, source_dtype, target_dtype):
+        if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
+            return expr_text
+        return f"({expr_text}).cast[{target_dtype}]()"
+
+    def cast_vector_component(self, component, source_dtype, target_dtype):
+        if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
+            return component
+        return f"{component}.cast[{target_dtype}]()"
+
+    def generate_constructor_scalar_expression(self, expr, target_dtype):
+        expr_text = self.generate_expression(expr)
+        if self.is_literal_expression(expr):
+            return expr_text
+        return self.cast_scalar_text(
+            expr_text, self.expression_mojo_dtype(expr), target_dtype
+        )
+
+    def vector_components_for_expression(self, expr, target_dtype=None):
         if isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
-                return [f"{obj}[{index}]" for index in swizzle_indices]
+                source_info = self.vector_type_info(
+                    self.expression_result_type(expr.object)
+                )
+                source_dtype = source_info[0] if source_info is not None else None
+                return [
+                    self.cast_vector_component(
+                        f"{obj}[{index}]", source_dtype, target_dtype
+                    )
+                    for index in swizzle_indices
+                ]
 
         expr_type = self.expression_result_type(expr)
         info = self.vector_type_info(expr_type)
         if info is None:
             return None
 
-        _, source_width, _, _ = info
+        source_dtype, source_width, _, _ = info
         if source_width <= 1:
             return None
 
         expr_text = self.generate_expression(expr)
-        return [f"{expr_text}[{index}]" for index in range(source_width)]
+        return [
+            self.cast_vector_component(
+                f"{expr_text}[{index}]", source_dtype, target_dtype
+            )
+            for index in range(source_width)
+        ]
 
     def generate_swizzle(self, source_expr, obj, obj_type, member, swizzle_indices):
         if len(swizzle_indices) == 1:
@@ -1307,11 +1963,16 @@ class MojoCodeGen:
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, size = parse_array_type(vtype_str)
-            base_mapped = self.type_mapping.get(base_type, base_type)
+            base_mapped = self.map_type(base_type)
             if size:
-                return f"StaticTuple[{base_mapped}, {size}]"
+                return f"InlineArray[{base_mapped}, {size}]"
             else:
-                return f"DynamicVector[{base_mapped}]"
+                return f"List[{base_mapped}]"
+
+        if vtype_str in MOJO_MATRIX_TYPES:
+            dtype, columns, rows = MOJO_MATRIX_TYPES[vtype_str]
+            self.required_matrix_types.add((dtype, columns, rows))
+            return self.matrix_type_name(dtype, columns, rows)
 
         return self.type_mapping.get(vtype_str, vtype_str)
 

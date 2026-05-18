@@ -375,7 +375,9 @@ class HLSLCodeGen:
 
             if mapped_type.startswith("Texture"):
                 sampler_name = f"{var_name}Sampler"
-                needs_implicit_sampler = var_name in global_implicit_sampler_texture_names
+                needs_implicit_sampler = (
+                    var_name in global_implicit_sampler_texture_names
+                )
                 needs_query_lod_sampler = (
                     var_name in global_implicit_query_lod_texture_names
                 )
@@ -403,9 +405,9 @@ class HLSLCodeGen:
                         if needs_comparison_sampler
                         else sampler_name
                     )
-                    self.global_implicit_texture_query_lod_samplers[
-                        var_name
-                    ] = query_sampler_name
+                    self.global_implicit_texture_query_lod_samplers[var_name] = (
+                        query_sampler_name
+                    )
                     if (
                         needs_comparison_sampler
                         and query_sampler_name not in explicit_sampler_names
@@ -1330,6 +1332,7 @@ class HLSLCodeGen:
         texture_names = set()
         sampler_names = set()
         visited = set()
+        global_resource_types = self.collect_global_texture_types(root)
         comparison_funcs = {
             "textureCompare",
             "textureCompareOffset",
@@ -1369,6 +1372,14 @@ class HLSLCodeGen:
                 args = getattr(value, "arguments", getattr(value, "args", []))
                 if func_name in comparison_funcs and len(args) >= 3:
                     texture_name = self.expression_name(args[0])
+                    texture_type = global_resource_types.get(texture_name)
+                    if (
+                        self.storage_image_texture_operation_expression(
+                            func_name, texture_type
+                        )
+                        is not None
+                    ):
+                        return
                     if texture_name:
                         texture_names.add(texture_name)
                     if len(args) >= 4:
@@ -1393,10 +1404,137 @@ class HLSLCodeGen:
                 texture_names.add(var_name)
         return texture_names
 
+    def collect_global_texture_types(self, root):
+        texture_types = {}
+        for node in getattr(root, "global_variables", []) or []:
+            var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            mapped_type = self.map_resource_type_with_format(var_type, node)
+            if var_name and mapped_type.startswith(("Texture", "RWTexture")):
+                texture_types[var_name] = mapped_type
+        return texture_types
+
+    def is_projected_texture_function(self, func_name):
+        return func_name in {
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+        }
+
+    def is_projected_texture_compare_function(self, func_name):
+        return func_name in {
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }
+
+    def projected_texture_call_is_diagnostic_only(self, func_name, texture_type):
+        if not self.is_projected_texture_function(func_name):
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return texture_type in {"TextureCube", "TextureCubeArray"}
+
+    def projected_texture_compare_call_is_diagnostic_only(
+        self, func_name, texture_type
+    ):
+        if not self.is_projected_texture_compare_function(func_name):
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return texture_type in {"TextureCube", "TextureCubeArray"}
+
+    def texture_gather_compare_offset_call_is_diagnostic_only(
+        self, func_name, texture_type
+    ):
+        if func_name != "textureGatherCompareOffset" or texture_type is None:
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return not self.texture_gather_compare_offset_supported(texture_type)
+
+    def texture_gather_call_is_diagnostic_only(self, func_name, texture_type):
+        if func_name != "textureGather" or texture_type is None:
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return not self.texture_gather_supported(texture_type)
+
+    def texture_gather_offset_call_is_diagnostic_only(self, func_name, texture_type):
+        if func_name not in {"textureGatherOffset", "textureGatherOffsets"}:
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return not self.texture_gather_offset_supported(texture_type)
+
+    def texture_sample_offset_call_is_diagnostic_only(self, func_name, texture_type):
+        if func_name not in {
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+        }:
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return not self.texture_sample_offset_supported(texture_type)
+
+    def texture_compare_offset_call_is_diagnostic_only(self, func_name, texture_type):
+        if func_name not in {
+            "textureCompareOffset",
+            "textureCompareLodOffset",
+            "textureCompareGradOffset",
+        }:
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return not self.texture_compare_offset_supported(texture_type)
+
+    def is_multisample_texture_resource_type(self, texture_type):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}
+
+    def multisample_texture_call_is_diagnostic_only(self, func_name, texture_type):
+        if func_name not in {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureQueryLod",
+        }:
+            return False
+        return self.is_multisample_texture_resource_type(texture_type)
+
     def collect_global_implicit_sampler_texture_names(
         self, root, global_texture_names, sampler_names, implicit_params
     ):
         texture_names = set()
+        global_texture_types = self.collect_global_texture_types(root)
         functions = self.collect_functions(root)
         texture_funcs = {
             "texture",
@@ -1447,6 +1585,38 @@ class HLSLCodeGen:
                     continue
                 if self.has_explicit_sampler_argument(func_name, args, sampler_names):
                     continue
+                if self.projected_texture_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.projected_texture_compare_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_gather_compare_offset_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_gather_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_gather_offset_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_sample_offset_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_compare_offset_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.multisample_texture_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
                 texture_names.add(texture_name)
 
         for func in functions:
@@ -1478,6 +1648,7 @@ class HLSLCodeGen:
         self, root, global_texture_names, sampler_names, implicit_params
     ):
         texture_names = set()
+        global_texture_types = self.collect_global_texture_types(root)
         functions = self.collect_functions(root)
 
         for func in functions:
@@ -1495,6 +1666,10 @@ class HLSLCodeGen:
                 if texture_name not in global_texture_names:
                     continue
                 if self.has_explicit_sampler_argument(func_name, args, sampler_names):
+                    continue
+                if self.multisample_texture_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
                     continue
                 texture_names.add(texture_name)
 
@@ -1565,6 +1740,16 @@ class HLSLCodeGen:
             func_name = getattr(func, "name", None)
             if not func_name:
                 continue
+            resource_param_types = {
+                param.name: getattr(param, "param_type", getattr(param, "vtype", None))
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+                if self.is_texture_type(
+                    getattr(param, "param_type", getattr(param, "vtype", None))
+                )
+                or self.is_image_type(
+                    getattr(param, "param_type", getattr(param, "vtype", None))
+                )
+            }
             sampler_params = {
                 param.name
                 for param in getattr(func, "parameters", getattr(func, "params", []))
@@ -1598,6 +1783,17 @@ class HLSLCodeGen:
                     continue
                 args = getattr(node, "arguments", getattr(node, "args", []))
                 if len(args) < 4:
+                    continue
+                texture_name = self.expression_name(args[0])
+                texture_type = resource_param_types.get(texture_name)
+                if texture_type is not None:
+                    texture_type = self.map_resource_type_with_format(texture_type)
+                if (
+                    self.storage_image_texture_operation_expression(
+                        self.expression_name(func_expr), texture_type
+                    )
+                    is not None
+                ):
                     continue
                 sampler_name = self.expression_name(args[1])
                 if sampler_name in sampler_params:
@@ -1766,6 +1962,38 @@ class HLSLCodeGen:
                     continue
                 if self.has_explicit_sampler_argument(
                     texture_func, args, sampler_params
+                ):
+                    continue
+                if self.projected_texture_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
+                ):
+                    continue
+                if self.projected_texture_compare_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
+                ):
+                    continue
+                if self.texture_gather_compare_offset_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
+                ):
+                    continue
+                if self.texture_gather_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
+                ):
+                    continue
+                if self.texture_gather_offset_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
+                ):
+                    continue
+                if self.texture_sample_offset_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
+                ):
+                    continue
+                if self.texture_compare_offset_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
+                ):
+                    continue
+                if self.multisample_texture_call_is_diagnostic_only(
+                    texture_func, texture_param_types[texture_name]
                 ):
                     continue
 
@@ -2232,7 +2460,9 @@ class HLSLCodeGen:
             return f"{texture_name}QuerySampler"
         return sampler_info["sampler_name"]
 
-    def generate_implicit_query_lod_sampler_argument(self, texture_arg, sampler_info=None):
+    def generate_implicit_query_lod_sampler_argument(
+        self, texture_arg, sampler_info=None
+    ):
         texture_name = self.expression_name(texture_arg)
         if texture_name in self.current_implicit_texture_query_lod_samplers:
             return self.current_implicit_texture_query_lod_samplers[texture_name]
@@ -2279,6 +2509,7 @@ class HLSLCodeGen:
         }.get(texture_type)
 
     def texture_query_dimension(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
         if texture_type in {"Texture1D"}:
             return 1
         if texture_type in {
@@ -2289,6 +2520,16 @@ class HLSLCodeGen:
             return 2
         return 3
 
+    def is_storage_image_resource_type(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return texture_type.startswith(
+            (
+                "RWTexture2D<",
+                "RWTexture3D<",
+                "RWTexture2DArray<",
+            )
+        )
+
     def texture_query_helper_key(self, helper_name, texture_type):
         if not texture_type:
             return None
@@ -2297,6 +2538,11 @@ class HLSLCodeGen:
     def texture_query_size_expression(self, texture_arg, lod_arg=None):
         texture_name = self.generate_expression(texture_arg)
         texture_type = self.texture_resource_type(texture_arg)
+        if self.is_storage_image_resource_type(texture_type):
+            key = self.texture_query_helper_key("imageSize", texture_type)
+            if key:
+                self.required_texture_query_helpers.add(key)
+            return f"imageSize({texture_name})"
         key = self.texture_query_helper_key("textureSize", texture_type)
         if key:
             self.required_texture_query_helpers.add(key)
@@ -2308,10 +2554,22 @@ class HLSLCodeGen:
     def texture_query_levels_expression(self, texture_arg):
         texture_name = self.generate_expression(texture_arg)
         texture_type = self.texture_resource_type(texture_arg)
+        if self.is_storage_image_resource_type(texture_type):
+            return self.unsupported_texture_query_levels_call(texture_type)
         key = self.texture_query_helper_key("textureQueryLevels", texture_type)
         if key:
             self.required_texture_query_helpers.add(key)
         return f"textureQueryLevels({texture_name})"
+
+    def texture_samples_expression(self, texture_arg):
+        texture_name = self.generate_expression(texture_arg)
+        texture_type = self.texture_resource_type(texture_arg)
+        if texture_type not in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
+            return "/* unsupported DirectX texture samples query: requires multisample texture */ 0"
+        key = self.texture_query_helper_key("textureSamples", texture_type)
+        if key:
+            self.required_texture_query_helpers.add(key)
+        return f"textureSamples({texture_name})"
 
     def vector_component(self, expression, component):
         if all(char.isalnum() or char in "_.[]" for char in expression):
@@ -2374,6 +2632,120 @@ class HLSLCodeGen:
 
     def unsupported_texture_gather_call(self, func_name, reason):
         return f"/* unsupported DirectX texture gather: {func_name} {reason} */ float4(0.0)"
+
+    def texture_gather_supported(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return texture_type in {
+            "Texture2D",
+            "Texture2DArray",
+            "TextureCube",
+            "TextureCubeArray",
+        }
+
+    def texture_gather_offset_supported(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return texture_type in {"Texture2D", "Texture2DArray"}
+
+    def unsupported_multisample_texture_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            f"/* unsupported DirectX multisample texture call: "
+            f"{func_name} on {texture_type} */ float4(0.0)"
+        )
+
+    def unsupported_multisample_texture_query_lod_call(self, texture_type):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            "/* unsupported DirectX multisample texture query: "
+            f"textureQueryLod on {texture_type} */ float2(0.0)"
+        )
+
+    def unsupported_texture_query_levels_call(self, texture_type):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            "/* unsupported DirectX texture query: "
+            f"textureQueryLevels on {texture_type} */ 0"
+        )
+
+    def unsupported_texture_query_lod_call(self, texture_type):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            "/* unsupported DirectX texture query: "
+            f"textureQueryLod on {texture_type} */ float2(0.0)"
+        )
+
+    def storage_image_texture_operation_expression(self, func_name, texture_type):
+        if not self.is_storage_image_resource_type(texture_type):
+            return None
+
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        if func_name in {
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }:
+            return (
+                "/* unsupported DirectX storage image texture comparison: "
+                f"{func_name} on {texture_type} */ 0.0"
+            )
+
+        if func_name in {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+            "texelFetch",
+            "texelFetchOffset",
+        }:
+            return (
+                "/* unsupported DirectX storage image texture operation: "
+                f"{func_name} on {texture_type} */ float4(0.0)"
+            )
+
+        return None
+
+    def is_cube_texture_resource_type(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return texture_type in {"TextureCube", "TextureCubeArray"}
+
+    def unsupported_cube_texel_fetch_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            f"/* unsupported DirectX texel fetch: {func_name} on "
+            f"{texture_type} */ float4(0.0)"
+        )
 
     def texture_sample_offset_supported(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
@@ -2460,6 +2832,10 @@ class HLSLCodeGen:
                 "vec4": ("xy", "w"),
                 "float4": ("xy", "w"),
             },
+            "Texture2DArray": {
+                "vec4": ("xy", "w"),
+                "float4": ("xy", "w"),
+            },
             "Texture3D": {
                 "vec4": ("xyz", "w"),
                 "float4": ("xyz", "w"),
@@ -2472,10 +2848,13 @@ class HLSLCodeGen:
         if coord_spec is None:
             return None
         numerator, divisor = coord_spec
-        return (
+        projected_coord = (
             f"{self.vector_component(coord, numerator)} / "
             f"{self.vector_component(coord, divisor)}"
         )
+        if texture_type == "Texture2DArray":
+            return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
+        return projected_coord
 
     def generate_texture_projected_call(self, func_name, args):
         parts = self.texture_call_parts(args)
@@ -2580,6 +2959,23 @@ class HLSLCodeGen:
             )
 
         texture_name, sampler_name, coord, extra_args = parts
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_call(func_name, texture_type)
+        if func_name == "textureGather" and not self.texture_gather_supported(
+            texture_type
+        ):
+            return self.unsupported_texture_gather_call(
+                func_name, "requires 2D, 2D-array, cube, or cube-array textures"
+            )
+        if func_name in {
+            "textureGatherOffset",
+            "textureGatherOffsets",
+        } and not self.texture_gather_offset_supported(texture_type):
+            return self.unsupported_texture_gather_call(
+                func_name, "offsets require 2D or 2D-array textures"
+            )
+
         offset_args = []
         component_arg = None
 
@@ -2889,8 +3285,12 @@ class HLSLCodeGen:
         for helper_name, texture_type in sorted(self.required_texture_query_helpers):
             if helper_name == "textureSize":
                 helpers.append(self.generate_texture_size_helper(texture_type))
+            elif helper_name == "imageSize":
+                helpers.append(self.generate_image_size_helper(texture_type))
             elif helper_name == "textureQueryLevels":
                 helpers.append(self.generate_texture_query_levels_helper(texture_type))
+            elif helper_name == "textureSamples":
+                helpers.append(self.generate_texture_samples_helper(texture_type))
 
         return "".join(helper for helper in helpers if helper)
 
@@ -3073,6 +3473,41 @@ class HLSLCodeGen:
             )
         return ""
 
+    def generate_image_size_helper(self, texture_type):
+        if not self.is_storage_image_resource_type(texture_type):
+            return ""
+
+        if self.resource_base_type(texture_type).startswith("RWTexture2DArray<"):
+            return (
+                f"int3 imageSize({texture_type} image) {{\n"
+                "    uint width;\n"
+                "    uint height;\n"
+                "    uint elements;\n"
+                "    image.GetDimensions(width, height, elements);\n"
+                "    return int3(width, height, elements);\n"
+                "}\n\n"
+            )
+
+        if self.resource_base_type(texture_type).startswith("RWTexture3D<"):
+            return (
+                f"int3 imageSize({texture_type} image) {{\n"
+                "    uint width;\n"
+                "    uint height;\n"
+                "    uint depth;\n"
+                "    image.GetDimensions(width, height, depth);\n"
+                "    return int3(width, height, depth);\n"
+                "}\n\n"
+            )
+
+        return (
+            f"int2 imageSize({texture_type} image) {{\n"
+            "    uint width;\n"
+            "    uint height;\n"
+            "    image.GetDimensions(width, height);\n"
+            "    return int2(width, height);\n"
+            "}\n\n"
+        )
+
     def generate_texture_query_levels_helper(self, texture_type):
         if texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
             return (
@@ -3119,6 +3554,30 @@ class HLSLCodeGen:
                 "    uint levels;\n"
                 "    tex.GetDimensions(0, width, height, depth, levels);\n"
                 "    return int(levels);\n"
+                "}\n\n"
+            )
+        return ""
+
+    def generate_texture_samples_helper(self, texture_type):
+        if texture_type == "Texture2DMS<float4>":
+            return (
+                f"int textureSamples({texture_type} tex) {{\n"
+                "    uint width;\n"
+                "    uint height;\n"
+                "    uint samples;\n"
+                "    tex.GetDimensions(width, height, samples);\n"
+                "    return int(samples);\n"
+                "}\n\n"
+            )
+        if texture_type == "Texture2DMSArray<float4>":
+            return (
+                f"int textureSamples({texture_type} tex) {{\n"
+                "    uint width;\n"
+                "    uint height;\n"
+                "    uint elements;\n"
+                "    uint samples;\n"
+                "    tex.GetDimensions(width, height, elements, samples);\n"
+                "    return int(samples);\n"
                 "}\n\n"
             )
         return ""
@@ -3355,23 +3814,31 @@ class HLSLCodeGen:
         if not func_name:
             return None
 
-        if func_name == "textureSize" and args:
+        if func_name in {"textureSize", "imageSize"} and args:
             lod_arg = args[1] if len(args) > 1 else None
             return self.texture_query_size_expression(args[0], lod_arg)
 
         if func_name == "textureQueryLevels" and args:
             return self.texture_query_levels_expression(args[0])
 
+        if func_name in {"textureSamples", "imageSamples"} and args:
+            return self.texture_samples_expression(args[0])
+
         if func_name == "textureQueryLod" and len(args) >= 2:
             parts = self.texture_call_parts(args)
             if parts is None:
                 return None
             texture_name, sampler_name, coord, _ = parts
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_multisample_texture_resource_type(texture_type):
+                return self.unsupported_multisample_texture_query_lod_call(texture_type)
+            if self.is_storage_image_resource_type(texture_type):
+                return self.unsupported_texture_query_lod_call(texture_type)
             if not self.is_explicit_sampler_argument(args):
-                sampler_name = self.generate_implicit_query_lod_sampler_argument(args[0])
-            coord = self.texture_query_lod_coordinate(
-                self.texture_resource_type(args[0]), coord
-            )
+                sampler_name = self.generate_implicit_query_lod_sampler_argument(
+                    args[0]
+                )
+            coord = self.texture_query_lod_coordinate(texture_type, coord)
             return (
                 f"float2({texture_name}.CalculateLevelOfDetailUnclamped({sampler_name}, {coord}), "
                 f"{texture_name}.CalculateLevelOfDetail({sampler_name}, {coord}))"
@@ -3426,6 +3893,13 @@ class HLSLCodeGen:
         if len(args) < 2:
             return None
 
+        texture_type = self.texture_resource_type(args[0])
+        storage_image_operation = self.storage_image_texture_operation_expression(
+            func_name, texture_type
+        )
+        if storage_image_operation is not None:
+            return storage_image_operation
+
         if func_name in {
             "textureCompare",
             "textureCompareOffset",
@@ -3479,6 +3953,11 @@ class HLSLCodeGen:
             if parts is None:
                 return None
             texture_name, sampler_name, coord, extra_args = parts
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_multisample_texture_resource_type(texture_type):
+                return self.unsupported_multisample_texture_call(
+                    func_name, texture_type
+                )
             mapped_args = [coord] + [
                 self.generate_expression(arg) for arg in extra_args
             ]
@@ -3489,6 +3968,8 @@ class HLSLCodeGen:
             coord = self.generate_expression(args[1])
             lod = self.generate_expression(args[2])
             texture_type = self.texture_resource_type(args[0])
+            if self.is_cube_texture_resource_type(texture_type):
+                return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
                 return f"{texture_name}.Load({coord}, {lod})"
             load_coord_type = (
@@ -3502,6 +3983,8 @@ class HLSLCodeGen:
             lod = self.generate_expression(args[2])
             offset = self.generate_expression(args[3])
             texture_type = self.resource_base_type(self.texture_resource_type(args[0]))
+            if self.is_cube_texture_resource_type(texture_type):
+                return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
                 return "/* unsupported DirectX texel fetch offset: multisample textures do not support offsets */ float4(0.0)"
             if texture_type == "Texture2DArray":

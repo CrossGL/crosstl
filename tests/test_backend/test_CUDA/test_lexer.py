@@ -102,3 +102,24 @@ class TestCudaLexer:
         ]
 
         assert tokens == expected_tokens
+
+    def test_shift_assignment_tokenization(self):
+        """Test shift assignment operators are not split"""
+        code = "out[0] <<= 1; out[1] >>= 1;"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        token_types = [token_type for token_type, _ in tokens]
+
+        assert "SHIFT_LEFT_EQUALS" in token_types
+        assert "SHIFT_RIGHT_EQUALS" in token_types
+
+    def test_numeric_literal_tokenization(self):
+        """Test integer masks and float suffixes stay intact"""
+        code = "0xffu 0XCAFEull 0b1010u 0777u 1e-3f .5f"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        values = [value for token_type, value in tokens if token_type == "NUMBER"]
+
+        assert values == ["0xffu", "0XCAFEull", "0b1010u", "0777u", "1e-3f", ".5f"]

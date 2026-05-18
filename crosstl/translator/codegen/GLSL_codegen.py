@@ -1612,8 +1612,154 @@ class GLSLCodeGen:
 
     def unsupported_texture_gather_call(self, func_name, reason):
         return (
-            f"/* unsupported GLSL texture gather: "
-            f"{func_name} {reason} */ vec4(0.0)"
+            f"/* unsupported GLSL texture gather: " f"{func_name} {reason} */ vec4(0.0)"
+        )
+
+    def texture_gather_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2D",
+            "sampler2DArray",
+            "samplerCube",
+            "samplerCubeArray",
+        }
+
+    def texture_gather_offset_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2D",
+            "sampler2DArray",
+        }
+
+    def unsupported_texture_projected_call(self, func_name, reason):
+        return (
+            f"/* unsupported GLSL projected texture: {func_name} {reason} */ vec4(0.0)"
+        )
+
+    def texture_sample_offset_supported(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler1D",
+            "sampler2D",
+            "sampler3D",
+            "sampler2DArray",
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+
+    def unsupported_texture_sample_offset_call(self, func_name, reason):
+        return f"/* unsupported GLSL texture offset: {func_name} {reason} */ vec4(0.0)"
+
+    def is_multisample_texture_resource_type(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "sampler2DMS",
+            "sampler2DMSArray",
+        }
+
+    def unsupported_multisample_texture_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            f"/* unsupported GLSL multisample texture call: "
+            f"{func_name} on {texture_type} */ vec4(0.0)"
+        )
+
+    def unsupported_multisample_texture_query_lod_call(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported GLSL multisample texture query: "
+            f"textureQueryLod on {texture_type} */ vec2(0.0)"
+        )
+
+    def unsupported_texture_query_levels_call(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported GLSL texture query: "
+            f"textureQueryLevels on {texture_type} */ 0"
+        )
+
+    def unsupported_texture_query_lod_call(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported GLSL texture query: "
+            f"textureQueryLod on {texture_type} */ vec2(0.0)"
+        )
+
+    def storage_image_texture_operation_expression(self, func_name, texture_type):
+        if not self.is_storage_image_type(texture_type):
+            return None
+
+        texture_type = self.resource_base_type(texture_type)
+        if func_name in {
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }:
+            return (
+                "/* unsupported GLSL storage image texture comparison: "
+                f"{func_name} on {texture_type} */ 0.0"
+            )
+
+        if func_name in {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+            "texelFetch",
+            "texelFetchOffset",
+        }:
+            return (
+                "/* unsupported GLSL storage image texture operation: "
+                f"{func_name} on {texture_type} */ vec4(0.0)"
+            )
+
+        return None
+
+    def unsupported_texture_samples_query_call(self):
+        return "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
+
+    def image_size_expression(self, image_arg):
+        image_name = self.generate_expression(image_arg)
+        return f"imageSize({image_name})"
+
+    def unsupported_multisample_texel_fetch_offset_call(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported GLSL texel fetch offset: "
+            f"multisample texture {texture_type} does not support offsets */ vec4(0.0)"
+        )
+
+    def is_cube_texture_resource_type(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "samplerCube",
+            "samplerCubeArray",
+            "samplerCubeShadow",
+            "samplerCubeArrayShadow",
+        }
+
+    def unsupported_cube_texel_fetch_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            f"/* unsupported GLSL texel fetch: {func_name} on "
+            f"{texture_type} */ vec4(0.0)"
         )
 
     def generate_texture_gather_call(self, func_name, args):
@@ -1624,6 +1770,23 @@ class GLSLCodeGen:
             )
 
         texture_name, coord, extra_args = parts
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_call(func_name, texture_type)
+        if func_name == "textureGather" and not self.texture_gather_supported(
+            texture_type
+        ):
+            return self.unsupported_texture_gather_call(
+                func_name, "requires 2D, 2D-array, cube, or cube-array textures"
+            )
+        if func_name in {
+            "textureGatherOffset",
+            "textureGatherOffsets",
+        } and not self.texture_gather_offset_supported(texture_type):
+            return self.unsupported_texture_gather_call(
+                func_name, "offsets require 2D or 2D-array textures"
+            )
+
         offset_args = []
         component_arg = None
 
@@ -1698,9 +1861,7 @@ class GLSLCodeGen:
                 component_expr,
             )
 
-        offset_arg = (
-            self.generate_expression(offset_args[0]) if offset_args else None
-        )
+        offset_arg = self.generate_expression(offset_args[0]) if offset_args else None
         function_name = (
             "textureGatherOffset"
             if func_name == "textureGatherOffset"
@@ -2193,7 +2354,38 @@ class GLSLCodeGen:
         return value
 
     def generate_texture_call(self, func_name, args):
-        if not func_name or len(args) < 2:
+        if not func_name:
+            return None
+
+        if func_name == "textureQueryLevels" and args:
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_storage_image_type(texture_type):
+                return self.unsupported_texture_query_levels_call(texture_type)
+            if self.is_multisample_texture_resource_type(texture_type):
+                return "1"
+            return None
+
+        if func_name in {"textureSamples", "imageSamples"} and args:
+            texture_type = self.texture_resource_type(args[0])
+            if texture_type and not self.is_multisample_texture_resource_type(
+                texture_type
+            ):
+                return self.unsupported_texture_samples_query_call()
+            if (
+                func_name == "imageSamples"
+                and self.is_multisample_texture_resource_type(texture_type)
+            ):
+                texture_name = self.generate_expression(args[0])
+                return f"textureSamples({texture_name})"
+            return None
+
+        if func_name in {"textureSize", "imageSize"} and args:
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_storage_image_type(texture_type):
+                return self.image_size_expression(args[0])
+            return None
+
+        if len(args) < 2:
             return None
 
         if func_name == "imageLoad" and len(args) >= 2:
@@ -2214,6 +2406,13 @@ class GLSLCodeGen:
                 texture_type, image_format, value, self.expression_result_type(args[2])
             )
             return f"imageStore({image_name}, {coord}, {value})"
+
+        texture_type = self.texture_resource_type(args[0])
+        storage_image_operation = self.storage_image_texture_operation_expression(
+            func_name, texture_type
+        )
+        if storage_image_operation is not None:
+            return storage_image_operation
 
         if func_name in {
             "textureCompare",
@@ -2246,10 +2445,45 @@ class GLSLCodeGen:
             if parts is None:
                 return None
             texture_name, coord, _ = parts
-            coord = self.texture_query_lod_coordinate(
-                self.texture_resource_type(args[0]), coord
-            )
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_multisample_texture_resource_type(texture_type):
+                return self.unsupported_multisample_texture_query_lod_call(texture_type)
+            if self.is_storage_image_type(texture_type):
+                return self.unsupported_texture_query_lod_call(texture_type)
+            coord = self.texture_query_lod_coordinate(texture_type, coord)
             return f"textureQueryLod({texture_name}, {coord})"
+
+        if func_name == "texelFetchOffset" and len(args) >= 4:
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_cube_texture_resource_type(texture_type):
+                return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
+            if self.is_multisample_texture_resource_type(texture_type):
+                return self.unsupported_multisample_texel_fetch_offset_call(
+                    texture_type
+                )
+            return None
+
+        if func_name == "texelFetch" and len(args) >= 3:
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_cube_texture_resource_type(texture_type):
+                return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
+            return None
+
+        projected_texture_funcs = {
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+        }
+        if func_name in projected_texture_funcs and args:
+            texture_type = self.resource_base_type(self.texture_resource_type(args[0]))
+            if texture_type in {"samplerCube", "samplerCubeArray"}:
+                return self.unsupported_texture_projected_call(
+                    func_name,
+                    "requires 1D, 2D, 2D-array, or 3D projection coordinates",
+                )
 
         texture_funcs = {
             "texture",
@@ -2258,13 +2492,24 @@ class GLSLCodeGen:
             "textureOffset",
             "textureLodOffset",
             "textureGradOffset",
-            "textureProj",
-            "textureProjOffset",
-            "textureProjLod",
-            "textureProjLodOffset",
-            "textureProjGrad",
-            "textureProjGradOffset",
+            *projected_texture_funcs,
         }
+        if func_name in texture_funcs:
+            texture_type = self.texture_resource_type(args[0])
+            if self.is_multisample_texture_resource_type(texture_type):
+                return self.unsupported_multisample_texture_call(
+                    func_name, texture_type
+                )
+            if func_name in {
+                "textureOffset",
+                "textureLodOffset",
+                "textureGradOffset",
+            } and not self.texture_sample_offset_supported(texture_type):
+                return self.unsupported_texture_sample_offset_call(
+                    func_name,
+                    "offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers",
+                )
+
         if func_name not in texture_funcs or not self.is_explicit_sampler_argument(
             args
         ):
