@@ -736,10 +736,9 @@ shader ShadowCompareLodGradValidation {
         vec2 ddx,
         vec2 ddy
     ) {
-        float lodValue = textureCompareLod(tex, s, uvLayer, depth, lod);
         float gradValue = textureCompareGrad(tex, s, uvLayer, depth, ddx, ddy);
         float gradOffsetValue = textureCompareGradOffset(tex, s, uvLayer, depth, ddx, ddy, ivec2(1, 0));
-        return lodValue + gradValue + gradOffsetValue;
+        return gradValue + gradOffsetValue;
     }
 
     fragment {

@@ -2623,6 +2623,132 @@ class TestCudaCodeGen:
         assert "imageSize(" not in cuda_code
         assert "imageLoad(" not in cuda_code
 
+    def test_struct_member_array_resource_assignments_emit_cuda_metadata_arguments(self):
+        """Test CUDA handles resource calls assigned into struct member arrays."""
+        source_code = """
+        struct SampleResult {
+            vec4 sampled;
+            vec4 loaded;
+            ivec2 texSize;
+            ivec2 imageSizeValue;
+        };
+
+        struct SampleEnvelope {
+            SampleResult results[3];
+            vec4 bias;
+        };
+
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            SampleEnvelope buildArrayEnvelope(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope;
+                envelope.results[slot].sampled = texture(dynTex[layer][slot], uv);
+                envelope.results[slot].loaded = imageLoad(dynImages[layer][slot], pixel);
+                envelope.results[slot].texSize = textureSize(dynTex[layer][slot], 0);
+                envelope.results[slot].imageSizeValue = imageSize(dynImages[layer][slot]);
+                envelope.bias = envelope.results[slot].sampled +
+                    envelope.results[slot].loaded;
+                return envelope;
+            }
+
+            vec4 consumeArrayEnvelope(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope = buildArrayEnvelope(
+                    dynTex,
+                    dynImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+                return envelope.results[slot].sampled +
+                    envelope.results[slot].loaded + envelope.bias;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = consumeArrayEnvelope(
+                        textureGrid,
+                        imageGrid,
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "SampleResult results[3];" in cuda_code
+        assert (
+            "__device__ SampleEnvelope buildArrayEnvelope("
+            "texture<float4, 2> (*dynTex)[3], "
+            "CglResourceQueryInfo (*dynTex_metadata)[3], "
+            "cudaSurfaceObject_t (*dynImages)[3], "
+            "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
+            "float2 uv, int2 pixel)"
+            in cuda_code
+        )
+        assert (
+            "envelope.results[slot].sampled = tex2D(dynTex[layer][slot], uv);"
+            in cuda_code
+        )
+        assert (
+            "envelope.results[slot].loaded = surf2Dread<float4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "envelope.results[slot].texSize = cgl_textureSize_sampler2D"
+            "(dynTex_metadata[layer][slot], 0);"
+            in cuda_code
+        )
+        assert (
+            "envelope.results[slot].imageSizeValue = cgl_imageSize_image2D"
+            "(dynImages_metadata[layer][slot]);"
+            in cuda_code
+        )
+        assert (
+            "SampleEnvelope envelope = buildArrayEnvelope("
+            "dynTex, dynTex_metadata, dynImages, dynImages_metadata, "
+            "layer, slot, uv, pixel);"
+            in cuda_code
+        )
+        assert (
+            "consumeArrayEnvelope(textureGrid, textureGrid_metadata, imageGrid, "
+            "imageGrid_metadata, 1, 2, uv, pixel);"
+            in cuda_code
+        )
+        assert "texture(" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+
     def test_image_atomic_builtins_emit_cuda_diagnostics(self):
         """Test CUDA makes unsupported storage image atomics explicit."""
         source_code = """

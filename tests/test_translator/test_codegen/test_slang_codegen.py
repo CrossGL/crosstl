@@ -2944,6 +2944,121 @@ def test_nested_struct_resource_assignments_emit_slang_operations():
     assert "unsupported Slang" not in generated_code
 
 
+def test_struct_member_array_resource_assignments_emit_slang_operations():
+    code = """
+    struct SampleResult {
+        vec4 sampled;
+        vec4 loaded;
+        ivec2 texSize;
+        ivec2 imageSizeValue;
+    };
+
+    struct SampleEnvelope {
+        SampleResult results[3];
+        vec4 bias;
+    };
+
+    shader Resources {
+        sampler2d textureGrid[2][3];
+        image2D imageGrid @rgba16f[2][3];
+
+        SampleEnvelope buildArrayEnvelope(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleEnvelope envelope;
+            envelope.results[slot].sampled = texture(dynTex[layer][slot], uv);
+            envelope.results[slot].loaded = imageLoad(dynImages[layer][slot], pixel);
+            envelope.results[slot].texSize = textureSize(dynTex[layer][slot], 0);
+            envelope.results[slot].imageSizeValue = imageSize(dynImages[layer][slot]);
+            envelope.bias = envelope.results[slot].sampled +
+                envelope.results[slot].loaded;
+            return envelope;
+        }
+
+        vec4 consumeArrayEnvelope(
+            sampler2d dynTex[][3],
+            image2D dynImages[][3] @rgba16f,
+            int layer,
+            int slot,
+            vec2 uv,
+            ivec2 pixel
+        ) {
+            SampleEnvelope envelope = buildArrayEnvelope(
+                dynTex,
+                dynImages,
+                layer,
+                slot,
+                uv,
+                pixel
+            );
+            return envelope.results[slot].sampled +
+                envelope.results[slot].loaded + envelope.bias;
+        }
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                ivec2 pixel = ivec2(0, 0);
+                vec4 value = consumeArrayEnvelope(
+                    textureGrid,
+                    imageGrid,
+                    1,
+                    2,
+                    uv,
+                    pixel
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "SampleResult results[3];" in generated_code
+    assert (
+        "SampleEnvelope buildArrayEnvelope(Sampler2D<float4> dynTex[][3], "
+        "RWTexture2D<float4> dynImages[][3], int layer, int slot, "
+        "float2 uv, int2 pixel)"
+        in generated_code
+    )
+    assert (
+        "envelope.results[slot].sampled = dynTex[layer][slot].Sample(uv);"
+        in generated_code
+    )
+    assert "envelope.results[slot].loaded = dynImages[layer][slot][pixel];" in generated_code
+    assert (
+        "envelope.results[slot].texSize = "
+        "cgl_textureSize_sampler2D(dynTex[layer][slot], 0);"
+        in generated_code
+    )
+    assert (
+        "envelope.results[slot].imageSizeValue = "
+        "cgl_imageSize_image2D(dynImages[layer][slot]);"
+        in generated_code
+    )
+    assert (
+        "SampleEnvelope envelope = buildArrayEnvelope("
+        "dynTex, dynImages, layer, slot, uv, pixel);"
+        in generated_code
+    )
+    assert (
+        "consumeArrayEnvelope(textureGrid, imageGrid, 1, 2, uv, pixel);"
+        in generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "unsupported Slang" not in generated_code
+
+
 def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     code = """
     shader Resources {

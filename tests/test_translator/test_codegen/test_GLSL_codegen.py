@@ -3064,15 +3064,13 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
             sampler s,
             vec3 uvLayer,
             float depth,
-            float lod,
             vec2 ddx,
             vec2 ddy,
             ivec2 offset
         ) {
-            float lodValue = textureCompareLod(tex, s, uvLayer, depth, lod);
             float gradValue = textureCompareGrad(tex, s, uvLayer, depth, ddx, ddy);
             float gradOffsetValue = textureCompareGradOffset(tex, s, uvLayer, depth, ddx, ddy, offset);
-            return lodValue + gradValue + gradOffsetValue;
+            return gradValue + gradOffsetValue;
         }
 
         fragment {
@@ -3092,7 +3090,6 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
                     compareSampler,
                     input.uvLayer,
                     input.depth,
-                    input.lod,
                     input.ddx,
                     input.ddy,
                     input.offset
@@ -3130,11 +3127,8 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float compareShadowArray(sampler2DArrayShadow tex, vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset)"
+        "float compareShadowArray(sampler2DArrayShadow tex, vec3 uvLayer, float depth, vec2 ddx, vec2 ddy, ivec2 offset)"
         in generated_code
-    )
-    assert (
-        "float lodValue = textureLod(tex, vec4(uvLayer, depth), lod);" in generated_code
     )
     assert (
         "float gradValue = textureGrad(tex, vec4(uvLayer, depth), ddx, ddy);"
@@ -3148,12 +3142,61 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
         "compareShadow(shadowMap, uv, depth, lod, ddx, ddy, offset)" in generated_code
     )
     assert (
-        "compareShadowArray(shadowArray, uvLayer, depth, lod, ddx, ddy, offset)"
+        "compareShadowArray(shadowArray, uvLayer, depth, ddx, ddy, offset)"
         in generated_code
     )
     assert "compareSampler" not in generated_code
     assert "textureCompareLod" not in generated_code
     assert "textureCompareGrad" not in generated_code
+
+
+def test_opengl_array_shadow_compare_lod_reports_unsupported():
+    shader = """
+    shader ArrayShadowCompareLodUnsupported {
+        sampler2DArrayShadow shadowArray;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            float depth;
+            float lod;
+        };
+
+        float compareShadowArray(
+            sampler2DArrayShadow tex,
+            sampler s,
+            vec3 uvLayer,
+            float depth,
+            float lod
+        ) {
+            float rejected = textureCompareLod(tex, s, uvLayer, depth, lod);
+            return rejected;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float shadow = compareShadowArray(
+                    shadowArray,
+                    compareSampler,
+                    input.uvLayer,
+                    input.depth,
+                    input.lod
+                );
+                return vec4(shadow);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "float rejected = /* unsupported GLSL texture compare: textureCompareLod explicit LOD requires 2D shadow samplers */ 0.0;"
+        in generated_code
+    )
+    assert "textureLod(" not in generated_code
 
 
 def test_opengl_array_shadow_compare_lod_offset_reports_unsupported():

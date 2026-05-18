@@ -1563,10 +1563,7 @@ class GLSLCodeGen:
         }
 
     def texture_compare_lod_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-        }
+        return self.resource_base_type(texture_type) == "sampler2DShadow"
 
     def texture_compare_grad_supported(self, texture_type):
         return self.resource_base_type(texture_type) in {
@@ -1755,7 +1752,7 @@ class GLSLCodeGen:
                 )
             if not self.texture_compare_lod_supported(texture_type):
                 return self.unsupported_texture_compare_call(
-                    func_name, "explicit LOD requires 2D or 2D-array shadow samplers"
+                    func_name, "explicit LOD requires 2D shadow samplers"
                 )
             compare_coord = self.texture_compare_coordinate(
                 texture_type, coord, compare

@@ -2715,6 +2715,125 @@ class TestVulkanSPIRVCodeGen:
         assert "imageLoad(" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_struct_member_array_resource_assignments_use_spirv_pointer_chain(self):
+        source_code = """
+        struct SampleResult {
+            vec4 sampled;
+            vec4 loaded;
+            ivec2 texSize;
+            ivec2 imageSizeValue;
+        };
+
+        struct SampleEnvelope {
+            SampleResult results[3];
+            vec4 bias;
+        };
+
+        shader Resources {
+            sampler2d textureGrid[2][3];
+            image2D imageGrid @rgba16f[2][3];
+
+            SampleEnvelope buildArrayEnvelope(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope;
+                envelope.results[slot].sampled = texture(dynTex[layer][slot], uv);
+                envelope.results[slot].loaded = imageLoad(dynImages[layer][slot], pixel);
+                envelope.results[slot].texSize = textureSize(dynTex[layer][slot], 0);
+                envelope.results[slot].imageSizeValue = imageSize(dynImages[layer][slot]);
+                envelope.bias = envelope.results[slot].sampled +
+                    envelope.results[slot].loaded;
+                return envelope;
+            }
+
+            vec4 consumeArrayEnvelope(
+                sampler2d dynTex[][3],
+                image2D dynImages[][3] @rgba16f,
+                int layer,
+                int slot,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                SampleEnvelope envelope = buildArrayEnvelope(
+                    dynTex,
+                    dynImages,
+                    layer,
+                    slot,
+                    uv,
+                    pixel
+                );
+                return envelope.results[slot].sampled +
+                    envelope.results[slot].loaded + envelope.bias;
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 value = consumeArrayEnvelope(
+                        textureGrid,
+                        imageGrid,
+                        1,
+                        2,
+                        uv,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpTypeArray" in spv_code
+        assert 'OpName' in spv_code and '"SampleEnvelope"' in spv_code
+
+        def resource_result_is_stored_through_member_array(opcode):
+            lines = spv_code.splitlines()
+            for index, line in enumerate(lines):
+                match = re.match(rf"(%\d+) = {opcode}\b", line)
+                if not match:
+                    continue
+
+                result_id = match.group(1)
+                window = lines[index + 1 : index + 12]
+                if (
+                    sum("OpAccessChain" in item for item in window) >= 3
+                    and any(
+                        item.startswith("OpStore ") and item.endswith(f" {result_id}")
+                        for item in window
+                    )
+                ):
+                    return True
+            return False
+
+        for opcode in [
+            "OpImageSampleImplicitLod",
+            "OpImageRead",
+            "OpImageQuerySizeLod",
+            "OpImageQuerySize",
+        ]:
+            assert resource_result_is_stored_through_member_array(opcode)
+
+        assert re.search(
+            r"(?:%\d+ = OpAccessChain [^\n]+\n){3}%\d+ = OpLoad %\d+ %\d+",
+            spv_code,
+        )
+        assert "OpFunctionCall" in spv_code
+        assert "OpReturnValue" in spv_code
+        assert "texture(" not in spv_code
+        assert "textureSize(" not in spv_code
+        assert "imageSize(" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "WARNING" not in spv_code
+
     def test_nested_resource_array_access_operations_use_spirv_element_pointers(self):
         source_code = """
         shader Resources {
