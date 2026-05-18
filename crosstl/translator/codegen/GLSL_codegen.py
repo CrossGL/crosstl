@@ -915,7 +915,7 @@ class GLSLCodeGen:
 
     def fragment_output_name(self, semantic):
         if semantic and semantic.startswith("gl_FragColor"):
-            suffix = semantic.removeprefix("gl_FragColor")
+            suffix = semantic[len("gl_FragColor") :]
             return f"fragColor{suffix}"
         return "fragColor"
 
