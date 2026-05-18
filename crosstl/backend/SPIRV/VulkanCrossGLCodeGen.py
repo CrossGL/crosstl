@@ -24,7 +24,10 @@ from .VulkanAst import (
 
 
 class VulkanToCrossGLConverter:
+    """Serialize Vulkan backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize Vulkan-to-CrossGL type and semantic mappings."""
         self.type_map = {
             "void": "void",
             "vec2": "float2",
@@ -90,9 +93,11 @@ class VulkanToCrossGLConverter:
         self.code = []
 
     def get_indent(self):
+        """Return whitespace for the current indentation level."""
         return "    " * self.indentation
 
     def generate(self, ast):
+        """Generate complete CrossGL source from a parsed Vulkan backend AST."""
         code = "shader main {\n"
         top_level_nodes = []
         top_level_nodes.extend(getattr(ast, "structs", []))
@@ -195,6 +200,7 @@ class VulkanToCrossGLConverter:
         return code
 
     def generate_function(self, node, indent=1):
+        """Render one Vulkan backend function node as a CrossGL function."""
         code = "  " * indent
         return_type = self.map_type(node.return_type)
         params = ", ".join(
@@ -257,6 +263,7 @@ class VulkanToCrossGLConverter:
         return f"{lhs} {operator} {rhs}"
 
     def generate_expression(self, expr):
+        """Render a Vulkan backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, int) or isinstance(expr, float):
@@ -393,6 +400,7 @@ class VulkanToCrossGLConverter:
         return code
 
     def map_type(self, vulkan_type):
+        """Map a Vulkan/SPIR-V type name to the closest CrossGL type name."""
         if vulkan_type in self.type_map:
             return self.type_map[vulkan_type]
         return vulkan_type

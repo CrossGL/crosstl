@@ -6,7 +6,10 @@ from .RustLexer import *
 
 
 class RustToCrossGLConverter:
+    """Serialize Rust backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize Rust-to-CrossGL type and semantic mappings."""
         self.type_map = {
             # Rust primitive types to CrossGL
             "()": "void",
@@ -152,11 +155,14 @@ class RustToCrossGLConverter:
 
         self.indentation = 0
         self.code = []
+        self.type_aliases = {}
 
     def get_indent(self):
+        """Return whitespace for the current indentation level."""
         return "    " * self.indentation
 
     def visit(self, node):
+        """Dispatch a Rust AST node to a visitor method when available."""
         if isinstance(node, StructNode):
             return self.visit_StructNode(node)
         elif isinstance(node, FunctionNode):
@@ -181,10 +187,20 @@ class RustToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
+        """Generate complete CrossGL source from a parsed Rust AST."""
+        self.type_aliases = {}
         code = "shader main {\n"
 
         for use_stmt in ast.use_statements:
             code += f"    // use {use_stmt.path}\n"
+
+        for alias in getattr(ast, "type_aliases", []):
+            self.register_type_alias(alias)
+
+        for alias in getattr(ast, "type_aliases", []):
+            alias_code = self.generate_type_alias(alias)
+            if alias_code:
+                code += alias_code
 
         for global_var in ast.global_variables:
             if isinstance(global_var, ConstNode):
@@ -230,7 +246,19 @@ class RustToCrossGLConverter:
         code += "}\n"
         return code
 
+    def register_type_alias(self, alias):
+        if getattr(alias, "name", None):
+            self.type_aliases[alias.name] = alias
+
+    def generate_type_alias(self, alias):
+        if getattr(alias, "generics", None) or not getattr(alias, "alias_type", None):
+            return ""
+
+        declarator = self.format_typed_declarator(alias.alias_type, alias.name)
+        return f"    typedef {declarator};\n"
+
     def generate_function(self, func, indent=1, struct_name=None):
+        """Render one Rust function node as a CrossGL function."""
         code = ""
         indent_str = "    " * indent
 
@@ -395,6 +423,7 @@ class RustToCrossGLConverter:
         return code
 
     def generate_expression(self, expr):
+        """Render a Rust backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
@@ -408,6 +437,9 @@ class RustToCrossGLConverter:
             return f"({expr.op}{operand})"
         elif isinstance(expr, FunctionCallNode):
             if isinstance(expr.name, str):
+                constructor = self.format_path_constructor_call(expr.name, expr.args)
+                if constructor is not None:
+                    return constructor
                 func_name = self.map_function(expr.name)
             else:
                 func_name = self.generate_expression(expr.name)
@@ -469,7 +501,20 @@ class RustToCrossGLConverter:
         else:
             return str(expr)
 
+    def format_path_constructor_call(self, function_name, args):
+        if not function_name.endswith("::new"):
+            return None
+
+        type_name = function_name[: -len("::new")]
+        mapped_type = self.map_type(type_name)
+        if mapped_type == type_name:
+            return None
+
+        args_str = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{mapped_type}({args_str})"
+
     def map_type(self, rust_type):
+        """Map a Rust type name to the closest CrossGL type name."""
         if not rust_type:
             return "void"
 
@@ -482,6 +527,10 @@ class RustToCrossGLConverter:
             base_type, array_suffix = array_parts
             return f"{self.map_type(base_type)}{array_suffix}"
 
+        resolved_alias = self.resolve_type_alias(rust_type)
+        if resolved_alias is not None:
+            return resolved_alias
+
         if "<" in rust_type and ">" in rust_type:
             base_type = rust_type.split("<")[0]
             if base_type in ["Vec2", "Vec3", "Vec4"]:
@@ -490,6 +539,122 @@ class RustToCrossGLConverter:
                 )
 
         return self.type_map.get(rust_type, rust_type)
+
+    def resolve_type_alias(self, rust_type):
+        for alias_name in self.type_alias_lookup_names(rust_type):
+            alias = self.type_aliases.get(alias_name)
+            if alias is None:
+                continue
+            if getattr(alias, "generics", None):
+                return None
+            return alias.name
+
+        generic = self.parse_generic_type(rust_type)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        alias = None
+        for alias_name in self.type_alias_lookup_names(base_name):
+            alias = self.type_aliases.get(alias_name)
+            if alias is not None:
+                break
+        if alias is None:
+            return None
+
+        generics = getattr(alias, "generics", []) or []
+        if not generics or len(generics) != len(args):
+            return None
+
+        substituted = self.substitute_type_parameters(alias.alias_type, generics, args)
+        if substituted == rust_type:
+            return None
+        return self.map_type(substituted)
+
+    def type_alias_lookup_names(self, type_name):
+        names = [type_name]
+        if "::" in type_name:
+            names.append(type_name.rsplit("::", 1)[-1])
+        return names
+
+    def parse_generic_type(self, rust_type):
+        if not rust_type or "<" not in rust_type or not rust_type.endswith(">"):
+            return None
+
+        base_name, remainder = rust_type.split("<", 1)
+        base_name = base_name.strip()
+        if not base_name:
+            return None
+
+        args_text = remainder[:-1]
+        args = self.split_generic_arguments(args_text)
+        if not args:
+            return None
+        return base_name, args
+
+    def split_generic_arguments(self, args_text):
+        args = []
+        current = []
+        depth = 0
+
+        for char in args_text:
+            if char == "," and depth == 0:
+                arg = "".join(current).strip()
+                if arg:
+                    args.append(arg)
+                current = []
+                continue
+
+            if char in "<[(":
+                depth += 1
+            elif char in ">])":
+                depth = max(0, depth - 1)
+
+            current.append(char)
+
+        arg = "".join(current).strip()
+        if arg:
+            args.append(arg)
+        return args
+
+    def substitute_type_parameters(self, alias_type, generics, args):
+        substitutions = {
+            self.generic_parameter_name(generic): arg
+            for generic, arg in zip(generics, args)
+        }
+        result = alias_type
+
+        for name, replacement in substitutions.items():
+            result = self.replace_type_identifier(result, name, replacement)
+
+        return result
+
+    def generic_parameter_name(self, generic):
+        return generic.split(":", 1)[0].strip()
+
+    def replace_type_identifier(self, text, name, replacement):
+        result = []
+        index = 0
+        name_len = len(name)
+
+        while index < len(text):
+            if (
+                text.startswith(name, index)
+                and self.is_type_identifier_boundary(text, index - 1)
+                and self.is_type_identifier_boundary(text, index + name_len)
+            ):
+                result.append(replacement)
+                index += name_len
+            else:
+                result.append(text[index])
+                index += 1
+
+        return "".join(result)
+
+    def is_type_identifier_boundary(self, text, index):
+        if index < 0 or index >= len(text):
+            return True
+        return not (text[index].isalnum() or text[index] == "_")
 
     def strip_reference_type(self, type_name):
         if type_name.startswith("&mut "):

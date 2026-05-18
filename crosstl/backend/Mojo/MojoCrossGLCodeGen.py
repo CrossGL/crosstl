@@ -6,7 +6,10 @@ from .MojoLexer import *
 
 
 class MojoToCrossGLConverter:
+    """Serialize Mojo backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize Mojo-to-CrossGL type, semantic, and function mappings."""
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -117,6 +120,7 @@ class MojoToCrossGLConverter:
         }
 
     def generate(self, ast):
+        """Generate complete CrossGL source from a parsed Mojo AST."""
         code = "shader main {\n"
 
         if hasattr(ast, "functions") and ast.functions:
@@ -216,6 +220,7 @@ class MojoToCrossGLConverter:
         return False
 
     def generate_function(self, func, indent=1):
+        """Render one Mojo function node as a CrossGL function."""
         code = ""
         indent_str = "    " * indent
 
@@ -373,6 +378,7 @@ class MojoToCrossGLConverter:
         return code
 
     def generate_expression(self, expr):
+        """Render a Mojo backend expression node as CrossGL syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
@@ -428,11 +434,13 @@ class MojoToCrossGLConverter:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def map_type(self, mojo_type):
+        """Map a Mojo type name to the closest CrossGL type name."""
         if mojo_type is None:
             return "void"
         return self.type_map.get(mojo_type, mojo_type)
 
     def map_semantic(self, attributes):
+        """Map Mojo decorators or attributes to CrossGL semantic annotations."""
         if not attributes:
             return ""
 

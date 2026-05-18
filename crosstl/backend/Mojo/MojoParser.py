@@ -5,17 +5,22 @@ from .MojoAst import *
 
 
 class MojoParser:
+    """Parse Mojo tokens into the Mojo backend AST."""
+
     def __init__(self, tokens):
+        """Initialize the parser with a token stream from ``MojoLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
         self.skip_comments()
 
     def skip_comments(self):
+        """Advance past comment tokens before parsing syntax."""
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
+        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -26,11 +31,13 @@ class MojoParser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def parse(self):
+        """Parse the complete Mojo token stream into a module AST."""
         module = self.parse_module()
         self.eat("EOF")
         return module
 
     def parse_module(self):
+        """Parse top-level Mojo imports, declarations, and functions."""
         imports = []
         structs = []
         functions = []

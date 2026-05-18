@@ -35,7 +35,10 @@ from .array_utils import (
 
 
 class SlangCodeGen:
+    """Emit Slang shader source from the shared CrossGL AST."""
+
     def __init__(self):
+        """Initialize Slang generation state and helper caches."""
         self.indent_level = 0
         self.indent_str = "    "
         self.variable_types = {}
@@ -46,9 +49,11 @@ class SlangCodeGen:
         self._generating = False
 
     def indent(self):
+        """Return whitespace for the current indentation level."""
         return self.indent_str * self.indent_level
 
     def generate(self, ast):
+        """Generate Slang source for a CrossGL AST or AST fragment."""
         outermost = not self._generating
         if outermost:
             self._generating = True
@@ -137,6 +142,7 @@ class SlangCodeGen:
         return "\n\n".join(self.helper_functions.values()) + "\n\n"
 
     def generate_shader(self, node):
+        """Render a full CrossGL shader AST as a Slang translation unit."""
         result = ""
 
         structs = getattr(node, "structs", [])
@@ -179,6 +185,7 @@ class SlangCodeGen:
         return None
 
     def generate_stage(self, stage_type, stage):
+        """Render one staged entry point and its local functions."""
         stage_name = self.get_stage_name(stage_type)
         result = f"// {stage_name.title()} Shader\n"
 
@@ -333,6 +340,7 @@ class SlangCodeGen:
         return result
 
     def generate_function(self, node, shader_type=None):
+        """Render one CrossGL function or shader entry point as Slang code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
         saved_function_return_type = self.current_function_return_type
@@ -420,6 +428,7 @@ class SlangCodeGen:
         )
 
     def generate_statement(self, node):
+        """Render a single CrossGL statement as Slang code."""
         if isinstance(node, ReturnNode):
             if node.value is None:
                 return "return;"
@@ -656,6 +665,7 @@ class SlangCodeGen:
         return "".join(escaped)
 
     def generate_expression(self, node):
+        """Render a CrossGL expression as Slang expression syntax."""
         if isinstance(node, VariableNode):
             return node.name
         elif isinstance(node, IdentifierNode):
@@ -807,6 +817,7 @@ class SlangCodeGen:
         return [body]
 
     def convert_type(self, type_name):
+        """Map a CrossGL type name or type node to a Slang type string."""
         # Map CrossGL types to Slang types
         type_map = {
             "vec2<f32>": "float2",

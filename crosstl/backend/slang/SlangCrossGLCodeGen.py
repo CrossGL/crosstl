@@ -6,7 +6,10 @@ from .SlangLexer import *
 
 
 class SlangToCrossGLConverter:
+    """Serialize Slang backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize Slang-to-CrossGL type, semantic, and resource mappings."""
         self.vertex_inputs = []
         self.vertex_outputs = []
         self.fragment_inputs = []
@@ -135,6 +138,7 @@ class SlangToCrossGLConverter:
         }
 
     def generate(self, ast):
+        """Generate complete CrossGL source from a parsed Slang AST."""
         code = "shader main {\n"
         if ast.imports:
             for imp in ast.imports:
@@ -191,6 +195,7 @@ class SlangToCrossGLConverter:
         return code
 
     def generate_function(self, func, indent=1):
+        """Render one Slang function node as a CrossGL function."""
         code = " "
         code += "  " * indent
         params = ", ".join(
@@ -257,6 +262,7 @@ class SlangToCrossGLConverter:
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
+        """Render a Slang backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
@@ -291,11 +297,13 @@ class SlangToCrossGLConverter:
             return str(expr)
 
     def map_type(self, slang_type):
+        """Map a Slang type name to the closest CrossGL type name."""
         if slang_type:
             return self.type_map.get(slang_type, slang_type)
         return slang_type
 
     def map_semantic(self, semantic):
+        """Map a Slang semantic to CrossGL semantic annotation syntax."""
         if semantic is not None:
             return f"@ {self.semantic_map.get(semantic, semantic)}"
         else:

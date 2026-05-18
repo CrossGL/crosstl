@@ -124,7 +124,10 @@ MOJO_VECTOR_ARITHMETIC_OPS = {
 
 
 class MojoCodeGen:
+    """Emit Mojo-like shader source from the shared CrossGL AST."""
+
     def __init__(self):
+        """Initialize Mojo type maps and helper-generation state."""
         self.vector_constructor_info = MOJO_VECTOR_TYPES
         self.struct_types = {}
         self.function_return_types = {}
@@ -222,6 +225,7 @@ class MojoCodeGen:
         }
 
     def generate(self, ast):
+        """Generate complete Mojo-like shader source for a CrossGL AST."""
         self.struct_types = {}
         self.function_return_types = {}
         self.variable_types = {}
@@ -510,6 +514,7 @@ class MojoCodeGen:
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
+        """Render one CrossGL function or shader entry point as Mojo code."""
         code = ""
         "    " * indent
         previous_variable_types = self.variable_types.copy()
@@ -661,6 +666,7 @@ class MojoCodeGen:
         return None
 
     def generate_statement(self, stmt, indent=0):
+        """Render a single CrossGL statement as Mojo code."""
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
@@ -871,6 +877,7 @@ class MojoCodeGen:
         return code
 
     def generate_expression(self, expr):
+        """Render a CrossGL expression as Mojo expression syntax."""
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, (int, float, bool)):
@@ -1953,6 +1960,7 @@ class MojoCodeGen:
         return "".join(escaped)
 
     def map_type(self, vtype):
+        """Map a CrossGL type name or type node to a Mojo type string."""
         if vtype is None:
             return "Float32"
 
@@ -2014,6 +2022,7 @@ class MojoCodeGen:
         return op_map.get(op, op)
 
     def map_semantic(self, semantic):
+        """Map a CrossGL semantic to the Mojo backend attribute name."""
         if semantic:
             return self.semantic_map.get(semantic, semantic)
         return ""

@@ -158,15 +158,20 @@ VALID_DATA_TYPES = [
 
 
 class VulkanLexer:
+    """Tokenize Vulkan/SPIR-V style source for the Vulkan backend parser."""
+
     def __init__(self, code: str):
+        """Initialize the lexer with raw Vulkan/SPIR-V style source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
+        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
+        """Yield Vulkan/SPIR-V tokens while skipping whitespace and comments."""
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -187,6 +192,7 @@ class VulkanLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Tuple[int, str, str]:
+        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -195,5 +201,6 @@ class VulkanLexer:
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "VulkanLexer":
+        """Create a lexer instance from a Vulkan/SPIR-V source file."""
         with open(filepath, "r") as f:
             return cls(f.read())

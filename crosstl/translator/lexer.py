@@ -462,6 +462,7 @@ class Lexer:
     """Tokenizer for CrossGL Universal IR."""
 
     def __init__(self, code):
+        """Tokenize CrossGL source text immediately on construction."""
         self.code = code
         self.tokens = []
         self.token_cache = {}
@@ -469,18 +470,21 @@ class Lexer:
         self.tokenize()
 
     def _compile_patterns(self):
+        """Compile the ordered token specification into one regex."""
         combined_pattern = "|".join(
             f"(?P<{name}>{pattern})" for name, pattern in TOKENS.items()
         )
         return re.compile(combined_pattern)
 
     def _get_cached_token(self, text, token_type):
+        """Return a stable tuple object for repeated token text/type pairs."""
         cache_key = (text, token_type)
         if cache_key not in self.token_cache:
             self.token_cache[cache_key] = (token_type, text)
         return self.token_cache[cache_key]
 
     def tokenize(self):
+        """Scan source text into parser-ready tokens."""
         pos = 0
         length = len(self.code)
 
@@ -519,8 +523,10 @@ class Lexer:
         self.tokens.append(self._get_cached_token(None, "EOF"))
 
     def get_tokens(self):
+        """Return the token list produced by the lexer."""
         return self.tokens
 
     def debug_print(self):
+        """Print token indexes, types, and text for grammar debugging."""
         for i, (token_type, text) in enumerate(self.tokens):
             print(f"{i:3d}: {token_type:20s} '{text}'")

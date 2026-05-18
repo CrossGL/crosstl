@@ -5,17 +5,22 @@ from .SlangAst import *
 
 
 class SlangParser:
+    """Parse Slang tokens into the Slang backend AST."""
+
     def __init__(self, tokens):
+        """Initialize the parser with a token stream from ``SlangLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
         self.skip_comments()
 
     def skip_comments(self):
+        """Advance past comment tokens before parsing syntax."""
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
+        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -26,11 +31,13 @@ class SlangParser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def parse(self):
+        """Parse the complete Slang token stream into a shader AST."""
         shader = self.parse_shader()
         self.eat("EOF")
         return shader
 
     def parse_shader(self):
+        """Parse top-level Slang declarations, functions, and cbuffers."""
         imports = []
         exports = []
         functions = []

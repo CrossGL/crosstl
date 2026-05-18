@@ -24,9 +24,12 @@ from .vector_arithmetic import VectorArithmeticMixin
 
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+    """Emit HIP source from the shared CrossGL translator AST."""
+
     resource_diagnostic_backend = "HIP"
 
     def __init__(self):
+        """Initialize HIP type maps and per-generation visitor state."""
         self.indent_level = 0
         self.code_lines = []
         self.current_function = None
@@ -285,6 +288,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         }
 
     def generate(self, node: ASTNode) -> str:
+        """Generate complete HIP source for a CrossGL AST."""
         self.code_lines = []
         self.indent_level = 0
         self.variable_types = {}
@@ -311,6 +315,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return "\n".join(self.code_lines)
 
     def add_includes(self):
+        """Emit the standard HIP runtime include block."""
         self.code_lines.extend(
             [
                 "#include <hip/hip_runtime.h>",
@@ -322,25 +327,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         )
 
     def indent(self) -> str:
+        """Return whitespace for the current indentation level."""
         return "    " * self.indent_level
 
     def add_line(self, line: str = ""):
+        """Append one HIP output line using the current indentation level."""
         if line:
             self.code_lines.append(self.indent() + line)
         else:
             self.code_lines.append("")
 
     def visit(self, node: ASTNode) -> str:
+        """Dispatch an AST node to its HIP visitor method."""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node: ASTNode) -> str:
+        """Raise a clear error for unsupported AST nodes."""
         raise NotImplementedError(
             f"Code generation not implemented for {type(node).__name__}"
         )
 
     def visit_ShaderNode(self, node: ShaderNode) -> str:
+        """Render a full shader/program AST as a HIP translation unit."""
         structs = getattr(node, "structs", [])
         for struct in structs:
             self.visit(struct)
@@ -385,6 +395,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_FunctionNode(self, node: FunctionNode) -> str:
+        """Render a CrossGL function or compute entry point as HIP code."""
         saved_variable_types = self.variable_types.copy()
         self.current_function = node.name
         saved_current_function_name = self.current_function_name
@@ -538,6 +549,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def emit_statement(self, node):
+        """Render and append one statement node when it produces code."""
         if node is None:
             return
 
@@ -546,6 +558,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.add_line(f"{result};")
 
     def emit_body(self, body):
+        """Render a list-like or block-like function body."""
         if isinstance(body, list):
             for stmt in body:
                 self.emit_statement(stmt)
@@ -1232,6 +1245,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return str(type_node)
 
     def map_type(self, type_name) -> str:
+        """Map a CrossGL type name or type node to a HIP type string."""
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
             type_str = self.convert_type_node_to_string(type_name)
         else:
@@ -1275,6 +1289,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return self.visit(size)
 
     def generate_kernel_wrapper(self, kernel_node: FunctionNode) -> str:
+        """Generate a host-side HIP launch wrapper for a kernel node."""
         wrapper_lines = []
 
         # Generate wrapper function
@@ -1303,5 +1318,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
 
 def generate_hip_code(ast: ShaderNode) -> str:
+    """Generate HIP source from a CrossGL shader AST."""
     generator = HipCodeGen()
     return generator.generate(ast)

@@ -23,9 +23,12 @@ from .vector_arithmetic import VectorArithmeticMixin
 
 
 class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+    """Emit CUDA source from the shared CrossGL translator AST."""
+
     resource_diagnostic_backend = "CUDA"
 
     def __init__(self):
+        """Initialize CUDA type maps and per-generation visitor state."""
         self.indent_level = 0
         self.output = []
         self.variable_types = {}
@@ -56,6 +59,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
 
     def generate(self, ast_node):
+        """Generate complete CUDA source for a CrossGL AST."""
         self.output = []
         self.indent_level = 0
         self.variable_types = {}
@@ -79,11 +83,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return "\n".join(self.output)
 
     def visit(self, node):
+        """Dispatch an AST node to its CUDA visitor method."""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node):
+        """Fallback visitor for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
             return node
         elif isinstance(node, list):
@@ -92,12 +98,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return str(node)
 
     def emit(self, code):
+        """Append a line of CUDA output using the current indentation level."""
         if code.strip():
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
 
     def emit_statement(self, node):
+        """Render and append one statement node when it produces code."""
         if node is None:
             return
 
@@ -106,6 +114,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.emit(f"{result};")
 
     def emit_body(self, body):
+        """Render a list-like or block-like function body."""
         if isinstance(body, list):
             for stmt in body:
                 self.emit_statement(stmt)
@@ -116,6 +125,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.emit_statement(body)
 
     def visit_ShaderNode(self, node):
+        """Render a full shader/program AST as a CUDA translation unit."""
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("")
@@ -164,6 +174,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     self.emit("")
 
     def visit_FunctionNode(self, node):
+        """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
         saved_current_function_name = self.current_function_name
         self.current_function_name = node.name

@@ -25,7 +25,10 @@ from .array_utils import parse_array_type, format_array_type, get_array_size_fro
 
 
 class RustCodeGen:
+    """Emit Rust-like GPU shader source from the shared CrossGL AST."""
+
     def __init__(self):
+        """Initialize Rust type maps and expression-generation state."""
         self.current_shader = None
         self.type_mapping = {
             # Scalar Types
@@ -169,6 +172,7 @@ class RustCodeGen:
         self.current_return_type = None
 
     def generate(self, ast):
+        """Generate complete Rust-like shader source for a CrossGL AST."""
         self.variable_types = {}
         self.current_return_type = None
         code = "// Generated Rust GPU Shader Code\n"
@@ -207,7 +211,7 @@ class RustCodeGen:
                     f"{init_expr};\n"
                 )
 
-        cbuffers = getattr(ast, "cbuffers", None) or getattr(ast, "constants", [])
+        cbuffers = self.get_cbuffer_nodes(ast)
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -356,6 +360,24 @@ class RustCodeGen:
                 return attr.name
         return None
 
+    def get_member_type(self, member):
+        if hasattr(member, "member_type"):
+            return self.convert_type_node_to_string(member.member_type)
+        if hasattr(member, "vtype"):
+            return member.vtype
+        return "float"
+
+    def get_cbuffer_nodes(self, ast):
+        nodes = []
+        seen = set()
+        for attr in ("cbuffers", "constants"):
+            for node in getattr(ast, attr, None) or []:
+                node_id = id(node)
+                if node_id not in seen:
+                    nodes.append(node)
+                    seen.add(node_id)
+        return nodes
+
     def map_type_to_rust(self, type_str):
         """Enhanced type mapping for Rust."""
         # Handle vector types first
@@ -396,7 +418,7 @@ class RustCodeGen:
 
     def generate_cbuffers(self, ast):
         code = ""
-        cbuffers = getattr(ast, "cbuffers", None) or getattr(ast, "constants", [])
+        cbuffers = self.get_cbuffer_nodes(ast)
         for node in cbuffers:
             if isinstance(node, StructNode):
                 code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
@@ -408,10 +430,9 @@ class RustCodeGen:
                         else:
                             code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
                     else:
-                        code += (
-                            f"    pub {member.name}: {self.map_type(member.vtype)},\n"
-                        )
+                        code += f"    pub {member.name}: {self.map_type(self.get_member_type(member))},\n"
                 code += "}\n\n"
+                code += self.generate_cbuffer_member_statics(node.members)
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
                 code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
                 code += f"pub struct {node.name} {{\n"
@@ -422,13 +443,28 @@ class RustCodeGen:
                         else:
                             code += f"    pub {member.name}: Vec<{self.map_type(member.element_type)}>,\n"
                     else:
-                        code += (
-                            f"    pub {member.name}: {self.map_type(member.vtype)},\n"
-                        )
+                        code += f"    pub {member.name}: {self.map_type(self.get_member_type(member))},\n"
                 code += "}\n\n"
+                code += self.generate_cbuffer_member_statics(node.members)
+        return code
+
+    def generate_cbuffer_member_statics(self, members):
+        code = ""
+        for member in members:
+            if isinstance(member, ArrayNode):
+                if member.size:
+                    member_type = (
+                        f"[{self.map_type(member.element_type)}; {member.size}]"
+                    )
+                else:
+                    member_type = f"Vec<{self.map_type(member.element_type)}>"
+            else:
+                member_type = self.map_type(self.get_member_type(member))
+            code += f"static {member.name}: {member_type} = Default::default();\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
+        """Render one CrossGL function or shader entry point as Rust code."""
         code = ""
         code += "  " * indent
         saved_variable_types = self.variable_types.copy()
@@ -503,6 +539,7 @@ class RustCodeGen:
         return ""
 
     def generate_statement(self, stmt, indent=0):
+        """Render a single CrossGL statement as Rust code."""
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
@@ -714,6 +751,8 @@ class RustCodeGen:
         indent_str = "    " * indent
 
         init = self.generate_statement(node.init, 0).strip()
+        if init.endswith(";"):
+            init = init[:-1]
         condition = self.generate_expression(node.condition)
         update = self.generate_expression(node.update)
 
@@ -736,6 +775,7 @@ class RustCodeGen:
         return code
 
     def generate_expression(self, expr):
+        """Render a CrossGL expression as Rust expression syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
@@ -796,6 +836,10 @@ class RustCodeGen:
 
             func_name = self.function_map.get(func_name, func_name)
 
+            scalar_cast = self.generate_scalar_constructor_call(func_name, args)
+            if scalar_cast is not None:
+                return scalar_cast
+
             vector_info = self.vector_type_info(func_name)
             if vector_info:
                 rust_type = self.map_type(func_name)
@@ -851,6 +895,48 @@ class RustCodeGen:
             return f"(if {condition} {{ {true_expr} }} else {{ {false_expr} }})"
         else:
             return str(expr)
+
+    def generate_scalar_constructor_call(self, func_name, args):
+        rust_type = self.scalar_constructor_type(func_name)
+        if rust_type is None or len(args) != 1:
+            return None
+
+        arg = args[0]
+        arg_expr = self.generate_expression(arg)
+
+        if rust_type == "bool":
+            arg_type = self.expression_result_type(arg)
+            if arg_type == "bool":
+                return arg_expr
+            zero_literal = "0.0" if arg_type in {"float", "double", "half"} else "0"
+            return f"({arg_expr} != {zero_literal})"
+
+        return f"({arg_expr} as {rust_type})"
+
+    def scalar_constructor_type(self, func_name):
+        scalar_types = {
+            "bool": "bool",
+            "char": "char",
+            "short": "i16",
+            "ushort": "u16",
+            "int": "i32",
+            "uint": "u32",
+            "long": "i64",
+            "ulong": "u64",
+            "float": "f32",
+            "double": "f64",
+            "half": "f16",
+            "i16": "i16",
+            "u16": "u16",
+            "i32": "i32",
+            "u32": "u32",
+            "i64": "i64",
+            "u64": "u64",
+            "f16": "f16",
+            "f32": "f32",
+            "f64": "f64",
+        }
+        return scalar_types.get(func_name)
 
     def format_literal(self, value, literal_type=None):
         if isinstance(value, bool):
@@ -1003,6 +1089,7 @@ class RustCodeGen:
         return "".join(escaped)
 
     def map_type(self, vtype):
+        """Map a CrossGL type name or type node to a Rust type string."""
         if vtype is None:
             return "f32"
 
@@ -1059,6 +1146,7 @@ class RustCodeGen:
         return op_map.get(op, op)
 
     def map_semantic(self, semantic):
+        """Map a CrossGL semantic to the Rust backend attribute name."""
         if semantic:
             return self.semantic_map.get(semantic, semantic)
         return ""

@@ -32,6 +32,8 @@ class ShaderNode(ASTNode):
         impl_blocks=None,
         use_statements=None,
         traits=None,
+        enums=None,
+        type_aliases=None,
     ):
         self.structs = structs or []
         self.functions = functions or []
@@ -39,6 +41,8 @@ class ShaderNode(ASTNode):
         self.impl_blocks = impl_blocks or []
         self.use_statements = use_statements or []
         self.traits = traits or []
+        self.enums = enums or []
+        self.type_aliases = type_aliases or []
 
     def __repr__(self):
         return (
@@ -47,7 +51,10 @@ class ShaderNode(ASTNode):
             f"functions={len(self.functions)}, "
             f"globals={len(self.global_variables)}, "
             f"impl_blocks={len(self.impl_blocks)}, "
-            f"use_statements={len(self.use_statements)})"
+            f"use_statements={len(self.use_statements)}, "
+            f"traits={len(self.traits)}, "
+            f"enums={len(self.enums)}, "
+            f"type_aliases={len(self.type_aliases)})"
         )
 
 
@@ -68,6 +75,49 @@ class StructNode(ASTNode):
         )
 
 
+class EnumVariantNode(ASTNode):
+    """Node representing one Rust enum variant."""
+
+    def __init__(self, name, kind="unit", fields=None, value=None, attributes=None):
+        self.name = name
+        self.kind = kind
+        self.fields = fields or []
+        self.value = value
+        self.attributes = attributes or []
+
+    def __repr__(self):
+        return (
+            f"EnumVariantNode(name={self.name}, kind={self.kind}, "
+            f"fields={len(self.fields)}, value={self.value})"
+        )
+
+
+class EnumNode(ASTNode):
+    """Node representing a Rust enum declaration."""
+
+    def __init__(
+        self,
+        name,
+        variants,
+        attributes=None,
+        visibility=None,
+        generics=None,
+        where_clauses=None,
+    ):
+        self.name = name
+        self.variants = variants
+        self.attributes = attributes or []
+        self.visibility = visibility
+        self.generics = generics or []
+        self.where_clauses = where_clauses or []
+
+    def __repr__(self):
+        return (
+            f"EnumNode(name={self.name}, variants={len(self.variants)}, "
+            f"visibility={self.visibility})"
+        )
+
+
 class FunctionNode(ASTNode):
     """Node representing a Rust function."""
 
@@ -80,6 +130,7 @@ class FunctionNode(ASTNode):
         attributes=None,
         visibility=None,
         generics=None,
+        where_clauses=None,
     ):
         self.return_type = return_type
         self.name = name
@@ -88,6 +139,7 @@ class FunctionNode(ASTNode):
         self.attributes = attributes or []
         self.visibility = visibility
         self.generics = generics or []
+        self.where_clauses = where_clauses or []
 
     def __repr__(self):
         return (
@@ -102,12 +154,22 @@ class FunctionNode(ASTNode):
 class ImplNode(ASTNode):
     """Node representing an impl block"""
 
-    def __init__(self, struct_name, methods, trait_name=None, generics=None):
+    def __init__(
+        self,
+        struct_name,
+        methods,
+        trait_name=None,
+        generics=None,
+        where_clauses=None,
+        type_aliases=None,
+    ):
         self.struct_name = struct_name
         self.methods = methods
         self.functions = methods
         self.trait_name = trait_name  # For trait implementations
         self.generics = generics or []
+        self.where_clauses = where_clauses or []
+        self.type_aliases = type_aliases or []
 
     def __repr__(self):
         if self.trait_name:
@@ -115,12 +177,68 @@ class ImplNode(ASTNode):
         return f"ImplNode(for={self.struct_name}, methods={len(self.methods)})"
 
 
+class AssociatedTypeNode(ASTNode):
+    """Node representing a Rust trait associated type declaration."""
+
+    def __init__(self, name, bounds=None, default_type=None, where_clauses=None):
+        self.name = name
+        self.bounds = bounds or []
+        self.default_type = default_type
+        self.where_clauses = where_clauses or []
+
+    def __repr__(self):
+        return (
+            f"AssociatedTypeNode(name={self.name}, bounds={self.bounds}, "
+            f"default_type={self.default_type})"
+        )
+
+
+class TypeAliasNode(ASTNode):
+    """Node representing a Rust type alias declaration."""
+
+    def __init__(
+        self,
+        name,
+        alias_type,
+        generics=None,
+        visibility=None,
+        where_clauses=None,
+        attributes=None,
+    ):
+        self.name = name
+        self.alias_type = alias_type
+        self.generics = generics or []
+        self.visibility = visibility
+        self.where_clauses = where_clauses or []
+        self.attributes = attributes or []
+
+    def __repr__(self):
+        return (
+            f"TypeAliasNode(name={self.name}, alias_type={self.alias_type}, "
+            f"generics={self.generics})"
+        )
+
+
 class TraitNode(ASTNode):
     """Node representing a trait definition"""
 
-    def __init__(self, name, methods, *args, **kwargs):
+    def __init__(
+        self,
+        name,
+        methods,
+        generics=None,
+        visibility=None,
+        where_clauses=None,
+        associated_types=None,
+        *args,
+        **kwargs,
+    ):
         self.name = name
         self.methods = methods
+        self.generics = generics or []
+        self.visibility = visibility
+        self.where_clauses = where_clauses or []
+        self.associated_types = associated_types or []
 
         # Handle additional arguments for compatibility
         for key, value in kwargs.items():

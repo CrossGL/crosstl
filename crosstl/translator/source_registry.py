@@ -43,6 +43,13 @@ def _extract_tokens(lexer) -> Any:
 
 @dataclass(frozen=True)
 class SourceSpec:
+    """Descriptor for a source language frontend.
+
+    A source spec connects file extensions and aliases to a lazily imported
+    lexer/parser pair. Specs can also provide a reverse code generator factory
+    when the source language can be converted back into CrossGL.
+    """
+
     name: str
     extensions: Sequence[str]
     load_lexer_parser: Callable[[], Tuple[type, type]]
@@ -50,6 +57,7 @@ class SourceSpec:
     aliases: Sequence[str] = ()
 
     def parse(self, code: str):
+        """Parse source code into that source backend's AST."""
         lexer_cls, parser_cls = self.load_lexer_parser()
         lexer = lexer_cls(code)
         tokens = _extract_tokens(lexer)
@@ -58,12 +66,15 @@ class SourceSpec:
 
 
 class SourceRegistry:
+    """Lookup table for source parsers by name, alias, and extension."""
+
     def __init__(self) -> None:
         self._by_name: Dict[str, SourceSpec] = {}
         self._by_alias: Dict[str, str] = {}
         self._by_extension: Dict[str, str] = {}
 
     def register(self, spec: SourceSpec, *, overwrite: bool = False) -> SourceSpec:
+        """Register a source spec and all of its aliases/extensions."""
         name = _normalize_source_name(spec.name)
         if name in self._by_name and not overwrite:
             existing = self._by_name[name]
@@ -94,6 +105,7 @@ class SourceRegistry:
         return spec
 
     def resolve_name(self, name: str) -> Optional[str]:
+        """Resolve a source name or alias to its canonical registry name."""
         if not name:
             return None
         key = _normalize_source_name(name)
@@ -102,12 +114,14 @@ class SourceRegistry:
         return self._by_alias.get(key)
 
     def get(self, name: str) -> Optional[SourceSpec]:
+        """Return the source spec registered for a name or alias."""
         resolved = self.resolve_name(name)
         if not resolved:
             return None
         return self._by_name.get(resolved)
 
     def get_by_extension(self, path_or_ext: str) -> Optional[SourceSpec]:
+        """Return the source spec registered for a file path or extension."""
         ext = path_or_ext
         if path_or_ext:
             looks_like_path = os.path.basename(path_or_ext) != path_or_ext
@@ -121,9 +135,11 @@ class SourceRegistry:
         return self._by_name.get(name)
 
     def names(self) -> Sequence[str]:
+        """Return registered canonical source names in sorted order."""
         return sorted(self._by_name.keys())
 
     def extensions(self) -> Sequence[str]:
+        """Return registered source file extensions in sorted order."""
         return sorted(self._by_extension.keys())
 
 
@@ -243,6 +259,8 @@ def _reverse_hip():
 
 
 def register_default_sources() -> None:
+    """Register the built-in CrossGL and native source frontends."""
+
     def _register(spec: SourceSpec) -> None:
         try:
             SOURCE_REGISTRY.register(spec)

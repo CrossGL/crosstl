@@ -28,18 +28,21 @@ STAGE_QUALIFIER_NAMES = frozenset(
 
 
 def normalize_stage_name(stage):
+    """Normalize a shader stage enum or string into a lowercase name."""
     if stage is None:
         return None
     return str(stage).split(".")[-1].lower()
 
 
 def stage_matches(target_stage, stage):
+    """Return whether a stage should be emitted for the target stage."""
     target_stage = normalize_stage_name(target_stage)
     stage = normalize_stage_name(stage)
     return target_stage is None or stage == target_stage
 
 
 def should_emit_qualified_function(target_stage, qualifier):
+    """Return whether a qualified function belongs in the target output."""
     target_stage = normalize_stage_name(target_stage)
     qualifier = normalize_stage_name(qualifier)
     return not (
@@ -50,6 +53,7 @@ def should_emit_qualified_function(target_stage, qualifier):
 
 
 def compute_local_size(execution_config=None):
+    """Return a three-component workgroup size from execution metadata."""
     config = execution_config or {}
     for key in ("local_size", "workgroup_size", "numthreads"):
         value = config.get(key)
@@ -64,6 +68,7 @@ def compute_local_size(execution_config=None):
 
 
 def compute_local_size_value(value):
+    """Return a string representation for a local-size dimension value."""
     if hasattr(value, "value"):
         return str(value.value)
     return str(value)

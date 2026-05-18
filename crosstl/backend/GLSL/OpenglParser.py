@@ -157,13 +157,17 @@ ASSIGNMENT_TOKENS = {
 
 
 class GLSLParser:
+    """Parse GLSL tokens into the OpenGL backend shader AST."""
+
     def __init__(self, tokens, shader_type="vertex"):
+        """Initialize the parser for a token stream and shader stage."""
         self.tokens = tokens or [("EOF", "")]
         self.shader_type = shader_type
         self.index = 0
         self.current_token = self.tokens[self.index]
 
     def advance(self):
+        """Advance to the next token, falling back to EOF at the end."""
         self.index += 1
         if self.index < len(self.tokens):
             self.current_token = self.tokens[self.index]
@@ -171,6 +175,7 @@ class GLSLParser:
             self.current_token = ("EOF", "")
 
     def eat(self, token_type):
+        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.advance()
         else:
@@ -179,22 +184,26 @@ class GLSLParser:
             )
 
     def peek(self, offset=1):
+        """Return a lookahead token without advancing the parser."""
         idx = self.index + offset
         if idx < len(self.tokens):
             return self.tokens[idx]
         return ("EOF", "")
 
     def skip_newlines(self):
+        """Advance past newline tokens that separate GLSL declarations."""
         while self.current_token[0] == "NEWLINE":
             self.advance()
 
     def parse(self):
+        """Parse the complete token stream into a shader node."""
         shader = self.parse_shader()
         if self.current_token[0] != "EOF":
             self.eat("EOF")
         return shader
 
     def parse_shader(self):
+        """Parse top-level GLSL declarations, functions, and layout blocks."""
         io_variables = []
         uniforms = []
         constants = []

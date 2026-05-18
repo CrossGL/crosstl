@@ -4,6 +4,7 @@ from ..ast import ArrayAccessNode, FunctionCallNode
 
 
 def split_array_suffix(array_suffix):
+    """Split a C-style array suffix into dimension strings."""
     dimensions = []
     offset = 0
     while offset < len(array_suffix):
@@ -23,6 +24,7 @@ def format_array_declarator(
     array_suffix,
     dynamic_array_as_pointer=True,
 ):
+    """Format a typed C-style array declarator for generated code."""
     if not dynamic_array_as_pointer or "[]" not in array_suffix:
         return f"{mapped_base} {name}{array_suffix}"
 
@@ -61,6 +63,7 @@ def collect_resource_array_size_hints(
     initial_size,
     format_size,
 ):
+    """Infer resource-array sizes from literal accesses and call propagation."""
     fixed_global_array_sizes = fixed_global_array_sizes or {}
     fixed_function_array_sizes = fixed_function_array_sizes or {}
     global_hints = {name: initial_size for name in global_arrays}
@@ -73,6 +76,7 @@ def collect_resource_array_size_hints(
     functions_by_name = {name: func for name, func in functions_by_name.items() if name}
 
     def assert_not_larger_than_known_fixed(name, fixed_size, required_size):
+        """Raise when inferred usage exceeds a known fixed array size."""
         if required_size > fixed_size:
             raise ValueError(
                 "Conflicting fixed resource array sizes for "
@@ -108,6 +112,7 @@ def collect_resource_array_size_hints(
                 )
 
     def register_fixed_requirement(scope_key, size, current_size):
+        """Record a fixed size requirement for a propagated array argument."""
         if size is None:
             return
         existing = fixed_requirements.get(scope_key)
@@ -124,6 +129,7 @@ def collect_resource_array_size_hints(
         fixed_requirements[scope_key] = size
 
     def assert_not_larger_than_fixed(scope_key, required_size):
+        """Raise when propagated usage exceeds a fixed array requirement."""
         fixed_size = fixed_requirements.get(scope_key)
         if fixed_size is not None and required_size > fixed_size:
             raise ValueError(

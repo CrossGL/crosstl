@@ -40,6 +40,34 @@ from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
 )
+from ..validation import (
+    collect_cbuffer_declaration_name_conflicts,
+    collect_cbuffer_member_global_conflicts,
+    collect_duplicate_cbuffer_member_names,
+    collect_duplicate_cbuffer_names,
+    collect_non_resource_global_resource_shadows,
+    expression_debug_name,
+    floating_coordinate_dimension,
+    integer_coordinate_dimension,
+    is_floating_scalar_type,
+    is_integer_scalar_type,
+    is_numeric_scalar_type,
+    IMAGE_RESOURCE_INTRINSIC_NAMES,
+    INTEGER_COORDINATE_INTRINSIC_NAMES,
+    OFFSET_DIMENSION_INTRINSIC_NAMES,
+    texture_bias_argument_index,
+    texture_compare_argument_index,
+    texture_gather_component_argument_index,
+    texture_gradient_argument_indices,
+    texture_intrinsic_allowed_argument_counts,
+    texture_intrinsic_max_argument_count,
+    texture_intrinsic_min_argument_count,
+    texture_lod_argument_index,
+    texture_mip_level_argument_index,
+    texture_offset_argument_indices,
+    texture_query_lod_coordinate_argument_index,
+    texture_sample_index_argument_index,
+)
 from .stage_utils import (
     normalize_stage_name,
     should_emit_qualified_function,
@@ -49,7 +77,10 @@ from .resource_arrays import collect_resource_array_size_hints
 
 
 class CharTypeMapper:
+    """Normalize CrossGL char-like scalar and vector types for Metal output."""
+
     def map_char_type(self, vtype):
+        """Return the Metal-compatible integer type for a char-like type."""
         char_type_mapping = {
             "char": "int",
             "signed char": "int",
@@ -65,7 +96,10 @@ class CharTypeMapper:
 
 
 class MetalCodeGen:
+    """Emit Metal Shading Language from the shared CrossGL translator AST."""
+
     def __init__(self):
+        """Initialize Metal type maps and per-generation resource state."""
         self.current_shader = None
         self.vertex_item = None
         self.fragment_item = None
@@ -73,6 +107,14 @@ class MetalCodeGen:
         self.char_mapper = CharTypeMapper()
         self.texture_variables = []
         self.sampler_variables = []
+        self.cbuffer_variables = []
+        self.cbuffer_parameter_names = {}
+        self.cbuffer_member_references = {}
+        self.ambiguous_cbuffer_members = set()
+        self.cbuffers_by_name = {}
+        self.user_function_names = set()
+        self.function_cbuffer_dependencies = {}
+        self.function_global_resource_dependencies = {}
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
@@ -219,21 +261,46 @@ class MetalCodeGen:
         }
 
     def generate(self, ast):
+        """Generate complete Metal Shading Language source for a CrossGL AST."""
         return self.generate_program(ast)
 
     def generate_stage(self, ast, shader_type):
+        """Generate Metal source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
     def generate_program(self, ast, target_stage=None):
+        """Render an AST to Metal, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
 
         self.texture_variables = []
         self.sampler_variables = []
+        self.cbuffer_variables = getattr(ast, "cbuffers", []) or []
+        self.cbuffers_by_name = {
+            cbuffer.name: cbuffer
+            for cbuffer in self.cbuffer_variables
+            if getattr(cbuffer, "name", None)
+        }
+        all_functions = self.all_functions(ast)
+        self.user_function_names = {
+            func.name for func in all_functions if getattr(func, "name", None)
+        }
+        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
+            all_functions
+        )
+        self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
+            self.cbuffer_variables
+        )
+        self.cbuffer_member_references = self.collect_cbuffer_member_references(
+            self.cbuffer_variables
+        )
+        if not self.cbuffer_variables:
+            self.ambiguous_cbuffer_members = set()
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.function_global_resource_dependencies = {}
         self.required_image_atomic_compare_helpers = set()
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
@@ -242,6 +309,7 @@ class MetalCodeGen:
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
         ) = self.collect_resource_array_size_hints(ast)
+        self.validate_global_resource_shadows(ast)
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
@@ -412,6 +480,10 @@ class MetalCodeGen:
             else:
                 code += f"{self.map_type(vtype)} {node.name}{array_suffix};\n"
 
+        self.function_global_resource_dependencies = (
+            self.collect_function_global_resource_dependencies(all_functions)
+        )
+
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
             code += "// Constant Buffers\n"
@@ -489,9 +561,30 @@ class MetalCodeGen:
     def generate_cbuffers(self, ast):
         code = ""
         cbuffers = getattr(ast, "cbuffers", [])
+        duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
+        if duplicate_names:
+            names = ", ".join(sorted(duplicate_names))
+            raise ValueError(f"Duplicate cbuffer name(s) in Metal output: {names}")
+
+        declaration_conflicts = collect_cbuffer_declaration_name_conflicts(ast)
+        if declaration_conflicts:
+            names = ", ".join(sorted(declaration_conflicts))
+            raise ValueError(
+                "Cbuffer name(s) conflict with existing Metal declaration(s): "
+                f"{names}"
+            )
+
+        global_member_conflicts = collect_cbuffer_member_global_conflicts(ast)
+        if global_member_conflicts:
+            names = ", ".join(sorted(global_member_conflicts))
+            raise ValueError(
+                "Cbuffer member name(s) conflict with Metal global declaration(s): "
+                f"{names}"
+            )
+
         for node in cbuffers:
             if isinstance(node, StructNode):
-                code += f"{node.name} {{\n"
+                code += f"struct {node.name} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -506,17 +599,20 @@ class MetalCodeGen:
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
-                            member_type = self.map_type(str(member.member_type))
+                            member_type = self.map_type(member.member_type)
                         else:
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
-                        code += f"    {member_type} {member.name};\n"
+                        declaration = format_c_style_array_declaration(
+                            member_type, member.name
+                        )
+                        code += f"    {declaration};\n"
                 code += "};\n"
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # CbufferNode handling
-                code += f"{node.name} {{\n"
+                code += f"struct {node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -530,31 +626,40 @@ class MetalCodeGen:
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
-                            member_type = self.map_type(str(member.member_type))
+                            member_type = self.map_type(member.member_type)
                         else:
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
-                        code += f"    {member_type} {member.name};\n"
+                        declaration = format_c_style_array_declaration(
+                            member_type, member.name
+                        )
+                        code += f"    {declaration};\n"
                 code += "};\n"
 
-        for i, node in enumerate(cbuffers):
-            if isinstance(node, StructNode) or hasattr(node, "name"):
-                code += f"constant {node.name} &{node.name} [[buffer({i})]];\n"
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
+        """Render a function or stage entry point with Metal attributes."""
         code = ""
         code += "  " * indent
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
+        reserved_parameter_names = {
+            getattr(parameter, "name", None)
+            for parameter in param_list
+            if getattr(parameter, "name", None)
+        }
         sampler_parameters = set()
         texture_parameters = {}
         image_format_parameters = {}
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_cbuffer_parameter_names = self.cbuffer_parameter_names
+        previous_cbuffer_member_references = self.cbuffer_member_references
+        previous_ambiguous_cbuffer_members = self.ambiguous_cbuffer_members
         self.current_function_name = getattr(func, "name", None)
         self.local_variable_types = {}
         for p in param_list:
@@ -595,8 +700,24 @@ class MetalCodeGen:
             ):
                 if name not in existing_param_names:
                     params.append(f"{param_type} {name} [[{attribute}]]")
+                    reserved_parameter_names.add(name)
+
+        reserved_parameter_names.update(self.global_resource_parameter_names())
+        self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
+            self.cbuffer_variables, reserved_names=reserved_parameter_names
+        )
+        self.cbuffer_member_references = self.collect_cbuffer_member_references(
+            self.cbuffer_variables
+        )
 
         params_str = ", ".join(params)
+        if shader_type is None:
+            params_str = self.append_required_cbuffer_parameters(
+                params_str, self.current_function_name
+            )
+            params_str = self.append_required_global_resource_parameters(
+                params_str, self.current_function_name
+            )
 
         if hasattr(func, "return_type"):
             raw_return_type = self.type_name_string(func.return_type)
@@ -607,6 +728,7 @@ class MetalCodeGen:
         self.current_function_return_type = raw_return_type
 
         if shader_type == "vertex":
+            params_str = self.append_global_resource_parameters(params_str)
             code += f"vertex {return_type} vertex_{func.name}({params_str}) {{\n"
         elif shader_type == "fragment":
             params_str = self.append_global_resource_parameters(params_str)
@@ -674,6 +796,9 @@ class MetalCodeGen:
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
+        self.cbuffer_parameter_names = previous_cbuffer_parameter_names
+        self.cbuffer_member_references = previous_cbuffer_member_references
+        self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
 
         code += "}\n\n"
         return code
@@ -712,6 +837,12 @@ class MetalCodeGen:
 
     def append_global_resource_parameters(self, params_str):
         resource_params = []
+        if self.cbuffer_variables:
+            for i, cbuffer in enumerate(self.cbuffer_variables):
+                parameter_name = self.cbuffer_parameter_name(cbuffer)
+                resource_params.append(
+                    f"constant {cbuffer.name}& {parameter_name} [[buffer({i})]]"
+                )
         if self.texture_variables:
             for (
                 texture_variable,
@@ -735,7 +866,94 @@ class MetalCodeGen:
             return f"{params_str}, {', '.join(resource_params)}"
         return ", ".join(resource_params)
 
+    def global_resource_parameter_names(self):
+        names = set()
+        for texture_variable, _, _, _ in self.texture_variables:
+            if getattr(texture_variable, "name", None):
+                names.add(texture_variable.name)
+        for sampler_variable, _, _ in self.sampler_variables:
+            if getattr(sampler_variable, "name", None):
+                names.add(sampler_variable.name)
+        return names
+
+    def append_required_cbuffer_parameters(self, params_str, func_name):
+        cbuffer_params = []
+        for cbuffer in self.required_function_cbuffers(func_name):
+            parameter_name = self.cbuffer_parameter_name(cbuffer)
+            cbuffer_params.append(f"constant {cbuffer.name}& {parameter_name}")
+        if not cbuffer_params:
+            return params_str
+        if params_str:
+            return f"{params_str}, {', '.join(cbuffer_params)}"
+        return ", ".join(cbuffer_params)
+
+    def append_required_global_resource_parameters(self, params_str, func_name):
+        resource_params = []
+        for (
+            texture_variable,
+            texture_type,
+            array_size,
+        ) in self.required_function_textures(func_name):
+            texture_name = getattr(texture_variable, "name", None)
+            if texture_name:
+                resource_params.append(
+                    self.format_resource_parameter(
+                        texture_type, texture_name, array_size
+                    )
+                )
+        for sampler_variable, array_size in self.required_function_samplers(func_name):
+            sampler_name = getattr(sampler_variable, "name", None)
+            if sampler_name:
+                resource_params.append(
+                    self.format_resource_parameter("sampler", sampler_name, array_size)
+                )
+        if not resource_params:
+            return params_str
+        if params_str:
+            return f"{params_str}, {', '.join(resource_params)}"
+        return ", ".join(resource_params)
+
+    def cbuffer_parameter_name(self, cbuffer):
+        parameter_name = self.cbuffer_parameter_names.get(id(cbuffer))
+        if parameter_name:
+            return parameter_name
+        return self.default_cbuffer_parameter_name(cbuffer)
+
+    def default_cbuffer_parameter_name(self, cbuffer):
+        name = getattr(cbuffer, "name", "constants")
+        if not name:
+            return "constants"
+        return name[:1].lower() + name[1:]
+
+    def collect_cbuffer_parameter_names(self, cbuffers, reserved_names=None):
+        parameter_names = {}
+        used_names = set(reserved_names or [])
+        for cbuffer in cbuffers:
+            base_name = self.default_cbuffer_parameter_name(cbuffer)
+            parameter_name = base_name
+            suffix = 1
+            while parameter_name in used_names:
+                parameter_name = f"{base_name}{suffix}"
+                suffix += 1
+            used_names.add(parameter_name)
+            parameter_names[id(cbuffer)] = parameter_name
+        return parameter_names
+
+    def collect_cbuffer_member_references(self, cbuffers):
+        references = {}
+        ambiguous_members = collect_duplicate_cbuffer_member_names(cbuffers)
+        for cbuffer in cbuffers:
+            parameter_name = self.cbuffer_parameter_name(cbuffer)
+            for member in getattr(cbuffer, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                if not member_name or member_name in ambiguous_members:
+                    continue
+                references[member_name] = f"{parameter_name}.{member_name}"
+        self.ambiguous_cbuffer_members = ambiguous_members
+        return references
+
     def generate_statement(self, stmt, indent=0):
+        """Render a single CrossGL AST statement as Metal source."""
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
             if hasattr(stmt, "var_type"):
@@ -929,6 +1147,13 @@ class MetalCodeGen:
                 ).get(member)
                 if member_type:
                     return member_type
+            member_types = {
+                self.type_name_string(members[member])
+                for members in self.struct_member_types.values()
+                if member in members
+            }
+            if len(member_types) == 1:
+                return next(iter(member_types))
             return None
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
@@ -1263,6 +1488,7 @@ class MetalCodeGen:
         return self.generate_expression(init).strip().rstrip(";")
 
     def generate_expression(self, expr):
+        """Render a CrossGL AST expression into Metal expression syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
@@ -1351,7 +1577,16 @@ class MetalCodeGen:
                 return f"{metal_type}({args})"
             else:
                 # Standard function call
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                args = [self.generate_expression(arg) for arg in expr.args]
+                if func_name in self.user_function_names:
+                    args.extend(
+                        self.cbuffer_parameter_name(cbuffer)
+                        for cbuffer in self.required_function_cbuffers(func_name)
+                    )
+                    args.extend(
+                        self.required_function_resource_argument_names(func_name)
+                    )
+                args = ", ".join(args)
                 return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
@@ -1379,7 +1614,20 @@ class MetalCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return getattr(expr, "name", str(expr))
+            name = getattr(expr, "name", str(expr))
+            if (
+                name not in self.local_variable_types
+                and name in self.ambiguous_cbuffer_members
+            ):
+                raise ValueError(
+                    f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
+                )
+            if (
+                name not in self.local_variable_types
+                and name in self.cbuffer_member_references
+            ):
+                return self.cbuffer_member_references[name]
+            return name
         else:
             return str(expr)
 
@@ -1420,6 +1668,143 @@ class MetalCodeGen:
             "imageCube",
             "image2DArray",
         }
+
+    def is_texture_or_image_resource_type(self, vtype):
+        return self.is_resource_parameter_type(vtype) and not self.is_sampler_type(
+            vtype
+        )
+
+    def is_integer_coordinate_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        base_type = self.resource_base_type(type_name)
+        mapped_type = self.map_type(base_type)
+        return base_type in {
+            "int",
+            "uint",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+        } or mapped_type in {
+            "int",
+            "uint",
+            "int2",
+            "int3",
+            "int4",
+            "uint2",
+            "uint3",
+            "uint4",
+        }
+
+    def resource_coordinate_dimension(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if not texture_type or "cube" in texture_type:
+            return None
+        if texture_type.startswith("texture1d_array<"):
+            return 2
+        if texture_type.startswith("texture1d<"):
+            return 1
+        if texture_type.startswith("texture2d_ms_array<"):
+            return 3
+        if texture_type.startswith("texture2d_ms<"):
+            return 2
+        if texture_type.startswith("texture2d_array<"):
+            return 3
+        if texture_type.startswith("texture2d<"):
+            return 2
+        if texture_type.startswith("depth2d_array<"):
+            return 3
+        if texture_type.startswith("depth2d<"):
+            return 2
+        if texture_type.startswith("texture3d<"):
+            return 3
+        return None
+
+    def resource_offset_dimension(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if not texture_type or "cube" in texture_type:
+            return None
+        if func_name == "texelFetchOffset":
+            if self.is_multisample_texture_resource(texture_type):
+                return None
+            if texture_type.startswith("texture1d_array<"):
+                return 1
+            if texture_type.startswith("texture1d<"):
+                return 1
+            if texture_type.startswith("texture2d_array<"):
+                return 2
+            if texture_type.startswith("texture2d<"):
+                return 2
+            if texture_type.startswith("texture3d<"):
+                return 3
+            return None
+        if func_name in {"textureGatherOffset", "textureGatherOffsets"}:
+            return 2 if self.texture_gather_supports_offset(texture_type) else None
+        if func_name == "textureGatherCompareOffset":
+            return (
+                2
+                if self.texture_gather_compare_offset_supported(texture_type)
+                else None
+            )
+        if func_name in {
+            "textureCompareOffset",
+            "textureCompareLodOffset",
+            "textureCompareGradOffset",
+            "textureCompareProjOffset",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGradOffset",
+        }:
+            return 2 if self.texture_compare_offset_supported(texture_type) else None
+        if (
+            func_name in OFFSET_DIMENSION_INTRINSIC_NAMES
+            and not self.texture_sample_supports_offset(texture_type)
+        ):
+            return None
+        if texture_type.startswith("texture2d_array<"):
+            return 2
+        if texture_type.startswith("texture2d<"):
+            return 2
+        return None
+
+    def resource_gradient_dimension(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if not texture_type or "access::" in texture_type:
+            return None
+        if "ms" in texture_type:
+            return None
+        if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
+            return 2
+        if texture_type.startswith(("texture2d<", "depth2d<")):
+            return 2
+        if texture_type.startswith("texture3d<"):
+            return 3
+        if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
+            return 3
+        if texture_type.startswith(("texturecube<", "depthcube<")):
+            return 3
+        return None
+
+    def resource_query_lod_coordinate_dimension(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if not texture_type or "access::" in texture_type or "_ms" in texture_type:
+            return None
+        if texture_type.startswith("texture1d_array<"):
+            return 2
+        if texture_type.startswith("texture1d<"):
+            return 1
+        if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
+            return 3
+        if texture_type.startswith(("texture2d<", "depth2d<")):
+            return 2
+        if texture_type.startswith("texture3d<"):
+            return 3
+        if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
+            return 4
+        if texture_type.startswith(("texturecube<", "depthcube<")):
+            return 3
+        return None
 
     def parameter_attribute(self, raw_param_type, semantic, shader_type):
         if semantic:
@@ -1578,6 +1963,245 @@ class MetalCodeGen:
                 functions.append(entry_point)
             functions.extend(getattr(stage, "local_functions", []) or [])
         return functions
+
+    def collect_global_resource_names(self, root):
+        resource_names = set()
+        for node in getattr(root, "global_variables", []) or []:
+            var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if var_name and self.is_resource_parameter_type(var_type):
+                resource_names.add(var_name)
+        return resource_names
+
+    def validate_global_resource_shadows(self, ast):
+        conflicts = collect_non_resource_global_resource_shadows(
+            ast,
+            self.collect_global_resource_names(ast),
+            self.is_resource_parameter_type,
+        )
+        if conflicts:
+            names = ", ".join(sorted(conflicts))
+            raise ValueError(
+                "Non-resource local declaration(s) shadow Metal global resource(s): "
+                f"{names}"
+            )
+
+    def collect_function_cbuffer_dependencies(self, functions):
+        direct_dependencies = {}
+        function_calls = {}
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            direct_dependencies[func_name] = self.direct_cbuffer_dependencies(func)
+            function_calls[func_name] = self.called_user_function_names(func)
+
+        dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                before = set(dependencies.get(func_name, set()))
+                for called_name in calls:
+                    dependencies.setdefault(func_name, set()).update(
+                        dependencies.get(called_name, set())
+                    )
+                if dependencies.get(func_name, set()) != before:
+                    changed = True
+        return dependencies
+
+    def direct_cbuffer_dependencies(self, func):
+        local_names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", []))
+            if getattr(param, "name", None)
+        }
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                local_names.add(node.name)
+
+        member_to_cbuffer = {}
+        for cbuffer in self.cbuffer_variables:
+            cbuffer_name = getattr(cbuffer, "name", None)
+            if not cbuffer_name:
+                continue
+            for member in getattr(cbuffer, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                if member_name:
+                    member_to_cbuffer[member_name] = cbuffer_name
+
+        dependencies = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not (hasattr(node, "__class__") and "Identifier" in str(node.__class__)):
+                continue
+            name = getattr(node, "name", None)
+            if not name or name in local_names:
+                continue
+            cbuffer_name = member_to_cbuffer.get(name)
+            if cbuffer_name:
+                dependencies.add(cbuffer_name)
+        return dependencies
+
+    def called_user_function_names(self, func):
+        called_names = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            func_name = self.function_call_name(node)
+            if func_name in self.user_function_names and func_name != getattr(
+                func, "name", None
+            ):
+                called_names.add(func_name)
+        return called_names
+
+    def required_function_cbuffers(self, func_name):
+        dependencies = self.function_cbuffer_dependencies.get(func_name, set())
+        return [
+            cbuffer
+            for cbuffer in self.cbuffer_variables
+            if getattr(cbuffer, "name", None) in dependencies
+        ]
+
+    def collect_function_global_resource_dependencies(self, functions):
+        direct_dependencies = {}
+        function_calls = {}
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            direct_dependencies[func_name] = self.direct_global_resource_dependencies(
+                func
+            )
+            function_calls[func_name] = self.called_user_function_names(func)
+
+        dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                before = set(dependencies.get(func_name, set()))
+                for called_name in calls:
+                    dependencies.setdefault(func_name, set()).update(
+                        dependencies.get(called_name, set())
+                    )
+                if dependencies.get(func_name, set()) != before:
+                    changed = True
+        return dependencies
+
+    def direct_global_resource_dependencies(self, func):
+        local_names = {
+            getattr(param, "name", None)
+            for param in getattr(func, "parameters", getattr(func, "params", []))
+            if getattr(param, "name", None)
+        }
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                local_names.add(node.name)
+
+        texture_names = self.global_texture_names()
+        sampler_names = self.global_sampler_names()
+        dependencies = set()
+
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if hasattr(node, "__class__") and "Identifier" in str(node.__class__):
+                name = getattr(node, "name", None)
+                if (
+                    name
+                    and name not in local_names
+                    and (name in texture_names or name in sampler_names)
+                ):
+                    dependencies.add(name)
+
+            if isinstance(node, FunctionCallNode):
+                self.add_texture_call_resource_dependencies(
+                    node, local_names, texture_names, sampler_names, dependencies
+                )
+
+        return dependencies
+
+    def add_texture_call_resource_dependencies(
+        self, call, local_names, texture_names, sampler_names, dependencies
+    ):
+        func_name = self.function_call_name(call)
+        if not func_name or not str(func_name).startswith(("texture", "image")):
+            return
+        args = getattr(call, "arguments", getattr(call, "args", []))
+        if not args:
+            return
+
+        texture_name = self.expression_name(args[0])
+        if texture_name in texture_names and texture_name not in local_names:
+            dependencies.add(texture_name)
+
+        if len(args) >= 3:
+            sampler_name = self.expression_name(args[1])
+            if sampler_name in sampler_names and sampler_name not in local_names:
+                dependencies.add(sampler_name)
+                return
+
+        if not self.texture_sampling_uses_implicit_sampler(func_name):
+            return
+        implicit_sampler_name = f"{texture_name}Sampler" if texture_name else None
+        if (
+            implicit_sampler_name in sampler_names
+            and implicit_sampler_name not in local_names
+        ):
+            dependencies.add(implicit_sampler_name)
+
+    def texture_sampling_uses_implicit_sampler(self, func_name):
+        return func_name in {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjLod",
+            "textureProjGrad",
+            "textureProjOffset",
+            "textureProjLodOffset",
+            "textureProjGradOffset",
+        }
+
+    def global_texture_names(self):
+        return {
+            texture_variable.name
+            for texture_variable, _, _, _ in self.texture_variables
+            if getattr(texture_variable, "name", None)
+        }
+
+    def global_sampler_names(self):
+        return {
+            sampler_variable.name
+            for sampler_variable, _, _ in self.sampler_variables
+            if getattr(sampler_variable, "name", None)
+        }
+
+    def required_function_textures(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (texture_variable, texture_type, array_size)
+            for texture_variable, _, texture_type, array_size in self.texture_variables
+            if getattr(texture_variable, "name", None) in dependencies
+        ]
+
+    def required_function_samplers(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (sampler_variable, array_size)
+            for sampler_variable, _, array_size in self.sampler_variables
+            if getattr(sampler_variable, "name", None) in dependencies
+        ]
+
+    def required_function_resource_argument_names(self, func_name):
+        return [
+            texture_variable.name
+            for texture_variable, _, _ in self.required_function_textures(func_name)
+        ] + [
+            sampler_variable.name
+            for sampler_variable, _ in self.required_function_samplers(func_name)
+        ]
 
     def iter_ast_nodes(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):
@@ -1849,10 +2473,18 @@ class MetalCodeGen:
     def is_explicit_sampler_argument(self, args):
         if len(args) < 3:
             return False
+        return self.texture_call_uses_explicit_sampler(args)
+
+    def texture_call_uses_explicit_sampler(self, args):
+        if len(args) < 2:
+            return False
         sampler_name = self.expression_name(args[1]) or self.generate_expression(
             args[1]
         )
-        return sampler_name in self.sampler_variable_names()
+        if sampler_name in self.sampler_variable_names():
+            return True
+        arg_type = self.expression_result_type(args[1])
+        return arg_type is not None and self.is_sampler_type(arg_type)
 
     def texture_call_parts(self, args):
         explicit_sampler = self.is_explicit_sampler_argument(args)
@@ -1878,6 +2510,408 @@ class MetalCodeGen:
         return self.current_texture_parameters.get(
             texture_name, self.texture_variable_types.get(texture_name)
         )
+
+    def texture_argument_resource_type(self, texture_arg):
+        texture_type = self.texture_resource_type(texture_arg)
+        if texture_type is not None:
+            return texture_type
+        arg_type = self.expression_result_type(texture_arg)
+        if arg_type is None or not self.is_texture_or_image_resource_type(arg_type):
+            return None
+        return self.map_resource_type_with_format(self.resource_base_type(arg_type))
+
+    def validate_texture_resource_argument(self, func_name, args):
+        if not args or func_name not in self.texture_resource_operation_names():
+            return
+        if self.texture_resource_type(args[0]) is not None:
+            return
+        arg_type = self.expression_result_type(args[0])
+        if arg_type is not None and self.is_texture_or_image_resource_type(arg_type):
+            return
+
+        texture_name = self.expression_name(args[0]) or str(args[0])
+        raise ValueError(
+            f"Metal texture operation '{func_name}' requires a declared "
+            f"texture or image resource argument: {texture_name}"
+        )
+
+    def validate_image_resource_argument(self, func_name, args):
+        if not args or func_name not in IMAGE_RESOURCE_INTRINSIC_NAMES:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        if self.is_storage_image_resource(texture_type):
+            return
+        texture_name = self.expression_name(args[0]) or str(args[0])
+        raise ValueError(
+            f"Metal image operation '{func_name}' requires a storage "
+            f"image resource argument: {texture_name}"
+        )
+
+    def validate_integer_coordinate_argument(self, func_name, args):
+        if func_name not in INTEGER_COORDINATE_INTRINSIC_NAMES or len(args) < 2:
+            return
+        coord_type = self.expression_result_type(args[1])
+        if coord_type is None or self.is_integer_coordinate_type(coord_type):
+            return
+        raise ValueError(
+            f"Metal resource operation '{func_name}' requires an integer "
+            f"coordinate argument: {expression_debug_name(args[1])} has type "
+            f"{self.type_name_string(coord_type)}"
+        )
+
+    def validate_coordinate_dimension_argument(self, func_name, args):
+        if func_name not in INTEGER_COORDINATE_INTRINSIC_NAMES or len(args) < 2:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_coordinate_dimension(texture_type)
+        if expected_dimension is None:
+            return
+        coord_type = self.expression_result_type(args[1])
+        coord_dimension = integer_coordinate_dimension(
+            self.type_name_string(coord_type)
+        )
+        if coord_dimension is None or coord_dimension == expected_dimension:
+            return
+        raise ValueError(
+            f"Metal resource operation '{func_name}' requires a "
+            f"{expected_dimension}D integer coordinate for "
+            f"{self.resource_base_type(texture_type)}: "
+            f"{expression_debug_name(args[1])} has type "
+            f"{self.type_name_string(coord_type)}"
+        )
+
+    def validate_offset_dimension_argument(self, func_name, args):
+        offset_indices = texture_offset_argument_indices(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if not offset_indices:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_offset_dimension(func_name, texture_type)
+        if expected_dimension is None:
+            return
+        for offset_index in offset_indices:
+            offset_type = self.expression_result_type(args[offset_index])
+            if offset_type is None:
+                continue
+            if not self.is_integer_coordinate_type(offset_type):
+                raise ValueError(
+                    f"Metal resource operation '{func_name}' requires an integer "
+                    f"offset argument: {expression_debug_name(args[offset_index])} "
+                    f"has type {self.type_name_string(offset_type)}"
+                )
+            offset_dimension = integer_coordinate_dimension(
+                self.type_name_string(offset_type)
+            )
+            if offset_dimension is None or offset_dimension == expected_dimension:
+                continue
+            raise ValueError(
+                f"Metal resource operation '{func_name}' requires a "
+                f"{expected_dimension}D integer offset for "
+                f"{self.resource_base_type(texture_type)}: "
+                f"{expression_debug_name(args[offset_index])} has type "
+                f"{self.type_name_string(offset_type)}"
+            )
+
+    def gradient_argument_dimension(self, vtype):
+        type_name = self.resource_base_type(self.type_name_string(vtype))
+        mapped_type = self.map_type(type_name)
+        return floating_coordinate_dimension(
+            mapped_type
+        ) or floating_coordinate_dimension(type_name)
+
+    def query_lod_coordinate_dimension(self, vtype):
+        type_name = self.resource_base_type(self.type_name_string(vtype))
+        mapped_type = self.map_type(type_name)
+        return floating_coordinate_dimension(
+            mapped_type
+        ) or floating_coordinate_dimension(type_name)
+
+    def validate_query_lod_coordinate_argument(self, func_name, args):
+        coord_index = texture_query_lod_coordinate_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if coord_index is None:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_query_lod_coordinate_dimension(texture_type)
+        if expected_dimension is None:
+            return
+        coord_type = self.expression_result_type(args[coord_index])
+        if coord_type is None:
+            return
+        coord_dimension = self.query_lod_coordinate_dimension(coord_type)
+        if coord_dimension is None:
+            raise ValueError(
+                f"Metal texture query operation '{func_name}' requires a floating "
+                f"coordinate argument: {expression_debug_name(args[coord_index])} "
+                f"has type {self.type_name_string(coord_type)}"
+            )
+        if coord_dimension == expected_dimension:
+            return
+        raise ValueError(
+            f"Metal texture query operation '{func_name}' requires a "
+            f"{expected_dimension}D floating coordinate for "
+            f"{self.resource_base_type(texture_type)}: "
+            f"{expression_debug_name(args[coord_index])} has type "
+            f"{self.type_name_string(coord_type)}"
+        )
+
+    def validate_gradient_dimension_arguments(self, func_name, args):
+        gradient_indices = texture_gradient_argument_indices(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if not gradient_indices:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_gradient_dimension(func_name, texture_type)
+        if expected_dimension is None:
+            return
+        for gradient_index in gradient_indices:
+            gradient_type = self.expression_result_type(args[gradient_index])
+            if gradient_type is None:
+                continue
+            gradient_dimension = self.gradient_argument_dimension(gradient_type)
+            if gradient_dimension is None:
+                raise ValueError(
+                    f"Metal resource operation '{func_name}' requires a floating "
+                    f"gradient argument: {expression_debug_name(args[gradient_index])} "
+                    f"has type {self.type_name_string(gradient_type)}"
+                )
+            if gradient_dimension == expected_dimension:
+                continue
+            raise ValueError(
+                f"Metal resource operation '{func_name}' requires a "
+                f"{expected_dimension}D floating gradient for "
+                f"{self.resource_base_type(texture_type)}: "
+                f"{expression_debug_name(args[gradient_index])} has type "
+                f"{self.type_name_string(gradient_type)}"
+            )
+
+    def is_scalar_floating_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in str(type_name):
+            return False
+        mapped_type = self.map_type(type_name)
+        return is_floating_scalar_type(mapped_type) or is_floating_scalar_type(
+            type_name
+        )
+
+    def is_scalar_numeric_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in str(type_name):
+            return False
+        mapped_type = self.map_type(type_name)
+        return is_numeric_scalar_type(mapped_type) or is_numeric_scalar_type(type_name)
+
+    def is_scalar_integer_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in str(type_name):
+            return False
+        mapped_type = self.map_type(type_name)
+        return is_integer_scalar_type(mapped_type) or is_integer_scalar_type(type_name)
+
+    def texture_argument_diagnostic_type(self, arg):
+        texture_type = self.texture_resource_type(arg)
+        if texture_type is not None:
+            return texture_type
+        arg_name = self.expression_name(arg)
+        sampler_names = {
+            sampler_variable.name for sampler_variable, _, _ in self.sampler_variables
+        }
+        if arg_name in sampler_names or arg_name in self.current_sampler_parameters:
+            return "sampler"
+        return self.expression_result_type(arg)
+
+    def validate_compare_argument(self, func_name, args):
+        compare_index = texture_compare_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if compare_index is None:
+            return
+        compare_type = self.expression_result_type(args[compare_index])
+        if compare_type is None or self.is_scalar_floating_type(compare_type):
+            return
+        raise ValueError(
+            f"Metal texture compare operation '{func_name}' requires a scalar "
+            f"floating compare argument: {expression_debug_name(args[compare_index])} "
+            f"has type {self.type_name_string(compare_type)}"
+        )
+
+    def validate_lod_argument(self, func_name, args):
+        lod_index = texture_lod_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if lod_index is None:
+            return
+        lod_type = self.texture_argument_diagnostic_type(args[lod_index])
+        if lod_type is None or self.is_scalar_numeric_type(lod_type):
+            return
+        raise ValueError(
+            f"Metal texture LOD operation '{func_name}' requires a scalar "
+            f"numeric lod argument: {expression_debug_name(args[lod_index])} "
+            f"has type {self.type_name_string(lod_type)}"
+        )
+
+    def validate_bias_argument(self, func_name, args):
+        bias_index = texture_bias_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if bias_index is None:
+            return
+        bias_type = self.texture_argument_diagnostic_type(args[bias_index])
+        if bias_type is None or self.is_scalar_numeric_type(bias_type):
+            return
+        raise ValueError(
+            f"Metal texture bias operation '{func_name}' requires a scalar "
+            f"numeric bias argument: {expression_debug_name(args[bias_index])} "
+            f"has type {self.type_name_string(bias_type)}"
+        )
+
+    def validate_mip_level_argument(self, func_name, args):
+        level_index = texture_mip_level_argument_index(func_name, len(args))
+        if level_index is None:
+            return
+        level_type = self.texture_argument_diagnostic_type(args[level_index])
+        if level_type is None or self.is_scalar_integer_type(level_type):
+            return
+        raise ValueError(
+            f"Metal resource operation '{func_name}' requires a scalar integer "
+            f"mip/sample level argument: {expression_debug_name(args[level_index])} "
+            f"has type {self.type_name_string(level_type)}"
+        )
+
+    def validate_sample_index_argument(self, func_name, args):
+        sample_index = texture_sample_index_argument_index(func_name, len(args))
+        if sample_index is None:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        if not self.is_multisample_texture_resource(texture_type):
+            return
+        sample_type = self.texture_argument_diagnostic_type(args[sample_index])
+        if sample_type is None or self.is_scalar_integer_type(sample_type):
+            return
+        raise ValueError(
+            f"Metal multisample texel fetch operation '{func_name}' requires a "
+            f"scalar integer sample index argument: "
+            f"{expression_debug_name(args[sample_index])} has type "
+            f"{self.type_name_string(sample_type)}"
+        )
+
+    def validate_gather_component_argument(self, func_name, args):
+        component_index = texture_gather_component_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if component_index is None:
+            return
+        component_type = self.texture_argument_diagnostic_type(args[component_index])
+        if component_type is None or self.is_scalar_integer_type(component_type):
+            return
+        raise ValueError(
+            f"Metal texture gather operation '{func_name}' requires a scalar "
+            f"integer component argument: "
+            f"{expression_debug_name(args[component_index])} has type "
+            f"{self.type_name_string(component_type)}"
+        )
+
+    def validate_texture_call_arity(self, func_name, args):
+        if func_name not in self.texture_resource_operation_names():
+            return
+        has_explicit_sampler = self.texture_call_uses_explicit_sampler(args)
+        min_count = texture_intrinsic_min_argument_count(
+            func_name,
+            has_explicit_sampler,
+        )
+        if min_count is not None and len(args) < min_count:
+            raise ValueError(
+                f"Metal texture operation '{func_name}' requires at least "
+                f"{min_count} argument(s), got {len(args)}"
+            )
+        allowed_counts = texture_intrinsic_allowed_argument_counts(
+            func_name,
+            has_explicit_sampler,
+        )
+        if allowed_counts is not None and len(args) not in allowed_counts:
+            counts = ", ".join(str(count) for count in allowed_counts)
+            raise ValueError(
+                f"Metal texture operation '{func_name}' accepts "
+                f"{counts} argument(s), got {len(args)}"
+            )
+        max_count = texture_intrinsic_max_argument_count(
+            func_name,
+            has_explicit_sampler,
+        )
+        if max_count is None or len(args) <= max_count:
+            return
+        raise ValueError(
+            f"Metal texture operation '{func_name}' accepts at most "
+            f"{max_count} argument(s), got {len(args)}"
+        )
+
+    def texture_resource_operation_names(self):
+        return {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+            "textureQueryLod",
+            "textureQueryLevels",
+            "textureSize",
+            "textureSamples",
+            "texelFetch",
+            "texelFetchOffset",
+            "imageLoad",
+            "imageStore",
+            "imageSize",
+            "imageSamples",
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+        }
 
     def image_resource_format(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
@@ -1977,12 +3011,16 @@ class MetalCodeGen:
         coord_args = self.texture_sample_offset_coord_args(texture_type, coord)
 
         if func_name == "textureOffset":
-            if len(extra_args) != 1:
+            if len(extra_args) not in {1, 2}:
                 return self.unsupported_texture_sample_offset_call(
-                    func_name, "requires one offset argument"
+                    func_name, "requires offset and optional bias arguments"
                 )
             offset = self.generate_expression(extra_args[0])
-            args = [sampler_arg] + list(coord_args) + [offset]
+            args = [sampler_arg] + list(coord_args)
+            if len(extra_args) == 2:
+                bias = self.generate_expression(extra_args[1])
+                args.append(f"bias({bias})")
+            args.append(offset)
             return f"{texture_name}.sample({', '.join(args)})"
 
         if func_name == "textureLodOffset":
@@ -3127,6 +4165,21 @@ class MetalCodeGen:
         if not func_name:
             return None
 
+        self.validate_texture_call_arity(func_name, args)
+        self.validate_image_resource_argument(func_name, args)
+        self.validate_texture_resource_argument(func_name, args)
+        self.validate_integer_coordinate_argument(func_name, args)
+        self.validate_coordinate_dimension_argument(func_name, args)
+        self.validate_query_lod_coordinate_argument(func_name, args)
+        self.validate_compare_argument(func_name, args)
+        self.validate_lod_argument(func_name, args)
+        self.validate_bias_argument(func_name, args)
+        self.validate_sample_index_argument(func_name, args)
+        self.validate_mip_level_argument(func_name, args)
+        self.validate_gradient_dimension_arguments(func_name, args)
+        self.validate_offset_dimension_argument(func_name, args)
+        self.validate_gather_component_argument(func_name, args)
+
         image_call = self.generate_image_call(func_name, args)
         if image_call is not None:
             return image_call
@@ -3168,6 +4221,14 @@ class MetalCodeGen:
             return self.unsupported_multisample_texture_call(func_name, texture_type)
 
         if func_name == "texture":
+            if extra_args:
+                bias = self.generate_expression(extra_args[0])
+                if is_array_texture:
+                    return (
+                        f"{texture_name}.sample("
+                        f"{sampler_arg}, {coord_xy}, {layer}, bias({bias}))"
+                    )
+                return f"{texture_name}.sample({sampler_arg}, {coord}, bias({bias}))"
             if is_array_texture:
                 return f"{texture_name}.sample({sampler_arg}, {coord_xy}, {layer})"
             return f"{texture_name}.sample({sampler_arg}, {coord})"
@@ -3435,6 +4496,7 @@ class MetalCodeGen:
         return op_map.get(op, op)
 
     def map_semantic(self, semantic):
+        """Map a CrossGL semantic to Metal attribute syntax."""
         if semantic is not None:
             mapped_semantic = self.semantic_map.get(semantic, semantic)
             # If the mapped semantic already has brackets, use it as-is

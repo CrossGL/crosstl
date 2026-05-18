@@ -5,13 +5,17 @@ from .VulkanAst import *
 
 
 class VulkanParser:
+    """Parse Vulkan/SPIR-V style tokens into the Vulkan backend AST."""
+
     def __init__(self, tokens):
+        """Initialize the parser with a token stream from ``VulkanLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
         self.skip_comments()
 
     def skip_comments(self):
+        """Advance past comment tokens before parsing syntax."""
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
@@ -35,6 +39,7 @@ class VulkanParser:
         return
 
     def eat(self, token_type):
+        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -45,11 +50,13 @@ class VulkanParser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def parse(self):
+        """Parse the complete token stream into a module AST."""
         module = self.parse_module()
         self.eat("EOF")
         return module
 
     def parse_module(self):
+        """Parse top-level Vulkan/SPIR-V declarations and functions."""
         functions = []
         structs = []
         global_variables = []

@@ -13,7 +13,10 @@ from ..common_ast import (
 
 
 class HLSLToCrossGLConverter:
+    """Serialize DirectX backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize HLSL-to-CrossGL type, function, and semantic mappings."""
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -332,6 +335,7 @@ class HLSLToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
+        """Generate a complete CrossGL shader from a parsed HLSL AST."""
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -426,6 +430,7 @@ class HLSLToCrossGLConverter:
         return code
 
     def generate_function(self, func, indent=1):
+        """Render one HLSL function node as a CrossGL function block."""
         code = self.format_attributes(getattr(func, "attributes", []), indent)
         code += "    " * indent
         params = ", ".join(
@@ -576,6 +581,7 @@ class HLSLToCrossGLConverter:
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
+        """Render a DirectX backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
@@ -672,6 +678,7 @@ class HLSLToCrossGLConverter:
             return str(expr)
 
     def map_type(self, hlsl_type):
+        """Map an HLSL type name to the closest CrossGL type name."""
         if not hlsl_type:
             return hlsl_type
         type_name = hlsl_type
@@ -681,6 +688,7 @@ class HLSLToCrossGLConverter:
         return self.type_map.get(type_name, type_name)
 
     def map_semantic(self, semantic):
+        """Map an HLSL semantic to CrossGL semantic annotation syntax."""
         if not semantic:
             return ""
         mapped = self.semantic_map.get(semantic)
@@ -839,6 +847,7 @@ class HLSLToCrossGLConverter:
         return code
 
     def generate_statement(self, node):
+        """Render one DirectX backend statement node as CrossGL source."""
         if isinstance(node, str):
             return node
         if isinstance(node, BreakNode):

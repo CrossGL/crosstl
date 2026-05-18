@@ -875,6 +875,108 @@ def test_array_syntax():
         pytest.fail(f"Array syntax parsing failed: {e}")
 
 
+def test_duplicate_cbuffer_members_fail_validation():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float value;
+        };
+
+        cbuffer Lighting {
+            float value;
+        };
+
+        compute {
+            void main() {
+                float x = value;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        SyntaxError,
+        match="Ambiguous cbuffer member name\\(s\\): value",
+    ):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_cbuffer_names_fail_validation():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float exposure;
+        };
+
+        cbuffer Camera {
+            float gamma;
+        };
+
+        compute {
+            void main() {
+                float x = exposure + gamma;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        SyntaxError,
+        match="Duplicate cbuffer name\\(s\\): Camera",
+    ):
+        parse_code(tokenize_code(code))
+
+
+def test_cbuffer_name_conflicts_with_struct_fail_validation():
+    code = """
+    shader CBufferScope {
+        struct Camera {
+            float exposure;
+        };
+
+        cbuffer Camera {
+            float gamma;
+        };
+
+        compute {
+            void main() {
+                float x = gamma;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        SyntaxError,
+        match="Cbuffer name\\(s\\) conflict with existing declaration\\(s\\): Camera",
+    ):
+        parse_code(tokenize_code(code))
+
+
+def test_cbuffer_member_conflicts_with_global_fail_validation():
+    code = """
+    shader CBufferScope {
+        float exposure;
+
+        cbuffer Camera {
+            float exposure;
+        };
+
+        compute {
+            void main() {
+                float x = exposure;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        SyntaxError,
+        match="Cbuffer member name\\(s\\) conflict with global declaration\\(s\\): exposure",
+    ):
+        parse_code(tokenize_code(code))
+
+
 def test_array_parameter_syntax():
     code = """
     shader ArrayParams {

@@ -4,6 +4,8 @@ from ..ast import ArrayAccessNode, FunctionCallNode
 
 
 class ResourceQueryMixin:
+    """Helpers for resource query metadata propagation and code generation."""
+
     query_function_names = {
         "textureSize",
         "imageSize",
@@ -13,6 +15,7 @@ class ResourceQueryMixin:
     }
 
     def collect_resource_query_requirements(self, node):
+        """Collect global and function-parameter resources needing metadata."""
         functions = self.query_collect_functions(node)
         functions_by_name = {getattr(func, "name", None): func for func in functions}
         functions_by_name = {
@@ -36,6 +39,7 @@ class ResourceQueryMixin:
         }
 
         def mark_resource_name(func_name, resource_name):
+            """Record a resource as global or function-parameter metadata."""
             if not resource_name:
                 return False
             if resource_name in param_names.get(func_name, set()):
@@ -109,10 +113,12 @@ class ResourceQueryMixin:
         )
 
     def collect_resource_query_names(self, node):
+        """Collect resource names used directly in resource query calls."""
         query_names = set()
         visited = set()
 
         def visit_node(current):
+            """Visit one AST value while collecting direct resource queries."""
             if current is None or isinstance(current, (str, int, float, bool)):
                 return
             if isinstance(current, (list, tuple, set)):
@@ -157,6 +163,7 @@ class ResourceQueryMixin:
         return query_names
 
     def query_collect_functions(self, root):
+        """Collect function-like nodes from an AST subtree."""
         functions = []
         for node in self.query_walk_nodes(root):
             if hasattr(node, "body") and hasattr(node, "parameters"):
@@ -164,9 +171,11 @@ class ResourceQueryMixin:
         return functions
 
     def query_walk_nodes(self, root):
+        """Yield AST nodes recursively while avoiding parent/annotation cycles."""
         visited = set()
 
         def walk(value):
+            """Yield one AST value and recurse into child values."""
             if value is None or isinstance(value, (str, int, float, bool)):
                 return
             if isinstance(value, dict):
@@ -193,6 +202,7 @@ class ResourceQueryMixin:
         yield from walk(root)
 
     def raw_function_call_name(self, node):
+        """Return a function call name without backend formatting."""
         func_expr = getattr(node, "function", getattr(node, "name", None))
         if hasattr(func_expr, "name"):
             return func_expr.name
@@ -201,6 +211,7 @@ class ResourceQueryMixin:
         return None
 
     def get_parameter_type(self, param):
+        """Return a parameter type from current or legacy AST shapes."""
         if hasattr(param, "param_type"):
             return param.param_type
         if hasattr(param, "vtype"):
@@ -208,6 +219,7 @@ class ResourceQueryMixin:
         return "void"
 
     def get_variable_node_type(self, node):
+        """Return a variable type from current or legacy AST shapes."""
         if hasattr(node, "var_type"):
             return node.var_type
         if hasattr(node, "vtype"):
@@ -215,23 +227,28 @@ class ResourceQueryMixin:
         return None
 
     def query_metadata_name(self, resource_name):
+        """Return the generated metadata variable name for a resource."""
         return f"{resource_name}_metadata"
 
     def query_type_name(self, type_name):
+        """Return a string type name suitable for resource query decisions."""
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
             return self.convert_type_node_to_string(type_name)
         return str(type_name)
 
     def query_array_suffix(self, type_name):
+        """Return the array suffix for a resource type, if present."""
         type_name = self.query_type_name(type_name)
         if "[" not in type_name or "]" not in type_name:
             return ""
         return type_name[type_name.find("[") :]
 
     def query_metadata_type(self, type_name):
+        """Return the metadata type used for a resource type."""
         return f"CglResourceQueryInfo{self.query_array_suffix(type_name)}"
 
     def query_metadata_expression(self, resource_expr):
+        """Return the metadata expression paired with a resource expression."""
         if isinstance(resource_expr, ArrayAccessNode):
             base_expr = self.query_metadata_expression(resource_expr.array_expr)
             if base_expr is None:
@@ -244,9 +261,11 @@ class ResourceQueryMixin:
         return None
 
     def require_helper_function(self, name, body):
+        """Register a helper function body if it has not already been added."""
         self.helper_functions.setdefault(name, body)
 
     def needs_query_metadata(self, name, type_name):
+        """Return whether a resource declaration needs query metadata."""
         current_function = getattr(self, "current_function_name", None)
         if current_function:
             query_params = getattr(self, "query_metadata_function_params", {})
@@ -261,6 +280,7 @@ class ResourceQueryMixin:
         return True
 
     def query_metadata_parameter(self, name, type_name):
+        """Return an extra metadata parameter declaration when required."""
         if not self.needs_query_metadata(name, type_name):
             return None
         return self.format_typed_declarator(
@@ -268,6 +288,7 @@ class ResourceQueryMixin:
         )
 
     def query_metadata_declaration(self, name, type_name):
+        """Return a metadata variable declaration when required."""
         if self.needs_query_metadata(name, type_name):
             declaration = self.format_typed_declarator(
                 self.query_metadata_type(type_name),
@@ -278,6 +299,7 @@ class ResourceQueryMixin:
         return None
 
     def query_metadata_call_arguments(self, func_name, raw_args, args):
+        """Expand call arguments with resource metadata arguments."""
         query_params = getattr(self, "query_metadata_function_params", {}).get(
             func_name, set()
         )
@@ -304,22 +326,26 @@ class ResourceQueryMixin:
         return expanded_args
 
     def query_return_type(self, dimensions):
+        """Return an integer vector type for a dimension query result."""
         if len(dimensions) == 1:
             return "int"
         return f"int{len(dimensions)}"
 
     def query_constructor(self, return_type, values):
+        """Return a constructor expression for a query result."""
         if return_type == "int":
             return values[0]
         return f"make_{return_type}({', '.join(values)})"
 
     def query_dimension_expression(self, dimension, mip_arg):
+        """Return a metadata field expression for one queried dimension."""
         value = f"info.{dimension}"
         if mip_arg is not None and dimension in {"width", "height", "depth"}:
             return f"cgl_lod_extent({value}, {mip_arg})"
         return value
 
     def query_helper_prefix(self):
+        """Return helper code shared by mip-aware dimension queries."""
         return (
             "__device__ inline int cgl_lod_extent(int extent, int mipLevel)\n"
             "{\n"
@@ -329,6 +355,7 @@ class ResourceQueryMixin:
         )
 
     def dimension_query_spec(self, type_name):
+        """Return dimension/mip/sample metadata for a queryable resource type."""
         specs = {
             "sampler1D": (("width",), True, False),
             "sampler2D": (("width", "height"), True, False),
@@ -374,6 +401,7 @@ class ResourceQueryMixin:
         return {"dimensions": dimensions, "mip": mip, "samples": samples}
 
     def build_dimension_query_helper(self, helper_name, spec):
+        """Build helper code for a texture/image dimension query."""
         return_type = self.query_return_type(spec["dimensions"])
         params = "CglResourceQueryInfo info"
         mip_arg = None
@@ -394,6 +422,7 @@ class ResourceQueryMixin:
         )
 
     def build_sample_count_query_helper(self, helper_name):
+        """Build helper code for a sample-count query."""
         return (
             f"__device__ inline int {helper_name}(CglResourceQueryInfo info)\n"
             "{\n"
@@ -402,6 +431,7 @@ class ResourceQueryMixin:
         )
 
     def build_texture_query_levels_helper(self, helper_name, spec):
+        """Build helper code for texture mip-level queries."""
         if not spec["mip"]:
             return (
                 f"__device__ inline int {helper_name}(CglResourceQueryInfo info)\n"
@@ -417,12 +447,15 @@ class ResourceQueryMixin:
         )
 
     def ensure_query_prefix_helper(self):
+        """Ensure shared query helper code has been registered."""
         self.require_helper_function("cgl_lod_extent", self.query_helper_prefix())
 
     def is_sampled_resource_type(self, type_name):
+        """Return whether a resource type is sampler-backed."""
         return isinstance(type_name, str) and type_name.startswith("sampler")
 
     def generate_dimension_query(self, func_name, raw_args, args):
+        """Generate a helper call for a dimension query, if supported."""
         if not raw_args:
             return None
 
@@ -446,6 +479,7 @@ class ResourceQueryMixin:
         return f"{helper_name}({metadata_expr})"
 
     def generate_sample_count_query(self, func_name, raw_args, args):
+        """Generate a helper call for a sample-count query, if supported."""
         if not raw_args:
             return None
 
@@ -463,6 +497,7 @@ class ResourceQueryMixin:
         return f"{helper_name}({metadata_expr})"
 
     def generate_texture_query_levels(self, raw_args):
+        """Generate a helper call for ``textureQueryLevels``, if supported."""
         if not raw_args:
             return None
 

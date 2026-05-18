@@ -213,6 +213,8 @@ KEYWORDS = {
 
 
 class TokenType(Enum):
+    """Token names emitted by the Rust source lexer."""
+
     COMMENT_SINGLE = auto()
     COMMENT_MULTI = auto()
     BITWISE_NOT = auto()
@@ -340,13 +342,19 @@ class TokenType(Enum):
 
 
 class Token:
+    """Simple typed token object used by Rust compatibility paths."""
+
     def __init__(self, token_type: TokenType, text: str):
+        """Store the token kind and original source text."""
         self.token_type = token_type
         self.text = text
 
 
 class RustLexer:
+    """Tokenize Rust source for the Rust backend parser."""
+
     def __init__(self, code: str):
+        """Initialize the lexer with raw Rust source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
@@ -359,9 +367,11 @@ class RustLexer:
         }
 
     def tokenize(self) -> List[Tuple[str, str]]:
+        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
+        """Yield Rust tokens while skipping whitespace and comments."""
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -382,6 +392,7 @@ class RustLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Tuple[int, str, str]:
+        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -390,6 +401,7 @@ class RustLexer:
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "RustLexer":
+        """Create a lexer instance from a Rust source file."""
         with open(filepath, "r") as f:
             return cls(f.read())
 
@@ -398,11 +410,13 @@ class Lexer:
     """Compatibility wrapper around RustLexer"""
 
     def __init__(self, input_str):
+        """Tokenize ``input_str`` and prepare cursor-based access."""
         self.lexer = RustLexer(input_str)
         self.tokens = self.lexer.tokenize()
         self.current_pos = 0
 
     def next(self):
+        """Return the next token and advance the cursor."""
         if self.current_pos < len(self.tokens):
             token = self.tokens[self.current_pos]
             self.current_pos += 1
@@ -410,6 +424,7 @@ class Lexer:
         return ("EOF", "")
 
     def peek(self):
+        """Return the next token without advancing the cursor."""
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
         return ("EOF", "")

@@ -82,6 +82,7 @@ from .ast import (
     create_legacy_shader_node,
 )
 from .lexer import Lexer
+from .validation import validate_shader_cbuffers
 import logging
 
 WAVE_INTRINSICS = {
@@ -148,9 +149,10 @@ RAYQUERY_METHODS = {
 
 
 class Parser:
-    """Parser for CrossGL Universal IR."""
+    """Recursive-descent parser for CrossGL Universal IR tokens."""
 
     def __init__(self, tokens):
+        """Initialize parser state from a token sequence."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = (
@@ -158,10 +160,12 @@ class Parser:
         )
 
     def skip_comments(self):
+        """Consume single-line and multi-line comment tokens."""
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
+        """Consume one token of the expected type or raise ``SyntaxError``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -174,16 +178,23 @@ class Parser:
             )
 
     def peek(self, offset=1):
+        """Return a lookahead token without advancing the parser."""
         peek_pos = self.pos + offset
         if peek_pos < len(self.tokens):
             return self.tokens[peek_pos]
         return ("EOF", None)
 
+    def finalize_shader(self, shader):
+        """Run final validation hooks before returning a shader AST."""
+        return validate_shader_cbuffers(shader)
+
     def parse(self):
+        """Parse a complete CrossGL translation unit into a ``ShaderNode``."""
         structs = []
         functions = []
         global_variables = []
         constants = []
+        cbuffers = []
         stages = {}
         imports = []
         preprocessors = []
@@ -197,7 +208,10 @@ class Parser:
             parsed_element = self.parse_global()
             if parsed_element:
                 if isinstance(parsed_element, StructNode):
-                    structs.append(parsed_element)
+                    if getattr(parsed_element, "is_cbuffer", False):
+                        cbuffers.append(parsed_element)
+                    else:
+                        structs.append(parsed_element)
                 elif isinstance(parsed_element, FunctionNode):
                     functions.append(parsed_element)
                 elif isinstance(parsed_element, VariableNode):
@@ -228,7 +242,7 @@ class Parser:
         if loop_count >= max_loops:
             print(f"Warning: Parser hit maximum loop limit ({max_loops}), stopping...")
 
-        return ShaderNode(
+        shader = ShaderNode(
             name="main",
             execution_model=ExecutionModel.GRAPHICS_PIPELINE,
             stages=stages,
@@ -239,14 +253,19 @@ class Parser:
             imports=imports,
             preprocessors=preprocessors,
         )
+        if cbuffers:
+            shader.cbuffers = cbuffers
+        return self.finalize_shader(shader)
 
     def parse_program(self):
+        """Parse the explicit program form used by legacy callers."""
         imports = []
         structs = []
         enums = []
         functions = []
         constants = []
         global_variables = []
+        cbuffers = []
 
         shader_node = None
 
@@ -259,8 +278,8 @@ class Parser:
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "ENUM":
                 enums.append(self.parse_enum())
-            elif self.current_token[0] in ["CBUFFER", "UNIFORM"]:
-                structs.append(self.parse_cbuffer_as_struct())
+            elif self.is_cbuffer_declaration():
+                cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
             elif self.is_function_declaration():
@@ -293,10 +312,12 @@ class Parser:
             shader_node.functions.extend(functions)
             shader_node.global_variables.extend(global_variables)
             shader_node.constants.extend(constants)
+            if cbuffers:
+                shader_node.cbuffers = getattr(shader_node, "cbuffers", []) + cbuffers
             shader_node.imports.extend(imports)
-            return shader_node
+            return self.finalize_shader(shader_node)
         else:
-            return ShaderNode(
+            shader = ShaderNode(
                 name="main",
                 execution_model=ExecutionModel.GRAPHICS_PIPELINE,
                 stages={},
@@ -306,8 +327,12 @@ class Parser:
                 constants=constants,
                 imports=imports,
             )
+            if cbuffers:
+                shader.cbuffers = cbuffers
+            return self.finalize_shader(shader)
 
     def parse_shader_declaration(self):
+        """Parse a named ``shader`` block and its contained declarations."""
         self.eat("SHADER")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -318,6 +343,7 @@ class Parser:
         structs = []
         global_variables = []
         constants = []
+        cbuffers = []
 
         self.eat("LBRACE")
 
@@ -342,8 +368,8 @@ class Parser:
                 stages[stage_node.stage] = stage_node
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
-            elif self.current_token[0] in ["CBUFFER", "UNIFORM"]:
-                structs.append(self.parse_cbuffer_as_struct())
+            elif self.is_cbuffer_declaration():
+                cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
             elif self.is_function_declaration():
@@ -356,7 +382,7 @@ class Parser:
 
         self.eat("RBRACE")
 
-        return ShaderNode(
+        shader = ShaderNode(
             name=name,
             execution_model=execution_model,
             stages=stages,
@@ -365,8 +391,12 @@ class Parser:
             global_variables=global_variables,
             constants=constants,
         )
+        if cbuffers:
+            shader.cbuffers = cbuffers
+        return self.finalize_shader(shader)
 
     def parse_shader_stage_block(self):
+        """Parse a stage-qualified block into a ``StageNode``."""
         stage_type = self.current_token[1]
         stage_enum = {
             "vertex": ShaderStage.VERTEX,
@@ -438,6 +468,7 @@ class Parser:
         )
 
     def parse_import(self):
+        """Parse an ``import`` or ``use`` declaration."""
         if self.current_token[0] == "IMPORT":
             self.eat("IMPORT")
         else:
@@ -459,6 +490,7 @@ class Parser:
         return ImportNode(path=path, alias=alias, items=items)
 
     def parse_preprocessor_directive(self):
+        """Parse a preprocessor token into a structured directive node."""
         text = self.current_token[1] or ""
         self.eat("PREPROCESSOR")
         stripped = text.lstrip("#").strip()
@@ -470,6 +502,7 @@ class Parser:
         return PreprocessorNode(directive, content)
 
     def parse_precision_statement(self):
+        """Parse a GLSL-style precision statement as a preprocessor node."""
         self.eat("PRECISION")
         parts = []
         while self.current_token[0] not in ["SEMICOLON", "EOF"]:
@@ -481,6 +514,7 @@ class Parser:
         return PreprocessorNode("precision", content)
 
     def parse_struct(self):
+        """Parse a struct declaration and its member list."""
         if self.current_token[0] == "EOF":
             return None
 
@@ -523,6 +557,7 @@ class Parser:
         return StructNode(name=name, members=members, generic_params=generic_params)
 
     def parse_struct_member(self):
+        """Parse one struct member declaration."""
         if self.current_token[0] == "EOF":
             return None
 
@@ -594,6 +629,7 @@ class Parser:
         )
 
     def parse_enum(self):
+        """Parse an enum declaration and its variants."""
         self.eat("ENUM")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -618,6 +654,7 @@ class Parser:
         return EnumNode(name=name, variants=variants, underlying_type=underlying_type)
 
     def parse_enum_variant(self):
+        """Parse one enum variant, including tuple or struct payloads."""
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
@@ -676,6 +713,7 @@ class Parser:
         return variant_node
 
     def parse_function(self):
+        """Parse a function declaration or definition."""
         qualifiers = []
         attributes = []
 
@@ -731,6 +769,7 @@ class Parser:
         )
 
     def parse_parameter_list(self):
+        """Parse a comma-separated function parameter list."""
         parameters = []
 
         while self.current_token[0] != "RPAREN":
@@ -745,6 +784,7 @@ class Parser:
         return parameters
 
     def parse_parameter(self):
+        """Parse one function parameter declaration."""
         attributes = []
         if self.current_token[0] == "ATTRIBUTE":
             attributes = self.parse_attributes()
@@ -783,6 +823,7 @@ class Parser:
         )
 
     def parse_variable_declaration(self):
+        """Parse a variable declaration, including qualifiers and attributes."""
         attributes = []
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes = self.parse_attributes()
@@ -927,6 +968,7 @@ class Parser:
         return False
 
     def parse_constant(self):
+        """Parse a constant declaration."""
         self.eat("CONST")
         const_type = self.parse_type()
         name = self.current_token[1]
@@ -939,6 +981,7 @@ class Parser:
         return ConstantNode(name=name, const_type=const_type, value=value)
 
     def parse_type(self):
+        """Parse a CrossGL type expression into a ``TypeNode``."""
         is_buffer = False
         if self.current_token[0] == "BUFFER":
             is_buffer = True
@@ -1167,6 +1210,7 @@ class Parser:
         return base_type
 
     def parse_generic_parameters(self):
+        """Parse generic parameter declarations after ``<``."""
         self.eat("LESS_THAN")
         params = []
 
@@ -1192,6 +1236,7 @@ class Parser:
         return params
 
     def parse_generic_arguments(self):
+        """Parse generic type arguments after ``<``."""
         self.eat("LESS_THAN")
         args = []
 
@@ -1206,6 +1251,7 @@ class Parser:
         return args
 
     def vector_element_type_from_generic(self, type_node):
+        """Resolve a vector generic argument to a primitive element type."""
         type_name = self.format_type_argument(type_node)
         aliases = {
             "f32": "float",
@@ -1221,6 +1267,7 @@ class Parser:
         return PrimitiveType(aliases.get(type_name, type_name))
 
     def format_type_argument(self, type_node):
+        """Format a parsed type node back into a compact type argument string."""
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
@@ -1243,6 +1290,7 @@ class Parser:
         return str(type_node)
 
     def parse_attributes(self):
+        """Parse one or more ``@`` attribute annotations."""
         attributes = []
 
         while self.current_token[0] in ["AT", "ATTRIBUTE"]:
@@ -1268,6 +1316,7 @@ class Parser:
         return attributes
 
     def parse_block(self):
+        """Parse a braced statement block."""
         self.eat("LBRACE")
         statements = []
 
@@ -1280,6 +1329,7 @@ class Parser:
         return BlockNode(statements)
 
     def parse_statement(self):
+        """Parse any statement form supported by CrossGL."""
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -1314,7 +1364,7 @@ class Parser:
             return ExpressionStatementNode(expr)
 
     def parse_let_declaration(self):
-        """Parse Rust-style let declarations: let [mut] name [: type] = expr;"""
+        """Parse Rust-style ``let [mut] name [: type] = expr;`` declarations."""
         self.eat("LET")
 
         is_mutable = False
@@ -1346,6 +1396,7 @@ class Parser:
         return var_node
 
     def parse_if_statement(self):
+        """Parse an if/else statement chain."""
         self.eat("IF")
         self.eat("LPAREN")
         condition = self.parse_expression()
@@ -1365,6 +1416,7 @@ class Parser:
         )
 
     def parse_for_statement(self):
+        """Parse a C-style ``for`` loop or dispatch to ``for-in`` parsing."""
         self.eat("FOR")
         if self.current_token[0] != "LPAREN":
             return self.parse_for_in_statement_after_for()
@@ -1396,6 +1448,7 @@ class Parser:
         return ForNode(init=init, condition=condition, update=update, body=body)
 
     def parse_for_in_statement_after_for(self):
+        """Parse a ``for pattern in iterable`` loop after ``for`` is consumed."""
         pattern = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("IN")
@@ -1447,6 +1500,7 @@ class Parser:
         )
 
     def parse_while_statement(self):
+        """Parse a while loop statement."""
         self.eat("WHILE")
         condition = self.parse_expression()
         body = self.parse_statement()
@@ -1454,12 +1508,14 @@ class Parser:
         return WhileNode(condition=condition, body=body)
 
     def parse_loop_statement(self):
+        """Parse an unconditional loop statement."""
         self.eat("LOOP")
         body = self.parse_statement()
 
         return LoopNode(body=body)
 
     def parse_match_statement(self):
+        """Parse a match statement and all of its arms."""
         self.eat("MATCH")
         expression = self.parse_expression()
 
@@ -1475,6 +1531,7 @@ class Parser:
         return MatchNode(expression=expression, arms=arms)
 
     def parse_match_arm(self):
+        """Parse a single match arm."""
         pattern = self.parse_pattern()
 
         guard = None
@@ -1491,6 +1548,7 @@ class Parser:
         return MatchArmNode(pattern=pattern, guard=guard, body=body)
 
     def parse_pattern(self):
+        """Parse a match pattern."""
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "_":
             self.eat("IDENTIFIER")
             return WildcardPatternNode()
@@ -1503,6 +1561,7 @@ class Parser:
             return LiteralPatternNode(literal)
 
     def parse_return_statement(self):
+        """Parse a return statement with an optional value."""
         self.eat("RETURN")
 
         value = None
@@ -1513,9 +1572,11 @@ class Parser:
         return ReturnNode(value=value)
 
     def parse_expression(self):
+        """Parse an expression using the highest-precedence entry point."""
         return self.parse_assignment_expression()
 
     def parse_range_expression(self):
+        """Parse range and inclusive-range expressions."""
         left = self.parse_ternary_expression()
 
         if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
@@ -1527,6 +1588,7 @@ class Parser:
         return left
 
     def parse_assignment_expression(self):
+        """Parse assignment and compound-assignment expressions."""
         left = self.parse_range_expression()
 
         if self.current_token[0] in [
@@ -1550,6 +1612,7 @@ class Parser:
         return left
 
     def parse_ternary_expression(self):
+        """Parse a ternary conditional expression."""
         condition = self.parse_logical_or_expression()
 
         if self.current_token[0] == "QUESTION":
@@ -1562,6 +1625,7 @@ class Parser:
         return condition
 
     def parse_logical_or_expression(self):
+        """Parse logical OR expressions."""
         left = self.parse_logical_and_expression()
 
         while self.current_token[0] == "LOGICAL_OR":
@@ -1573,6 +1637,7 @@ class Parser:
         return left
 
     def parse_logical_and_expression(self):
+        """Parse logical AND expressions."""
         left = self.parse_bitwise_or_expression()
 
         while self.current_token[0] == "LOGICAL_AND":
@@ -1584,6 +1649,7 @@ class Parser:
         return left
 
     def parse_bitwise_or_expression(self):
+        """Parse bitwise OR expressions."""
         left = self.parse_bitwise_xor_expression()
 
         while self.current_token[0] == "BITWISE_OR":
@@ -1595,6 +1661,7 @@ class Parser:
         return left
 
     def parse_bitwise_xor_expression(self):
+        """Parse bitwise XOR expressions."""
         left = self.parse_bitwise_and_expression()
 
         while self.current_token[0] == "BITWISE_XOR":
@@ -1606,6 +1673,7 @@ class Parser:
         return left
 
     def parse_bitwise_and_expression(self):
+        """Parse bitwise AND expressions."""
         left = self.parse_equality_expression()
 
         while self.current_token[0] == "BITWISE_AND":
@@ -1617,6 +1685,7 @@ class Parser:
         return left
 
     def parse_equality_expression(self):
+        """Parse equality and inequality expressions."""
         left = self.parse_relational_expression()
 
         while self.current_token[0] in ["EQUAL", "NOT_EQUAL"]:
@@ -1628,6 +1697,7 @@ class Parser:
         return left
 
     def parse_relational_expression(self):
+        """Parse relational comparison expressions."""
         left = self.parse_shift_expression()
 
         while self.current_token[0] in [
@@ -1644,6 +1714,7 @@ class Parser:
         return left
 
     def parse_shift_expression(self):
+        """Parse bit-shift expressions."""
         left = self.parse_additive_expression()
 
         while self.current_token[0] in ["BITWISE_SHIFT_LEFT", "BITWISE_SHIFT_RIGHT"]:
@@ -1655,6 +1726,7 @@ class Parser:
         return left
 
     def parse_additive_expression(self):
+        """Parse addition and subtraction expressions."""
         left = self.parse_multiplicative_expression()
 
         while self.current_token[0] in ["PLUS", "MINUS"]:
@@ -1666,6 +1738,7 @@ class Parser:
         return left
 
     def parse_multiplicative_expression(self):
+        """Parse multiplication, division, and modulo expressions."""
         left = self.parse_unary_expression()
 
         while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
@@ -1677,6 +1750,7 @@ class Parser:
         return left
 
     def parse_unary_expression(self):
+        """Parse prefix unary expressions."""
         if self.current_token[0] in [
             "NOT",
             "MINUS",
@@ -1693,6 +1767,7 @@ class Parser:
         return self.parse_postfix_expression()
 
     def parse_postfix_expression(self):
+        """Parse member, call, index, and postfix unary expressions."""
         left = self.parse_primary_expression()
 
         while True:
@@ -1748,6 +1823,7 @@ class Parser:
         return left
 
     def parse_primary_expression(self):
+        """Parse identifiers, literals, parenthesized expressions, and arrays."""
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -1783,6 +1859,7 @@ class Parser:
             return IdentifierNode(name)
 
     def parse_array_literal(self):
+        """Parse a braced array literal expression."""
         self.eat("LBRACE")
         elements = []
 
@@ -1799,6 +1876,7 @@ class Parser:
         return ArrayLiteralNode(elements)
 
     def parse_literal(self):
+        """Parse a scalar literal token into a typed literal node."""
         token_type, value = self.current_token
 
         if token_type == "NUMBER":
@@ -1842,6 +1920,7 @@ class Parser:
             return LiteralNode(value, PrimitiveType("unknown"))
 
     def parse_integer_literal_parts(self, value):
+        """Return integer digits and signedness for an integer literal."""
         value = str(value)
         if value.endswith(("u", "U")):
             return value[:-1], PrimitiveType("uint")
@@ -1849,9 +1928,11 @@ class Parser:
 
     # Legacy compatibility methods
     def parse_legacy_shader(self):
+        """Return an empty legacy shader root."""
         return create_legacy_shader_node([], [], [], [])
 
     def parse_shader_stage(self):
+        """Parse a legacy stage block into a function node."""
         stage_type = self.current_token[1]
         self.eat(self.current_token[0])
 
@@ -1876,6 +1957,7 @@ class Parser:
         )
 
     def parse_cbuffer_as_struct(self):
+        """Parse a constant/uniform buffer declaration as a struct node."""
         if self.current_token[0] == "CBUFFER":
             self.eat("CBUFFER")
         else:
@@ -1909,10 +1991,23 @@ class Parser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
-        return StructNode(name=name, members=members)
+        node = StructNode(name=name, members=members)
+        node.is_cbuffer = True
+        return node
 
     # Helper methods
+    def is_cbuffer_declaration(self):
+        """Return whether the current token begins a cbuffer declaration."""
+        if self.current_token[0] == "CBUFFER":
+            return True
+        return (
+            self.current_token[0] == "UNIFORM"
+            and self.peek()[0] == "IDENTIFIER"
+            and self.peek(2)[0] == "LBRACE"
+        )
+
     def is_function_declaration(self):
+        """Return whether the current token sequence looks like a function."""
         saved_pos = self.pos
         saved_token = self.current_token
 
@@ -1949,6 +2044,7 @@ class Parser:
         return False
 
     def is_type_token(self):
+        """Return whether the current token can start a type expression."""
         return self.current_token[0] in [
             "BOOL",
             "I8",
@@ -2042,6 +2138,7 @@ class Parser:
         ]
 
     def advance_over_type(self):
+        """Advance over a type expression during lookahead checks."""
         if self.is_type_token():
             self.eat(self.current_token[0])
 
@@ -2056,10 +2153,12 @@ class Parser:
                     self.eat(self.current_token[0])
 
     def skip_unknown_token(self):
+        """Consume one token when recovering from unsupported syntax."""
         if self.current_token[0] != "EOF":
             self.eat(self.current_token[0])
 
     def create_empty_shader(self):
+        """Create an empty shader used by parser error recovery."""
         return ShaderNode(
             name="error",
             execution_model=ExecutionModel.GRAPHICS_PIPELINE,
@@ -2072,14 +2171,17 @@ class Parser:
         )
 
     def report_error(self, message):
+        """Emit a parser warning."""
         logging.warning(f"Parser: {message}")
 
     def next_token(self):
+        """Advance to the next token without validating token type."""
         if self.pos < len(self.tokens) - 1:
             self.pos += 1
             self.current_token = self.tokens[self.pos]
 
     def parse_global(self):
+        """Parse one top-level declaration or recover past unsupported input."""
         if self.current_token[0] == "EOF":
             return None
 
@@ -2113,6 +2215,9 @@ class Parser:
 
         if self.current_token[0] == "CONST":
             return self.parse_constant()
+
+        if self.is_cbuffer_declaration():
+            return self.parse_cbuffer_as_struct()
 
         if self.current_token[0] in [
             "VERTEX",
@@ -2153,6 +2258,7 @@ class Parser:
         return None
 
     def parse_generic_declaration(self):
+        """Parse legacy generic declarations that wrap structs/enums/functions."""
         if self.current_token[0] == "EOF":
             return None
 
@@ -2219,6 +2325,7 @@ class Parser:
             return None
 
     def parse_trait(self):
+        """Parse a trait-like declaration into the current AST shape."""
         if self.current_token[0] == "EOF":
             return None
 
@@ -2259,6 +2366,7 @@ class Parser:
         )
 
     def parse_switch_statement(self):
+        """Parse a switch statement and its case clauses."""
         self.eat("SWITCH")
         self.eat("LPAREN")
         expression = self.parse_expression()
@@ -2282,6 +2390,7 @@ class Parser:
         return SwitchNode(expression=expression, cases=cases)
 
     def parse_case(self):
+        """Parse one explicit switch case."""
         self.eat("CASE")
         value = self.parse_expression()
         self.eat("COLON")
@@ -2294,6 +2403,7 @@ class Parser:
         return CaseNode(value=value, statements=statements)
 
     def parse_default_case(self):
+        """Parse the default switch case."""
         self.eat("DEFAULT")
         self.eat("COLON")
 

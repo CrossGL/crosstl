@@ -6,7 +6,10 @@ from .MetalLexer import *
 
 
 class MetalToCrossGLConverter:
+    """Serialize Metal backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize Metal-to-CrossGL type, function, and semantic mappings."""
         self.rt_qualifiers = {
             "intersection",
             "anyhit",
@@ -247,6 +250,7 @@ class MetalToCrossGLConverter:
         }
 
     def generate(self, ast):
+        """Generate a complete CrossGL shader from a parsed Metal AST."""
         code = ""
         includes = getattr(ast, "includes", []) or []
         for inc in includes:
@@ -417,6 +421,7 @@ class MetalToCrossGLConverter:
         return " ".join(part for part in parts if part)
 
     def generate_function(self, func, indent=2):
+        """Render one Metal function node as a CrossGL function block."""
         code = ""
         code += "    " * indent
         params = ", ".join(
@@ -547,6 +552,7 @@ class MetalToCrossGLConverter:
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
+        """Render a Metal backend expression node as CrossGL syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
@@ -635,6 +641,7 @@ class MetalToCrossGLConverter:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def map_type(self, metal_type):
+        """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
             return metal_type
 
@@ -660,6 +667,7 @@ class MetalToCrossGLConverter:
         return f"{mapped}{suffix}"
 
     def map_semantic(self, semantic):
+        """Map Metal attributes to CrossGL semantic annotation syntax."""
         if not semantic:
             return ""
 

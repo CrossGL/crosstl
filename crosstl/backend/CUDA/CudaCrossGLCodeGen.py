@@ -1,10 +1,19 @@
 """CUDA to CrossGL Code Generator"""
 
-from .CudaAst import AssignmentNode, VariableNode
+from .CudaAst import (
+    AssignmentNode,
+    CastNode,
+    FunctionCallNode,
+    InitializerListNode,
+    MemberAccessNode,
+    TypeAliasNode,
+    UnaryOpNode,
+    VariableNode,
+)
 
 
 class CudaToCrossGLConverter:
-    """Converts CUDA AST to CrossGL format"""
+    """Serialize CUDA backend AST nodes back into CrossGL source."""
 
     VECTOR_TYPE_MAPPING = {
         "float2": "vec2<f32>",
@@ -50,21 +59,31 @@ class CudaToCrossGLConverter:
     }
 
     def __init__(self):
+        """Initialize CUDA-to-CrossGL visitor state."""
         self.indent_level = 0
         self.output = []
+        self.packed_argument_scopes = []
+        self.unique_ptr_scopes = [set()]
+        self.type_alias_scopes = [{}]
 
     def generate(self, ast_node):
+        """Generate complete CrossGL source from a parsed CUDA AST."""
         self.output = []
         self.indent_level = 0
+        self.packed_argument_scopes = []
+        self.unique_ptr_scopes = [set()]
+        self.type_alias_scopes = [{}]
         self.visit(ast_node)
         return "\n".join(self.output)
 
     def visit(self, node):
+        """Dispatch a CUDA backend AST node to its converter method."""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node):
+        """Fallback converter for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
             return node
         elif isinstance(node, list):
@@ -73,15 +92,122 @@ class CudaToCrossGLConverter:
             return str(node)
 
     def emit(self, code):
+        """Append a line of CrossGL output using the current indentation level."""
         if code.strip():
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
 
     def emit_statement(self, stmt):
+        """Render and append one converted statement."""
+        if isinstance(stmt, list):
+            for item in stmt:
+                self.emit_statement(item)
+            return
+
+        if self.emit_cuda_runtime_call_statement(stmt):
+            return
+
         result = self.visit(stmt)
         if isinstance(result, str) and result.strip():
             self.emit(f"{result};")
+
+    def emit_cuda_runtime_call_statement(self, stmt):
+        if not isinstance(stmt, FunctionCallNode):
+            return False
+
+        comments = self.format_cuda_runtime_call(stmt)
+        if comments is None:
+            return False
+
+        for comment in comments:
+            self.emit(comment)
+        return True
+
+    def format_cuda_runtime_call(self, node):
+        args = [self.visit(arg) for arg in node.args]
+        name = node.name
+
+        if name in {"cudaMalloc", "cudaMallocManaged", "cudaMallocHost"}:
+            if len(node.args) >= 2:
+                target = self.format_runtime_pointer_target(node.args[0])
+                size = self.visit(node.args[1])
+                return [f"// CUDA memory allocate: {target}, bytes: {size}"]
+        elif name in {"cudaFree", "cudaFreeHost"}:
+            if args:
+                return [f"// CUDA memory free: {args[0]}"]
+        elif name in {"cudaMemcpy", "cudaMemcpyAsync"}:
+            if len(args) >= 4:
+                comment = (
+                    f"// CUDA memory copy: {args[1]} -> {args[0]}, "
+                    f"bytes: {args[2]}, kind: {args[3]}"
+                )
+                if len(args) >= 5:
+                    comment += f", stream: {args[4]}"
+                return [comment]
+        elif name == "cudaMemset":
+            if len(args) >= 3:
+                return [
+                    f"// CUDA memory set: {args[0]}, value: {args[1]}, "
+                    f"bytes: {args[2]}"
+                ]
+        elif name in {"cudaDeviceSynchronize", "cudaStreamSynchronize"}:
+            if args:
+                return [f"// CUDA synchronize: {args[0]}"]
+            return ["// CUDA device synchronize"]
+        elif name in {"cudaStreamCreate", "cudaStreamDestroy"}:
+            if args:
+                action = "create" if name == "cudaStreamCreate" else "destroy"
+                stream = (
+                    self.format_runtime_pointer_target(node.args[0])
+                    if action == "create"
+                    else args[0]
+                )
+                return [f"// CUDA stream {action}: {stream}"]
+        elif name in {"cudaEventCreate", "cudaEventCreateWithFlags"}:
+            if args:
+                event = self.format_runtime_pointer_target(node.args[0])
+                comment = f"// CUDA event create: {event}"
+                if len(args) >= 2:
+                    comment += f", flags: {args[1]}"
+                return [comment]
+        elif name == "cudaEventRecord":
+            if args:
+                comment = f"// CUDA event record: {args[0]}"
+                if len(args) >= 2:
+                    comment += f", stream: {args[1]}"
+                return [comment]
+        elif name == "cudaEventSynchronize":
+            if args:
+                return [f"// CUDA event synchronize: {args[0]}"]
+        elif name == "cudaEventElapsedTime":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA event elapsed time: {args[1]} -> {args[2]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cudaEventDestroy":
+            if args:
+                return [f"// CUDA event destroy: {args[0]}"]
+        elif name == "cudaEventQuery":
+            if args:
+                return [f"// CUDA event query: {args[0]}"]
+        elif name == "cudaStreamWaitEvent":
+            if len(args) >= 2:
+                comment = f"// CUDA stream wait event: {args[0]} waits for {args[1]}"
+                if len(args) >= 3:
+                    comment += f", flags: {args[2]}"
+                return [comment]
+
+        return None
+
+    def format_runtime_pointer_target(self, arg):
+        if isinstance(arg, CastNode):
+            return self.format_runtime_pointer_target(arg.expression)
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
 
     def format_statement_fragment(self, stmt):
         if stmt is None:
@@ -101,6 +227,7 @@ class CudaToCrossGLConverter:
         return result if isinstance(result, str) else ""
 
     def visit_ShaderNode(self, node):
+        """Render a CUDA shader/program AST as a CrossGL shader block."""
         self.emit("// CUDA to CrossGL conversion")
 
         if hasattr(node, "includes") and node.includes:
@@ -112,6 +239,11 @@ class CudaToCrossGLConverter:
             for struct in node.structs:
                 self.visit(struct)
                 self.emit("")
+
+        if hasattr(node, "typedefs") and node.typedefs:
+            for alias in node.typedefs:
+                self.visit(alias)
+            self.emit("")
 
         if hasattr(node, "global_variables") and node.global_variables:
             for var in node.global_variables:
@@ -153,6 +285,7 @@ class CudaToCrossGLConverter:
         self.emit("};")
 
     def visit_FunctionNode(self, node):
+        """Render a CUDA function node as a CrossGL function."""
         # Skip device functions in CrossGL (they become inline)
         if "__device__" in node.qualifiers:
             return
@@ -168,14 +301,24 @@ class CudaToCrossGLConverter:
         self.emit(f"{return_type} {node.name}({param_str}) {{")
 
         self.indent_level += 1
-        for stmt in node.body:
-            self.emit_statement(stmt)
-        self.indent_level -= 1
+        self.push_packed_argument_scope()
+        self.push_type_alias_scope()
+        self.push_unique_ptr_scope()
+        for param in node.params:
+            self.register_unique_ptr_name(param.name, param.vtype)
+        try:
+            for stmt in node.body:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_unique_ptr_scope()
+            self.pop_type_alias_scope()
+            self.pop_packed_argument_scope()
+            self.indent_level -= 1
 
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
-        """Convert CUDA kernel to CrossGL compute shader"""
+        """Render a CUDA kernel as a CrossGL compute shader block."""
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
@@ -208,28 +351,150 @@ class CudaToCrossGLConverter:
         self.emit("let block_dim = gl_WorkGroupSize;")
         self.emit("")
 
-        for stmt in kernel.body:
-            self.emit_statement(stmt)
+        self.push_packed_argument_scope()
+        self.push_type_alias_scope()
+        self.push_unique_ptr_scope()
+        for param in kernel.params:
+            self.register_unique_ptr_name(param.name, param.vtype)
+        try:
+            for stmt in kernel.body:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_unique_ptr_scope()
+            self.pop_type_alias_scope()
+            self.pop_packed_argument_scope()
 
         self.indent_level -= 1
         self.emit("}")
 
     def visit_KernelLaunchNode(self, node):
-        self.emit(
-            f"// Kernel launch: {node.kernel_name}<<<{self.visit(node.blocks)}, {self.visit(node.threads)}>>>()"
-        )
+        kernel_name = self.visit(node.kernel_name)
+        config = [self.visit(node.blocks), self.visit(node.threads)]
+        if node.shared_mem is not None:
+            config.append(self.visit(node.shared_mem))
+        if node.stream is not None:
+            config.append(self.visit(node.stream))
+
+        self.emit(f"// Kernel launch: {kernel_name}<<<{', '.join(config)}>>>()")
         if node.args:
-            args_str = ", ".join([self.visit(arg) for arg in node.args])
+            args = self.resolve_packed_launch_args(node.args)
+            args_str = ", ".join([self.format_kernel_launch_arg(arg) for arg in args])
             self.emit(f"// Arguments: {args_str}")
 
     def visit_VariableNode(self, node):
         var_type = self.convert_cuda_type_to_crossgl(node.vtype)
 
+        self.register_packed_argument_list(node)
+        self.register_unique_ptr_name(node.name, node.vtype)
         if node.value:
             value = self.visit(node.value)
             self.emit(f"var {node.name}: {var_type} = {value};")
         else:
             self.emit(f"var {node.name}: {var_type};")
+
+    def push_packed_argument_scope(self):
+        self.packed_argument_scopes.append({})
+
+    def pop_packed_argument_scope(self):
+        if self.packed_argument_scopes:
+            self.packed_argument_scopes.pop()
+
+    def push_unique_ptr_scope(self):
+        self.unique_ptr_scopes.append(set())
+
+    def pop_unique_ptr_scope(self):
+        if len(self.unique_ptr_scopes) > 1:
+            self.unique_ptr_scopes.pop()
+
+    def push_type_alias_scope(self):
+        self.type_alias_scopes.append({})
+
+    def pop_type_alias_scope(self):
+        if len(self.type_alias_scopes) > 1:
+            self.type_alias_scopes.pop()
+
+    def register_type_alias(self, name, alias_type):
+        self.type_alias_scopes[-1][name] = alias_type
+
+    def resolve_type_alias(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name)
+        for scope in reversed(self.type_alias_scopes):
+            if type_name in scope:
+                return scope[type_name]
+        return type_name
+
+    def register_unique_ptr_name(self, name, type_name):
+        if self.is_unique_ptr_type_name(type_name):
+            self.unique_ptr_scopes[-1].add(name)
+
+    def is_unique_ptr_expression(self, expr):
+        if not isinstance(expr, str):
+            return False
+        return any(expr in scope for scope in reversed(self.unique_ptr_scopes))
+
+    def register_packed_argument_list(self, node):
+        if not self.packed_argument_scopes:
+            return
+        if self.is_packed_argument_list(node):
+            self.packed_argument_scopes[-1][node.name] = (
+                self.get_initializer_list_elements(node.value)
+            )
+
+    def is_packed_argument_list(self, node):
+        if self.get_initializer_list_elements(getattr(node, "value", None)) is None:
+            return False
+
+        compact_type = getattr(node, "vtype", "").replace(" ", "")
+        return compact_type in {"void*[]", "void**"}
+
+    def get_initializer_list_elements(self, value):
+        if isinstance(value, InitializerListNode):
+            return value.elements
+        if isinstance(value, CastNode) and isinstance(
+            value.expression, InitializerListNode
+        ):
+            return value.expression.elements
+        return None
+
+    def resolve_packed_launch_args(self, args):
+        if len(args) != 1:
+            return args
+
+        compound_elements = self.get_packed_compound_literal_elements(args[0])
+        if compound_elements is not None:
+            return compound_elements
+
+        packed_arg_name = self.get_packed_argument_name(args[0])
+        if packed_arg_name is None:
+            return args
+
+        for scope in reversed(self.packed_argument_scopes):
+            if packed_arg_name in scope:
+                return scope[packed_arg_name]
+
+        return args
+
+    def get_packed_argument_name(self, arg):
+        if isinstance(arg, str):
+            return arg
+        if isinstance(arg, CastNode):
+            return self.get_packed_argument_name(arg.expression)
+        return None
+
+    def get_packed_compound_literal_elements(self, arg):
+        if not isinstance(arg, CastNode):
+            return None
+
+        compact_type = arg.target_type.replace(" ", "")
+        if compact_type not in {"void*[]", "void**"}:
+            return None
+
+        return self.get_initializer_list_elements(arg.expression)
+
+    def format_kernel_launch_arg(self, arg):
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
 
     def visit_SharedMemoryNode(self, node):
         # Convert to workgroup memory in CrossGL
@@ -269,10 +534,74 @@ class CudaToCrossGLConverter:
             return f"({node.op}{operand})"
 
     def visit_FunctionCallNode(self, node):
+        if self.is_get_method_call(node):
+            return self.visit(node.name.object)
+
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
-        func_name = self.convert_cuda_builtin_function(node.name)
+        raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
+        make_unique = self.format_make_unique_call(raw_name, args)
+        if make_unique is not None:
+            return make_unique
+
+        unique_ptr_init = self.format_unique_ptr_constructor_call(raw_name, args)
+        if unique_ptr_init is not None:
+            return unique_ptr_init
+
+        func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def is_get_method_call(self, node):
+        return (
+            isinstance(node.name, MemberAccessNode)
+            and node.name.member == "get"
+            and not node.args
+            and self.is_unique_ptr_expression(node.name.object)
+        )
+
+    def format_make_unique_call(self, function_name, args):
+        base_name, template_args = self.parse_cpp_template(function_name)
+        if base_name.split("::")[-1] != "make_unique" or not template_args:
+            return None
+
+        target_type, is_array = self.unwrap_array_template_type(template_args[0])
+        target_type = self.convert_cuda_type_to_crossgl(target_type)
+        args_str = ", ".join(args)
+        if is_array:
+            return f"new_array<{target_type}>({args_str})"
+        return f"new<{target_type}>({args_str})"
+
+    def format_unique_ptr_constructor_call(self, function_name, args):
+        base_name, _ = self.parse_cpp_template(function_name)
+        if len(args) != 1:
+            return None
+        if base_name.split("::")[
+            -1
+        ] != "unique_ptr" and not self.is_unique_ptr_type_name(function_name):
+            return None
+
+        return args[0]
+
+    def visit_NewNode(self, node):
+        target_type = self.convert_cuda_type_to_crossgl(node.target_type)
+        if node.is_array:
+            size = self.visit(node.size) if node.size is not None else ""
+            return f"new_array<{target_type}>({size})"
+
+        args = ", ".join(self.visit(arg) for arg in node.args)
+        return f"new<{target_type}>({args})"
+
+    def visit_DeleteNode(self, node):
+        target = self.visit(node.expression)
+        if node.is_array:
+            self.emit(f"// delete array: {target}")
+        else:
+            self.emit(f"// delete: {target}")
+
+    def visit_TypeAliasNode(self, node):
+        self.register_type_alias(node.name, node.alias_type)
+        alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
+        self.emit(f"typedef {alias_type} {node.name};")
 
     def visit_AtomicOperationNode(self, node):
         args = [self.visit(arg) for arg in node.args]
@@ -326,6 +655,17 @@ class CudaToCrossGLConverter:
         elements = ", ".join(self.visit(element) for element in node.elements)
         return f"{{{elements}}}"
 
+    def visit_DesignatedInitializerNode(self, node):
+        designators = []
+        for kind, target in node.designators:
+            if kind == "index":
+                designators.append(f"[{self.visit(target)}]")
+            else:
+                designators.append(f".{target}")
+
+        value = self.visit(node.value)
+        return f"{''.join(designators)} = {value}"
+
     def visit_IfNode(self, node):
         condition = self.visit(node.condition)
         self.emit(f"if ({condition}) {{")
@@ -351,11 +691,36 @@ class CudaToCrossGLConverter:
         self.emit("}")
 
     def visit_ForNode(self, node):
-        init = self.format_statement_fragment(node.init)
+        scoped_init = isinstance(node.init, list)
+        if scoped_init:
+            self.emit("{")
+            self.indent_level += 1
+            for stmt in node.init:
+                self.emit_statement(stmt)
+            init = ""
+        else:
+            init = self.format_statement_fragment(node.init)
         condition = self.visit(node.condition) if node.condition else ""
         update = self.format_statement_fragment(node.update)
 
         self.emit(f"for ({init}; {condition}; {update}) {{")
+
+        self.indent_level += 1
+        if isinstance(node.body, list):
+            for stmt in node.body:
+                self.emit_statement(stmt)
+        else:
+            self.emit_statement(node.body)
+        self.indent_level -= 1
+
+        self.emit("}")
+        if scoped_init:
+            self.indent_level -= 1
+            self.emit("}")
+
+    def visit_RangeForNode(self, node):
+        iterable = self.visit(node.iterable)
+        self.emit(f"for {node.name} in {iterable} {{")
 
         self.indent_level += 1
         if isinstance(node.body, list):
@@ -468,22 +833,108 @@ class CudaToCrossGLConverter:
             "dim3": "vec3<u32>",
         }
 
+        unique_ptr_type = self.convert_unique_ptr_type(cuda_type)
+        if unique_ptr_type is not None:
+            return unique_ptr_type
+
         # Handle arrays
-        if "[" in cuda_type and "]" in cuda_type:
+        if self.has_array_suffix(cuda_type):
             return self.convert_cuda_array_type(cuda_type, type_mapping)
 
         # Handle pointers
         if "*" in cuda_type:
-            return f"ptr<{self.convert_cuda_pointer_element_type(cuda_type)}>"
+            return self.convert_cuda_pointer_type(cuda_type)
 
         return type_mapping.get(cuda_type, cuda_type)
 
-    def convert_cuda_pointer_element_type(self, cuda_type):
+    def convert_unique_ptr_type(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if not self.is_unique_ptr_base_name(base_name) or not template_args:
+            return None
+
+        target_type, _ = self.unwrap_array_template_type(template_args[0])
+        return f"ptr<{self.convert_cuda_type_to_crossgl(target_type)}>"
+
+    def is_unique_ptr_type_name(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name)
+        type_name = self.resolve_type_alias(type_name)
+        base_name, template_args = self.parse_cpp_template(type_name)
+        return self.is_unique_ptr_base_name(base_name) and bool(template_args)
+
+    def is_unique_ptr_base_name(self, base_name):
+        return base_name.split("::")[-1] == "unique_ptr"
+
+    def has_array_suffix(self, type_name):
+        depth = 0
+        for char in str(type_name):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "[" and depth == 0:
+                return True
+        return False
+
+    def unwrap_array_template_type(self, type_name):
+        type_name = type_name.strip()
+        if type_name.endswith("[]"):
+            return type_name[:-2].strip(), True
+        return type_name, False
+
+    def parse_cpp_template(self, text):
+        if not isinstance(text, str):
+            return str(text), []
+
+        start = text.find("<")
+        if start == -1 or not text.endswith(">"):
+            return text, []
+
+        base_name = text[:start].strip()
+        args = self.split_cpp_template_args(text[start + 1 : -1])
+        return base_name, args
+
+    def split_cpp_template_args(self, args_text):
+        args = []
+        depth = 0
+        start = 0
+
+        for index, char in enumerate(args_text):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append(args_text[start:index].strip())
+                start = index + 1
+
+        tail = args_text[start:].strip()
+        if tail:
+            args.append(tail)
+        return args
+
+    def convert_cuda_pointer_type(self, cuda_type):
+        """Convert a CUDA pointer type into nested CrossGL pointer syntax."""
+        pointer_depth = cuda_type.count("*")
         base_type = cuda_type.replace("*", "").strip()
-        return self.convert_cuda_type_to_crossgl(base_type)
+        mapped_type = self.convert_cuda_type_to_crossgl(base_type)
+
+        for _ in range(pointer_depth):
+            mapped_type = f"ptr<{mapped_type}>"
+
+        return mapped_type
+
+    def convert_cuda_pointer_element_type(self, cuda_type):
+        pointer_depth = cuda_type.count("*")
+        base_type = cuda_type.replace("*", "").strip()
+        mapped_type = self.convert_cuda_type_to_crossgl(base_type)
+
+        for _ in range(max(0, pointer_depth - 1)):
+            mapped_type = f"ptr<{mapped_type}>"
+
+        return mapped_type
 
     def strip_type_qualifiers(self, type_name):
-        qualifiers = {"const", "volatile", "__restrict__", "restrict"}
+        qualifiers = {"const", "volatile", "__restrict__", "restrict", "&", "&&"}
         return " ".join(
             part for part in str(type_name).split() if part not in qualifiers
         )
@@ -491,16 +942,18 @@ class CudaToCrossGLConverter:
     def convert_cuda_array_type(self, cuda_type, type_mapping):
         base_type = cuda_type.split("[", 1)[0].strip()
         dimensions = []
-        remainder = cuda_type[len(base_type) :]
+        remainder = cuda_type[len(base_type) :].strip()
 
         while remainder.startswith("["):
             close_index = remainder.find("]")
             if close_index == -1:
                 break
             dimensions.append(remainder[1:close_index].strip())
-            remainder = remainder[close_index + 1 :]
+            remainder = remainder[close_index + 1 :].strip()
 
-        mapped_type = type_mapping.get(base_type, base_type)
+        mapped_type = type_mapping.get(base_type)
+        if mapped_type is None:
+            mapped_type = self.convert_cuda_type_to_crossgl(base_type)
         for size in reversed(dimensions):
             if size:
                 mapped_type = f"array<{mapped_type}, {size}>"
@@ -510,7 +963,7 @@ class CudaToCrossGLConverter:
         return mapped_type
 
     def convert_cuda_builtin_function(self, func_name):
-        """Convert CUDA built-in functions to CrossGL equivalents"""
+        """Convert CUDA built-in functions to CrossGL equivalents."""
         function_mapping = {
             "sqrtf": "sqrt",
             "powf": "pow",
@@ -536,6 +989,14 @@ class CudaToCrossGLConverter:
             "fmax": "max",
             "floor": "floor",
             "ceil": "ceil",
+            "bool": "bool",
+            "char": "i8",
+            "short": "i16",
+            "int": "i32",
+            "long": "i64",
+            "float": "f32",
+            "double": "f64",
+            "size_t": "u32",
             **self.VECTOR_CONSTRUCTOR_MAPPING,
             "dim3": "vec3<u32>",
         }

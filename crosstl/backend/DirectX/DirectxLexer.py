@@ -301,6 +301,8 @@ KEYWORDS = {
 
 
 class TokenType(Enum):
+    """Token names emitted by the HLSL lexer."""
+
     COMMENT_SINGLE = auto()
     COMMENT_MULTI = auto()
     PREPROCESSOR = auto()
@@ -457,16 +459,20 @@ class TokenType(Enum):
 
 
 class Token:
+    """Simple typed token object used by DirectX compatibility paths."""
+
     def __init__(self, token_type: TokenType, text: str):
+        """Store the token kind and original source text."""
         self.token_type = token_type
         self.text = text
 
     def __repr__(self):
+        """Return a developer-readable token representation."""
         return f"Token({self.token_type}, '{self.text}')"
 
 
 class HLSLLexer:
-    """Lexer for High-Level Shading Language (HLSL)"""
+    """Tokenize High-Level Shading Language source for the DirectX parser."""
 
     def __init__(
         self,
@@ -477,6 +483,7 @@ class HLSLLexer:
         defines: Optional[dict] = None,
         strict_preprocessor: bool = False,
     ):
+        """Initialize the lexer and optionally preprocess HLSL includes/macros."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.file_path = file_path
         self.include_paths = include_paths or []
@@ -491,9 +498,11 @@ class HLSLLexer:
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
+        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
+        """Yield HLSL tokens while skipping whitespace and comments."""
         pos = 0
         while pos < self._length:
             if self.code.startswith("/*", pos) and "*/" not in self.code[pos + 2 :]:
@@ -525,6 +534,7 @@ class HLSLLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
+        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -533,7 +543,7 @@ class HLSLLexer:
 
     @classmethod
     def from_file(cls, filepath: str) -> "HLSLLexer":
-        """Create a lexer instance from a file"""
+        """Create a lexer instance from a source file."""
         with open(filepath, "r", encoding="utf-8") as f:
             base_dir = os.path.dirname(filepath)
             return cls(f.read(), file_path=filepath, include_paths=[base_dir])
@@ -543,11 +553,13 @@ class Lexer:
     """Compatibility wrapper around HLSLLexer for legacy code"""
 
     def __init__(self, input_str: str):
+        """Tokenize ``input_str`` and prepare cursor-based access."""
         self.lexer = HLSLLexer(input_str)
         self.tokens = self.lexer.tokenize()
         self.current_pos = 0
 
     def next(self) -> Tuple[str, str]:
+        """Return the next token and advance the cursor."""
         if self.current_pos < len(self.tokens):
             token = self.tokens[self.current_pos]
             self.current_pos += 1
@@ -555,9 +567,11 @@ class Lexer:
         return ("EOF", "")
 
     def peek(self) -> Tuple[str, str]:
+        """Return the next token without advancing the cursor."""
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
         return ("EOF", "")
 
     def reset(self):
+        """Reset the cursor to the beginning of the token stream."""
         self.current_pos = 0

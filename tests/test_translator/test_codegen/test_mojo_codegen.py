@@ -39,6 +39,45 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def find_mojo_compiler():
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    try:
+        result = subprocess.run(
+            [mojo, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"mojo compiler is not executable: {exc}")
+
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        pytest.skip(
+            f"mojo compiler is not installed or not executable ({mojo}): {output}"
+        )
+
+    return mojo
+
+
+def test_find_mojo_compiler_skips_non_compiler_on_path(monkeypatch):
+    class FailedProbe:
+        returncode = 29
+        stdout = ""
+        stderr = "Can't find C:\\Strawberry\\perl\\bin\\mojo.BAT on PATH"
+
+    monkeypatch.setattr(
+        shutil, "which", lambda name: r"C:\Strawberry\perl\bin\mojo.BAT"
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FailedProbe())
+
+    with pytest.raises(pytest.skip.Exception):
+        find_mojo_compiler()
+
+
 def test_struct():
     code = """
     struct VSInput {
@@ -678,9 +717,7 @@ def test_double_vector_and_matrix_types_emit_mojo_names():
 
 
 def test_matrix_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     mat2 makeMat2() {
@@ -802,9 +839,7 @@ def test_vector_fed_matrix_constructors_use_helpers_and_index_fields():
 
 
 def test_vector_fed_matrix_constructors_and_indexing_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec2 makeUv() {
@@ -892,9 +927,7 @@ def test_dynamic_matrix_indexing_emits_getitem_and_vector_index_casts():
 
 
 def test_dynamic_matrix_indexing_and_assignment_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     mat2 mutateLocal(int column, int row) {
@@ -1008,9 +1041,7 @@ def test_three_component_vectors_emit_power_of_two_simd_storage():
 
 
 def test_three_component_vector_codegen_compiles_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec3 buildColor() {
@@ -1095,9 +1126,7 @@ def test_swizzles_and_composite_vector_constructors_emit_indexed_lanes():
 
 
 def test_swizzles_and_composite_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Input {
@@ -1247,9 +1276,7 @@ def test_duplicate_sensitive_splats_and_swizzles_use_helpers():
 
 
 def test_scalar_vec3_splats_and_later_function_swizzles_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float expensive() {
@@ -1345,9 +1372,7 @@ def test_duplicate_sensitive_composite_constructors_use_helpers():
 
 
 def test_duplicate_sensitive_composite_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec2 makeUv() {
@@ -1446,9 +1471,7 @@ def test_duplicate_sensitive_bool_vector_helpers_use_bool_dtype():
 
 
 def test_duplicate_sensitive_bool_vector_helpers_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     bool flag() {
@@ -1588,9 +1611,7 @@ def test_duplicate_sensitive_integer_vector_helpers_use_typed_dtypes():
 
 
 def test_duplicate_sensitive_integer_vector_helpers_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     int pickIndex() {
@@ -1780,9 +1801,7 @@ def test_mixed_dtype_vector_constructors_cast_and_preserve_single_eval():
 
 
 def test_mixed_dtype_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     int nextIndex() {
@@ -1986,9 +2005,7 @@ def test_scalar_vec2_vec4_constructors_emit_splat_form():
 
 
 def test_scalar_vec2_vec4_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float nextFloat() {
@@ -2232,9 +2249,7 @@ def test_nested_composite_vector_constructors_use_helpers_and_casts():
 
 
 def test_nested_composite_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float nextFloat() {
@@ -2449,9 +2464,7 @@ def test_truncating_vector_constructors_use_helpers_and_pad_hidden_lane():
 
 
 def test_truncating_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec4 makeColor() {
@@ -2593,9 +2606,7 @@ def test_vec3_arithmetic_helpers_preserve_hidden_lane():
 
 
 def test_vec3_arithmetic_helpers_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec3 addScalar(vec3 color, float bloom) {
@@ -2745,9 +2756,7 @@ def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices():
 
 
 def test_fixed_size_arrays_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec4 scalarArray(int index) {
@@ -2801,9 +2810,7 @@ fn main():
 
 
 def test_struct_array_fields_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Packed {
@@ -2860,9 +2867,7 @@ fn main():
 
 
 def test_local_struct_array_fields_default_initialize_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Packed {
@@ -2917,9 +2922,7 @@ fn main():
 
 
 def test_nested_struct_arrays_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Inner {
@@ -3042,9 +3045,7 @@ def test_array_literals_emit_inlinearray_and_zero_padding():
 
 
 def test_array_literals_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float globalWeights[4] = {1.0, 2.0};
@@ -3151,9 +3152,7 @@ def test_mutated_parameters_emit_owned_only_when_needed():
 
 
 def test_mutated_array_matrix_vector_parameters_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float writeArray(float values[4], int index) {

@@ -5,13 +5,17 @@ from typing import List
 
 
 class Token:
+    """Token object carrying HIP token type, text, and source location."""
+
     def __init__(self, token_type: str, value: str, line: int = 1, column: int = 1):
+        """Store token metadata produced by ``HipLexer``."""
         self.type = token_type
         self.value = value
         self.line = line
         self.column = column
 
     def __repr__(self):
+        """Return a developer-readable token representation."""
         return f"Token({self.type}, '{self.value}')"
 
 
@@ -235,7 +239,10 @@ KEYWORDS = {
 
 
 class HipLexer:
+    """Tokenize HIP source for the HIP backend parser."""
+
     def __init__(self, code: str):
+        """Initialize the lexer with raw HIP source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
@@ -244,6 +251,7 @@ class HipLexer:
         self.column = 1
 
     def tokenize(self) -> List[Token]:
+        """Return the full HIP token stream with source locations."""
         tokens = []
         pos = 0
 
@@ -272,6 +280,7 @@ class HipLexer:
         return tokens
 
     def _next_token(self, pos: int):
+        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -282,7 +291,7 @@ class HipLexer:
 
 # For compatibility with existing test expectations
 def parse_hip_code(code: str):
-    """Parse HIP code and return the AST"""
+    """Parse HIP source text and return the backend AST."""
     from .HipParser import HipParser
 
     lexer = HipLexer(code)

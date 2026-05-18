@@ -2,11 +2,16 @@ import pytest
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
 from crosstl.backend.Rust.RustAst import (
+    AssociatedTypeNode,
     ConstNode,
+    EnumNode,
+    EnumVariantNode,
+    FunctionCallNode,
     FunctionNode,
     ImplNode,
     StaticNode,
     StructNode,
+    TypeAliasNode,
     UseNode,
     ArrayNode,
 )
@@ -40,6 +45,103 @@ def test_struct_parsing():
         assert len(struct.attributes) == 1
     except Exception as e:
         pytest.fail(f"Struct parsing failed: {e}")
+
+
+def test_enum_parsing():
+    code = """
+    #[repr(u32)]
+    pub enum Message<T>
+    where
+        T: Copy,
+    {
+        Quit,
+        AxisX = 0,
+        Data(T, Vec3<f32>),
+        Move { x: f32, y: f32 },
+    }
+    """
+    try:
+        ast = parse_code(code)
+        assert len(ast.enums) == 1
+
+        enum = ast.enums[0]
+        assert isinstance(enum, EnumNode)
+        assert enum.name == "Message"
+        assert enum.visibility == "pub"
+        assert enum.generics == ["T"]
+        assert enum.where_clauses == [("T", ["Copy"])]
+        assert len(enum.attributes) == 1
+
+        assert [variant.name for variant in enum.variants] == [
+            "Quit",
+            "AxisX",
+            "Data",
+            "Move",
+        ]
+        assert all(isinstance(variant, EnumVariantNode) for variant in enum.variants)
+        assert enum.variants[0].kind == "unit"
+        assert enum.variants[1].value == "0"
+        assert enum.variants[2].kind == "tuple"
+        assert enum.variants[2].fields == ["T", "Vec3<f32>"]
+        assert enum.variants[3].kind == "struct"
+        assert [field.name for field in enum.variants[3].fields] == ["x", "y"]
+        assert [field.vtype for field in enum.variants[3].fields] == ["f32", "f32"]
+    except Exception as e:
+        pytest.fail(f"Enum parsing failed: {e}")
+
+
+def test_type_alias_parsing():
+    code = """
+    #[repr(transparent)]
+    pub type Real = f32;
+    type Buffer<T> = [T; 4];
+    type Table<T>
+    where
+        T: Copy,
+    = Vec3<T>;
+
+    impl<T> Kernel<T>
+    where
+        T: Clone,
+    {
+        type Output = T;
+        pub type Scratch = [T; 2];
+    }
+    """
+    try:
+        ast = parse_code(code)
+        assert len(ast.type_aliases) == 3
+        assert all(isinstance(alias, TypeAliasNode) for alias in ast.type_aliases)
+
+        real, buffer, table = ast.type_aliases
+        assert real.name == "Real"
+        assert real.alias_type == "f32"
+        assert real.visibility == "pub"
+        assert len(real.attributes) == 1
+
+        assert buffer.name == "Buffer"
+        assert buffer.generics == ["T"]
+        assert buffer.alias_type == "T[4]"
+
+        assert table.name == "Table"
+        assert table.generics == ["T"]
+        assert table.where_clauses == [("T", ["Copy"])]
+        assert table.alias_type == "Vec3<T>"
+
+        impl_block = ast.impl_blocks[0]
+        assert impl_block.struct_name == "Kernel<T>"
+        assert impl_block.where_clauses == [("T", ["Clone"])]
+        assert [alias.name for alias in impl_block.type_aliases] == [
+            "Output",
+            "Scratch",
+        ]
+        assert [alias.alias_type for alias in impl_block.type_aliases] == [
+            "T",
+            "T[2]",
+        ]
+        assert impl_block.type_aliases[1].visibility == "pub"
+    except Exception as e:
+        pytest.fail(f"Type alias parsing failed: {e}")
 
 
 def test_function_parsing():
@@ -85,6 +187,45 @@ def test_impl_block_parsing():
         assert len(impl_block.functions) == 1
     except Exception as e:
         pytest.fail(f"Impl block parsing failed: {e}")
+
+
+def test_generic_impl_where_clause_parsing():
+    code = """
+    impl<T> Drawable for Sprite<T>
+    where
+        T: Copy + Clone,
+    {
+        fn draw(&self) {}
+    }
+
+    impl<T> Sprite<T>
+    where
+        T: Copy,
+    {
+        fn new(value: T) -> Self {
+            Self { value: value }
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        assert len(ast.impl_blocks) == 2
+
+        trait_impl = ast.impl_blocks[0]
+        assert trait_impl.trait_name == "Drawable"
+        assert trait_impl.struct_name == "Sprite<T>"
+        assert trait_impl.generics == ["T"]
+        assert trait_impl.where_clauses == [("T", ["Copy", "Clone"])]
+        assert trait_impl.functions[0].name == "draw"
+
+        inherent_impl = ast.impl_blocks[1]
+        assert inherent_impl.trait_name is None
+        assert inherent_impl.struct_name == "Sprite<T>"
+        assert inherent_impl.generics == ["T"]
+        assert inherent_impl.where_clauses == [("T", ["Copy"])]
+        assert inherent_impl.functions[0].return_type == "Self"
+    except Exception as e:
+        pytest.fail(f"Generic impl where-clause parsing failed: {e}")
 
 
 def test_use_statement_parsing():
@@ -271,6 +412,73 @@ def test_function_call_parsing():
         pytest.fail(f"Function call parsing failed: {e}")
 
 
+def test_turbofish_path_expression_parsing():
+    code = """
+    type Vector<T> = Vec3<T>;
+
+    fn test_paths() {
+        let a = Vec3::<f32>::new(1.0, 2.0, 3.0);
+        let b = Vector::<f32>::new(1.0, 2.0, 3.0);
+        let c = Type::<f32>::CONST;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "Vec3<f32>::new"
+        assert isinstance(body[1].value, FunctionCallNode)
+        assert body[1].value.name == "Vector<f32>::new"
+        assert body[2].value == "Type<f32>::CONST"
+    except Exception as e:
+        pytest.fail(f"Turbofish path expression parsing failed: {e}")
+
+
+def test_module_path_expression_parsing():
+    code = """
+    type Vector<T> = Vec3<T>;
+
+    fn test_paths() {
+        let a = crate::math::value();
+        let b = super::math::VALUE;
+        let c = self::helper::CONST;
+        let d = crate::math::Vector::<f32>::new(1.0, 2.0, 3.0);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "crate::math::value"
+        assert body[1].value == "super::math::VALUE"
+        assert body[2].value == "self::helper::CONST"
+        assert isinstance(body[3].value, FunctionCallNode)
+        assert body[3].value.name == "crate::math::Vector<f32>::new"
+    except Exception as e:
+        pytest.fail(f"Module path expression parsing failed: {e}")
+
+
+def test_module_path_type_parsing():
+    code = """
+    fn sample(x: crate::math::Real) -> crate::math::Real {
+        x
+    }
+
+    type Name = std::vec::Vec<f32>;
+    """
+    try:
+        ast = parse_code(code)
+        func = ast.functions[0]
+
+        assert func.params[0].vtype == "crate::math::Real"
+        assert func.return_type == "crate::math::Real"
+        assert ast.type_aliases[0].alias_type == "std::vec::Vec<f32>"
+    except Exception as e:
+        pytest.fail(f"Module path type parsing failed: {e}")
+
+
 def test_binary_operations_parsing():
     code = """
     fn test_binary() {
@@ -420,6 +628,8 @@ def test_generics_parsing():
         assert len(ast.functions) == 1
         func = ast.functions[0]
         assert len(func.generics) == 2
+        assert func.generics == ["T", "U"]
+        assert func.where_clauses == [("T", ["Clone"]), ("U", ["Debug"])]
     except Exception as e:
         pytest.fail(f"Generics parsing failed: {e}")
 
@@ -464,15 +674,47 @@ def test_attributes_parsing():
 
 def test_trait_parsing():
     code = """
-    pub trait Drawable {
-        fn draw(&self);
-        fn update(&mut self, delta: f32);
+    pub trait Drawable<T: Into<Vec3<f32>> + Clone, U>
+    where
+        U: Debug,
+    {
+        type Output: Copy + Clone;
+        type Scratch: Into<Vec3<f32>> = Vec3<f32>;
+
+        fn draw(&self) -> Self::Output;
+        fn update<V: Copy>(&mut self, value: V) -> U
+        where
+            V: Clone;
     }
     """
     try:
-        parse_code(code)
-        # Note: trait parsing might be handled differently in the current implementation
-        # This test ensures the parser doesn't crash on trait syntax
+        ast = parse_code(code)
+        assert len(ast.traits) == 1
+
+        trait = ast.traits[0]
+        assert trait.name == "Drawable"
+        assert trait.visibility == "pub"
+        assert trait.generics == ["T: Into<Vec3<f32>> + Clone", "U"]
+        assert trait.where_clauses == [("U", ["Debug"])]
+        assert len(trait.associated_types) == 2
+        assert all(
+            isinstance(associated_type, AssociatedTypeNode)
+            for associated_type in trait.associated_types
+        )
+        assert trait.associated_types[0].name == "Output"
+        assert trait.associated_types[0].bounds == ["Copy", "Clone"]
+        assert trait.associated_types[0].default_type is None
+        assert trait.associated_types[1].name == "Scratch"
+        assert trait.associated_types[1].bounds == ["Into<Vec3<f32>>"]
+        assert trait.associated_types[1].default_type == "Vec3<f32>"
+        assert [method.name for method in trait.methods] == ["draw", "update"]
+        assert trait.methods[0].params[0].vtype == "&Self"
+        assert trait.methods[0].return_type == "Self::Output"
+        assert trait.methods[1].params[0].vtype == "&mut Self"
+        assert trait.methods[1].params[1].vtype == "V"
+        assert trait.methods[1].return_type == "U"
+        assert trait.methods[1].generics == ["V: Copy"]
+        assert trait.methods[1].where_clauses == [("V", ["Clone"])]
     except Exception as e:
         pytest.fail(f"Trait parsing failed: {e}")
 

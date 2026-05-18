@@ -174,6 +174,8 @@ def test_for_statement():
         assert (
             "while " in generated_code
         )  # Rust codegen converts for loops to while loops
+        assert "let mut i: i32 = 0;" in generated_code
+        assert "let mut i: i32 = 0;;" not in generated_code
         print(generated_code)
     except SyntaxError:
         pytest.fail("For statement codegen not implemented.")
@@ -1021,12 +1023,10 @@ def test_rust_type_conversions():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert (
-            "int(" in generated_code
-        )  # Rust codegen preserves type conversions with function calls
-        assert (
-            "f" in generated_code or "float" in generated_code
-        )  # Check for float variable usage
+        assert "let mut i: i32 = ((input.texCoord.x * 100.0) as i32);" in generated_code
+        assert "let mut f: f32 = (i as f32);" in generated_code
+        assert "int(" not in generated_code
+        assert "float(" not in generated_code
         print(generated_code)
     except SyntaxError:
         pytest.fail("Rust type conversions not implemented")

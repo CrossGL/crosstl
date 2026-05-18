@@ -108,6 +108,85 @@ def test_type_mapping():
         pytest.fail(f"Type mapping failed: {e}")
 
 
+def test_type_alias_conversion():
+    code = """
+    type Real = f32;
+    type Color = Vec3<f32>;
+    type Weights = [f32; 4];
+    type Buffer<T> = [T; 4];
+    type Vector<T> = Vec3<T>;
+
+    fn sample(x: Real, weights: Weights, buffer: Buffer<f32>, normal: Vector<f32>) -> Real {
+        let color: Color;
+        x
+    }
+
+    impl<T> Kernel<T> {
+        type Output = T;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "typedef float Real;" in result
+        assert "typedef vec3 Color;" in result
+        assert "typedef float Weights[4];" in result
+        assert "typedef" in result
+        assert "Buffer" not in result
+        assert "Vector" not in result
+        assert (
+            "Real sample(Real x, Weights weights, float buffer[4], vec3 normal)"
+            in result
+        )
+        assert "Color color;" in result
+    except Exception as e:
+        pytest.fail(f"Type alias conversion failed: {e}")
+
+
+def test_turbofish_path_conversion():
+    code = """
+    type Vector<T> = Vec3<T>;
+
+    fn test_paths() {
+        let a = Vec3::<f32>::new(1.0, 2.0, 3.0);
+        let b: Vector<f32> = Vector::<f32>::new(4.0, 5.0, 6.0);
+        let c = Type::<f32>::CONST;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "a = vec3(1.0, 2.0, 3.0);" in result
+        assert "vec3 b = vec3(4.0, 5.0, 6.0);" in result
+        assert "c = Type<f32>::CONST;" in result
+        assert "Vector" not in result
+        assert "Vec3::<f32>" not in result
+    except Exception as e:
+        pytest.fail(f"Turbofish path conversion failed: {e}")
+
+
+def test_module_path_alias_conversion():
+    code = """
+    type Real = f32;
+    type Vector<T> = Vec3<T>;
+
+    fn sample(x: crate::math::Real, normal: crate::math::Vector<f32>) -> crate::math::Real {
+        let lifted = crate::math::Vector::<f32>::new(1.0, 2.0, 3.0);
+        let c = self::helper::CONST;
+        let s = super::math::VALUE;
+        x
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "typedef float Real;" in result
+        assert "Real sample(Real x, vec3 normal)" in result
+        assert "lifted = vec3(1.0, 2.0, 3.0);" in result
+        assert "c = self::helper::CONST;" in result
+        assert "s = super::math::VALUE;" in result
+        assert "crate::math::Vector" not in result
+    except Exception as e:
+        pytest.fail(f"Module path alias conversion failed: {e}")
+
+
 def test_control_flow_conversion():
     code = """
     fn test_control() {

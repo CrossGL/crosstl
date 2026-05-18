@@ -32,10 +32,12 @@ class SpirvType:
     """Represents a SPIR-V type with storage class information."""
 
     def __init__(self, base_type: str, storage_class: Optional[str] = None):
+        """Store the base type name and optional storage class."""
         self.base_type = base_type
         self.storage_class = storage_class
 
     def __str__(self) -> str:
+        """Return a readable type label for debug output."""
         if self.storage_class:
             return f"{self.base_type} ({self.storage_class})"
         return self.base_type
@@ -47,11 +49,13 @@ class SpirvId:
     def __init__(
         self, id_value: int, spirv_type: SpirvType, name: Optional[str] = None
     ):
+        """Store the numeric result id, type metadata, and optional name."""
         self.id = id_value
         self.type = spirv_type
         self.name = name
 
     def __str__(self) -> str:
+        """Return a readable SPIR-V id label for debug output."""
         if self.name:
             return f"%{self.id} ({self.name}: {self.type})"
         return f"%{self.id} ({self.type})"
@@ -61,6 +65,7 @@ class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     def __init__(self):
+        """Initialize an empty SPIR-V module-generation state."""
         self.reset_generation_state()
 
     def reset_generation_state(self):
@@ -2468,7 +2473,7 @@ class VulkanSPIRVCodeGen:
 
         return self.register_struct_type(struct_node.name, members)
 
-    def process_function_node(self, function_node: "FunctionNode"):
+    def process_function_node(self, function_node):
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
         previous_return_type = self.current_return_type
@@ -3926,11 +3931,13 @@ class VulkanSPIRVCodeGen:
         return None
 
     def stage_key(self, stage_type) -> str:
+        """Normalize a stage enum or string to a registry key."""
         if hasattr(stage_type, "value"):
             return stage_type.value
         return str(stage_type).split(".")[-1].lower()
 
     def spirv_execution_model(self, stage_name: Optional[str]) -> str:
+        """Map a CrossGL stage name to a SPIR-V execution model."""
         stage_map = {
             "vertex": "Vertex",
             "fragment": "Fragment",
@@ -3942,6 +3949,7 @@ class VulkanSPIRVCodeGen:
         return stage_map.get(stage_name or "fragment", "Fragment")
 
     def compute_local_size(self, stage) -> Tuple[int, int, int]:
+        """Return compute workgroup dimensions from a stage execution config."""
         config = getattr(stage, "execution_config", {}) or {}
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
@@ -3957,6 +3965,7 @@ class VulkanSPIRVCodeGen:
     def emit_entry_point(
         self, execution_model: str, function_id: SpirvId, name: str, stage=None
     ):
+        """Emit SPIR-V entry-point and execution-mode declarations."""
         interface_ids = " ".join(
             f"%{variable.id}" for variable in self.inputs + self.outputs
         )

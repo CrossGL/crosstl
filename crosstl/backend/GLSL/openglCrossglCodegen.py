@@ -33,7 +33,10 @@ from .OpenglAst import (
 
 
 class GLSLToCrossGLConverter:
+    """Serialize OpenGL backend AST nodes back into CrossGL source."""
+
     def __init__(self, shader_type="vertex"):
+        """Initialize GLSL-to-CrossGL mappings for a shader stage."""
         self.shader_type = shader_type
         self.indent_level = 0
         self.indent_str = "    "
@@ -257,6 +260,7 @@ class GLSLToCrossGLConverter:
         return layout_str.strip()
 
     def generate(self, ast):
+        """Generate a complete CrossGL shader from a parsed GLSL AST."""
         if ast is None:
             return "// Empty shader"
 
@@ -525,6 +529,7 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_function(self, node):
+        """Render one GLSL function node as a CrossGL function block."""
         return_type = self.convert_type(node.return_type)
         name = node.name
 
@@ -549,6 +554,7 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_statement(self, node):
+        """Render a GLSL statement node as CrossGL source."""
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node) + ";"
         elif isinstance(node, IfNode):
@@ -698,6 +704,7 @@ class GLSLToCrossGLConverter:
         return f"return {self.generate_expression(node.value)}"
 
     def generate_expression(self, node):
+        """Render an OpenGL backend expression node as CrossGL syntax."""
         if node is None:
             return ""
 

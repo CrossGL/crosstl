@@ -133,12 +133,16 @@ ASSIGNMENT_TOKENS = {
 
 
 class HLSLParser:
+    """Parse HLSL tokens into the DirectX backend shader AST."""
+
     def __init__(self, tokens):
+        """Initialize the parser with a token stream from ``HLSLLexer``."""
         self.tokens = tokens
         self.current_index = 0
         self.current_token = tokens[0] if tokens else ("EOF", "")
 
     def parse(self):
+        """Parse the complete token stream into a ``ShaderNode``."""
         structs = []
         functions = []
         global_variables = []
@@ -213,6 +217,7 @@ class HLSLParser:
         )
 
     def eat(self, expected_type):
+        """Consume and return the current token when it matches ``expected_type``."""
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -224,6 +229,7 @@ class HLSLParser:
         raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
 
     def peek(self, offset=1):
+        """Return a lookahead token without advancing the parser."""
         idx = self.current_index + offset
         if idx < len(self.tokens):
             return self.tokens[idx]
