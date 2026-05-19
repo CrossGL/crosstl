@@ -62,6 +62,86 @@ def test_hlsl_unsigned_integer_literal_suffix_codegen():
     assert "7, u" not in generated_code
 
 
+def test_hlsl_resource_binding_attributes_are_not_parameter_semantics():
+    code = """
+    shader BindingAttributes {
+        vec4 sampleBound(sampler2D tex @texture(1), sampler samp @sampler(2), sampler2D registered @register(t3), vec2 uv) {
+            return texture(tex, samp, uv) + texture(registered, uv);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 sampleBound(Texture2D tex, SamplerState samp, Texture2D registered, SamplerState registeredSampler, float2 uv)"
+        in generated_code
+    )
+    assert "tex.Sample(samp, uv)" in generated_code
+    assert "registered.Sample(registeredSampler, uv)" in generated_code
+    assert ": texture" not in generated_code
+    assert ": sampler" not in generated_code
+    assert ": register" not in generated_code
+
+
+def test_hlsl_global_resource_binding_attributes_drive_registers():
+    code = """
+    shader ExplicitGlobalBindings {
+        sampler samp @sampler(5);
+        sampler2D explicitTex @texture(3);
+        image2D storageImage @binding(7);
+        sampler2D registerTex @register(t8);
+        sampler2D autoTex;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(storageImage, ivec2(0, 0));
+                return texture(explicitTex, samp, uv) + texture(registerTex, samp, uv) + texture(autoTex, samp, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "SamplerState samp : register(s5);" in generated_code
+    assert "Texture2D explicitTex : register(t3);" in generated_code
+    assert "RWTexture2D<float4> storageImage : register(u7);" in generated_code
+    assert "Texture2D registerTex : register(t8);" in generated_code
+    assert "Texture2D autoTex : register(t9);" in generated_code
+
+
+def test_hlsl_cbuffer_binding_attributes_drive_registers():
+    code = """
+    shader CBufferBindings {
+        cbuffer Camera @register(b2) {
+            mat4 viewProj;
+            mat4 bones[2];
+            vec4 viewRow;
+        };
+
+        uniform Material @binding(4) {
+            vec4 tint;
+        };
+
+        cbuffer AutoBlock {
+            vec4 color;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer Camera : register(b2)" in generated_code
+    assert "float4x4 viewProj;" in generated_code
+    assert "float4x4 bones[2];" in generated_code
+    assert "cbuffer Material : register(b4)" in generated_code
+    assert "cbuffer AutoBlock : register(b5)" in generated_code
+    assert "MatrixType(" not in generated_code
+
+
 def test_hlsl_default_float_image_scalar_and_vector_load_store():
     code = """
     shader DefaultFloatImageLoadStore {
@@ -8462,13 +8542,14 @@ def test_directx_projected_cube_shadow_compare_reports_unsupported():
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
-    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert "SamplerState compareSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState compareSampler" not in generated_code
     assert (
-        "float cubeProjected(TextureCube tex, SamplerComparisonState s, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeProjected(TextureCube tex, SamplerState s, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float cubeArrayProjected(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeArrayProjected(TextureCubeArray tex, SamplerState s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     reasons = {
@@ -8889,6 +8970,381 @@ def test_directx_projected_cube_texture_parameters_do_not_forward_implicit_sampl
     assert "SamplerState cubeArraySampler" not in generated_code
     assert "SamplerState texSampler" not in generated_code
     assert "texSampler" not in generated_code
+
+
+def test_directx_projected_cube_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader DiagnosticRegularSamplerRoleConflict {
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = textureProj(cubeMap, sharedSampler, input.cubeProj);
+                float ok = textureCompare(shadowMap, sharedSampler, input.uv, input.depth);
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+    parameter_diagnostic_shader = """
+    shader DiagnosticSamplerParamRoleConflict {
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        float inspect(sampler s, vec4 cubeProj, vec2 uv, float depth) {
+            vec4 bad = textureProj(cubeMap, s, cubeProj);
+            float ok = textureCompare(shadowMap, s, uv, depth);
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(sharedSampler, input.cubeProj, input.uv, input.depth);
+            }
+        }
+    }
+    """
+    comparison_diagnostic_shader = """
+    shader DiagnosticCompareSamplerRoleConflict {
+        samplerCubeShadow cubeShadow;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float bad = textureCompareProj(
+                    cubeShadow,
+                    sharedSampler,
+                    input.cubeProj,
+                    input.depth
+                );
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + vec4(bad);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    parameter_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
+    )
+    comparison_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+    )
+
+    projected_diagnostic = (
+        "/* unsupported DirectX projected texture: textureProj "
+        "requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+    )
+    compare_projected_diagnostic = (
+        "/* unsupported DirectX texture compare: textureCompareProj requires "
+        "Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
+    )
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert "SamplerState sharedSampler" not in regular_code
+    assert projected_diagnostic in regular_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in regular_code
+    )
+    assert ".Sample(sharedSampler" not in regular_code
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in parameter_code
+    assert (
+        "float inspect(SamplerComparisonState s, float4 cubeProj, float2 uv, float depth)"
+        in parameter_code
+    )
+    assert projected_diagnostic in parameter_code
+    assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in parameter_code
+    assert (
+        "return inspect(sharedSampler, input.cubeProj, input.uv, input.depth);"
+        in parameter_code
+    )
+
+    assert "SamplerState sharedSampler : register(s0);" in comparison_code
+    assert "SamplerComparisonState sharedSampler" not in comparison_code
+    assert compare_projected_diagnostic in comparison_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in comparison_code
+    assert "SampleCmp(sharedSampler" not in comparison_code
+
+
+def test_directx_projected_cube_diagnostic_struct_sampler_member_keeps_real_role():
+    shader = """
+    shader DiagnosticStructSamplerRoleConflict {
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+            int index;
+        };
+
+        float inspect(SamplerPack pack, FSInput input) {
+            vec4 bad = textureProj(cubeMap, pack.samplers[input.index], input.cubeProj);
+            float ok = textureCompare(
+                shadowMap,
+                pack.samplers[input.index],
+                input.uv,
+                input.depth
+            );
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                SamplerPack pack;
+                return inspect(pack, input);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "SamplerComparisonState samplers[2];" in generated_code
+    assert "SamplerState samplers[2];" not in generated_code
+    assert (
+        "/* unsupported DirectX projected texture: textureProj requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+        in generated_code
+    )
+    assert (
+        "float ok = shadowMap.SampleCmp(pack.samplers[input.index], input.uv, input.depth);"
+        in generated_code
+    )
+    assert ".Sample(pack.samplers" not in generated_code
+
+
+def test_directx_unsupported_gather_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader UnsupportedGatherSamplerRoleConflict {
+        sampler1D lineMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = textureGather(lineMap, sharedSampler, input.u);
+                float ok = textureCompare(shadowMap, sharedSampler, input.uv, input.depth);
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+    compare_diagnostic_shader = """
+    shader UnsupportedGatherCompareSamplerRoleConflict {
+        samplerCubeShadow cubeShadow;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+            ivec2 offset @ TEXCOORD2;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 bad = textureGatherCompareOffset(
+                    cubeShadow,
+                    sharedSampler,
+                    input.cubeLayer,
+                    input.depth,
+                    input.offset
+                );
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + bad;
+            }
+        }
+    }
+    """
+    parameter_diagnostic_shader = """
+    shader UnsupportedGatherParamRoleConflict {
+        sampler1D lineMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        float inspect(sampler s, float u, vec2 uv, float depth) {
+            vec4 bad = textureGather(lineMap, s, u);
+            float ok = textureCompare(shadowMap, s, uv, depth);
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(sharedSampler, input.u, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    compare_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(compare_diagnostic_shader), "fragment"
+    )
+    parameter_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
+    )
+
+    gather_diagnostic = (
+        "/* unsupported DirectX texture gather: textureGather requires 2D, "
+        "2D-array, cube, or cube-array textures */ float4(0.0)"
+    )
+    gather_compare_offset_diagnostic = (
+        "/* unsupported DirectX texture gather compare: "
+        "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
+        "float4(0.0)"
+    )
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert "SamplerState sharedSampler" not in regular_code
+    assert gather_diagnostic in regular_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in regular_code
+    )
+    assert ".Gather(sharedSampler" not in regular_code
+
+    assert "SamplerState sharedSampler : register(s0);" in compare_code
+    assert "SamplerComparisonState sharedSampler" not in compare_code
+    assert gather_compare_offset_diagnostic in compare_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in compare_code
+    assert "GatherCmp(sharedSampler" not in compare_code
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in parameter_code
+    assert (
+        "float inspect(SamplerComparisonState s, float u, float2 uv, float depth)"
+        in parameter_code
+    )
+    assert gather_diagnostic in parameter_code
+    assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in parameter_code
+    assert (
+        "return inspect(sharedSampler, input.u, input.uv, input.depth);"
+        in parameter_code
+    )
+
+
+def test_directx_storage_image_texture_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader StorageRegularSamplerRoleConflict {
+        image2D colorImage;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = texture(colorImage, sharedSampler, input.uv);
+                float ok = textureCompare(shadowMap, sharedSampler, input.uv, input.depth);
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+    comparison_diagnostic_shader = """
+    shader StorageCompareSamplerRoleConflict {
+        image2D colorImage;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float bad = textureCompare(colorImage, sharedSampler, input.uv, input.depth);
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + vec4(bad);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    comparison_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+    )
+
+    storage_texture_diagnostic = (
+        "/* unsupported DirectX storage image texture operation: "
+        "texture on RWTexture2D<float4> */ float4(0.0)"
+    )
+    storage_compare_diagnostic = (
+        "/* unsupported DirectX storage image texture comparison: "
+        "textureCompare on RWTexture2D<float4> */ 0.0"
+    )
+
+    assert "RWTexture2D<float4> colorImage : register(u0);" in regular_code
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert "SamplerState sharedSampler" not in regular_code
+    assert storage_texture_diagnostic in regular_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in regular_code
+    )
+    assert ".Sample(sharedSampler, input.uv)" not in regular_code
+
+    assert "RWTexture2D<float4> colorImage : register(u0);" in comparison_code
+    assert "SamplerState sharedSampler : register(s0);" in comparison_code
+    assert "SamplerComparisonState sharedSampler" not in comparison_code
+    assert storage_compare_diagnostic in comparison_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in comparison_code
+    assert "SampleCmp(sharedSampler" not in comparison_code
 
 
 def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
@@ -9819,13 +10275,14 @@ def test_directx_cube_shadow_compare_offsets_report_unsupported():
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
-    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert "SamplerState compareSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState compareSampler" not in generated_code
     assert (
-        "float cubeOffsets(TextureCube tex, SamplerComparisonState s, float3 direction, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeOffsets(TextureCube tex, SamplerState s, float3 direction, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float cubeArrayOffsets(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeArrayOffsets(TextureCubeArray tex, SamplerState s, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
@@ -10983,6 +11440,204 @@ def test_directx_multisample_texture_query_lod_emits_diagnostics_without_sampler
     )
 
 
+def test_directx_multisample_compare_operations_emit_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleCompare {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD2;
+            vec2 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float cmp = textureCompare(msTex, sharedSampler, input.uv, input.depth)
+                    + textureCompareOffset(msTex, sharedSampler, input.uv, input.depth, input.offset)
+                    + textureCompareLod(msTex, sharedSampler, input.uv, input.depth, input.lod)
+                    + textureCompareLodOffset(msTex, sharedSampler, input.uv, input.depth, input.lod, input.offset)
+                    + textureCompareGrad(msTex, sharedSampler, input.uv, input.depth, input.ddx, input.ddy)
+                    + textureCompareGradOffset(msTex, sharedSampler, input.uv, input.depth, input.ddx, input.ddy, input.offset);
+                vec4 gathered = textureGatherCompare(msArray, sharedSampler, input.uvLayer, input.depth)
+                    + textureGatherCompareOffset(msArray, sharedSampler, input.uvLayer, input.depth, input.offset);
+                return gathered + vec4(cmp);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
+    assert "Texture2DMSArray<float4> msArray : register(t1);" in generated_code
+    assert "SamplerState sharedSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState sharedSampler" not in generated_code
+    for func_name in {
+        "textureCompare",
+        "textureCompareOffset",
+        "textureCompareLod",
+        "textureCompareLodOffset",
+        "textureCompareGrad",
+        "textureCompareGradOffset",
+    }:
+        assert (
+            f"unsupported DirectX multisample texture comparison: {func_name} on Texture2DMS<float4>"
+            in generated_code
+        )
+    for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
+        assert (
+            f"unsupported DirectX multisample texture gather comparison: {func_name} on Texture2DMSArray<float4>"
+            in generated_code
+        )
+    assert "SampleCmp" not in generated_code
+    assert "GatherCmp" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+
+
+def test_directx_multisample_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader MultisampleSamplerRoleConflict {
+        sampler2DMS msTex;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+            vec2 ddx @ TEXCOORD1;
+            vec2 ddy @ TEXCOORD2;
+        };
+
+        float inspect(sampler s, vec2 uv, float depth, vec2 ddx, vec2 ddy) {
+            vec4 bad = textureGrad(msTex, s, uv, ddx, ddy);
+            float ok = textureCompare(shadowMap, s, uv, depth);
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(sharedSampler, input.uv, input.depth, input.ddx, input.ddy);
+            }
+        }
+    }
+    """
+    compare_diagnostic_shader = """
+    shader MultisampleCompareSamplerRoleConflict {
+        sampler2DMS msTex;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float bad = textureCompare(msTex, sharedSampler, input.uv, input.depth);
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + vec4(bad);
+            }
+        }
+    }
+    """
+    struct_diagnostic_shader = """
+    shader MultisampleStructSamplerRoleConflict {
+        sampler2DMS msTex;
+        sampler2DShadow shadowMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+            int index;
+        };
+
+        float inspect(SamplerPack pack, FSInput input) {
+            vec4 bad = texture(msTex, pack.samplers[input.index], input.uv);
+            float ok = textureCompare(
+                shadowMap,
+                pack.samplers[input.index],
+                input.uv,
+                input.depth
+            );
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                SamplerPack pack;
+                return inspect(pack, input);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    compare_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(compare_diagnostic_shader), "fragment"
+    )
+    struct_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(struct_diagnostic_shader), "fragment"
+    )
+
+    regular_diagnostic = (
+        "/* unsupported DirectX multisample texture call: "
+        "textureGrad on Texture2DMS<float4> */ float4(0.0)"
+    )
+    compare_diagnostic = (
+        "/* unsupported DirectX multisample texture comparison: "
+        "textureCompare on Texture2DMS<float4> */ 0.0"
+    )
+    sample_diagnostic = (
+        "/* unsupported DirectX multisample texture call: "
+        "texture on Texture2DMS<float4> */ float4(0.0)"
+    )
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert (
+        "float inspect(SamplerComparisonState s, float2 uv, float depth, float2 ddx, float2 ddy)"
+        in regular_code
+    )
+    assert regular_diagnostic in regular_code
+    assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in regular_code
+    assert (
+        "return inspect(sharedSampler, input.uv, input.depth, input.ddx, input.ddy);"
+        in regular_code
+    )
+
+    assert "SamplerState sharedSampler : register(s0);" in compare_code
+    assert "SamplerComparisonState sharedSampler" not in compare_code
+    assert compare_diagnostic in compare_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in compare_code
+    assert "SampleCmp(sharedSampler" not in compare_code
+
+    assert "SamplerComparisonState samplers[2];" in struct_code
+    assert "SamplerState samplers[2];" not in struct_code
+    assert sample_diagnostic in struct_code
+    assert (
+        "float ok = shadowMap.SampleCmp(pack.samplers[input.index], input.uv, input.depth);"
+        in struct_code
+    )
+    assert ".Sample(pack.samplers" not in struct_code
+
+
 def test_directx_multisample_texel_fetch_offsets_emit_diagnostics():
     shader = """
     shader UnsupportedMultisampleTexelFetchOffset {
@@ -11650,6 +12305,249 @@ def test_directx_implicit_array_texture_query_lod_synthesizes_regular_samplers()
     )
 
 
+def test_directx_nested_array_texture_query_lod_threads_resource_arrays():
+    shader = """
+    shader NestedArrayTextureQueryLod {
+        sampler2DArray layerMaps[4];
+        samplerCubeArray cubeArrays[4];
+        sampler linearSamplers[4];
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+        };
+
+        vec2 explicitLeaf(sampler2DArray layerMaps[], sampler linearSamplers[], vec3 uvLayer) {
+            return textureQueryLod(layerMaps[2], linearSamplers[2], uvLayer);
+        }
+
+        vec2 explicitMid(sampler2DArray layerMaps[], sampler linearSamplers[], vec3 uvLayer) {
+            return explicitLeaf(layerMaps, linearSamplers, uvLayer);
+        }
+
+        vec2 implicitLeaf(samplerCubeArray cubeArrays[], vec4 cubeLayer) {
+            return textureQueryLod(cubeArrays[3], cubeLayer);
+        }
+
+        vec2 implicitMid(samplerCubeArray cubeArrays[], vec4 cubeLayer) {
+            return implicitLeaf(cubeArrays, cubeLayer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 a = explicitMid(layerMaps, linearSamplers, input.uvLayer);
+                vec2 b = implicitMid(cubeArrays, input.cubeLayer);
+                return vec4(a.x, a.y, b.x, b.y);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DArray layerMaps[4] : register(t0);" in generated_code
+    assert "TextureCubeArray cubeArrays[4] : register(t4);" in generated_code
+    assert "SamplerState cubeArraysSampler : register(s0);" in generated_code
+    assert "SamplerState linearSamplers[4] : register(s1);" in generated_code
+    assert (
+        "float2 explicitLeaf(Texture2DArray layerMaps[4], SamplerState linearSamplers[4], float3 uvLayer)"
+        in generated_code
+    )
+    assert (
+        "float2 explicitMid(Texture2DArray layerMaps[4], SamplerState linearSamplers[4], float3 uvLayer)"
+        in generated_code
+    )
+    assert "return explicitLeaf(layerMaps, linearSamplers, uvLayer);" in generated_code
+    assert (
+        "layerMaps[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
+        in generated_code
+    )
+    assert (
+        "layerMaps[2].CalculateLevelOfDetail(linearSamplers[2], uvLayer.xy)"
+        in generated_code
+    )
+    assert (
+        "float2 implicitLeaf(TextureCubeArray cubeArrays[4], SamplerState cubeArraysSampler, float4 cubeLayer)"
+        in generated_code
+    )
+    assert (
+        "float2 implicitMid(TextureCubeArray cubeArrays[4], SamplerState cubeArraysSampler, float4 cubeLayer)"
+        in generated_code
+    )
+    assert (
+        "return implicitLeaf(cubeArrays, cubeArraysSampler, cubeLayer);"
+        in generated_code
+    )
+    assert (
+        "cubeArrays[3].CalculateLevelOfDetailUnclamped(cubeArraysSampler, cubeLayer.xyz)"
+        in generated_code
+    )
+    assert (
+        "cubeArrays[3].CalculateLevelOfDetail(cubeArraysSampler, cubeLayer.xyz)"
+        in generated_code
+    )
+    assert (
+        "float2 a = explicitMid(layerMaps, linearSamplers, input.uvLayer);"
+        in generated_code
+    )
+    assert (
+        "float2 b = implicitMid(cubeArrays, cubeArraysSampler, input.cubeLayer);"
+        in generated_code
+    )
+    assert (
+        "CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer)"
+        not in generated_code
+    )
+    assert (
+        "CalculateLevelOfDetailUnclamped(cubeArraysSampler, cubeLayer)"
+        not in generated_code
+    )
+    assert "textureQueryLod(" not in generated_code
+
+
+def test_directx_nested_shadow_array_query_lod_and_compare_split_samplers():
+    shader = """
+    shader NestedShadowArrayQueryCompare {
+        sampler2DArrayShadow shadowArrays[4];
+        samplerCubeArrayShadow cubeShadowArrays[4];
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec2 ddxLayer @ TEXCOORD2;
+            vec2 ddyLayer @ TEXCOORD3;
+            vec3 ddxCube @ TEXCOORD4;
+            vec3 ddyCube @ TEXCOORD5;
+        };
+
+        float layerLeaf(sampler2DArrayShadow shadowArrays[], vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy) {
+            vec2 query = textureQueryLod(shadowArrays[2], uvLayer);
+            float cmp = textureCompare(shadowArrays[2], uvLayer, depth);
+            float cmpLod = textureCompareLod(shadowArrays[1], uvLayer, depth, lod);
+            float cmpGrad = textureCompareGrad(shadowArrays[3], uvLayer, depth, ddx, ddy);
+            return query.x + cmp + cmpLod + cmpGrad;
+        }
+
+        float layerMid(sampler2DArrayShadow shadowArrays[], vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy) {
+            return layerLeaf(shadowArrays, uvLayer, depth, lod, ddx, ddy);
+        }
+
+        float cubeLeaf(samplerCubeArrayShadow cubeShadowArrays[], vec4 cubeLayer, float depth, float lod, vec3 ddx, vec3 ddy) {
+            vec2 query = textureQueryLod(cubeShadowArrays[2], cubeLayer);
+            float cmp = textureCompare(cubeShadowArrays[2], cubeLayer, depth);
+            float cmpLod = textureCompareLod(cubeShadowArrays[1], cubeLayer, depth, lod);
+            float cmpGrad = textureCompareGrad(cubeShadowArrays[3], cubeLayer, depth, ddx, ddy);
+            return query.y + cmp + cmpLod + cmpGrad;
+        }
+
+        float cubeMid(samplerCubeArrayShadow cubeShadowArrays[], vec4 cubeLayer, float depth, float lod, vec3 ddx, vec3 ddy) {
+            return cubeLeaf(cubeShadowArrays, cubeLayer, depth, lod, ddx, ddy);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return layerMid(shadowArrays, input.uvLayer, input.depth, input.lod, input.ddxLayer, input.ddyLayer)
+                    + cubeMid(cubeShadowArrays, input.cubeLayer, input.depth, input.lod, input.ddxCube, input.ddyCube);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DArray shadowArrays[4] : register(t0);" in generated_code
+    assert (
+        "SamplerComparisonState shadowArraysSampler : register(s0);" in generated_code
+    )
+    assert "SamplerState shadowArraysQuerySampler : register(s1);" in generated_code
+    assert "TextureCubeArray cubeShadowArrays[4] : register(t4);" in generated_code
+    assert (
+        "SamplerComparisonState cubeShadowArraysSampler : register(s2);"
+        in generated_code
+    )
+    assert "SamplerState cubeShadowArraysQuerySampler : register(s3);" in generated_code
+    assert (
+        "float layerLeaf(Texture2DArray shadowArrays[4], SamplerComparisonState shadowArraysSampler, SamplerState shadowArraysQuerySampler, float3 uvLayer, float depth, float lod, float2 ddx, float2 ddy)"
+        in generated_code
+    )
+    assert (
+        "float2 query = float2(shadowArrays[2].CalculateLevelOfDetailUnclamped(shadowArraysQuerySampler, uvLayer.xy), shadowArrays[2].CalculateLevelOfDetail(shadowArraysQuerySampler, uvLayer.xy));"
+        in generated_code
+    )
+    assert (
+        "float cmp = shadowArrays[2].SampleCmp(shadowArraysSampler, uvLayer, depth);"
+        in generated_code
+    )
+    assert (
+        "float cmpLod = shadowArrays[1].SampleCmpLevel(shadowArraysSampler, uvLayer, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float cmpGrad = shadowArrays[3].SampleCmpGrad(shadowArraysSampler, uvLayer, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float layerMid(Texture2DArray shadowArrays[4], SamplerComparisonState shadowArraysSampler, SamplerState shadowArraysQuerySampler, float3 uvLayer, float depth, float lod, float2 ddx, float2 ddy)"
+        in generated_code
+    )
+    assert (
+        "return layerLeaf(shadowArrays, shadowArraysSampler, shadowArraysQuerySampler, uvLayer, depth, lod, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float cubeLeaf(TextureCubeArray cubeShadowArrays[4], SamplerComparisonState cubeShadowArraysSampler, SamplerState cubeShadowArraysQuerySampler, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert (
+        "float2 query = float2(cubeShadowArrays[2].CalculateLevelOfDetailUnclamped(cubeShadowArraysQuerySampler, cubeLayer.xyz), cubeShadowArrays[2].CalculateLevelOfDetail(cubeShadowArraysQuerySampler, cubeLayer.xyz));"
+        in generated_code
+    )
+    assert (
+        "float cmp = cubeShadowArrays[2].SampleCmp(cubeShadowArraysSampler, cubeLayer, depth);"
+        in generated_code
+    )
+    assert (
+        "float cmpLod = cubeShadowArrays[1].SampleCmpLevel(cubeShadowArraysSampler, cubeLayer, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float cmpGrad = cubeShadowArrays[3].SampleCmpGrad(cubeShadowArraysSampler, cubeLayer, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float cubeMid(TextureCubeArray cubeShadowArrays[4], SamplerComparisonState cubeShadowArraysSampler, SamplerState cubeShadowArraysQuerySampler, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert (
+        "return cubeLeaf(cubeShadowArrays, cubeShadowArraysSampler, cubeShadowArraysQuerySampler, cubeLayer, depth, lod, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "layerMid(shadowArrays, shadowArraysSampler, shadowArraysQuerySampler, input.uvLayer, input.depth, input.lod, input.ddxLayer, input.ddyLayer)"
+        in generated_code
+    )
+    assert (
+        "cubeMid(cubeShadowArrays, cubeShadowArraysSampler, cubeShadowArraysQuerySampler, input.cubeLayer, input.depth, input.lod, input.ddxCube, input.ddyCube)"
+        in generated_code
+    )
+    assert "CalculateLevelOfDetailUnclamped(shadowArraysSampler" not in generated_code
+    assert (
+        "CalculateLevelOfDetailUnclamped(cubeShadowArraysSampler" not in generated_code
+    )
+    assert "SampleCmp(shadowArraysQuerySampler" not in generated_code
+    assert "SampleCmp(cubeShadowArraysQuerySampler" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGrad(" not in generated_code
+
+
 def test_directx_implicit_texture_query_lod_parameter_threads_regular_sampler():
     shader = """
     shader ImplicitQueryLodParameter {
@@ -12059,6 +12957,61 @@ def test_directx_mixed_unsized_implicit_shadow_array_helper_splits_regular_and_c
     assert "float shadow = maps[3].SampleCmp(mapsSampler, uv, depth);" in generated_code
     assert (
         "return inspect(shadowMaps, shadowMapsSampler, shadowMapsRegularSampler, input.layer, input.uv, input.depth);"
+        in generated_code
+    )
+
+
+def test_directx_mixed_implicit_cube_shadow_regular_sample_and_compare_split_samplers():
+    shader = """
+    shader MixedImplicitCubeShadowSampler {
+        samplerCubeShadow cubeShadow;
+        samplerCubeArrayShadow cubeArrayShadow;
+
+        struct FSInput {
+            vec3 direction;
+            vec4 cubeLayer;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 rawCube = texture(cubeShadow, input.direction);
+                float cmpCube = textureCompare(cubeShadow, input.direction, input.depth);
+                vec4 rawArray = texture(cubeArrayShadow, input.cubeLayer);
+                float cmpArray = textureCompare(cubeArrayShadow, input.cubeLayer, input.depth);
+                return rawCube * cmpCube + rawArray * cmpArray;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCube cubeShadow : register(t0);" in generated_code
+    assert "SamplerComparisonState cubeShadowSampler : register(s0);" in generated_code
+    assert "SamplerState cubeShadowRegularSampler : register(s1);" in generated_code
+    assert "TextureCubeArray cubeArrayShadow : register(t1);" in generated_code
+    assert (
+        "SamplerComparisonState cubeArrayShadowSampler : register(s2);"
+        in generated_code
+    )
+    assert (
+        "SamplerState cubeArrayShadowRegularSampler : register(s3);" in generated_code
+    )
+    assert (
+        "float4 rawCube = cubeShadow.Sample(cubeShadowRegularSampler, input.direction);"
+        in generated_code
+    )
+    assert (
+        "float cmpCube = cubeShadow.SampleCmp(cubeShadowSampler, input.direction, input.depth);"
+        in generated_code
+    )
+    assert (
+        "float4 rawArray = cubeArrayShadow.Sample(cubeArrayShadowRegularSampler, input.cubeLayer);"
+        in generated_code
+    )
+    assert (
+        "float cmpArray = cubeArrayShadow.SampleCmp(cubeArrayShadowSampler, input.cubeLayer, input.depth);"
         in generated_code
     )
 

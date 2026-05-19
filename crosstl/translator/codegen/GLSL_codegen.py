@@ -407,16 +407,7 @@ class GLSLCodeGen:
                                     getattr(member, "vtype", "float")
                                 )
 
-                            # Handle semantic
-                            semantic = None
-                            if hasattr(member, "semantic"):
-                                semantic = member.semantic
-                            elif hasattr(member, "attributes"):
-                                for attr in member.attributes:
-                                    if hasattr(attr, "name"):
-                                        semantic = attr.name
-                                        break
-
+                            semantic = self.semantic_from_node(member)
                             code += f"{self.map_semantic(semantic)} out {member_type} {member.name};\n"
                     else:
                         code += self.generate_struct(node)
@@ -487,13 +478,21 @@ class GLSLCodeGen:
             declaration = format_c_style_array_declaration(
                 f"{mapped_type}{array_suffix}", var_name
             )
+            explicit_binding = self.explicit_resource_binding_index(node)
+            resource_binding = (
+                explicit_binding if explicit_binding is not None else binding
+            )
             if self.is_opaque_resource_type(mapped_type):
-                layout = self.opaque_resource_layout(mapped_type, binding, node)
+                layout = self.opaque_resource_layout(
+                    mapped_type, resource_binding, node
+                )
                 code += f"{layout} uniform {declaration};\n"
             else:
-                code += f"layout(std140, binding = {binding}) {declaration};\n"
-            binding += (
-                resource_count if self.is_opaque_resource_type(mapped_type) else 1
+                code += f"layout(std140, binding = {resource_binding}) {declaration};\n"
+            binding = max(
+                binding,
+                resource_binding
+                + (resource_count if self.is_opaque_resource_type(mapped_type) else 1),
             )
 
         cbuffers = getattr(ast, "cbuffers", [])
@@ -599,9 +598,15 @@ class GLSLCodeGen:
                 "Cbuffer member name(s) conflict with OpenGL global declaration(s): "
                 f"{names}"
             )
-        for i, node in enumerate(cbuffers):
+        binding = 0
+        for node in cbuffers:
+            explicit_binding = self.explicit_resource_binding_index(node)
+            resource_binding = (
+                explicit_binding if explicit_binding is not None else binding
+            )
+            binding = max(binding, resource_binding + 1)
             if isinstance(node, StructNode):
-                code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
+                code += f"layout(std140, binding = {resource_binding}) uniform {node.name} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -630,7 +635,7 @@ class GLSLCodeGen:
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # CbufferNode handling
-                code += f"layout(std140, binding = {i}) uniform {node.name} {{\n"
+                code += f"layout(std140, binding = {resource_binding}) uniform {node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -2335,6 +2340,22 @@ class GLSLCodeGen:
             f"{func_name} on {texture_type} */ vec4(0.0)"
         )
 
+    def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            f"/* unsupported GLSL multisample texture comparison: "
+            f"{func_name} on {texture_type} */ 0.0"
+        )
+
+    def unsupported_multisample_texture_gather_compare_call(
+        self, func_name, texture_type
+    ):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            f"/* unsupported GLSL multisample texture gather comparison: "
+            f"{func_name} on {texture_type} */ vec4(0.0)"
+        )
+
     def unsupported_multisample_texture_query_lod_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
         return (
@@ -2634,8 +2655,13 @@ class GLSLCodeGen:
                 func_name, "requires a compare argument"
             )
 
-        compare = self.generate_expression(extra_args[0])
         texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_compare_call(
+                func_name, texture_type
+            )
+
+        compare = self.generate_expression(extra_args[0])
         if func_name in {
             "textureCompareProj",
             "textureCompareProjOffset",
@@ -2866,6 +2892,12 @@ class GLSLCodeGen:
                 func_name, "requires a compare argument"
             )
 
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_gather_compare_call(
+                func_name, texture_type
+            )
+
         compare = self.generate_expression(extra_args[0])
         if func_name == "textureGatherCompare":
             if len(extra_args) != 1:
@@ -2878,9 +2910,7 @@ class GLSLCodeGen:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires compare and offset arguments"
             )
-        if not self.texture_gather_compare_offset_supported(
-            self.texture_resource_type(args[0])
-        ):
+        if not self.texture_gather_compare_offset_supported(texture_type):
             return self.unsupported_texture_gather_compare_call(
                 func_name, "offsets require 2D or 2D-array shadow samplers"
             )
@@ -3807,13 +3837,66 @@ class GLSLCodeGen:
         attr_name = str(attr_name).lower()
         return attr_name == "format" or attr_name in self.supported_image_formats()
 
+    def is_resource_binding_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {
+            "binding",
+            "buffer",
+            "packoffset",
+            "register",
+            "sampler",
+            "set",
+            "space",
+            "texture",
+        }
+
+    def binding_index_value(self, value, prefixes=()):
+        if hasattr(value, "value") and value.value is not None:
+            raw_value = value.value
+        elif hasattr(value, "name") and value.name is not None:
+            raw_value = value.name
+        else:
+            raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def explicit_resource_binding_index(self, node):
+        if not hasattr(node, "attributes"):
+            return None
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name or not arguments:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in {"binding", "buffer", "sampler", "texture"}:
+                binding = self.binding_index_value(arguments[0])
+            elif attr_name == "register":
+                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
     def semantic_from_node(self, node):
         if hasattr(node, "semantic"):
             return node.semantic
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
-            if self.is_image_format_attribute(attr):
+            if self.is_image_format_attribute(
+                attr
+            ) or self.is_resource_binding_attribute(attr):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
@@ -3898,14 +3981,13 @@ class GLSLCodeGen:
         """Convert new AST TypeNode to string representation."""
         if hasattr(type_node, "name"):
             return type_node.name
+        elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            if type_node.rows == type_node.cols:
+                return f"mat{type_node.rows}"
+            return f"mat{type_node.cols}x{type_node.rows}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
-            if hasattr(type_node, "rows"):
-                element_type = self.convert_type_node_to_string(type_node.element_type)
-                if type_node.rows == type_node.cols:
-                    return f"mat{type_node.rows}"
-                else:
-                    return f"mat{type_node.cols}x{type_node.rows}"
-            elif str(type(type_node)).find("ArrayType") != -1:
+            if str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):

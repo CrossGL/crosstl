@@ -62,6 +62,82 @@ def test_glsl_unsigned_integer_literal_suffix_codegen():
     assert "7, u" not in generated_code
 
 
+def test_glsl_resource_binding_attributes_are_not_parameter_semantics():
+    code = """
+    shader BindingAttributes {
+        vec4 sampleBound(sampler2D tex @texture(1), sampler samp @sampler(2), vec2 uv) {
+            return texture(tex, samp, uv);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vec4 sampleBound(sampler2D tex, vec2 uv)" in generated_code
+    assert "return texture(tex, uv);" in generated_code
+    assert "tex texture" not in generated_code
+    assert "samp sampler" not in generated_code
+
+
+def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
+    code = """
+    shader ExplicitGlobalBindings {
+        sampler samp @sampler(5);
+        sampler2D explicitTex @texture(3);
+        image2D storageImage @binding(7);
+        sampler2D registerTex @register(t8);
+        sampler2D autoTex;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(storageImage, ivec2(0, 0));
+                return texture(explicitTex, samp, uv) + texture(registerTex, samp, uv) + texture(autoTex, samp, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(binding = 3) uniform sampler2D explicitTex;" in generated_code
+    assert (
+        "layout(rgba32f, binding = 7) uniform image2D storageImage;" in generated_code
+    )
+    assert "layout(binding = 8) uniform sampler2D registerTex;" in generated_code
+    assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
+
+
+def test_glsl_cbuffer_binding_attributes_drive_layout_bindings():
+    code = """
+    shader CBufferBindings {
+        cbuffer Camera @register(b2) {
+            mat4 viewProj;
+            mat4 bones[2];
+            vec4 viewRow;
+        };
+
+        uniform Material @binding(4) {
+            vec4 tint;
+        };
+
+        cbuffer AutoBlock {
+            vec4 color;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "layout(std140, binding = 2) uniform Camera" in generated_code
+    assert "mat4 viewProj;" in generated_code
+    assert "mat4 bones[2];" in generated_code
+    assert "layout(std140, binding = 4) uniform Material" in generated_code
+    assert "layout(std140, binding = 5) uniform AutoBlock" in generated_code
+    assert "MatrixType(" not in generated_code
+
+
 def test_glsl_default_float_image_scalar_and_vector_load_store():
     code = """
     shader DefaultFloatImageLoadStore {
@@ -10860,6 +10936,125 @@ def test_opengl_multisample_sampling_operations_emit_diagnostics():
         assert invalid_call not in generated_code
 
 
+def test_opengl_multisample_compare_operations_emit_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleCompare {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec4 proj @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        float invalidCompare2D(sampler2DMS tex, sampler s, vec2 uv, vec4 proj, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(tex, s, uv, depth)
+                + textureCompareOffset(tex, s, uv, depth, offset)
+                + textureCompareLod(tex, s, uv, depth, lod)
+                + textureCompareLodOffset(tex, s, uv, depth, lod, offset)
+                + textureCompareGrad(tex, s, uv, depth, ddx, ddy)
+                + textureCompareGradOffset(tex, s, uv, depth, ddx, ddy, offset)
+                + textureCompareProj(tex, s, proj, depth)
+                + textureCompareProjLod(tex, s, proj, depth, lod)
+                + textureCompareProjGradOffset(tex, s, proj, depth, ddx, ddy, offset);
+        }
+
+        float invalidCompareArray(sampler2DMSArray tex, sampler s, vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(tex, s, uvLayer, depth)
+                + textureCompareOffset(tex, s, uvLayer, depth, offset)
+                + textureCompareLod(tex, s, uvLayer, depth, lod)
+                + textureCompareLodOffset(tex, s, uvLayer, depth, lod, offset)
+                + textureCompareGrad(tex, s, uvLayer, depth, ddx, ddy)
+                + textureCompareGradOffset(tex, s, uvLayer, depth, ddx, ddy, offset);
+        }
+
+        vec4 invalidGather2D(sampler2DMS tex, sampler s, vec2 uv, float depth, ivec2 offset) {
+            return textureGatherCompare(tex, s, uv, depth)
+                + textureGatherCompareOffset(tex, s, uv, depth, offset);
+        }
+
+        vec4 invalidGatherArray(sampler2DMSArray tex, sampler s, vec3 uvLayer, float depth, ivec2 offset) {
+            return textureGatherCompare(tex, s, uvLayer, depth)
+                + textureGatherCompareOffset(tex, s, uvLayer, depth, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float cmp = invalidCompare2D(msTex, linearSampler, input.uv, input.proj, input.depth, input.lod, input.ddx, input.ddy, input.offset)
+                    + invalidCompareArray(msArray, linearSampler, input.uvLayer, input.depth, input.lod, input.ddx, input.ddy, input.offset);
+                return vec4(cmp)
+                    + invalidGather2D(msTex, linearSampler, input.uv, input.depth, input.offset)
+                    + invalidGatherArray(msArray, linearSampler, input.uvLayer, input.depth, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
+    assert "layout(binding = 1) uniform sampler2DMSArray msArray;" in generated_code
+    assert "linearSampler" not in generated_code
+
+    for func_name in {
+        "textureCompare",
+        "textureCompareOffset",
+        "textureCompareLod",
+        "textureCompareLodOffset",
+        "textureCompareGrad",
+        "textureCompareGradOffset",
+    }:
+        assert (
+            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMS"
+            in generated_code
+        )
+        assert (
+            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMSArray"
+            in generated_code
+        )
+
+    for func_name in {
+        "textureCompareProj",
+        "textureCompareProjLod",
+        "textureCompareProjGradOffset",
+    }:
+        assert (
+            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMS"
+            in generated_code
+        )
+
+    for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
+        assert (
+            f"unsupported GLSL multisample texture gather comparison: {func_name} on sampler2DMS"
+            in generated_code
+        )
+        assert (
+            f"unsupported GLSL multisample texture gather comparison: {func_name} on sampler2DMSArray"
+            in generated_code
+        )
+
+    for invalid_call in {
+        "texture(tex,",
+        "textureOffset(tex,",
+        "textureLod(tex,",
+        "textureLodOffset(tex,",
+        "textureGrad(tex,",
+        "textureGradOffset(tex,",
+        "textureGather(tex,",
+        "textureGatherOffset(tex,",
+    }:
+        assert invalid_call not in generated_code
+
+
 def test_opengl_multisample_texture_query_lod_emits_diagnostics():
     shader = """
     shader UnsupportedMultisampleQueryLod {
@@ -11284,6 +11479,69 @@ def test_opengl_array_texture_query_lod_uses_non_layer_coordinates():
     assert "linearSamplers" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
     assert "textureQueryLod(tex, cubeLayer);" not in generated_code
+
+
+def test_opengl_nested_array_texture_query_lod_keeps_combined_samplers():
+    shader = """
+    shader NestedArrayTextureQueryLod {
+        sampler2DArray layerMaps[4];
+        samplerCubeArray cubeArrays[4];
+        sampler linearSamplers[4];
+        sampler cubeArraysSampler;
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+        };
+
+        vec2 explicitLeaf(vec3 uvLayer) {
+            return textureQueryLod(layerMaps[2], linearSamplers[2], uvLayer);
+        }
+
+        vec2 explicitMid(vec3 uvLayer) {
+            return explicitLeaf(uvLayer);
+        }
+
+        vec2 implicitLeaf(vec4 cubeLayer) {
+            return textureQueryLod(cubeArrays[3], cubeLayer);
+        }
+
+        vec2 implicitMid(vec4 cubeLayer) {
+            return implicitLeaf(cubeLayer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 a = explicitMid(input.uvLayer);
+                vec2 b = implicitMid(input.cubeLayer);
+                return vec4(a.x + b.y, a.y + b.x, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2DArray layerMaps[4];" in generated_code
+    assert (
+        "layout(binding = 4) uniform samplerCubeArray cubeArrays[4];" in generated_code
+    )
+    assert "vec2 explicitLeaf(vec3 uvLayer)" in generated_code
+    assert "vec2 explicitMid(vec3 uvLayer)" in generated_code
+    assert "return explicitLeaf(uvLayer);" in generated_code
+    assert "return textureQueryLod(layerMaps[2], uvLayer.xy);" in generated_code
+    assert "vec2 implicitLeaf(vec4 cubeLayer)" in generated_code
+    assert "vec2 implicitMid(vec4 cubeLayer)" in generated_code
+    assert "return implicitLeaf(cubeLayer);" in generated_code
+    assert "return textureQueryLod(cubeArrays[3], cubeLayer.xyz);" in generated_code
+    assert "explicitMid(uvLayer)" in generated_code
+    assert "implicitMid(cubeLayer)" in generated_code
+    assert "linearSamplers" not in generated_code
+    assert "cubeArraysSampler" not in generated_code
+    assert "textureQueryLod(layerMaps[2], uvLayer);" not in generated_code
+    assert "textureQueryLod(cubeArrays[3], cubeLayer);" not in generated_code
 
 
 def test_opengl_shadow_array_texture_query_lod_uses_non_layer_coordinates():

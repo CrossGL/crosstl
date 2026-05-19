@@ -625,16 +625,19 @@ class MetalToCrossGLConverter:
             return f"{self.map_type(expr.type_name)}({args})"
         elif isinstance(expr, TextureSampleNode):
             texture = self.generate_expression(expr.texture, is_main)
+            sampler = self.generate_expression(expr.sampler, is_main)
             coords = self.generate_expression(expr.coordinates, is_main)
+            sample_args = [texture]
+            if sampler:
+                sample_args.append(sampler)
+            sample_args.append(coords)
 
             # Handle LOD parameter if present
             if hasattr(expr, "lod") and expr.lod is not None:
                 lod = self.generate_expression(expr.lod, is_main)
-                # In CrossGL, texture sampling with LOD is done with textureLod(sampler, coordinates, lod)
-                return f"textureLod({texture}, {coords}, {lod})"
+                return f"textureLod({', '.join(sample_args + [lod])})"
 
-            # In CrossGL, texture sampling is done with texture(sampler, coordinates)
-            return f"texture({texture}, {coords})"
+            return f"texture({', '.join(sample_args)})"
         elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
             return str(expr)
         else:

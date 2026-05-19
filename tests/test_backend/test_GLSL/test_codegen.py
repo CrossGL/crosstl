@@ -163,6 +163,79 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) in vec2 uv;
+        layout(location = 0) out vec4 fragColor;
+        uniform sampler2D tex;
+
+        void main() {
+            vec4 base = texture(tex, uv);
+            vec4 legacy = texture2D(tex, uv);
+            vec4 mip = textureLod(tex, uv, 1.0);
+            vec4 grad = textureGrad(tex, uv, vec2(1.0), vec2(1.0));
+            vec4 gathered = textureGather(tex, uv);
+            fragColor = base + legacy + mip + grad + gathered;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "sampler2D tex;" in crossgl
+    assert "Texture2D tex;" not in crossgl
+    assert "texture(tex, input.uv)" in crossgl
+    assert "textureLod(tex, input.uv, 1.0)" in crossgl
+    assert "textureGrad(tex, input.uv, vec2(1.0), vec2(1.0))" in crossgl
+    assert "textureGather(tex, input.uv)" in crossgl
+    assert "sample(tex" not in crossgl
+    assert "texture2D(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "layout(binding = 0) uniform sampler2D tex;" in glsl
+    assert "texture(tex, uv)" in glsl
+    assert "textureLod(tex, uv, 1.0)" in glsl
+    assert "textureGrad(tex, uv, vec2(1.0), vec2(1.0))" in glsl
+    assert "textureGather(tex, uv)" in glsl
+
+
+def test_codegen_multisample_compare_roundtrip_uses_translator_diagnostics():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) in vec2 uv;
+        layout(location = 1) in vec3 uvLayer;
+        layout(location = 0) out vec4 fragColor;
+        uniform sampler2DMS msTex;
+        uniform sampler2DMSArray msArray;
+
+        void main() {
+            float cmp = textureCompare(msTex, uv, 0.5);
+            vec4 gathered = textureGatherCompare(msArray, uvLayer, 0.5);
+            fragColor = vec4(cmp) + gathered;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "sampler2DMS msTex;" in crossgl
+    assert "sampler2DMSArray msArray;" in crossgl
+    assert "Texture2DMS" not in crossgl
+    assert "textureCompare(msTex, input.uv, 0.5)" in crossgl
+    assert "textureGatherCompare(msArray, input.uvLayer, 0.5)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert (
+        "unsupported GLSL multisample texture comparison: textureCompare on sampler2DMS"
+        in glsl
+    )
+    assert (
+        "unsupported GLSL multisample texture gather comparison: textureGatherCompare on sampler2DMSArray"
+        in glsl
+    )
+    assert "texture(msTex" not in glsl
+    assert "textureGather(msArray" not in glsl
+
+
 def test_codegen_control_flow_roundtrip():
     output = assert_roundtrip(CONTROL_FLOW_GLSL, "vertex", ShaderStage.VERTEX)
     lowered = output.lower()

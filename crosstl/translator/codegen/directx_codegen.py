@@ -437,16 +437,31 @@ class HLSLCodeGen:
             if mapped_type.startswith("Texture"):
                 self.texture_variables.add(var_name)
                 self.texture_variable_types[var_name] = mapped_type
-                register = f" : register(t{texture_register})"
-                texture_register += resource_count
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture"}, ("t",)
+                )
+                if binding is None:
+                    binding = texture_register
+                register = f" : register(t{binding})"
+                texture_register = max(texture_register, binding + resource_count)
             elif mapped_type.startswith("RWTexture"):
                 self.texture_variable_types[var_name] = mapped_type
-                register = f" : register(u{uav_register})"
-                uav_register += resource_count
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture", "uav"}, ("u",)
+                )
+                if binding is None:
+                    binding = uav_register
+                register = f" : register(u{binding})"
+                uav_register = max(uav_register, binding + resource_count)
             elif mapped_type in ["SamplerState", "SamplerComparisonState"]:
                 self.sampler_variables.add(var_name)
-                register = f" : register(s{sampler_register})"
-                sampler_register += resource_count
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "sampler"}, ("s",)
+                )
+                if binding is None:
+                    binding = sampler_register
+                register = f" : register(s{binding})"
+                sampler_register = max(sampler_register, binding + resource_count)
 
             code += f"{declaration}{register};\n"
 
@@ -616,9 +631,16 @@ class HLSLCodeGen:
                 "Cbuffer member name(s) conflict with DirectX global declaration(s): "
                 f"{names}"
             )
-        for i, node in enumerate(cbuffers):
+        buffer_register = 0
+        for node in cbuffers:
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b",)
+            )
+            if binding is None:
+                binding = buffer_register
+            buffer_register = max(buffer_register, binding + 1)
             if isinstance(node, StructNode):
-                code += f"cbuffer {node.name} : register(b{i}) {{\n"
+                code += f"cbuffer {node.name} : register(b{binding}) {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -648,7 +670,7 @@ class HLSLCodeGen:
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # Generic cbuffer handling
-                code += f"cbuffer {node.name} : register(b{i}) {{\n"
+                code += f"cbuffer {node.name} : register(b{binding}) {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -1518,12 +1540,7 @@ class HLSLCodeGen:
                 if func_name in comparison_funcs and len(args) >= 3:
                     texture_name = self.expression_name(args[0])
                     texture_type = global_resource_types.get(texture_name)
-                    if (
-                        self.storage_image_texture_operation_expression(
-                            func_name, texture_type
-                        )
-                        is not None
-                    ):
+                    if self.texture_call_is_diagnostic_only(func_name, texture_type):
                         return
                     if texture_name:
                         texture_names.add(texture_name)
@@ -1580,6 +1597,7 @@ class HLSLCodeGen:
     def collect_regular_sampler_parameters(self, root):
         regular_params = {}
         functions = self.collect_functions(root)
+        global_resource_types = self.collect_global_texture_types(root)
 
         for func in functions:
             func_name = getattr(func, "name", None)
@@ -1608,6 +1626,13 @@ class HLSLCodeGen:
                     args = getattr(node, "arguments", getattr(node, "args", []))
                     if not self.has_explicit_sampler_argument(
                         func_name_expr, args, sampler_params
+                    ):
+                        continue
+                    texture_type = self.texture_argument_analysis_type(
+                        args[0], global_resource_types
+                    )
+                    if self.texture_call_is_diagnostic_only(
+                        func_name_expr, texture_type
                     ):
                         continue
                     sampler_name = self.expression_name(args[1])
@@ -1692,6 +1717,7 @@ class HLSLCodeGen:
     def collect_explicit_sampler_resource_names(self, root, texture_funcs):
         sampler_names = set()
         global_sampler_names = self.collect_global_sampler_names(root)
+        global_resource_types = self.collect_global_texture_types(root)
         previous_local_variable_types = self.local_variable_types
         try:
             for func in self.collect_functions(root):
@@ -1717,6 +1743,11 @@ class HLSLCodeGen:
                         func_name, args, sampler_scope
                     ):
                         continue
+                    texture_type = self.texture_argument_analysis_type(
+                        args[0], global_resource_types
+                    )
+                    if self.texture_call_is_diagnostic_only(func_name, texture_type):
+                        continue
                     sampler_name = self.expression_name(args[1])
                     if sampler_name:
                         sampler_names.add(sampler_name)
@@ -1728,6 +1759,7 @@ class HLSLCodeGen:
         members = set()
         previous_local_variable_types = self.local_variable_types
         functions = self.collect_functions(root)
+        global_resource_types = self.collect_global_texture_types(root)
         try:
             for func in functions:
                 self.local_variable_types = self.function_scope_variable_types(func)
@@ -1741,6 +1773,13 @@ class HLSLCodeGen:
                         func_name in texture_funcs
                         and self.has_explicit_sampler_argument(func_name, args, set())
                     ):
+                        texture_type = self.texture_argument_analysis_type(
+                            args[0], global_resource_types
+                        )
+                        if self.texture_call_is_diagnostic_only(
+                            func_name, texture_type
+                        ):
+                            continue
                         member_ref = self.sampler_struct_member_reference(args[1])
                         if member_ref is not None:
                             members.add(member_ref)
@@ -2003,9 +2042,64 @@ class HLSLCodeGen:
             "textureGatherOffset",
             "textureGatherOffsets",
             "textureQueryLod",
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
         }:
             return False
         return self.is_multisample_texture_resource_type(texture_type)
+
+    def texture_call_is_diagnostic_only(self, func_name, texture_type):
+        if texture_type is None:
+            return False
+        if self.storage_image_texture_operation_expression(func_name, texture_type):
+            return True
+        if func_name == "textureQueryLod" and self.is_storage_image_resource_type(
+            texture_type
+        ):
+            return True
+        if self.projected_texture_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.projected_texture_compare_call_is_diagnostic_only(
+            func_name, texture_type
+        ):
+            return True
+        if self.texture_gather_compare_offset_call_is_diagnostic_only(
+            func_name, texture_type
+        ):
+            return True
+        if self.texture_gather_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.texture_gather_offset_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.texture_sample_offset_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.texture_compare_offset_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        return self.multisample_texture_call_is_diagnostic_only(func_name, texture_type)
+
+    def texture_argument_analysis_type(self, texture_arg, global_resource_types=None):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name and global_resource_types:
+            texture_type = global_resource_types.get(texture_name)
+            if texture_type is not None:
+                return texture_type
+
+        arg_type = self.expression_result_type(texture_arg)
+        if arg_type is not None and self.is_texture_or_image_type(arg_type):
+            return self.map_resource_type_with_format(self.resource_base_type(arg_type))
+        return None
 
     def collect_global_implicit_sampler_texture_names(
         self, root, global_texture_names, sampler_names, implicit_params
@@ -2285,6 +2379,7 @@ class HLSLCodeGen:
     def collect_comparison_sampler_parameters(self, root):
         comparison_params = {}
         functions = self.collect_functions(root)
+        global_resource_types = self.collect_global_texture_types(root)
 
         for func in functions:
             func_name = getattr(func, "name", None)
@@ -2338,11 +2433,12 @@ class HLSLCodeGen:
                 texture_type = resource_param_types.get(texture_name)
                 if texture_type is not None:
                     texture_type = self.map_resource_type_with_format(texture_type)
-                if (
-                    self.storage_image_texture_operation_expression(
-                        self.expression_name(func_expr), texture_type
+                else:
+                    texture_type = self.texture_argument_analysis_type(
+                        args[0], global_resource_types
                     )
-                    is not None
+                if self.texture_call_is_diagnostic_only(
+                    self.expression_name(func_expr), texture_type
                 ):
                     continue
                 sampler_name = self.expression_name(args[1])
@@ -3799,6 +3895,26 @@ class HLSLCodeGen:
             f"textureQueryLod on {texture_type} */ float2(0.0)"
         )
 
+    def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            "/* unsupported DirectX multisample texture comparison: "
+            f"{func_name} on {texture_type} */ 0.0"
+        )
+
+    def unsupported_multisample_texture_gather_compare_call(
+        self, func_name, texture_type
+    ):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            "/* unsupported DirectX multisample texture gather comparison: "
+            f"{func_name} on {texture_type} */ float4(0.0)"
+        )
+
     def unsupported_texture_query_levels_call(self, texture_type):
         texture_type = self.resource_base_type(
             self.map_resource_type_with_format(texture_type)
@@ -4201,6 +4317,12 @@ class HLSLCodeGen:
                 func_name, "requires a compare argument"
             )
 
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_compare_call(
+                func_name, texture_type
+            )
+
         compare = self.generate_expression(extra_args[0])
         if func_name in {
             "textureCompareProj",
@@ -4210,7 +4332,6 @@ class HLSLCodeGen:
             "textureCompareProjGrad",
             "textureCompareProjGradOffset",
         }:
-            texture_type = self.texture_resource_type(args[0])
             coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
             projected_coord = self.texture_compare_projected_coordinate(
                 texture_type, args[coord_index], coord
@@ -4303,7 +4424,6 @@ class HLSLCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "requires compare and offset arguments"
                 )
-            texture_type = self.texture_resource_type(args[0])
             if not self.texture_compare_offset_supported(texture_type):
                 return self.unsupported_texture_compare_call(
                     func_name, "offsets require 2D or 2D-array textures"
@@ -4327,7 +4447,6 @@ class HLSLCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "requires compare, lod, and offset arguments"
                 )
-            texture_type = self.texture_resource_type(args[0])
             if not self.texture_compare_offset_supported(texture_type):
                 return self.unsupported_texture_compare_call(
                     func_name, "offsets require 2D or 2D-array textures"
@@ -4358,7 +4477,6 @@ class HLSLCodeGen:
                     func_name,
                     "requires compare, gradient x, gradient y, and offset arguments",
                 )
-            texture_type = self.texture_resource_type(args[0])
             if not self.texture_compare_offset_supported(texture_type):
                 return self.unsupported_texture_compare_call(
                     func_name, "offsets require 2D or 2D-array textures"
@@ -4398,6 +4516,12 @@ class HLSLCodeGen:
                 func_name, "requires a compare argument"
             )
 
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_gather_compare_call(
+                func_name, texture_type
+            )
+
         compare = self.generate_expression(extra_args[0])
         if func_name == "textureGatherCompare":
             if len(extra_args) != 1:
@@ -4410,7 +4534,6 @@ class HLSLCodeGen:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires compare and offset arguments"
             )
-        texture_type = self.texture_resource_type(args[0])
         if not self.texture_gather_compare_offset_supported(texture_type):
             return self.unsupported_texture_gather_compare_call(
                 func_name, "offsets require 2D or 2D-array textures"
@@ -4848,13 +4971,68 @@ class HLSLCodeGen:
         attr_name = str(attr_name).lower()
         return attr_name == "format" or attr_name in self.supported_image_formats()
 
+    def is_resource_binding_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {
+            "binding",
+            "buffer",
+            "packoffset",
+            "register",
+            "sampler",
+            "set",
+            "space",
+            "texture",
+        }
+
+    def binding_index_value(self, value, prefixes=()):
+        if hasattr(value, "value") and value.value is not None:
+            raw_value = value.value
+        elif hasattr(value, "name") and value.name is not None:
+            raw_value = value.name
+        else:
+            raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def explicit_resource_binding_index(
+        self, node, attribute_names=(), register_prefixes=()
+    ):
+        if not hasattr(node, "attributes"):
+            return None
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name or not arguments:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in attribute_names:
+                binding = self.binding_index_value(arguments[0])
+            elif attr_name == "register":
+                binding = self.binding_index_value(arguments[0], register_prefixes)
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
     def semantic_from_node(self, node):
         if hasattr(node, "semantic"):
             return node.semantic
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
-            if self.is_image_format_attribute(attr):
+            if self.is_image_format_attribute(
+                attr
+            ) or self.is_resource_binding_attribute(attr):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
@@ -5172,14 +5350,13 @@ class HLSLCodeGen:
         """Convert new AST TypeNode to string representation."""
         if hasattr(type_node, "name"):
             return type_node.name
+        elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            if type_node.rows == type_node.cols:
+                return f"float{type_node.rows}x{type_node.rows}"
+            return f"float{type_node.cols}x{type_node.rows}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
-            if hasattr(type_node, "rows"):
-                element_type = self.convert_type_node_to_string(type_node.element_type)
-                if type_node.rows == type_node.cols:
-                    return f"float{type_node.rows}x{type_node.rows}"
-                else:
-                    return f"float{type_node.cols}x{type_node.rows}"
-            elif str(type(type_node)).find("ArrayType") != -1:
+            if str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):

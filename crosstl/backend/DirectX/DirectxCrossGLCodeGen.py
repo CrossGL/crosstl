@@ -128,7 +128,13 @@ class HLSLToCrossGLConverter:
             "TriangleStream": "triangleStream",
             # Sampler Types
             "SamplerState": "sampler",
-            "SamplerComparisonState": "samplerShadow",
+            "SamplerComparisonState": "sampler",
+        }
+        self.shadow_texture_type_map = {
+            "Texture2D": "sampler2DShadow",
+            "Texture2DArray": "sampler2DArrayShadow",
+            "TextureCube": "samplerCubeShadow",
+            "TextureCubeArray": "samplerCubeArrayShadow",
         }
         self.function_map = {
             "lerp": "mix",
@@ -145,19 +151,21 @@ class HLSLToCrossGLConverter:
             "InterlockedCompareExchange": "atomicCompareExchange",
         }
         self.texture_method_map = {
-            "Sample": "texture_sample",
-            "SampleLevel": "texture_sample_level",
-            "SampleGrad": "texture_sample_grad",
-            "SampleBias": "texture_sample_bias",
-            "SampleCmp": "texture_sample_cmp",
-            "SampleCmpLevelZero": "texture_sample_cmp_level_zero",
-            "Load": "texture_load",
-            "Gather": "texture_gather",
-            "GatherRed": "texture_gather_red",
-            "GatherGreen": "texture_gather_green",
-            "GatherBlue": "texture_gather_blue",
-            "GatherAlpha": "texture_gather_alpha",
+            "Sample": "texture",
+            "SampleLevel": "textureLod",
+            "SampleGrad": "textureGrad",
+            "SampleBias": "texture",
+            "SampleCmp": "textureCompare",
+            "SampleCmpLevelZero": "textureCompare",
+            "Load": "texelFetch",
+            "Gather": "textureGather",
             "GetDimensions": "texture_dimensions",
+        }
+        self.texture_gather_component_map = {
+            "GatherRed": "0",
+            "GatherGreen": "1",
+            "GatherBlue": "2",
+            "GatherAlpha": "3",
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
@@ -276,6 +284,8 @@ class HLSLToCrossGLConverter:
         }
         self.indentation = 0
         self.code = []
+        self.shadow_texture_names = set()
+        self.shadow_texture_declaration_ids = set()
 
     def get_indent(self):
         return "    " * self.indentation
@@ -317,6 +327,212 @@ class HLSLToCrossGLConverter:
             lines += "    " * indent + f"@ packoffset({packoffset})\n"
         return lines
 
+    def expression_base_name(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_base_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            return self.expression_base_name(expr.object)
+        return None
+
+    def iter_ast_children(self, node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                yield value
+            return
+        if isinstance(node, (list, tuple, set)):
+            for value in node:
+                yield value
+            return
+        for value in getattr(node, "__dict__", {}).values():
+            yield value
+
+    def collect_direct_texture_method_usage_names(self, root):
+        comparison_names = set()
+        regular_names = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, TextureSampleNode):
+                texture_name = self.expression_base_name(node.texture)
+                if texture_name:
+                    regular_names.add(texture_name)
+            if isinstance(node, FunctionCallNode) and isinstance(
+                node.name, MemberAccessNode
+            ):
+                texture_name = self.expression_base_name(node.name.object)
+                if node.name.member in {"SampleCmp", "SampleCmpLevelZero"}:
+                    if texture_name:
+                        comparison_names.add(texture_name)
+                elif node.name.member in {
+                    "Sample",
+                    "SampleLevel",
+                    "SampleGrad",
+                    "SampleBias",
+                    "Load",
+                    "Gather",
+                    "GatherRed",
+                    "GatherGreen",
+                    "GatherBlue",
+                    "GatherAlpha",
+                }:
+                    if texture_name:
+                        regular_names.add(texture_name)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return comparison_names, regular_names
+
+    def collect_function_texture_parameter_usage(self, root):
+        function_usage = {}
+        for func in getattr(root, "functions", []) or []:
+            param_by_name = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(getattr(func, "params", []) or [])
+            }
+            param_by_name.pop(None, None)
+            comparison_names, regular_names = (
+                self.collect_direct_texture_method_usage_names(
+                    getattr(func, "body", [])
+                )
+            )
+            function_usage[getattr(func, "name", None)] = {
+                "comparison": {
+                    param_by_name[name]
+                    for name in comparison_names
+                    if name in param_by_name
+                },
+                "regular": {
+                    param_by_name[name]
+                    for name in regular_names
+                    if name in param_by_name
+                },
+            }
+        function_usage.pop(None, None)
+        return function_usage
+
+    def collect_nonparameter_texture_usage_names(self, root):
+        comparison_names = set()
+        regular_names = set()
+
+        for node in getattr(root, "global_variables", []) or []:
+            direct_comparison, direct_regular = (
+                self.collect_direct_texture_method_usage_names(node)
+            )
+            comparison_names.update(direct_comparison)
+            regular_names.update(direct_regular)
+
+        for func in getattr(root, "functions", []) or []:
+            param_names = {
+                getattr(param, "name", None)
+                for param in getattr(func, "params", []) or []
+            }
+            param_names.discard(None)
+            direct_comparison, direct_regular = (
+                self.collect_direct_texture_method_usage_names(
+                    getattr(func, "body", [])
+                )
+            )
+            comparison_names.update(direct_comparison - param_names)
+            regular_names.update(direct_regular - param_names)
+
+        return comparison_names, regular_names
+
+    def propagate_function_texture_usage(
+        self, root, function_usage, comparison_names, regular_names
+    ):
+        changed = False
+
+        def apply_call_usage(node, caller_function_name, caller_param_by_name):
+            nonlocal changed
+            if not isinstance(node, FunctionCallNode) or not isinstance(node.name, str):
+                return
+            callee_usage = function_usage.get(node.name)
+            if not callee_usage:
+                return
+            for usage_kind, usage_names in (
+                ("comparison", comparison_names),
+                ("regular", regular_names),
+            ):
+                for param_index in callee_usage[usage_kind]:
+                    if param_index >= len(node.args):
+                        continue
+                    arg_name = self.expression_base_name(node.args[param_index])
+                    if not arg_name:
+                        continue
+                    caller_param_index = caller_param_by_name.get(arg_name)
+                    if caller_param_index is not None:
+                        caller_usage = function_usage.get(caller_function_name)
+                        if (
+                            caller_usage is not None
+                            and caller_param_index not in caller_usage[usage_kind]
+                        ):
+                            caller_usage[usage_kind].add(caller_param_index)
+                            changed = True
+                    elif arg_name not in usage_names:
+                        usage_names.add(arg_name)
+                        changed = True
+
+        def visit(node, caller_function_name, caller_param_by_name):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            apply_call_usage(node, caller_function_name, caller_param_by_name)
+            for child in self.iter_ast_children(node):
+                visit(child, caller_function_name, caller_param_by_name)
+
+        for func in getattr(root, "functions", []) or []:
+            param_by_name = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(getattr(func, "params", []) or [])
+            }
+            param_by_name.pop(None, None)
+            visit(getattr(func, "body", []), getattr(func, "name", None), param_by_name)
+
+        return changed
+
+    def collect_shadow_texture_names(self, root):
+        comparison_names, regular_names = self.collect_nonparameter_texture_usage_names(
+            root
+        )
+        function_usage = self.collect_function_texture_parameter_usage(root)
+        while self.propagate_function_texture_usage(
+            root, function_usage, comparison_names, regular_names
+        ):
+            pass
+
+        shadow_names = comparison_names - regular_names
+        self.shadow_texture_declaration_ids = set()
+        for node in getattr(root, "global_variables", []) or []:
+            if getattr(node, "name", None) in shadow_names:
+                self.shadow_texture_declaration_ids.add(id(node))
+
+        for func in getattr(root, "functions", []) or []:
+            usage = function_usage.get(getattr(func, "name", None), {})
+            shadow_indices = usage.get("comparison", set()) - usage.get(
+                "regular", set()
+            )
+            for index, param in enumerate(getattr(func, "params", []) or []):
+                if index in shadow_indices:
+                    self.shadow_texture_declaration_ids.add(id(param))
+
+        return shadow_names
+
+    def map_variable_type(self, node):
+        hlsl_type = getattr(node, "vtype", None)
+        if id(node) not in self.shadow_texture_declaration_ids:
+            return self.map_type(hlsl_type)
+        type_name = hlsl_type
+        if type_name and "<" in type_name and type_name.endswith(">"):
+            type_name = type_name.split("<", 1)[0]
+        return self.shadow_texture_type_map.get(type_name, self.map_type(hlsl_type))
+
     def visit(self, node):
         if isinstance(node, SwitchStatementNode):
             return self.visit_SwitchStatementNode(node)
@@ -336,6 +552,7 @@ class HLSLToCrossGLConverter:
 
     def generate(self, ast):
         """Generate a complete CrossGL shader from a parsed HLSL AST."""
+        self.shadow_texture_names = self.collect_shadow_texture_names(ast)
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -368,7 +585,7 @@ class HLSLToCrossGLConverter:
                     semantic = self.map_semantic(member.semantic)
                     semantic = f" {semantic}" if semantic else ""
                     code += (
-                        f"        {self.map_type(member.vtype)} "
+                        f"        {self.map_variable_type(member)} "
                         f"{member.name}{array_suffix}{semantic};\n"
                     )
                 code += "    }\n"
@@ -380,7 +597,7 @@ class HLSLToCrossGLConverter:
             code += self.format_attributes(getattr(node, "attributes", []), 1)
             code += self.format_binding_attributes(node, 1)
             array_suffix = self.format_array_suffixes(node)
-            code += f"    {self.map_type(node.vtype)} {node.name}{array_suffix};\n"
+            code += f"    {self.map_variable_type(node)} {node.name}{array_suffix};\n"
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -423,7 +640,7 @@ class HLSLToCrossGLConverter:
                 for member in node.members:
                     array_suffix = self.format_array_suffixes(member)
                     code += (
-                        f"        {self.map_type(member.vtype)} "
+                        f"        {self.map_variable_type(member)} "
                         f"{member.name}{array_suffix};\n"
                     )
                 code += "    }\n"
@@ -434,7 +651,7 @@ class HLSLToCrossGLConverter:
         code = self.format_attributes(getattr(func, "attributes", []), indent)
         code += "    " * indent
         params = ", ".join(
-            f"{self.map_type(p.vtype)} {p.name}{self.format_array_suffixes(p)}"
+            f"{self.map_variable_type(p)} {p.name}{self.format_array_suffixes(p)}"
             f"{(' ' + self.map_semantic(p.semantic)) if self.map_semantic(p.semantic) else ''}"
             for p in func.params
         )
@@ -456,11 +673,14 @@ class HLSLToCrossGLConverter:
                 if stmt.value is not None:
                     value = self.generate_expression(stmt.value, is_main)
                     code += (
-                        f"{self.map_type(stmt.vtype)} {stmt.name}{array_suffix} = "
+                        f"{self.map_variable_type(stmt)} {stmt.name}{array_suffix} = "
                         f"{value};\n"
                     )
                 else:
-                    code += f"{self.map_type(stmt.vtype)} {stmt.name}{array_suffix};\n"
+                    code += (
+                        f"{self.map_variable_type(stmt)} "
+                        f"{stmt.name}{array_suffix};\n"
+                    )
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
 
@@ -512,7 +732,10 @@ class HLSLToCrossGLConverter:
     def generate_for_loop(self, node, indent, is_main):
         if isinstance(node.init, VariableNode):
             array_suffix = self.format_array_suffixes(node.init, is_main)
-            init = f"{self.map_type(node.init.vtype)} {node.init.name}{array_suffix}"
+            init = (
+                f"{self.map_variable_type(node.init)} "
+                f"{node.init.name}{array_suffix}"
+            )
             if node.init.value is not None:
                 init += f" = {self.generate_expression(node.init.value, is_main)}"
         elif node.init is None:
@@ -606,9 +829,10 @@ class HLSLToCrossGLConverter:
                 return f"{operand}{expr.op}"
             return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
-            args = ", ".join(
+            rendered_args = [
                 self.generate_expression(arg, is_main) for arg in expr.args
-            )
+            ]
+            args = ", ".join(rendered_args)
             if isinstance(expr.name, MemberAccessNode):
                 obj = self.generate_expression(expr.name.object, is_main)
                 member = expr.name.member
@@ -622,6 +846,10 @@ class HLSLToCrossGLConverter:
                             f"{self.buffer_method_map['GetDimensions']}({obj}, {args})"
                         )
                     return f"{self.texture_method_map['GetDimensions']}({obj}, {args})"
+                if member in self.texture_gather_component_map:
+                    component = self.texture_gather_component_map[member]
+                    gather_args = ", ".join(rendered_args + [component])
+                    return f"textureGather({obj}, {gather_args})"
                 if member in self.texture_method_map:
                     return f"{self.texture_method_map[member]}({obj}, {args})"
                 if member in self.buffer_method_map:
@@ -657,8 +885,8 @@ class HLSLToCrossGLConverter:
             coords = self.generate_expression(expr.coordinates, is_main)
             if getattr(expr, "lod", None) is not None:
                 lod = self.generate_expression(expr.lod, is_main)
-                return f"texture_sample_level({texture}, {sampler}, {coords}, {lod})"
-            return f"texture_sample({texture}, {sampler}, {coords})"
+                return f"textureLod({texture}, {sampler}, {coords}, {lod})"
+            return f"texture({texture}, {sampler}, {coords})"
 
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
@@ -810,8 +1038,8 @@ class HLSLToCrossGLConverter:
 
             array_suffix = self.format_array_suffixes(member)
             code += (
-                self.get_indent()
-                + f"{self.map_type(member.vtype)} {member.name}{array_suffix}{semantic};\n"
+                self.get_indent() + f"{self.map_variable_type(member)} "
+                f"{member.name}{array_suffix}{semantic};\n"
             )
 
         self.indentation -= 1

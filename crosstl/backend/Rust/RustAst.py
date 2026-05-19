@@ -6,9 +6,7 @@ from ..common_ast import (
     AssignmentNode,
     AttributeNode,
     BinaryOpNode,
-    BreakNode,
     CastNode,
-    ContinueNode,
     FunctionCallNode,
     IfNode,
     MemberAccessNode,
@@ -17,7 +15,6 @@ from ..common_ast import (
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
-    WhileNode,
 )
 
 
@@ -61,12 +58,21 @@ class ShaderNode(ASTNode):
 class StructNode(ASTNode):
     """Node representing a Rust struct with visibility and attributes."""
 
-    def __init__(self, name, members, attributes=None, visibility=None, generics=None):
+    def __init__(
+        self,
+        name,
+        members,
+        attributes=None,
+        visibility=None,
+        generics=None,
+        where_clauses=None,
+    ):
         self.name = name
         self.members = members
         self.attributes = attributes or []
         self.visibility = visibility
         self.generics = generics or []
+        self.where_clauses = where_clauses or []
 
     def __repr__(self):
         return (
@@ -131,6 +137,7 @@ class FunctionNode(ASTNode):
         visibility=None,
         generics=None,
         where_clauses=None,
+        is_async=False,
     ):
         self.return_type = return_type
         self.name = name
@@ -140,11 +147,13 @@ class FunctionNode(ASTNode):
         self.visibility = visibility
         self.generics = generics or []
         self.where_clauses = where_clauses or []
+        self.is_async = is_async
 
     def __repr__(self):
         return (
             f"FunctionNode(name={self.name}, return_type={self.return_type}, "
-            f"params={len(self.params)}, visibility={self.visibility})"
+            f"params={len(self.params)}, visibility={self.visibility}, "
+            f"is_async={self.is_async})"
         )
 
 
@@ -252,16 +261,147 @@ class TraitNode(ASTNode):
 class LetNode(ASTNode):
     """Node representing a let binding"""
 
-    def __init__(self, name, value, var_type=None, is_mutable=False):
+    def __init__(
+        self,
+        name,
+        value,
+        var_type=None,
+        is_mutable=False,
+        else_body=None,
+    ):
         self.name = name
         self.value = value
         self.var_type = var_type
         self.vtype = var_type
         self.is_mutable = is_mutable
+        self.else_body = else_body
 
     def __repr__(self):
         mut = "mut " if self.is_mutable else ""
-        return f"LetNode({mut}{self.name}: {self.var_type} = {self.value})"
+        else_part = f" else {self.else_body}" if self.else_body is not None else ""
+        return f"LetNode({mut}{self.name}: {self.var_type} = {self.value}{else_part})"
+
+
+class LetPatternConditionNode(ASTNode):
+    """Node representing a Rust `let PATTERN = expression` condition."""
+
+    def __init__(self, pattern, expression):
+        self.pattern = pattern
+        self.expression = expression
+
+    def __repr__(self):
+        return (
+            f"LetPatternConditionNode(pattern={self.pattern}, "
+            f"expression={self.expression})"
+        )
+
+
+class MatchesMacroNode(ASTNode):
+    """Node representing a Rust `matches!(expression, pattern if guard)` macro."""
+
+    def __init__(self, expression, pattern, guard=None):
+        self.expression = expression
+        self.pattern = pattern
+        self.guard = guard
+
+    def __repr__(self):
+        return (
+            f"MatchesMacroNode(expression={self.expression}, "
+            f"pattern={self.pattern}, guard={self.guard})"
+        )
+
+
+class ConditionChainNode(ASTNode):
+    """Node representing a Rust condition chain joined by top-level `&&`."""
+
+    def __init__(self, operands):
+        self.operands = operands
+
+    def __repr__(self):
+        return f"ConditionChainNode(operands={self.operands})"
+
+
+class ClosureParameterNode(ASTNode):
+    """Node representing a Rust closure parameter."""
+
+    def __init__(self, pattern, param_type=None):
+        self.pattern = pattern
+        self.param_type = param_type
+        self.vtype = param_type
+
+    def __repr__(self):
+        return f"ClosureParameterNode(pattern={self.pattern}, param_type={self.param_type})"
+
+
+class ClosureNode(ASTNode):
+    """Node representing a Rust closure expression."""
+
+    def __init__(self, params, body, is_move=False, return_type=None):
+        self.params = params
+        self.body = body
+        self.is_move = is_move
+        self.return_type = return_type
+
+    def __repr__(self):
+        move = "move " if self.is_move else ""
+        return (
+            f"ClosureNode({move}params={self.params}, "
+            f"return_type={self.return_type}, body={self.body})"
+        )
+
+
+class AwaitNode(ASTNode):
+    """Node representing a Rust `expression.await` postfix expression."""
+
+    def __init__(self, expression):
+        self.expression = expression
+
+    def __repr__(self):
+        return f"AwaitNode(expression={self.expression})"
+
+
+class AsyncBlockNode(ASTNode):
+    """Node representing a Rust `async { ... }` block expression."""
+
+    def __init__(self, block, is_move=False):
+        self.block = block
+        self.is_move = is_move
+
+    def __repr__(self):
+        move = "move " if self.is_move else ""
+        return f"AsyncBlockNode({move}block={self.block})"
+
+
+class TryNode(ASTNode):
+    """Node representing a Rust `expression?` try-propagation expression."""
+
+    def __init__(self, expression):
+        self.expression = expression
+
+    def __repr__(self):
+        return f"TryNode(expression={self.expression})"
+
+
+class TryBlockNode(ASTNode):
+    """Node representing a Rust `try { ... }` block expression."""
+
+    def __init__(self, block):
+        self.block = block
+
+    def __repr__(self):
+        return f"TryBlockNode(block={self.block})"
+
+
+class WhileNode(ASTNode):
+    """Node representing a Rust while loop."""
+
+    def __init__(self, condition, body, label=None):
+        self.condition = condition
+        self.body = body
+        self.label = label
+
+    def __repr__(self):
+        return f"WhileNode(label={self.label}, condition={self.condition}, body={self.body})"
 
 
 class LoopNode(ASTNode):
@@ -278,13 +418,38 @@ class LoopNode(ASTNode):
 class ForNode(ASTNode):
     """Node representing a Rust for-in loop"""
 
-    def __init__(self, pattern, iterable, body):
+    def __init__(self, pattern, iterable, body, label=None):
         self.pattern = pattern
         self.iterable = iterable
         self.body = body
+        self.label = label
 
     def __repr__(self):
-        return f"ForNode(pattern={self.pattern}, iterable={self.iterable}, body={self.body})"
+        return (
+            f"ForNode(label={self.label}, pattern={self.pattern}, "
+            f"iterable={self.iterable}, body={self.body})"
+        )
+
+
+class BreakNode(ASTNode):
+    """Node representing a Rust break statement."""
+
+    def __init__(self, label=None, value=None):
+        self.label = label
+        self.value = value
+
+    def __repr__(self):
+        return f"BreakNode(label={self.label}, value={self.value})"
+
+
+class ContinueNode(ASTNode):
+    """Node representing a Rust continue statement."""
+
+    def __init__(self, label=None):
+        self.label = label
+
+    def __repr__(self):
+        return f"ContinueNode(label={self.label})"
 
 
 class MatchNode(ASTNode):
@@ -310,16 +475,63 @@ class MatchArmNode(ASTNode):
         return f"MatchArmNode(pattern={self.pattern}, guard={self.guard}, body={self.body})"
 
 
+class MatchOrPatternNode(ASTNode):
+    """Node representing a Rust match or-pattern."""
+
+    def __init__(self, patterns):
+        self.patterns = patterns
+
+    def __repr__(self):
+        return f"MatchOrPatternNode(patterns={self.patterns})"
+
+
+class MatchBindingPatternNode(ASTNode):
+    """Node representing a Rust binding pattern like `name @ pattern`."""
+
+    def __init__(self, name, pattern):
+        self.name = name
+        self.pattern = pattern
+
+    def __repr__(self):
+        return f"MatchBindingPatternNode(name={self.name}, pattern={self.pattern})"
+
+
+class MatchRestPatternNode(ASTNode):
+    """Node representing a Rust slice/array rest pattern (`..`)."""
+
+    def __repr__(self):
+        return "MatchRestPatternNode(..)"
+
+
+class MatchStructPatternNode(ASTNode):
+    """Node representing a Rust struct or record variant match pattern."""
+
+    def __init__(self, name, fields=None, has_rest=False):
+        self.name = name
+        self.fields = fields or []
+        self.has_rest = has_rest
+
+    def __repr__(self):
+        return (
+            f"MatchStructPatternNode(name={self.name}, fields={self.fields}, "
+            f"has_rest={self.has_rest})"
+        )
+
+
 class UseNode(ASTNode):
     """Node representing a use statement"""
 
-    def __init__(self, path, alias=None, items=None):
+    def __init__(self, path, alias=None, items=None, visibility=None):
         self.path = path
         self.alias = alias
         self.items = items  # For use path::{item1, item2}
+        self.visibility = visibility
 
     def __repr__(self):
-        return f"UseNode(path={self.path}, alias={self.alias}, items={self.items})"
+        return (
+            f"UseNode(path={self.path}, alias={self.alias}, "
+            f"items={self.items}, visibility={self.visibility})"
+        )
 
 
 class GenericParameterNode(ASTNode):
@@ -394,9 +606,10 @@ class DereferenceNode(ASTNode):
 class BlockNode(ASTNode):
     """Node representing a block expression"""
 
-    def __init__(self, statements, returns_value=False):
+    def __init__(self, statements, returns_value=None):
         self.statements = statements
         self.returns_value = returns_value
+        self.expression = returns_value
 
     def __repr__(self):
         return f"BlockNode(statements={len(self.statements)}, returns_value={self.returns_value})"

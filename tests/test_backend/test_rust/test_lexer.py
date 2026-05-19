@@ -103,6 +103,23 @@ def test_loop_tokenization():
         pytest.fail("Loop tokenization not implemented.")
 
 
+def test_lifetime_label_tokenization_keeps_char_literals():
+    code = """
+    fn main() {
+        'outer: loop {
+            continue 'outer;
+        }
+        let marker = 'x';
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        assert ("LIFETIME", "'outer") in tokens
+        assert ("CHAR_LIT", "'x'") in tokens
+    except SyntaxError:
+        pytest.fail("Rust lifetime-style label tokenization not implemented.")
+
+
 def test_match_tokenization():
     code = """
     fn main() {
@@ -373,21 +390,91 @@ def test_string_literals_tokenization():
     fn main() {
         let message = "Hello, Rust!";
         let path = "path/to/file.txt";
+        let raw_plain = r"plain raw";
         let raw_string = r#"This is a "raw" string"#;
+        let raw_hashes = r##"This has "# in it"##;
         let char_lit = 'a';
     }
     """
     try:
         tokens = tokenize_code(code)
         string_literals = [token[1] for token in tokens if token[0] == "STRING"]
+        raw_literals = [token[1] for token in tokens if token[0] == "RAW_STRING"]
         assert (
             '"Hello, Rust!"' in string_literals
         ), "String literal not tokenized correctly"
         assert (
             '"path/to/file.txt"' in string_literals
         ), "String literal not tokenized correctly"
+        assert (
+            'r"plain raw"' in raw_literals
+        ), "Plain raw string not tokenized correctly"
+        assert (
+            'r#"This is a "raw" string"#' in raw_literals
+        ), "Hash raw string not tokenized correctly"
+        assert (
+            'r##"This has "# in it"##' in raw_literals
+        ), "Multi-hash raw string not tokenized correctly"
     except SyntaxError:
         pytest.fail("String literals tokenization not implemented.")
+
+
+def test_byte_literals_tokenization():
+    code = r"""
+    fn main() {
+        let bytes = b"abc";
+        let byte = b'a';
+        let newline = b'\n';
+        let hex = b'\x41';
+        let raw = br"raw bytes";
+        let raw_hash = br#"a "quoted" byte raw"#;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        byte_strings = [token[1] for token in tokens if token[0] == "BYTE_STRING"]
+        byte_chars = [token[1] for token in tokens if token[0] == "BYTE_CHAR"]
+        byte_raw_strings = [
+            token[1] for token in tokens if token[0] == "BYTE_RAW_STRING"
+        ]
+
+        assert 'b"abc"' in byte_strings, "Byte string not tokenized correctly"
+        assert "b'a'" in byte_chars, "Byte char not tokenized correctly"
+        assert r"b'\n'" in byte_chars, "Byte char escape not tokenized correctly"
+        assert r"b'\x41'" in byte_chars, "Byte char hex escape not tokenized correctly"
+        assert (
+            'br"raw bytes"' in byte_raw_strings
+        ), "Raw byte string not tokenized correctly"
+        assert (
+            'br#"a "quoted" byte raw"#' in byte_raw_strings
+        ), "Hash raw byte string not tokenized correctly"
+    except SyntaxError:
+        pytest.fail("Byte literals tokenization not implemented.")
+
+
+def test_option_result_keyword_tokenization():
+    code = """
+    use std::option::Option::{Some, None};
+    fn main(value: i32) -> Result<i32, i32> {
+        let maybe: Option<i32> = Some(value);
+        let empty: Option<i32> = None;
+        let ok = Ok(value);
+        let err = Err(value);
+        ok
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        token_types = [token[0] for token in tokens]
+
+        assert "OPTION" in token_types, "Option keyword not tokenized correctly"
+        assert "RESULT" in token_types, "Result keyword not tokenized correctly"
+        assert "SOME" in token_types, "Some keyword not tokenized correctly"
+        assert "NONE" in token_types, "None keyword not tokenized correctly"
+        assert "OK" in token_types, "Ok keyword not tokenized correctly"
+        assert "ERR" in token_types, "Err keyword not tokenized correctly"
+    except SyntaxError:
+        pytest.fail("Option/Result tokenization not implemented.")
 
 
 def test_numeric_literals_tokenization():
@@ -401,13 +488,33 @@ def test_numeric_literals_tokenization():
         let scientific = 1.23e-4;
         let float_suffix = 3.14f32;
         let int_suffix = 42i32;
+        let grouped = 1_000u32;
+        let hex_suffix = 0xffu32;
+        let binary_suffix = 0b1010u32;
+        let octal_suffix = 0o77usize;
+        let grouped_float = 1_000.5f32;
+        let exponent_suffix = 1.0e-3f32;
     }
     """
     try:
         tokens = tokenize_code(code)
         numbers = [token[1] for token in tokens if token[0] == "NUMBER"]
         assert "42" in numbers, "Decimal literal not tokenized correctly"
+        assert "0x2A" in numbers, "Hex literal not tokenized correctly"
+        assert "0b101010" in numbers, "Binary literal not tokenized correctly"
+        assert "0o52" in numbers, "Octal literal not tokenized correctly"
         assert "3.14159" in numbers, "Float literal not tokenized correctly"
+        assert "1.23e-4" in numbers, "Scientific literal not tokenized correctly"
+        assert "3.14f32" in numbers, "Float suffix literal not tokenized correctly"
+        assert "42i32" in numbers, "Integer suffix literal not tokenized correctly"
+        assert "1_000u32" in numbers, "Grouped literal not tokenized correctly"
+        assert "0xffu32" in numbers, "Suffixed hex literal not tokenized correctly"
+        assert "0b1010u32" in numbers, "Suffixed binary literal not tokenized correctly"
+        assert "0o77usize" in numbers, "Suffixed octal literal not tokenized correctly"
+        assert "1_000.5f32" in numbers, "Grouped float literal not tokenized correctly"
+        assert (
+            "1.0e-3f32" in numbers
+        ), "Suffixed exponent literal not tokenized correctly"
     except SyntaxError:
         pytest.fail("Numeric literals tokenization not implemented.")
 
@@ -457,6 +564,25 @@ def test_bitwise_not_tokenization():
     assert has_not, "Logical NOT operator (!) not tokenized correctly"
 
 
+def test_not_equal_tokenization():
+    code = """
+    fn main() {
+        let changed = value != 0;
+        let inverted = !changed;
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert (
+        "NOT_EQUAL",
+        "!=",
+    ) in tokens, "Not-equal operator (!=) not tokenized correctly"
+    assert (
+        "EXCLAMATION",
+        "!",
+    ) in tokens, "Standalone logical not not tokenized correctly"
+
+
 def test_range_tokenization():
     code = """
     fn main() {
@@ -478,6 +604,51 @@ def test_range_tokenization():
         ), "Inclusive range operator (..=) not tokenized correctly"
     except SyntaxError:
         pytest.fail("Range operators tokenization not implemented.")
+
+
+def test_try_keyword_tokenization():
+    code = """
+    fn main() {
+        let value = try {
+            maybe?
+        };
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert ("TRY", "try") in tokens, "try keyword not tokenized correctly"
+    assert ("QUESTION", "?") in tokens, "try block inner ? not tokenized correctly"
+
+
+def test_await_keyword_tokenization():
+    code = """
+    fn main() {
+        let value = future.await?;
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert ("AWAIT", "await") in tokens, "await keyword not tokenized correctly"
+    assert ("DOT", ".") in tokens, "await postfix dot not tokenized correctly"
+    assert ("QUESTION", "?") in tokens, "await? question not tokenized correctly"
+
+
+def test_async_keyword_tokenization():
+    code = """
+    pub async fn load() {
+        let value = async move {
+            ready.await
+        };
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert ("ASYNC", "async") in tokens, "async keyword not tokenized correctly"
+    assert ("MOVE", "move") in tokens, "async move block not tokenized correctly"
+    assert (
+        "AWAIT",
+        "await",
+    ) in tokens, "await inside async block not tokenized correctly"
 
 
 if __name__ == "__main__":

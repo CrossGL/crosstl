@@ -46,6 +46,7 @@ TOKENS = tuple(
         ("LOOP", r"\bloop\b"),
         ("BREAK", r"\bbreak\b"),
         ("CONTINUE", r"\bcontinue\b"),
+        ("TRY", r"\btry\b"),
         ("IN", r"\bin\b"),
         ("TRUE", r"\btrue\b"),
         ("FALSE", r"\bfalse\b"),
@@ -80,13 +81,27 @@ TOKENS = tuple(
         # Note: shader-specific words like vertex, fragment are not Rust keywords
         # They can be used as identifiers and only have meaning in attributes
         # Numeric literals must come before identifiers to handle type suffixes
-        ("NUMBER", r"\d+(\.\d+)?((i|u)(8|16|32|64|128|size)|f(32|64))?"),
+        (
+            "NUMBER",
+            r"(0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|"
+            r"0[bB][01](?:_?[01])*|"
+            r"0[oO][0-7](?:_?[0-7])*|"
+            r"\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?)"
+            r"((i|u)(8|16|32|64|128|size)|f(32|64))?",
+        ),
         # Underscore must come before identifier to match wildcard patterns
         ("UNDERSCORE", r"_"),
+        (
+            "BYTE_RAW_STRING",
+            r'br(?P<byte_raw_hashes>#*)"(?:.|\n)*?"(?P=byte_raw_hashes)',
+        ),
+        ("RAW_STRING", r'r(?P<raw_hashes>#*)"(?:.|\n)*?"(?P=raw_hashes)'),
+        ("BYTE_STRING", r'b"([^"\\]|\\.)*"'),
+        ("BYTE_CHAR", r"b'(\\x[0-9a-fA-F]{2}|[^'\\]|\\.)'"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         ("STRING", r'"([^"\\]|\\.)*"'),
         ("CHAR_LIT", r"'([^'\\]|\\.)'"),
-        ("RAW_STRING", r'r#*"[^"]*"#*'),
+        ("LIFETIME", r"'[a-zA-Z_][a-zA-Z0-9_]*"),
         # Punctuation
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
@@ -106,23 +121,9 @@ TOKENS = tuple(
         ("ARROW", r"->"),
         ("FAT_ARROW", r"=>"),
         ("POUND", r"#"),
-        ("EXCLAMATION", r"!"),
-        ("AT", r"@"),
-        ("CARET", r"\^"),
-        ("TILDE", r"~"),
         # Operators (multi-character operators MUST come before single-character ones)
-        ("SHIFT_LEFT", r"<<"),
-        ("SHIFT_RIGHT", r">>"),
-        ("LESS_EQUAL", r"<="),
-        ("GREATER_EQUAL", r">="),
-        ("EQUAL", r"=="),
-        ("NOT_EQUAL", r"!="),
-        ("LOGICAL_AND", r"&&"),
-        ("LOGICAL_OR", r"\|\|"),
-        ("LESS_THAN", r"<"),
-        ("GREATER_THAN", r">"),
-        ("AMPERSAND", r"&"),
-        ("PIPE", r"\|"),
+        ("SHIFT_LEFT_EQUALS", r"<<="),
+        ("SHIFT_RIGHT_EQUALS", r">>="),
         ("PLUS_EQUALS", r"\+="),
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),
@@ -131,8 +132,22 @@ TOKENS = tuple(
         ("BITWISE_AND_EQUALS", r"&="),
         ("BITWISE_OR_EQUALS", r"\|="),
         ("BITWISE_XOR_EQUALS", r"\^="),
-        ("SHIFT_LEFT_EQUALS", r"<<="),
-        ("SHIFT_RIGHT_EQUALS", r">>="),
+        ("SHIFT_LEFT", r"<<"),
+        ("SHIFT_RIGHT", r">>"),
+        ("LESS_EQUAL", r"<="),
+        ("GREATER_EQUAL", r">="),
+        ("EQUAL", r"=="),
+        ("NOT_EQUAL", r"!="),
+        ("LOGICAL_AND", r"&&"),
+        ("LOGICAL_OR", r"\|\|"),
+        ("EXCLAMATION", r"!"),
+        ("LESS_THAN", r"<"),
+        ("GREATER_THAN", r">"),
+        ("AMPERSAND", r"&"),
+        ("PIPE", r"\|"),
+        ("AT", r"@"),
+        ("CARET", r"\^"),
+        ("TILDE", r"~"),
         ("PLUS", r"\+"),
         ("MINUS", r"-"),
         ("MULTIPLY", r"\*"),
@@ -208,6 +223,7 @@ KEYWORDS = {
     "None": "NONE",
     "Ok": "OK",
     "Err": "ERR",
+    "try": "TRY",
     # Removed shader keywords - they should be identifiers, not reserved words
 }
 
@@ -252,6 +268,7 @@ class TokenType(Enum):
     LOOP = auto()
     BREAK = auto()
     CONTINUE = auto()
+    TRY = auto()
     IN = auto()
     TRUE = auto()
     FALSE = auto()
@@ -287,6 +304,10 @@ class TokenType(Enum):
     NUMBER = auto()
     STRING = auto()
     CHAR_LIT = auto()
+    LIFETIME = auto()
+    BYTE_RAW_STRING = auto()
+    BYTE_STRING = auto()
+    BYTE_CHAR = auto()
     RAW_STRING = auto()
     LBRACE = auto()
     RBRACE = auto()

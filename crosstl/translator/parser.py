@@ -1966,6 +1966,8 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
+        attributes = self.parse_attributes()
+
         self.eat("LBRACE")
         members = []
 
@@ -1991,7 +1993,7 @@ class Parser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
-        node = StructNode(name=name, members=members)
+        node = StructNode(name=name, members=members, attributes=attributes)
         node.is_cbuffer = True
         return node
 
@@ -2000,11 +2002,29 @@ class Parser:
         """Return whether the current token begins a cbuffer declaration."""
         if self.current_token[0] == "CBUFFER":
             return True
-        return (
-            self.current_token[0] == "UNIFORM"
-            and self.peek()[0] == "IDENTIFIER"
-            and self.peek(2)[0] == "LBRACE"
-        )
+        if self.current_token[0] != "UNIFORM" or self.peek()[0] != "IDENTIFIER":
+            return False
+
+        offset = 2
+        while self.peek(offset)[0] in ["AT", "ATTRIBUTE"]:
+            if self.peek(offset)[0] == "ATTRIBUTE":
+                offset += 1
+            else:
+                if self.peek(offset + 1)[0] != "IDENTIFIER":
+                    return False
+                offset += 2
+
+            if self.peek(offset)[0] == "LPAREN":
+                depth = 1
+                offset += 1
+                while depth and self.peek(offset)[0] != "EOF":
+                    if self.peek(offset)[0] == "LPAREN":
+                        depth += 1
+                    elif self.peek(offset)[0] == "RPAREN":
+                        depth -= 1
+                    offset += 1
+
+        return self.peek(offset)[0] == "LBRACE"
 
     def is_function_declaration(self):
         """Return whether the current token sequence looks like a function."""

@@ -35,6 +35,53 @@ def test_struct_conversion():
         pytest.fail(f"Struct conversion failed: {e}")
 
 
+def test_tuple_struct_conversion():
+    code = """
+    #[repr(transparent)]
+    pub(crate) struct Marker;
+    struct Tagged<T>;
+    pub(super) struct Pair(pub(crate) f32, pub(self) Vec3<f32>);
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "struct Marker {" in result
+        assert "struct Tagged {" in result
+        assert "struct Pair {" in result
+        assert "float field0;" in result
+        assert "vec3 field1;" in result
+    except Exception as e:
+        pytest.fail(f"Tuple struct conversion failed: {e}")
+
+
+def test_struct_where_clause_conversion():
+    code = """
+    pub struct Buffer<T>
+    where
+        T: Copy,
+    {
+        value: T,
+    }
+
+    pub(super) struct Pair<T>(T, Vec3<f32>)
+    where
+        T: Copy + Clone;
+
+    struct Marker<T>
+    where
+        T: Copy;
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "struct Buffer {" in result
+        assert "T value;" in result
+        assert "struct Pair {" in result
+        assert "T field0;" in result
+        assert "vec3 field1;" in result
+        assert "struct Marker {" in result
+    except Exception as e:
+        pytest.fail(f"Struct where-clause conversion failed: {e}")
+
+
 def test_function_conversion():
     code = """
     #[vertex_shader]
@@ -187,6 +234,176 @@ def test_module_path_alias_conversion():
         pytest.fail(f"Module path alias conversion failed: {e}")
 
 
+def test_qualified_math_function_conversion():
+    code = """
+    fn sample(x: f32) {
+        let a = crate::math::sin(x);
+        let b = self::shader_math::clamp(x, 0.0, 1.0);
+        let c = std::f32::sqrt(x);
+        let d = crate::math::custom(x);
+        let e = Color::clamp(x, 0.0, 1.0);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "a = sin(x);" in result
+        assert "b = clamp(x, 0.0, 1.0);" in result
+        assert "c = sqrt(x);" in result
+        assert "d = crate::math::custom(x);" in result
+        assert "e = Color::clamp(x, 0.0, 1.0);" in result
+    except Exception as e:
+        pytest.fail(f"Qualified math function conversion failed: {e}")
+
+
+def test_qualified_builtin_type_conversion():
+    code = """
+    fn sample(position: crate::math::Vec3<f32>, tangent: glam::Vec4) -> glam::Vec4 {
+        let a: crate::math::Vec3<f32> = crate::math::Vec3::<f32>::new(1.0, 2.0, 3.0);
+        let b = glam::Vec3::new(4.0, 5.0, 6.0);
+        let transform: crate::math::Mat4<f32>;
+        tangent
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "vec4 sample(vec3 position, vec4 tangent)" in result
+        assert "vec3 a = vec3(1.0, 2.0, 3.0);" in result
+        assert "b = vec3(4.0, 5.0, 6.0);" in result
+        assert "mat4 transform;" in result
+        assert "crate::math::Vec3" not in result
+        assert "glam::Vec" not in result
+    except Exception as e:
+        pytest.fail(f"Qualified builtin type conversion failed: {e}")
+
+
+def test_use_alias_builtin_type_conversion():
+    code = """
+    use glam::Vec3 as GVec3;
+    use crate::math::Mat4 as CMat4;
+    use crate::math::Unknown as ShaderUnknown;
+
+    fn sample(position: GVec3, extra: GVec3<f32>) {
+        let a: GVec3 = GVec3::new(1.0, 2.0, 3.0);
+        let b: GVec3<f32> = GVec3::<f32>::new(4.0, 5.0, 6.0);
+        let transform: CMat4;
+        let fallback: ShaderUnknown;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "void sample(vec3 position, vec3 extra)" in result
+        assert "vec3 a = vec3(1.0, 2.0, 3.0);" in result
+        assert "vec3 b = vec3(4.0, 5.0, 6.0);" in result
+        assert "mat4 transform;" in result
+        assert "ShaderUnknown fallback;" in result
+        assert "GVec3" not in result
+        assert "CMat4" not in result
+    except Exception as e:
+        pytest.fail(f"Use alias builtin type conversion failed: {e}")
+
+
+def test_grouped_use_alias_builtin_type_conversion():
+    code = """
+    use glam::{Vec3 as GVec3, Vec4 as GVec4};
+    use crate::math::{Mat4 as CMat4, Unknown as ShaderUnknown};
+
+    fn sample(position: GVec3) -> GVec4 {
+        let a: GVec3 = GVec3::new(1.0, 2.0, 3.0);
+        let color: GVec4 = GVec4::new(1.0, 0.5, 0.25, 1.0);
+        let transform: CMat4;
+        let fallback: ShaderUnknown;
+        color
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "vec4 sample(vec3 position)" in result
+        assert "vec3 a = vec3(1.0, 2.0, 3.0);" in result
+        assert "vec4 color = vec4(1.0, 0.5, 0.25, 1.0);" in result
+        assert "mat4 transform;" in result
+        assert "ShaderUnknown fallback;" in result
+        assert "GVec3::new" not in result
+        assert "GVec4::new" not in result
+    except Exception as e:
+        pytest.fail(f"Grouped use alias builtin type conversion failed: {e}")
+
+
+def test_nested_grouped_use_alias_builtin_type_conversion():
+    code = """
+    use crate::{math::{Vec3 as CVec3, Mat4 as CMat4}, color::Vec4 as CVec4};
+
+    fn sample(position: CVec3) -> CVec4 {
+        let a: CVec3 = CVec3::new(1.0, 2.0, 3.0);
+        let color: CVec4 = CVec4::new(1.0, 0.5, 0.25, 1.0);
+        let transform: CMat4;
+        color
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "vec4 sample(vec3 position)" in result
+        assert "vec3 a = vec3(1.0, 2.0, 3.0);" in result
+        assert "vec4 color = vec4(1.0, 0.5, 0.25, 1.0);" in result
+        assert "mat4 transform;" in result
+        assert "CVec3::new" not in result
+        assert "CVec4::new" not in result
+        assert "CVec3 position" not in result
+        assert "CMat4 transform" not in result
+    except Exception as e:
+        pytest.fail(f"Nested grouped use alias builtin type conversion failed: {e}")
+
+
+def test_use_module_alias_path_conversion():
+    code = """
+    type Real = f32;
+    use crate::math as shader_math;
+    use glam as gm;
+    use crate::{color as shader_color};
+
+    fn sample(x: shader_math::Real) -> shader_math::Real {
+        let a = shader_math::sin(x);
+        let b = shader_math::custom(x);
+        let c = shader_math::PI;
+        let v = shader_math::Vec3::new(1.0, 2.0, 3.0);
+        let color: gm::Vec4 = shader_color::Vec4::new(1.0, 0.5, 0.25, 1.0);
+        x
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "Real sample(Real x)" in result
+        assert "a = sin(x);" in result
+        assert "b = crate::math::custom(x);" in result
+        assert "c = crate::math::PI;" in result
+        assert "v = vec3(1.0, 2.0, 3.0);" in result
+        assert "vec4 color = vec4(1.0, 0.5, 0.25, 1.0);" in result
+        assert "shader_math::" not in result
+        assert "shader_color::" not in result
+    except Exception as e:
+        pytest.fail(f"Use module alias path conversion failed: {e}")
+
+
+def test_pub_use_and_grouped_glob_alias_conversion():
+    code = """
+    pub(crate) use glam::Vec3 as PubVec3;
+    use crate::{math::{*, Vec3 as CVec3}, color::*};
+
+    fn sample(position: CVec3, other: PubVec3) {
+        let a: CVec3 = CVec3::new(1.0, 2.0, 3.0);
+        let b: PubVec3 = PubVec3::new(4.0, 5.0, 6.0);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "void sample(vec3 position, vec3 other)" in result
+        assert "vec3 a = vec3(1.0, 2.0, 3.0);" in result
+        assert "vec3 b = vec3(4.0, 5.0, 6.0);" in result
+        assert "CVec3::new" not in result
+        assert "PubVec3::new" not in result
+    except Exception as e:
+        pytest.fail(f"Pub use and grouped glob alias conversion failed: {e}")
+
+
 def test_control_flow_conversion():
     code = """
     fn test_control() {
@@ -195,15 +412,15 @@ def test_control_flow_conversion():
         } else {
             let y = x - 1;
         }
-        
+
         for i in 0..10 {
             println!("{}", i);
         }
-        
+
         while condition {
             do_something();
         }
-        
+
         loop {
             if should_break {
                 break;
@@ -223,6 +440,1166 @@ def test_control_flow_conversion():
         pytest.fail(f"Control flow conversion failed: {e}")
 
 
+def test_for_loop_pattern_conversion():
+    code = """
+    fn test_for_patterns() {
+        for i in 1..=3 {
+            use_index(i);
+        }
+        for _ in 0..4 {
+            tick();
+        }
+        for (_, _) in pairs {
+            tick_pair();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "for (int i = 1; i <= 3; i++)" in result
+        assert "for (int _for_index_0 = 0; _for_index_0 < 4; _for_index_0++)" in result
+        assert (
+            "for (int _for_index_1 = 0; " "_for_index_1 < pairs; _for_index_1++)"
+        ) in result
+        assert "tick();" in result
+        assert "tick_pair();" in result
+        assert "RangeNode" not in result
+        assert "TupleNode" not in result
+    except Exception as e:
+        pytest.fail(f"For loop pattern conversion failed: {e}")
+
+
+def test_for_loop_step_by_range_conversion():
+    code = """
+    fn test_for_step_by() {
+        for i in (0..10).step_by(2) {
+            use_index(i);
+        }
+        for j in (1..=9).step_by(step) {
+            use_index(j);
+        }
+        for k in (0..limit).step_by(next_step()) {
+            use_index(k);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "for (int i = 0; i < 10; i += 2)" in result
+        assert "for (int j = 1; j <= 9; j += step)" in result
+        assert "int _for_step_0 = next_step();" in result
+        assert "for (int k = 0; k < limit; k += _for_step_0)" in result
+        assert result.count("next_step()") == 1
+        assert "RangeNode" not in result
+        assert ".step_by" not in result
+    except Exception as e:
+        pytest.fail(f"For loop step_by range conversion failed: {e}")
+
+
+def test_for_loop_range_side_effect_bound_conversion():
+    code = """
+    fn test_for_bound_effects() {
+        for i in next_start()..next_limit() {
+            use_index(i);
+        }
+        for j in (next_start()..=next_limit()).step_by(next_step()) {
+            use_index(j);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        first_start = result.index("int _for_bound_0 = next_start();")
+        first_end = result.index("int _for_bound_1 = next_limit();")
+        first_loop = result.index("for (int i = _for_bound_0; i < _for_bound_1; i++)")
+        assert first_start < first_end < first_loop
+
+        second_start = result.index("int _for_bound_2 = next_start();")
+        second_end = result.index("int _for_bound_3 = next_limit();")
+        step = result.index("int _for_step_0 = next_step();")
+        second_loop = result.index(
+            "for (int j = _for_bound_2; " "j <= _for_bound_3; j += _for_step_0)"
+        )
+        assert second_start < second_end < step < second_loop
+
+        assert result.count("next_start()") == 2
+        assert result.count("next_limit()") == 2
+        assert result.count("next_step()") == 1
+    except Exception as e:
+        pytest.fail(f"For loop range side-effect bound conversion failed: {e}")
+
+
+def test_for_loop_fallback_side_effect_iterable_conversion():
+    code = """
+    fn test_for_count_effects(count: i32) {
+        for i in next_count() {
+            use_index(i);
+        }
+        for j in count {
+            use_index(j);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        setup = result.index("int _for_bound_0 = next_count();")
+        first_loop = result.index("for (int i = 0; i < _for_bound_0; i++)")
+        second_loop = result.index("for (int j = 0; j < count; j++)")
+
+        assert setup < first_loop < second_loop
+        assert result.count("next_count()") == 1
+        assert "_for_bound_1" not in result
+    except Exception as e:
+        pytest.fail(f"For loop fallback side-effect iterable conversion failed: {e}")
+
+
+def test_len_method_conversion():
+    code = """
+    fn test_len_method(values: Buffer) {
+        let n = values.len();
+        for i in 0..values.len() {
+            use_index(i);
+        }
+        for j in values.len() {
+            use_index(j);
+        }
+        for k in 0..next_values().len() {
+            use_index(k);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "n = values.length;" in result
+        assert "for (int i = 0; i < values.length; i++)" in result
+        assert "for (int j = 0; j < values.length; j++)" in result
+        assert "int _for_bound_0 = next_values().length;" in result
+        assert "for (int k = 0; k < _for_bound_0; k++)" in result
+        assert result.count("next_values()") == 1
+        assert ".len()" not in result
+    except Exception as e:
+        pytest.fail(f"len method conversion failed: {e}")
+
+
+def test_vector_method_conversion():
+    code = """
+    fn test_vector_methods(input: VertexInput, normal: Vec3<f32>, other: Vec3<f32>) {
+        let position = input.position.xyz();
+        let color = sample_color().rgba();
+        let mag = normal.length();
+        let unit = normal.normalize();
+        let dp = normal.dot(other);
+        let cp = normal.cross(other);
+        for i in 0..next_values().xyz().length() {
+            use_index(i);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "position = input.position.xyz;" in result
+        assert "color = sample_color().rgba;" in result
+        assert "mag = length(normal);" in result
+        assert "unit = normalize(normal);" in result
+        assert "dp = dot(normal, other);" in result
+        assert "cp = cross(normal, other);" in result
+        assert "int _for_bound_0 = length(next_values().xyz);" in result
+        assert "for (int i = 0; i < _for_bound_0; i++)" in result
+        assert result.count("next_values()") == 1
+        assert ".xyz()" not in result
+        assert ".rgba()" not in result
+        assert ".length()" not in result
+        assert ".normalize()" not in result
+        assert ".dot(" not in result
+        assert ".cross(" not in result
+    except Exception as e:
+        pytest.fail(f"Vector method conversion failed: {e}")
+
+
+def test_swizzle_and_index_assignment_return_conversion():
+    code = """
+    fn test_swizzle_index(values: Buffer, output: Output) -> Vec3<f32> {
+        output.normal = next_values().xyz();
+        output.uv = input_texcoord().st();
+        output.value = values[next_index()];
+        return next_values().stp();
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "output.normal = next_values().xyz;" in result
+        assert "output.uv = input_texcoord().st;" in result
+        assert "output.value = values[next_index()];" in result
+        assert "return next_values().stp;" in result
+        assert result.count("next_values()") == 2
+        assert result.count("next_index()") == 1
+        assert ".xyz()" not in result
+        assert ".st()" not in result
+        assert ".stp()" not in result
+    except Exception as e:
+        pytest.fail(f"Swizzle and index assignment/return conversion failed: {e}")
+
+
+def test_labeled_loop_conversion():
+    code = """
+    fn test_labeled_control() {
+        'outer: loop {
+            continue 'outer;
+            break 'outer;
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "while (true) {" in result
+        assert "continue;" in result
+        assert "break;" in result
+        assert "'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Labeled loop conversion failed: {e}")
+
+
+def test_nested_labeled_loop_control_conversion():
+    code = """
+    fn test_nested_labeled_control() {
+        'outer: loop {
+            setup();
+            loop {
+                if should_continue {
+                    continue 'outer;
+                }
+                if should_break {
+                    break 'outer;
+                }
+                step();
+            }
+            after_inner();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_break_outer_0 = false;" in result
+        assert "bool _rust_continue_outer_0 = false;" in result
+        assert "_rust_continue_outer_0 = true;" in result
+        assert "_rust_break_outer_0 = true;" in result
+        assert "if (_rust_continue_outer_0) {" in result
+        assert "_rust_continue_outer_0 = false;" in result
+        assert "if (_rust_break_outer_0) {" in result
+        assert "continue 'outer" not in result
+        assert "break 'outer" not in result
+        assert "setup();" in result
+        assert "step();" in result
+        assert "after_inner();" in result
+    except Exception as e:
+        pytest.fail(f"Nested labeled loop conversion failed: {e}")
+
+
+def test_nested_labeled_loop_expression_break_value_conversion():
+    code = """
+    fn test_nested_labeled_loop_expression() {
+        let value: i32 = 'outer: loop {
+            loop {
+                break 'outer 3;
+            }
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "bool _rust_break_outer_0 = false;" in result
+        assert "value = 3;" in result
+        assert "_rust_break_outer_0 = true;" in result
+        assert "if (_rust_break_outer_0) {" in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Nested labeled loop expression conversion failed: {e}")
+
+
+def test_break_value_conversion():
+    code = """
+    fn test_break_values() {
+        loop {
+            break result;
+        }
+        'outer: loop {
+            break 'outer value + 1;
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert result.count("break;") == 2
+        assert "break result;" not in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Break value conversion failed: {e}")
+
+
+def test_statement_loop_break_value_side_effect_conversion():
+    code = """
+    fn test_statement_loop_break_values() {
+        loop {
+            break compute();
+        }
+        loop {
+            break {
+                let temp = compute_block();
+                temp
+            };
+        }
+        loop {
+            break if ready {
+                let seeded = compute_if();
+                seeded
+            } else {
+                compute_else()
+            };
+        }
+        loop {
+            break match mode {
+                0 => compute_zero(),
+                _ => {
+                    let fallback = compute_default();
+                    fallback
+                },
+            };
+        }
+        loop {
+            break result;
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "compute();" in result
+        assert "temp = compute_block();" in result
+        assert "if (ready) {" in result
+        assert "seeded = compute_if();" in result
+        assert "compute_else();" in result
+        assert "switch (mode)" in result
+        assert "compute_zero();" in result
+        assert "fallback = compute_default();" in result
+        assert "result;" not in result
+        assert result.count("break;") == 7
+    except Exception as e:
+        pytest.fail(f"Statement loop break value side-effect conversion failed: {e}")
+
+
+def test_discarded_match_break_value_control_conversion():
+    code = """
+    fn test_discarded_match_break_value(mode: i32) -> i32 {
+        loop {
+            break match mode {
+                0 => {
+                    return 1;
+                },
+                1 => {
+                    continue;
+                },
+                2 => {
+                    break;
+                },
+                _ => {
+                    compute_default();
+                },
+            };
+        }
+        return 2;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_switch_break_0 = false;" in result
+        assert "_rust_switch_break_0 = true;" in result
+        assert "if (_rust_switch_break_0) {" in result
+        assert "return 1;" in result
+        assert "continue;" in result
+        assert "compute_default();" in result
+        assert "return 2;" in result
+        assert "return 1;\n                        break;" not in result
+        assert "continue;\n                        break;" not in result
+        assert "break;\n                        break;" not in result
+    except Exception as e:
+        pytest.fail(f"Discarded match break-value control conversion failed: {e}")
+
+
+def test_loop_break_result_expression_conversion():
+    code = """
+    fn test_loop_break_result_expressions() -> i32 {
+        let from_if: i32 = loop {
+            break if ready {
+                let seed = 1;
+                seed + 1
+            } else {
+                2
+            };
+        };
+        output.color = loop {
+            break match from_if {
+                0 => 0,
+                _ => {
+                    let next = from_if + 1;
+                    next
+                },
+            };
+        };
+        return loop {
+            break {
+                let final_value = from_if + 1;
+                final_value
+            };
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int from_if;" in result
+        assert "if (ready) {" in result
+        assert "seed = 1;" in result
+        assert "from_if = (seed + 1);" in result
+        assert "from_if = 2;" in result
+        assert "switch (from_if)" in result
+        assert "output.color = 0;" in result
+        assert "next = (from_if + 1);" in result
+        assert "output.color = next;" in result
+        assert "final_value = (from_if + 1);" in result
+        assert "return final_value;" in result
+        assert "from_if = if" not in result
+        assert "output.color = match" not in result
+        assert "return BlockNode" not in result
+    except Exception as e:
+        pytest.fail(f"Loop break result expression conversion failed: {e}")
+
+
+def test_loop_expression_let_conversion():
+    code = """
+    fn test_loop_expression() {
+        let value: i32 = loop {
+            if ready {
+                break 7;
+            }
+        };
+        let labeled: i32 = 'outer: loop {
+            break 'outer value + 1;
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "value = 7;" in result
+        assert "int labeled;" in result
+        assert "labeled = (value + 1);" in result
+        assert "break 7;" not in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Loop expression let conversion failed: {e}")
+
+
+def test_loop_expression_nested_loop_does_not_steal_inner_break_value():
+    code = """
+    fn test_nested_loop_expression() {
+        let value: i32 = loop {
+            loop {
+                break 1;
+            }
+            break 2;
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "value = 2;" in result
+        assert "value = 1;" not in result
+    except Exception as e:
+        pytest.fail(f"Nested loop expression conversion failed: {e}")
+
+
+def test_loop_expression_assignment_conversion():
+    code = """
+    fn test_loop_assignment() {
+        value = loop {
+            break result;
+        };
+        output.color = 'outer: loop {
+            break 'outer value + 1;
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "value = result;" in result
+        assert "output.color = (value + 1);" in result
+        assert "value = while" not in result
+        assert "output.color = while" not in result
+        assert "break result;" not in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Loop expression assignment conversion failed: {e}")
+
+
+def test_loop_expression_assignment_nested_loop_does_not_steal_outer_target():
+    code = """
+    fn test_nested_loop_assignment() {
+        value = loop {
+            loop {
+                break 1;
+            }
+            break 2;
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "value = 2;" in result
+        assert "value = 1;" not in result
+    except Exception as e:
+        pytest.fail(f"Nested loop expression assignment conversion failed: {e}")
+
+
+def test_loop_expression_return_conversion():
+    code = """
+    fn test_loop_return(value: i32) -> i32 {
+        return 'outer: loop {
+            break 'outer value + 1;
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int test_loop_return(int value)" in result
+        assert "while (true) {" in result
+        assert "return (value + 1);" in result
+        assert "return while" not in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Loop expression return conversion failed: {e}")
+
+
+def test_loop_expression_return_nested_loop_does_not_return_inner_break_value():
+    code = """
+    fn test_nested_loop_return() -> i32 {
+        return loop {
+            loop {
+                break 1;
+            }
+            break 2;
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "return 2;" in result
+        assert "return 1;" not in result
+    except Exception as e:
+        pytest.fail(f"Nested loop expression return conversion failed: {e}")
+
+
+def test_block_loop_expression_conversion():
+    code = """
+    fn test_block_loop_expression() -> i32 {
+        let value: i32 = {
+            let seed = 1;
+            loop {
+                break seed + 1;
+            }
+        };
+        output.color = {
+            'outer: loop {
+                break 'outer value + 1;
+            }
+        };
+        return {
+            loop {
+                break value;
+            }
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "seed = 1;" in result
+        assert "value = (seed + 1);" in result
+        assert "output.color = (value + 1);" in result
+        assert "return value;" in result
+        assert "BlockNode" not in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Block loop expression conversion failed: {e}")
+
+
+def test_block_expression_statements_are_preserved_in_let_conversion():
+    code = """
+    fn test_block_expression() {
+        let value: i32 = {
+            let seed = 1;
+            prepare_seed();
+            seed + 2
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "seed = 1;" in result
+        assert "prepare_seed();" in result
+        assert "value = (seed + 2);" in result
+    except Exception as e:
+        pytest.fail(f"Block expression let conversion failed: {e}")
+
+
+def test_if_expression_result_conversion():
+    code = """
+    fn test_if_expression() -> i32 {
+        let value: i32 = if ready {
+            let seed = 1;
+            seed + 1
+        } else {
+            2
+        };
+        output.color = if value > 1 {
+            value + 1
+        } else {
+            let fallback = 0;
+            fallback
+        };
+        return if done {
+            value
+        } else {
+            let next = value + 1;
+            next
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "if (ready) {" in result
+        assert "seed = 1;" in result
+        assert "value = (seed + 1);" in result
+        assert "} else {" in result
+        assert "value = 2;" in result
+        assert "if ((value > 1)) {" in result
+        assert "output.color = (value + 1);" in result
+        assert "fallback = 0;" in result
+        assert "output.color = fallback;" in result
+        assert "if (done) {" in result
+        assert "return value;" in result
+        assert "next = (value + 1);" in result
+        assert "return next;" in result
+        assert "? seed" not in result
+    except Exception as e:
+        pytest.fail(f"If expression result conversion failed: {e}")
+
+
+def test_match_expression_result_conversion():
+    code = """
+    fn test_match_expression() -> i32 {
+        let value: i32 = match mode {
+            0 => 1,
+            1 => {
+                let seed = 2;
+                seed + 1
+            },
+            _ => 3,
+        };
+        output.color = match value {
+            0 => 0,
+            _ => value + 1,
+        };
+        return match value {
+            0 => value,
+            _ => {
+                let next = value + 1;
+                next
+            },
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "switch (mode)" in result
+        assert "case 0:" in result
+        assert "value = 1;" in result
+        assert "case 1:" in result
+        assert "seed = 2;" in result
+        assert "value = (seed + 1);" in result
+        assert "default:" in result
+        assert "value = 3;" in result
+        assert "switch (value)" in result
+        assert "output.color = 0;" in result
+        assert "output.color = (value + 1);" in result
+        assert "return value;" in result
+        assert "next = (value + 1);" in result
+        assert "return next;" in result
+        assert "case _:" not in result
+    except Exception as e:
+        pytest.fail(f"Match expression result conversion failed: {e}")
+
+
+def test_match_arm_break_exits_enclosing_loop_conversion():
+    code = """
+    fn test_match_break_loop() {
+        loop {
+            match mode {
+                0 => {
+                    break;
+                },
+                _ => {
+                    step();
+                },
+            }
+            after_match();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_switch_break_0 = false;" in result
+        assert "_rust_switch_break_0 = true;" in result
+        assert "if (_rust_switch_break_0) {" in result
+        assert "after_match();" in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Match arm break loop conversion failed: {e}")
+
+
+def test_match_arm_break_value_exits_loop_expression_conversion():
+    code = """
+    fn test_match_break_loop_expression() {
+        let value: i32 = loop {
+            match mode {
+                0 => {
+                    break 3;
+                },
+                _ => {
+                    break 4;
+                },
+            }
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "bool _rust_switch_break_0 = false;" in result
+        assert "value = 3;" in result
+        assert "value = 4;" in result
+        assert "_rust_switch_break_0 = true;" in result
+        assert "if (_rust_switch_break_0) {" in result
+        assert "break 3;" not in result
+        assert "break 4;" not in result
+    except Exception as e:
+        pytest.fail(f"Match arm break value loop expression conversion failed: {e}")
+
+
+def test_nested_match_arm_break_propagates_switch_conversion():
+    code = """
+    fn test_nested_match_break_loop() {
+        loop {
+            match outer {
+                0 => {
+                    match inner {
+                        1 => {
+                            break;
+                        },
+                        _ => {
+                            step();
+                        },
+                    }
+                },
+                _ => {
+                    other();
+                },
+            }
+            after_match();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_switch_break_0 = false;" in result
+        assert "bool _rust_switch_break_1 = false;" in result
+        assert "_rust_switch_break_1 = true;" in result
+        assert "_rust_switch_break_0 = true;" in result
+        assert "if (_rust_switch_break_1) {" in result
+        assert "if (_rust_switch_break_0) {" in result
+        assert "break;\n                            break;" not in result
+        assert "after_match();" in result
+    except Exception as e:
+        pytest.fail(f"Nested match arm break propagation failed: {e}")
+
+
+def test_labeled_match_arm_break_current_loop_conversion():
+    code = """
+    fn test_labeled_match_break_loop() {
+        'outer: loop {
+            match mode {
+                0 => {
+                    break 'outer;
+                },
+                _ => {
+                    step();
+                },
+            }
+            after_match();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_switch_break_0 = false;" in result
+        assert "_rust_switch_break_0 = true;" in result
+        assert "if (_rust_switch_break_0) {" in result
+        assert "break 'outer" not in result
+    except Exception as e:
+        pytest.fail(f"Labeled match arm break current loop conversion failed: {e}")
+
+
+def test_labeled_match_arm_control_exits_outer_loop_conversion():
+    code = """
+    fn test_labeled_match_control_outer_loop() {
+        'outer: loop {
+            loop {
+                match mode {
+                    0 => {
+                        continue 'outer;
+                    },
+                    1 => {
+                        break 'outer;
+                    },
+                    _ => {
+                        step();
+                    },
+                }
+                after_match();
+            }
+            after_inner();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_break_outer_0 = false;" in result
+        assert "bool _rust_continue_outer_0 = false;" in result
+        assert "_rust_continue_outer_0 = true;" in result
+        assert "_rust_break_outer_0 = true;" in result
+        assert "if (_rust_continue_outer_0 || _rust_break_outer_0) {" in result
+        assert "if (_rust_continue_outer_0) {" in result
+        assert "_rust_continue_outer_0 = false;" in result
+        assert "continue 'outer" not in result
+        assert "break 'outer" not in result
+        assert "break;\n                        if (" not in result
+        assert result.index(
+            "if (_rust_continue_outer_0 || _rust_break_outer_0) {"
+        ) < result.index("after_match();")
+    except Exception as e:
+        pytest.fail(f"Labeled match arm outer-loop control conversion failed: {e}")
+
+
+def test_match_arm_plain_continue_keeps_loop_continue_conversion():
+    code = """
+    fn test_match_continue_loop() {
+        loop {
+            match mode {
+                0 => {
+                    continue;
+                },
+                _ => {
+                    step();
+                },
+            }
+            after_match();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "continue;" in result
+        assert "bool _rust_switch_break" not in result
+        assert "bool _rust_continue" not in result
+        assert "after_match();" in result
+    except Exception as e:
+        pytest.fail(f"Match arm plain continue conversion failed: {e}")
+
+
+def test_match_expression_return_branches_do_not_emit_fallback_return_conversion():
+    code = """
+    fn test_match_return_branches(value: i32) -> i32 {
+        return match value {
+            0 => {
+                return 1;
+            },
+            _ => {
+                return value + 1;
+            },
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "switch (value)" in result
+        assert "return 1;" in result
+        assert "return (value + 1);" in result
+        assert "return;\n" not in result
+        assert "break;" not in result
+    except Exception as e:
+        pytest.fail(f"Match expression return branch conversion failed: {e}")
+
+
+def test_if_expression_return_branches_do_not_emit_fallback_return_conversion():
+    code = """
+    fn test_if_return_branches(value: i32) -> i32 {
+        return if ready {
+            return value;
+        } else {
+            return value + 1;
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "if (ready) {" in result
+        assert "return value;" in result
+        assert "return (value + 1);" in result
+        assert "return;\n" not in result
+    except Exception as e:
+        pytest.fail(f"If expression return branch conversion failed: {e}")
+
+
+def test_block_final_if_match_expression_conversion():
+    code = """
+    fn test_block_final_expression() -> i32 {
+        let value: i32 = {
+            let seed = 1;
+            if ready {
+                seed + 1
+            } else {
+                let fallback = 2;
+                fallback
+            }
+        };
+        output.color = {
+            match value {
+                0 => 0,
+                _ => {
+                    let next = value + 1;
+                    next
+                },
+            }
+        };
+        return {
+            match value {
+                0 => value,
+                _ => value + 1,
+            }
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "seed = 1;" in result
+        assert "if (ready) {" in result
+        assert "value = (seed + 1);" in result
+        assert "fallback = 2;" in result
+        assert "value = fallback;" in result
+        assert "switch (value)" in result
+        assert "output.color = 0;" in result
+        assert "next = (value + 1);" in result
+        assert "output.color = next;" in result
+        assert "return value;" in result
+        assert "return (value + 1);" in result
+        assert "case _:" not in result
+        assert "BlockNode" not in result
+    except Exception as e:
+        pytest.fail(f"Block final if/match expression conversion failed: {e}")
+
+
+def test_block_expression_keeps_non_final_if_match_statements_conversion():
+    code = """
+    fn test_block_statement_restore() {
+        let value: i32 = {
+            if ready {
+                output.color = 1;
+            }
+            match mode {
+                0 => do_zero(),
+                _ => do_default(),
+            }
+            4
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "if (ready) {" in result
+        assert "output.color = 1;" in result
+        assert "switch (mode)" in result
+        assert "do_zero();" in result
+        assert "do_default();" in result
+        assert "value = 4;" in result
+        assert "return 4;" not in result
+    except Exception as e:
+        pytest.fail(f"Block expression statement restore conversion failed: {e}")
+
+
+def test_block_expression_semicolon_if_match_statement_conversion():
+    code = """
+    fn test_statement_like_block_expressions() {
+        let value: i32 = {
+            if ready {
+                compute_ready();
+                1
+            } else {
+                compute_fallback();
+                2
+            };
+            match mode {
+                0 => {
+                    compute_zero();
+                    0
+                },
+                _ => {
+                    compute_default();
+                    3
+                },
+            };
+            fallback
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int value;" in result
+        assert "if (ready) {" in result
+        assert "compute_ready();" in result
+        assert "compute_fallback();" in result
+        assert "switch (mode)" in result
+        assert "compute_zero();" in result
+        assert "compute_default();" in result
+        assert "value = fallback;" in result
+        assert "value = 1;" not in result
+        assert "value = 2;" not in result
+    except Exception as e:
+        pytest.fail(f"Block expression semicolon if/match conversion failed: {e}")
+
+
+def test_let_pattern_conversion():
+    code = """
+    fn test_let_patterns() {
+        let _ = compute_discard();
+        let _ = 1;
+        let (_, y) = (compute_x(), 2);
+        let (a, (b, _)) = (1, (2, compute_ignored()));
+        let (tx, ty): (f32, i32) = (1.0, 2);
+        let (_, (nz, _)): (f32, (i32, f32)) = (
+            compute_typed(),
+            (3, compute_typed_drop()),
+        );
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "compute_discard();" in result
+        assert "compute_x();" in result
+        assert "y = 2;" in result
+        assert "a = 1;" in result
+        assert "b = 2;" in result
+        assert "compute_ignored();" in result
+        assert "float tx = 1.0;" in result
+        assert "int ty = 2;" in result
+        assert "compute_typed();" in result
+        assert "int nz = 3;" in result
+        assert "compute_typed_drop();" in result
+        assert "_ =" not in result
+        assert "_ = 1;" not in result
+    except Exception as e:
+        pytest.fail(f"Let pattern conversion failed: {e}")
+
+
+def test_tuple_pattern_result_expression_elements_conversion():
+    code = """
+    fn test_tuple_result_elements() {
+        let (from_if, from_loop, from_match, from_block): (i32, i32, i32, i32) = (
+            if ready {
+                prepare_if();
+                1
+            } else {
+                2
+            },
+            loop {
+                break 3;
+            },
+            match mode {
+                0 => 4,
+                _ => {
+                    prepare_match();
+                    5
+                },
+            },
+            {
+                prepare_block();
+                6
+            },
+        );
+        let (_, kept): (i32, i32) = (
+            if should_drop {
+                prepare_drop();
+                31
+            } else {
+                fallback_drop();
+                32
+            },
+            7,
+        );
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "int from_if;" in result
+        assert "if (ready) {" in result
+        assert "prepare_if();" in result
+        assert "from_if = 1;" in result
+        assert "from_if = 2;" in result
+
+        assert "int from_loop;" in result
+        assert "while (true)" in result
+        assert "from_loop = 3;" in result
+
+        assert "int from_match;" in result
+        assert "switch (mode)" in result
+        assert "from_match = 4;" in result
+        assert "prepare_match();" in result
+        assert "from_match = 5;" in result
+
+        assert "int from_block;" in result
+        assert "prepare_block();" in result
+        assert "from_block = 6;" in result
+
+        assert "prepare_drop();" in result
+        assert "fallback_drop();" in result
+        assert "int kept = 7;" in result
+        assert "31;" not in result
+        assert "32;" not in result
+    except Exception as e:
+        pytest.fail(f"Tuple pattern result expression conversion failed: {e}")
+
+
 def test_match_to_switch_conversion():
     code = """
     fn test_match() {
@@ -237,6 +1614,8 @@ def test_match_to_switch_conversion():
         result = parse_and_generate(code)
         assert "switch (" in result
         assert "case " in result
+        assert "default:" in result
+        assert "case _:" not in result
         assert "break;" in result
     except Exception as e:
         pytest.fail(f"Match to switch conversion failed: {e}")
@@ -272,6 +1651,11 @@ def test_binary_operations_conversion():
         let h = e == 1;
         let i = f && g;
         let j = h || i;
+        let k = 1 << 2;
+        let l = k >> 1;
+        let m = k | l;
+        let n = k & l;
+        let o = k ^ l;
     }
     """
     try:
@@ -286,6 +1670,11 @@ def test_binary_operations_conversion():
         assert "(e == 1)" in result
         assert "(f && g)" in result
         assert "(h || i)" in result
+        assert "(1 << 2)" in result
+        assert "(k >> 1)" in result
+        assert "(k | l)" in result
+        assert "(k & l)" in result
+        assert "(k ^ l)" in result
     except Exception as e:
         pytest.fail(f"Binary operations conversion failed: {e}")
 
@@ -295,14 +1684,52 @@ def test_unary_operations_conversion():
     fn test_unary() {
         let a = -5;
         let b = !true;
+        let shared = &value;
+        let writable = &mut value;
+        let pointed = *ptr;
     }
     """
     try:
         result = parse_and_generate(code)
         assert "(-5)" in result
         assert "(!true)" in result
+        assert "shared = value;" in result
+        assert "writable = value;" in result
+        assert "pointed = ptr;" in result
+        assert "&value" not in result
+        assert "&mut value" not in result
+        assert "*ptr" not in result
     except Exception as e:
         pytest.fail(f"Unary operations conversion failed: {e}")
+
+
+def test_reference_dereference_assignment_return_conversion():
+    code = """
+    fn test_reference_deref(ptr: f32, value: f32, output: Output) -> f32 {
+        output.shared = &value;
+        output.writable = &mut value;
+        output.pointed = *ptr;
+        &next_value();
+        *next_pointer();
+        return *ptr;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "output.shared = value;" in result
+        assert "output.writable = value;" in result
+        assert "output.pointed = ptr;" in result
+        assert "next_value();" in result
+        assert "next_pointer();" in result
+        assert "return ptr;" in result
+        assert "&value" not in result
+        assert "&mut value" not in result
+        assert "*ptr" not in result
+        assert "&next_value" not in result
+        assert "*next_pointer" not in result
+    except Exception as e:
+        pytest.fail(f"Reference/dereference assignment/return conversion failed: {e}")
 
 
 def test_function_call_conversion():
@@ -322,6 +1749,900 @@ def test_function_call_conversion():
         assert "vec3(" in result
     except Exception as e:
         pytest.fail(f"Function call conversion failed: {e}")
+
+
+def test_char_literal_conversion():
+    code = r"""
+    fn test_chars(c: char) -> char {
+        let letter = 'a';
+        let newline = '\n';
+        match c {
+            'a' => hit_a(),
+            '\n' => hit_newline(),
+            _ => hit_default(),
+        }
+        return 'z';
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "letter = 'a';" in result
+        assert r"newline = '\n';" in result
+        assert "case 'a':" in result
+        assert r"case '\n':" in result
+        assert "return 'z';" in result
+        assert "CHAR_LIT" not in result
+    except Exception as e:
+        pytest.fail(f"Char literal conversion failed: {e}")
+
+
+def test_raw_string_literal_conversion():
+    code = r"""
+    fn test_raw_strings(s: String) -> String {
+        let plain = r"plain raw";
+        let quoted = r#"This is a "raw" string"#;
+        let slashes = r#"path\to\file"#;
+        let hashed = r##"This has "# in it"##;
+        match s {
+            r#"ok"# => hit_ok(),
+            _ => hit_default(),
+        }
+        return r#"done"#;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert 'plain = "plain raw";' in result
+        assert 'quoted = "This is a \\"raw\\" string";' in result
+        assert 'slashes = "path\\\\to\\\\file";' in result
+        assert 'hashed = "This has \\"# in it";' in result
+        assert 'case "ok":' in result
+        assert 'return "done";' in result
+        assert "RAW_STRING" not in result
+        assert 'r#"' not in result
+        assert 'r##"' not in result
+    except Exception as e:
+        pytest.fail(f"Raw string literal conversion failed: {e}")
+
+
+def test_byte_literal_conversion():
+    code = r"""
+    fn test_byte_literals(c: u8) -> String {
+        let bytes = b"abc";
+        let byte = b'a';
+        let newline = b'\n';
+        let slash = b'\\';
+        let hex = b'\x41';
+        let raw = br#"a "quoted" byte raw"#;
+        match c {
+            b'a' => hit_a(),
+            b'\n' => hit_newline(),
+            _ => hit_default(),
+        }
+        return br#"done"#;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert 'bytes = "abc";' in result
+        assert "byte = 97;" in result
+        assert "newline = 10;" in result
+        assert "slash = 92;" in result
+        assert "hex = 65;" in result
+        assert 'raw = "a \\"quoted\\" byte raw";' in result
+        assert "case 97:" in result
+        assert "case 10:" in result
+        assert 'return "done";' in result
+        assert 'b"' not in result
+        assert "br#" not in result
+        assert "b'" not in result
+    except Exception as e:
+        pytest.fail(f"Byte literal conversion failed: {e}")
+
+
+def test_option_result_constructor_conversion():
+    code = """
+    use std::option::Option::{Some, None};
+
+    fn test_option_result(value: i32, err: i32) -> Result<i32, i32> {
+        let maybe: Option<i32> = Some(value);
+        let empty: Option<i32> = None;
+        let ok_value = Ok(value + 1);
+        let err_value = Err(err);
+        return Ok(value);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "// use std::option::Option::{Some, None}" in result
+        assert "Result<i32, i32> test_option_result(int value, int err)" in result
+        assert "Option<i32> maybe = Some(value);" in result
+        assert "Option<i32> empty = None;" in result
+        assert "ok_value = Ok((value + 1));" in result
+        assert "err_value = Err(err);" in result
+        assert "return Ok(value);" in result
+    except Exception as e:
+        pytest.fail(f"Option/Result constructor conversion failed: {e}")
+
+
+def test_option_result_payload_match_conversion():
+    code = """
+    fn test_payload_match(maybe: Option<i32>, result: Result<i32, i32>) -> i32 {
+        let from_option: i32 = match maybe {
+            Some(1) => 10,
+            Some(v) => v + 1,
+            None => 0,
+        };
+        let from_result: i32 = match result {
+            Ok(value) if value > 0 => value,
+            Err(code) => code,
+            _ => -1,
+        };
+        match maybe {
+            Some(v) => use_value(v),
+            None => use_none(),
+        }
+        return match result {
+            Ok(v) => v,
+            Err(e) => e,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch (maybe)" not in result
+        assert "switch (result)" not in result
+        assert "case Some" not in result
+        assert "case Ok" not in result
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "if (!_rust_match_matched_0 && is_Some(maybe)" in result
+        assert "(unwrap_Some(maybe) == 1)" in result
+        assert "auto v = unwrap_Some(maybe);" in result
+        assert "from_option = (v + 1);" in result
+        assert "if (!_rust_match_matched_0 && (maybe == None))" in result
+        assert "if (!_rust_match_matched_1 && is_Ok(result))" in result
+        assert "auto value = unwrap_Ok(result);" in result
+        assert "if ((value > 0))" in result
+        assert "auto code = unwrap_Err(result);" in result
+        assert "from_result = code;" in result
+        assert "if (!_rust_match_matched_1)" in result
+        assert "from_result = (-1);" in result
+        assert "use_value(v);" in result
+        assert "return v;" in result
+        assert "auto e = unwrap_Err(result);" in result
+        assert "return e;" in result
+    except Exception as e:
+        pytest.fail(f"Option/Result payload match conversion failed: {e}")
+
+
+def test_guarded_literal_match_uses_if_chain_conversion():
+    code = """
+    fn test_guarded_match(mode: i32) {
+        match mode {
+            0 if ready => hit_ready(),
+            0 => hit_zero(),
+            _ if fallback => hit_fallback(),
+            _ => hit_default(),
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch (mode)" not in result
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "if (!_rust_match_matched_0 && (mode == 0))" in result
+        assert "if (ready)" in result
+        assert "hit_ready();" in result
+        assert "hit_zero();" in result
+        assert "if (fallback)" in result
+        assert "hit_fallback();" in result
+        assert "hit_default();" in result
+    except Exception as e:
+        pytest.fail(f"Guarded literal match conversion failed: {e}")
+
+
+def test_if_chain_match_hoists_side_effecting_subject_conversion():
+    code = """
+    fn test_subject_hoist() -> i32 {
+        let from_result: i32 = match next_result() {
+            Ok(value) if value > 0 => value,
+            Err(code) => code,
+            _ => -1,
+        };
+        match next_option() {
+            Some(v) => use_value(v),
+            None => use_none(),
+        }
+        return match next_result() {
+            Ok(v) => v,
+            Err(e) => e,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_match_subject_0 = next_result();" in result
+        assert "auto _rust_match_subject_1 = next_option();" in result
+        assert "auto _rust_match_subject_2 = next_result();" in result
+        assert result.count("next_result()") == 2
+        assert result.count("next_option()") == 1
+        assert "is_Ok(_rust_match_subject_0)" in result
+        assert "auto value = unwrap_Ok(_rust_match_subject_0);" in result
+        assert "auto code = unwrap_Err(_rust_match_subject_0);" in result
+        assert "is_Some(_rust_match_subject_1)" in result
+        assert "auto v = unwrap_Some(_rust_match_subject_1);" in result
+        assert "is_Ok(_rust_match_subject_2)" in result
+        assert "return v;" in result
+        assert "return e;" in result
+    except Exception as e:
+        pytest.fail(f"If-chain match subject hoisting failed: {e}")
+
+
+def test_multi_payload_constructor_match_conversion():
+    code = """
+    fn test_constructor_patterns(pair: Pair, color: Color) {
+        match pair {
+            Pair(a, b) => use_pair(a, b),
+            Pair(x, 3) => use_literal(x),
+            _ => use_default(),
+        }
+        match color {
+            Color::Rgb(r, g, b) => use_rgb(r, g, b),
+            Color::Red => use_red(),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch (pair)" not in result
+        assert "switch (color)" not in result
+        assert "case Pair" not in result
+        assert "case Color::Rgb" not in result
+        assert "if (!_rust_match_matched_0 && is_Pair(pair))" in result
+        assert "auto a = unwrap_Pair_0(pair);" in result
+        assert "auto b = unwrap_Pair_1(pair);" in result
+        assert "use_pair(a, b);" in result
+        assert (
+            "if (!_rust_match_matched_0 && is_Pair(pair) && "
+            "(unwrap_Pair_1(pair) == 3))"
+        ) in result
+        assert "auto x = unwrap_Pair_0(pair);" in result
+        assert "use_literal(x);" in result
+        assert "if (!_rust_match_matched_1 && is_Color_Rgb(color))" in result
+        assert "auto r = unwrap_Color_Rgb_0(color);" in result
+        assert "auto g = unwrap_Color_Rgb_1(color);" in result
+        assert "auto b = unwrap_Color_Rgb_2(color);" in result
+        assert "use_rgb(r, g, b);" in result
+        assert "if (!_rust_match_matched_1 && (color == Color::Red))" in result
+        assert "use_red();" in result
+        assert "use_default();" in result
+    except Exception as e:
+        pytest.fail(f"Multi-payload constructor match conversion failed: {e}")
+
+
+def test_nested_constructor_match_conversion():
+    code = """
+    fn test_nested_constructor_patterns(value: Option<Result<i32, i32>>, pair: Pair) -> i32 {
+        match value {
+            Some(Ok(v)) => use_ok(v),
+            Some(Err(e)) => use_err(e),
+            None => use_none(),
+        }
+        match pair {
+            Pair(Some(x), y) => use_pair(x, y),
+            Pair(None, 3) => use_none_pair(),
+            _ => use_default(),
+        }
+        return match value {
+            Some(Ok(v)) => v,
+            Some(Err(3)) => 3,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "== Ok(v)" not in result
+        assert "== Err(e)" not in result
+        assert "== Some(x)" not in result
+        assert "unwrap_Ok(unwrap_Some(value))" not in result
+        assert "unwrap_Err(unwrap_Some(value))" not in result
+        assert "is_Some(value)" in result
+        assert "auto _rust_match_payload_0 = unwrap_Some(value);" in result
+        assert "if (is_Ok(_rust_match_payload_0))" in result
+        assert "auto v = unwrap_Ok(_rust_match_payload_0);" in result
+        assert "auto _rust_match_payload_1 = unwrap_Some(value);" in result
+        assert "if (is_Err(_rust_match_payload_1))" in result
+        assert "auto e = unwrap_Err(_rust_match_payload_1);" in result
+        assert "use_ok(v);" in result
+        assert "use_err(e);" in result
+        assert "auto _rust_match_payload_2 = unwrap_Pair_0(pair);" in result
+        assert "if (is_Some(_rust_match_payload_2))" in result
+        assert "auto x = unwrap_Some(_rust_match_payload_2);" in result
+        assert "auto y = unwrap_Pair_1(pair);" in result
+        assert (
+            "if (!_rust_match_matched_1 && is_Pair(pair) && "
+            "(unwrap_Pair_0(pair) == None) && (unwrap_Pair_1(pair) == 3))"
+        ) in result
+        assert "return v;" in result
+        assert "auto _rust_match_payload_3 = unwrap_Some(value);" in result
+        assert "if (is_Ok(_rust_match_payload_3))" in result
+        assert "auto v = unwrap_Ok(_rust_match_payload_3);" in result
+        assert "auto _rust_match_payload_4 = unwrap_Some(value);" in result
+        assert "if (is_Err(_rust_match_payload_4))" in result
+        assert ("if ((unwrap_Err(_rust_match_payload_4) == 3))") in result
+        assert "return 3;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Nested constructor match conversion failed: {e}")
+
+
+def test_guarded_nested_constructor_match_conversion():
+    code = """
+    fn test_guarded_nested_patterns(value: Option<Result<i32, i32>>) -> i32 {
+        match value {
+            Some(Ok(v)) if v > 0 => use_positive(v),
+            Some(Ok(v)) => use_non_positive(v),
+            Some(Err(e)) if e != 0 => use_err(e),
+            _ => use_default(),
+        }
+        let out: i32 = match value {
+            Some(Ok(v)) if v > 0 => v,
+            Some(Ok(v)) => 0,
+            _ => -1,
+        };
+        return match value {
+            Some(Ok(v)) if v > 0 => v,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_match_payload_0 = unwrap_Some(value);" in result
+        assert "if (is_Ok(_rust_match_payload_0))" in result
+        assert "auto v = unwrap_Ok(_rust_match_payload_0);" in result
+        assert "if ((v > 0))" in result
+        assert "_rust_match_matched_0 = true;" in result
+        assert "use_positive(v);" in result
+
+        assert "auto _rust_match_payload_1 = unwrap_Some(value);" in result
+        assert "use_non_positive(v);" in result
+
+        assert "auto _rust_match_payload_2 = unwrap_Some(value);" in result
+        assert "if (is_Err(_rust_match_payload_2))" in result
+        assert "auto e = unwrap_Err(_rust_match_payload_2);" in result
+        assert "if ((e != 0))" in result
+        assert "use_err(e);" in result
+
+        assert "int out;" in result
+        assert "auto _rust_match_payload_3 = unwrap_Some(value);" in result
+        assert "out = v;" in result
+        assert "auto _rust_match_payload_4 = unwrap_Some(value);" in result
+        assert "out = 0;" in result
+        assert "out = (-1);" in result
+
+        assert "auto _rust_match_payload_5 = unwrap_Some(value);" in result
+        assert "return v;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Guarded nested constructor match conversion failed: {e}")
+
+
+def test_match_or_pattern_conversion():
+    code = """
+    fn test_or_patterns(mode: i32, color: Color, value: Option<Result<i32, i32>>, nested: Option<i32>) -> i32 {
+        match mode {
+            0 | 1 => hit_small(),
+            _ => hit_default(),
+        }
+        match color {
+            Color::Red | Color::Green => hit_warm(),
+            _ => hit_default(),
+        }
+        match value {
+            Some(Ok(v)) | Some(Err(v)) if v > 0 => use_value(v),
+            _ => use_default(),
+        }
+        match value {
+            Some(Ok(v) | Err(v)) if v > 0 => use_nested(v),
+            _ => use_default(),
+        }
+        match nested {
+            Some(0 | 1) => use_small_option(),
+            _ => use_default(),
+        }
+        return match mode {
+            0 | 1 => 10,
+            _ => 20,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch (mode)" not in result
+        assert "switch (color)" not in result
+        assert "(mode == 0)" in result
+        assert "(mode == 1)" in result
+        assert result.count("hit_small();") == 2
+        assert "(color == Color::Red)" in result
+        assert "(color == Color::Green)" in result
+        assert result.count("hit_warm();") == 2
+        assert "auto _rust_match_payload_0 = unwrap_Some(value);" in result
+        assert "if (is_Ok(_rust_match_payload_0))" in result
+        assert "auto v = unwrap_Ok(_rust_match_payload_0);" in result
+        assert "auto _rust_match_payload_1 = unwrap_Some(value);" in result
+        assert "if (is_Err(_rust_match_payload_1))" in result
+        assert "auto v = unwrap_Err(_rust_match_payload_1);" in result
+        assert result.count("if ((v > 0))") == 4
+        assert result.count("use_value(v);") == 2
+        assert "bool _rust_match_or_matched_0 = false;" in result
+        assert "auto _rust_match_payload_2 = unwrap_Some(value);" in result
+        assert "if (is_Ok(_rust_match_payload_2))" in result
+        assert "auto v = unwrap_Ok(_rust_match_payload_2);" in result
+        assert "if (is_Err(_rust_match_payload_2))" in result
+        assert "auto v = unwrap_Err(_rust_match_payload_2);" in result
+        assert result.count("use_nested(v);") == 2
+        assert "is_Some(nested)" in result
+        assert "(unwrap_Some(nested) == 0)" in result
+        assert "(unwrap_Some(nested) == 1)" in result
+        assert "return 10;" in result
+        assert "return 20;" in result
+    except Exception as e:
+        pytest.fail(f"Match or-pattern conversion failed: {e}")
+
+
+def test_match_range_pattern_conversion():
+    code = """
+    fn test_range_patterns(mode: i32, signed: i32, value: Option<i32>) -> i32 {
+        match mode {
+            1..=10 => hit_inclusive(),
+            11..20 => hit_exclusive(),
+            0 | 30..=40 => hit_or_range(),
+            _ => hit_default(),
+        }
+        match signed {
+            -5..=-1 => hit_negative(),
+            _ => hit_default(),
+        }
+        match value {
+            Some(1..=3 | 7..10) => hit_nested(),
+            _ => hit_default(),
+        }
+        return match mode {
+            1..=10 => 10,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch (mode)" not in result
+        assert "switch (signed)" not in result
+        assert "(mode >= 1)" in result
+        assert "(mode <= 10)" in result
+        assert "(mode >= 11)" in result
+        assert "(mode < 20)" in result
+        assert "(mode == 0)" in result
+        assert "(mode >= 30)" in result
+        assert "(mode <= 40)" in result
+        assert result.count("hit_or_range();") == 2
+        assert "(signed >= (-5))" in result
+        assert "(signed <= (-1))" in result
+        assert "is_Some(value)" in result
+        assert "(unwrap_Some(value) >= 1)" in result
+        assert "(unwrap_Some(value) <= 3)" in result
+        assert "(unwrap_Some(value) >= 7)" in result
+        assert "(unwrap_Some(value) < 10)" in result
+        assert "hit_nested();" in result
+        assert "return 10;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Match range pattern conversion failed: {e}")
+
+
+def test_match_grouped_reference_pattern_conversion():
+    code = """
+    fn test_grouped_reference_patterns(mode: i32, value: &Option<Result<i32, i32>>, nested: Option<&i32>) -> i32 {
+        match mode {
+            (0 | 1) => hit_grouped(),
+            _ => hit_default(),
+        }
+        match &mode {
+            &(2..=4) => hit_ref_range(),
+            &mut (5 | 6) => hit_mut_ref_or(),
+            _ => hit_default(),
+        }
+        match value {
+            &Some(Ok(v) | Err(v)) if v > 0 => use_value(v),
+            _ => use_default(),
+        }
+        match nested {
+            Some(&(1 | 2)) => hit_nested_ref(),
+            _ => hit_default(),
+        }
+        return match &mode {
+            &(0 | 1) => 1,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch (mode)" not in result
+        assert result.count("hit_grouped();") == 2
+        assert "(mode == 0)" in result
+        assert "(mode == 1)" in result
+        assert "(mode >= 2)" in result
+        assert "(mode <= 4)" in result
+        assert result.count("hit_ref_range();") == 1
+        assert "(mode == 5)" in result
+        assert "(mode == 6)" in result
+        assert result.count("hit_mut_ref_or();") == 2
+        assert "is_Some(value)" in result
+        assert "auto _rust_match_payload_0 = unwrap_Some(value);" in result
+        assert "if (is_Ok(_rust_match_payload_0))" in result
+        assert "auto v = unwrap_Ok(_rust_match_payload_0);" in result
+        assert "if (is_Err(_rust_match_payload_0))" in result
+        assert "auto v = unwrap_Err(_rust_match_payload_0);" in result
+        assert result.count("use_value(v);") == 2
+        assert "is_Some(nested)" in result
+        assert "(unwrap_Some(nested) == 1)" in result
+        assert "(unwrap_Some(nested) == 2)" in result
+        assert "hit_nested_ref();" in result
+        assert "return 1;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Grouped/reference match pattern conversion failed: {e}")
+
+
+def test_match_binding_pattern_conversion():
+    code = """
+    fn test_binding_patterns(mode: i32, value: Option<Result<i32, i32>>, nested: Option<i32>) -> i32 {
+        match mode {
+            whole @ 1..=10 if whole > 3 => use_mode(whole),
+            label @ (0 | 20) => use_label(label),
+            _ @ _ => use_discard(),
+        }
+        match value {
+            outer @ Some(Ok(v) | Err(v)) if outer_ready(outer) && v > 0 => use_result(outer, v),
+            _ => use_default(),
+        }
+        match nested {
+            Some(inner @ (1..=3 | 7..10)) => use_inner(inner),
+            _ => use_default(),
+        }
+        return match mode {
+            kept @ 1..=2 => kept,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch (mode)" not in result
+        assert "(mode >= 1)" in result
+        assert "(mode <= 10)" in result
+        assert "auto whole = mode;" in result
+        assert "if ((whole > 3))" in result
+        assert "use_mode(whole);" in result
+        assert result.count("auto label = mode;") == 2
+        assert result.count("use_label(label);") == 2
+        assert "(mode == 0)" in result
+        assert "(mode == 20)" in result
+        assert "auto _ = mode;" not in result
+        assert "use_discard();" in result
+
+        assert "is_Some(value)" in result
+        assert "auto _rust_match_payload_0 = unwrap_Some(value);" in result
+        assert "auto v = unwrap_Ok(_rust_match_payload_0);" in result
+        assert "auto v = unwrap_Err(_rust_match_payload_0);" in result
+        assert result.count("auto outer = value;") == 2
+        assert result.count("outer_ready(outer)") == 2
+        assert result.count("use_result(outer, v);") == 2
+
+        assert "is_Some(nested)" in result
+        assert "(unwrap_Some(nested) >= 1)" in result
+        assert "(unwrap_Some(nested) <= 3)" in result
+        assert "(unwrap_Some(nested) >= 7)" in result
+        assert "(unwrap_Some(nested) < 10)" in result
+        assert result.count("auto inner = unwrap_Some(nested);") == 1
+        assert result.count("use_inner(inner);") == 1
+
+        assert "(mode <= 2)" in result
+        assert "auto kept = mode;" in result
+        assert "return kept;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Match binding pattern conversion failed: {e}")
+
+
+def test_match_tuple_pattern_conversion():
+    code = """
+    fn test_tuple_patterns(mode: i32, state: i32, value: Option<i32>) -> i32 {
+        match (mode, state) {
+            (0, y) if y > 1 => use_y(y),
+            (1..=3, 4 | 5) => hit_range_or(),
+            (left @ (6 | 7), right @ 8..10) => use_pair(left, right),
+            _ => use_default(),
+        }
+        match (value, mode) {
+            (Some(v), 1) => use_some(v),
+            (None, _) => use_none(),
+            _ => use_default(),
+        }
+        match (mode, (state, value)) {
+            (9, (kept @ 10..=12, Some(v))) => use_nested(kept, v),
+            _ => use_default(),
+        }
+        return match (mode, state) {
+            (9, kept @ 10..=12) => kept,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_match_tuple_0 = mode;" in result
+        assert "auto _rust_match_tuple_1 = state;" in result
+        assert "switch" not in result
+
+        assert "(_rust_match_tuple_0 == 0)" in result
+        assert "auto y = _rust_match_tuple_1;" in result
+        assert "if ((y > 1))" in result
+        assert "use_y(y);" in result
+
+        assert "(_rust_match_tuple_0 >= 1)" in result
+        assert "(_rust_match_tuple_0 <= 3)" in result
+        assert "(_rust_match_tuple_1 == 4)" in result
+        assert "(_rust_match_tuple_1 == 5)" in result
+        assert result.count("hit_range_or();") == 2
+
+        assert result.count("auto left = _rust_match_tuple_0;") == 2
+        assert result.count("auto right = _rust_match_tuple_1;") == 2
+        assert result.count("use_pair(left, right);") == 2
+
+        assert "auto _rust_match_tuple_2 = value;" in result
+        assert "auto _rust_match_tuple_3 = mode;" in result
+        assert "if (is_Some(_rust_match_tuple_2))" in result
+        assert "auto v = unwrap_Some(_rust_match_tuple_2);" in result
+        assert "(_rust_match_tuple_3 == 1)" in result
+        assert "use_some(v);" in result
+        assert "(_rust_match_tuple_2 == None)" in result
+        assert "use_none();" in result
+
+        assert "auto _rust_match_tuple_4 = mode;" in result
+        assert "auto _rust_match_tuple_5 = state;" in result
+        assert "auto _rust_match_tuple_6 = value;" in result
+        assert "(_rust_match_tuple_4 == 9)" in result
+        assert "auto kept = _rust_match_tuple_5;" in result
+        assert "if (is_Some(_rust_match_tuple_6))" in result
+        assert "auto v = unwrap_Some(_rust_match_tuple_6);" in result
+        assert "use_nested(kept, v);" in result
+
+        assert "return kept;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Match tuple pattern conversion failed: {e}")
+
+
+def test_match_array_pattern_conversion():
+    code = """
+    fn test_array_patterns(values: [i32; 4], option_values: [Option<i32>; 2], mode: i32, state: i32) -> i32 {
+        match values {
+            [first, 2, third @ 3..=5, _] if first > 0 => use_fixed(first, third),
+            [0 | 1, ..] => hit_prefix(),
+            [head, middle @ .., tail] => use_rest(head, middle, tail),
+            [] => use_empty(),
+            _ => use_default(),
+        }
+        match option_values {
+            [Some(v), _] => use_some(v),
+            _ => use_default(),
+        }
+        match [mode, state] {
+            [0, kept @ 1..=3] => use_literal(kept),
+            _ => use_default(),
+        }
+        return match values {
+            [kept @ 1..=3, ..] => kept,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch" not in result
+        assert "(length(values) == 4)" in result
+        assert "auto first = values[0];" in result
+        assert "(values[1] == 2)" in result
+        assert "(values[2] >= 3)" in result
+        assert "(values[2] <= 5)" in result
+        assert "auto third = values[2];" in result
+        assert "if ((first > 0))" in result
+        assert "use_fixed(first, third);" in result
+
+        assert "(length(values) >= 1)" in result
+        assert "(values[0] == 0)" in result
+        assert "(values[0] == 1)" in result
+        assert result.count("hit_prefix();") == 2
+
+        assert "(length(values) >= 2)" in result
+        assert "auto head = values[0];" in result
+        assert "auto tail = values[(length(values) - 1)];" in result
+        assert "auto middle = _rust_slice(values, 1, (length(values) - 2));" in result
+        assert "use_rest(head, middle, tail);" in result
+
+        assert "(length(values) == 0)" in result
+        assert "use_empty();" in result
+
+        assert "(length(option_values) == 2)" in result
+        assert "if (is_Some(option_values[0]))" in result
+        assert "auto v = unwrap_Some(option_values[0]);" in result
+        assert "use_some(v);" in result
+
+        assert "auto _rust_match_array_0 = mode;" in result
+        assert "auto _rust_match_array_1 = state;" in result
+        assert "(_rust_match_array_0 == 0)" in result
+        assert "(_rust_match_array_1 >= 1)" in result
+        assert "(_rust_match_array_1 <= 3)" in result
+        assert "auto kept = _rust_match_array_1;" in result
+        assert "use_literal(kept);" in result
+
+        assert "auto kept = values[0];" in result
+        assert "return kept;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Match array pattern conversion failed: {e}")
+
+
+def test_match_struct_pattern_conversion():
+    code = """
+    fn test_struct_patterns(point: Point, shape: Shape) -> i32 {
+        match point {
+            Point { x, y: 0, .. } if x > 0 => use_x(x),
+            Point { x: left @ 1..=3, y } => use_pair(left, y),
+            _ => use_default(),
+        }
+        match shape {
+            Shape::Circle { radius } if radius > 0 => use_radius(radius),
+            Shape::Rect { corner: Point { x, y }, size: 1..=10, .. } => use_rect(x, y),
+            Shape::Circle { radius: small @ (1 | 2), .. }
+            | Shape::Circle { radius: small @ 3, .. } => use_small(small),
+            _ => use_default(),
+        }
+        return match point {
+            Point { x: kept @ 1..=3, .. } => kept,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch" not in result
+        assert "auto x = point.x;" in result
+        assert "(point.y == 0)" in result
+        assert "if ((x > 0))" in result
+        assert "use_x(x);" in result
+        assert "(point.x >= 1)" in result
+        assert "(point.x <= 3)" in result
+        assert "auto left = point.x;" in result
+        assert "auto y = point.y;" in result
+        assert "use_pair(left, y);" in result
+
+        assert "if (is_Shape_Circle(shape))" in result
+        assert "auto radius = unwrap_Shape_Circle_radius(shape);" in result
+        assert "if ((radius > 0))" in result
+        assert "use_radius(radius);" in result
+
+        assert "if (is_Shape_Rect(shape))" in result
+        assert "auto x = unwrap_Shape_Rect_corner(shape).x;" in result
+        assert "auto y = unwrap_Shape_Rect_corner(shape).y;" in result
+        assert "(unwrap_Shape_Rect_size(shape) >= 1)" in result
+        assert "(unwrap_Shape_Rect_size(shape) <= 10)" in result
+        assert "use_rect(x, y);" in result
+
+        assert result.count("auto small = unwrap_Shape_Circle_radius(shape);") == 3
+        assert "(unwrap_Shape_Circle_radius(shape) == 1)" in result
+        assert "(unwrap_Shape_Circle_radius(shape) == 2)" in result
+        assert "(unwrap_Shape_Circle_radius(shape) == 3)" in result
+        assert result.count("use_small(small);") == 3
+
+        assert "auto kept = point.x;" in result
+        assert "return kept;" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Match struct pattern conversion failed: {e}")
+
+
+def test_match_binding_modifier_pattern_conversion():
+    code = """
+    fn test_binding_modifier_patterns(value: Option<i32>, point: Point, pair: Pair, values: [i32; 3]) -> i32 {
+        match value {
+            Some(ref v) if v > 0 => use_ref(v),
+            Some(mut bounded @ 1..=3) => use_mut(bounded),
+            Some(ref mut choice @ (4 | 5)) => use_choice(choice),
+            _ => use_default(),
+        }
+        match point {
+            Point { ref x, mut y, z: ref renamed, w: mut kept @ 1..=2, .. } => use_point(x, y, renamed, kept),
+            _ => use_default(),
+        }
+        match pair {
+            Pair(ref left, mut right) => use_pair(left, right),
+        }
+        match values {
+            [ref first, mut second @ 2..=3, ..] => use_array(first, second),
+            _ => use_default(),
+        }
+        return match value {
+            Some(ref kept) => kept,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "switch" not in result
+        assert "auto v = unwrap_Some(value);" in result
+        assert "if ((v > 0))" in result
+        assert "use_ref(v);" in result
+
+        assert "(unwrap_Some(value) >= 1)" in result
+        assert "(unwrap_Some(value) <= 3)" in result
+        assert "auto bounded = unwrap_Some(value);" in result
+        assert "use_mut(bounded);" in result
+
+        assert "(unwrap_Some(value) == 4)" in result
+        assert "(unwrap_Some(value) == 5)" in result
+        assert result.count("auto choice = unwrap_Some(value);") == 1
+        assert result.count("use_choice(choice);") == 1
+
+        assert "auto x = point.x;" in result
+        assert "auto y = point.y;" in result
+        assert "auto renamed = point.z;" in result
+        assert "(point.w >= 1)" in result
+        assert "(point.w <= 2)" in result
+        assert "auto kept = point.w;" in result
+        assert "use_point(x, y, renamed, kept);" in result
+
+        assert "is_Pair(pair)" in result
+        assert "auto left = unwrap_Pair_0(pair);" in result
+        assert "auto right = unwrap_Pair_1(pair);" in result
+        assert "use_pair(left, right);" in result
+
+        assert "auto first = values[0];" in result
+        assert "(values[1] >= 2)" in result
+        assert "(values[1] <= 3)" in result
+        assert "auto second = values[1];" in result
+        assert "use_array(first, second);" in result
+
+        assert "auto kept = unwrap_Some(value);" in result
+        assert "return kept;" in result
+        assert "return 0;" in result
+        assert "ref " not in result
+        assert "mut " not in result
+    except Exception as e:
+        pytest.fail(f"Match binding modifier pattern conversion failed: {e}")
 
 
 def test_member_access_conversion():
@@ -365,6 +2686,11 @@ def test_assignment_operations_conversion():
         a *= 4;
         a /= 2;
         a %= 3;
+        a &= 1;
+        a |= 2;
+        a ^= 3;
+        a <<= 1;
+        a >>= 2;
     }
     """
     try:
@@ -374,6 +2700,11 @@ def test_assignment_operations_conversion():
         assert "a *= 4;" in result
         assert "a /= 2;" in result
         assert "a %= 3;" in result
+        assert "a &= 1;" in result
+        assert "a |= 2;" in result
+        assert "a ^= 3;" in result
+        assert "a <<= 1;" in result
+        assert "a >>= 2;" in result
     except Exception as e:
         pytest.fail(f"Assignment operations conversion failed: {e}")
 
@@ -495,7 +2826,7 @@ def test_impl_block_conversion():
                 texcoord: Vec2::new(0.0, 0.0),
             }
         }
-        
+
         fn calculate_distance(&self, other: &Vertex) -> f32 {
             distance(self.position, other.position)
         }
@@ -536,14 +2867,81 @@ def test_type_casting_conversion():
         let x = 42i32;
         let y = x as f64;
         let z = y as i32;
+        let chained = x as f32 as i32;
+        let from_deref = *ptr as f32;
+        let from_ref = &value as f32;
+        let from_swizzle = color.xyz() as Vec3<f32>;
     }
     """
     try:
         result = parse_and_generate(code)
+        assert "x = 42;" in result
         assert "(double)x" in result
         assert "(int)y" in result
+        assert "chained = (int)(float)x;" in result
+        assert "from_deref = (float)ptr;" in result
+        assert "from_ref = (float)value;" in result
+        assert "from_swizzle = (vec3)color.xyz;" in result
+        assert "42i32" not in result
+        assert ".xyz()" not in result
+        assert "*ptr" not in result
+        assert "&value" not in result
     except Exception as e:
         pytest.fail(f"Type casting conversion failed: {e}")
+
+
+def test_numeric_literal_suffix_conversion():
+    code = """
+    fn test_numeric_suffixes(mode: i32) {
+        let signed = 42i32;
+        let unsigned = 10u32;
+        let sized = 7usize;
+        let float32 = 1.5f32;
+        let float64 = 2.0f64;
+        let casted = 1u32 as i32;
+        let repeated: [i32; 3] = [4i32; 3usize];
+        let grouped = 1_000u32;
+        let hexed = 0xffu32;
+        let binary = 0b1010u32;
+        let octal = 0o77usize;
+        let grouped_float = 1_000.5f32;
+        let exponent = 1.0e-3f32;
+        match mode {
+            1u32 => hit_one(),
+            0xffu32 => hit_hex(),
+            _ => hit_default(),
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "signed = 42;" in result
+        assert "unsigned = 10;" in result
+        assert "sized = 7;" in result
+        assert "float32 = 1.5;" in result
+        assert "float64 = 2.0;" in result
+        assert "casted = (int)1;" in result
+        assert "int repeated[3] = {4, 4, 4};" in result
+        assert "grouped = 1000;" in result
+        assert "hexed = 255;" in result
+        assert "binary = 10;" in result
+        assert "octal = 63;" in result
+        assert "grouped_float = 1000.5;" in result
+        assert "exponent = 1.0e-3;" in result
+        assert "case 1:" in result
+        assert "case 255:" in result
+        assert "i32" not in result
+        assert "u32" not in result
+        assert "usize" not in result
+        assert "f32" not in result
+        assert "f64" not in result
+        assert "0xff" not in result
+        assert "0b1010" not in result
+        assert "0o77" not in result
+        assert "1_000" not in result
+    except Exception as e:
+        pytest.fail(f"Numeric literal suffix conversion failed: {e}")
 
 
 def test_ternary_expression_conversion():
@@ -557,6 +2955,1036 @@ def test_ternary_expression_conversion():
         assert "condition ? true_value : false_value" in result
     except Exception as e:
         pytest.fail(f"Ternary expression conversion failed: {e}")
+
+
+def test_if_let_statement_conversion():
+    code = """
+    fn choose(value: Option<i32>, fallback: i32) -> i32 {
+        if let Some(v) = value {
+            return v;
+        } else {
+            return fallback;
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "is_Some(value)" in result
+        assert "auto v = unwrap_Some(value);" in result
+        assert "return v;" in result
+        assert "if (!_rust_match_matched_0)" in result
+        assert "return fallback;" in result
+    except Exception as e:
+        pytest.fail(f"If let statement conversion failed: {e}")
+
+
+def test_if_let_expression_conversion():
+    code = """
+    fn score(value: Option<i32>) -> i32 {
+        let result: i32 = if let Some(v) = value {
+            v
+        } else {
+            0
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int result;" in result
+        assert "if (is_Some(value))" in result
+        assert "auto v = unwrap_Some(value);" in result
+        assert "result = v;" in result
+        assert "result = 0;" in result
+    except Exception as e:
+        pytest.fail(f"If let expression conversion failed: {e}")
+
+
+def test_if_let_complex_pattern_conversion():
+    code = """
+    fn handle(point: Point) {
+        if let Some(Ok(v) | Err(v)) = next_value() {
+            use_value(v);
+        }
+
+        if let Point { x, y: 0, .. } = point {
+            use_point(x);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "auto _rust_match_subject_0 = next_value();" in result
+        assert "if (is_Some(_rust_match_subject_0))" in result
+        assert "bool _rust_match_or_matched_0 = false;" in result
+        assert "if (is_Ok(" in result
+        assert "if (is_Err(" in result
+        assert "auto v = unwrap_Ok(" in result
+        assert "auto v = unwrap_Err(" in result
+        assert "auto x = point.x;" in result
+        assert "if ((point.y == 0))" in result
+    except Exception as e:
+        pytest.fail(f"If let complex pattern conversion failed: {e}")
+
+
+def test_while_let_conversion():
+    code = """
+    fn drain() {
+        while let Some(item) = next_value() {
+            consume(item);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "while (true)" in result
+        assert "auto _rust_match_subject_0 = next_value();" in result
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "if (is_Some(_rust_match_subject_0))" in result
+        assert "auto item = unwrap_Some(_rust_match_subject_0);" in result
+        assert "if (!_rust_match_matched_0)" in result
+        assert "break;" in result
+    except Exception as e:
+        pytest.fail(f"While let conversion failed: {e}")
+
+
+def test_let_else_conversion():
+    code = """
+    fn decode(value: Option<i32>, fallback: i32) -> i32 {
+        let Some(v) = value else {
+            return fallback;
+        };
+        return v;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "auto _rust_match_subject_0 = value;" in result
+        assert "v;" in result
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "if (is_Some(_rust_match_subject_0))" in result
+        assert "v = unwrap_Some(_rust_match_subject_0);" in result
+        assert "auto v = unwrap_Some(_rust_match_subject_0);" not in result
+        assert "return fallback;" in result
+        assert "return v;" in result
+    except Exception as e:
+        pytest.fail(f"Let else conversion failed: {e}")
+
+
+def test_let_else_shadowing_conversion():
+    code = """
+    fn decode_shadow(value: Option<i32>) -> i32 {
+        let Some(value) = value else {
+            return 0;
+        };
+        return value;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        subject_index = result.index("auto _rust_match_subject_0 = value;")
+        binding_index = result.index("value;", subject_index)
+        assert subject_index < binding_index
+        assert "if (is_Some(_rust_match_subject_0))" in result
+        assert "value = unwrap_Some(_rust_match_subject_0);" in result
+        assert "return 0;" in result
+        assert "return value;" in result
+    except Exception as e:
+        pytest.fail(f"Let else shadowing conversion failed: {e}")
+
+
+def test_let_else_complex_pattern_conversion():
+    code = """
+    fn decode_complex(point: Point) {
+        let Some(Ok(v) | Err(v)) = next_value() else {
+            return;
+        };
+        use_value(v);
+
+        let Point { x, y: 0, .. } = point else {
+            return;
+        };
+        use_point(x);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "auto _rust_match_subject_0 = next_value();" in result
+        assert "v;" in result
+        assert "bool _rust_match_or_matched_0 = false;" in result
+        assert "v = unwrap_Ok(" in result
+        assert "v = unwrap_Err(" in result
+        assert "auto v = unwrap_Ok(" not in result
+        assert "auto v = unwrap_Err(" not in result
+        assert "use_value(v);" in result
+        assert "auto _rust_match_subject_1 = point;" in result
+        assert "x;" in result
+        assert "x = _rust_match_subject_1.x;" in result
+        assert "if ((_rust_match_subject_1.y == 0))" in result
+        assert "use_point(x);" in result
+    except Exception as e:
+        pytest.fail(f"Let else complex pattern conversion failed: {e}")
+
+
+def test_plain_struct_array_let_pattern_conversion():
+    code = """
+    fn unpack(point: Point, values: [i32; 3]) {
+        let Point { x, y } = point;
+        let [first, .., last] = values;
+        use_point(x, y);
+        use_pair(first, last);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "auto _rust_match_subject_0 = point;" in result
+        assert "x = _rust_match_subject_0.x;" in result
+        assert "y = _rust_match_subject_0.y;" in result
+        assert "auto x = _rust_match_subject_0.x;" not in result
+        assert "auto y = _rust_match_subject_0.y;" not in result
+        assert "auto _rust_match_subject_1 = values;" in result
+        assert "first = _rust_match_subject_1[0];" in result
+        assert (
+            "last = _rust_match_subject_1[(length(_rust_match_subject_1) - 1)];"
+            in result
+        )
+        assert "use_point(x, y);" in result
+        assert "use_pair(first, last);" in result
+    except Exception as e:
+        pytest.fail(f"Plain struct/array let pattern conversion failed: {e}")
+
+
+def test_matches_macro_let_conversion():
+    code = """
+    fn check(value: Option<i32>) -> bool {
+        let ok: bool = matches!(value, Some(v) if v > 0);
+        return ok;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool ok;" in result
+        assert "ok = false;" in result
+        assert "auto _rust_match_subject_0 = value;" in result
+        assert "if (is_Some(_rust_match_subject_0))" in result
+        assert "auto v = unwrap_Some(_rust_match_subject_0);" in result
+        assert "if ((v > 0))" in result
+        assert "ok = true;" in result
+        assert "return ok;" in result
+    except Exception as e:
+        pytest.fail(f"Matches macro let conversion failed: {e}")
+
+
+def test_matches_macro_if_conversion():
+    code = """
+    fn branch(value: Option<Result<i32, i32>>) {
+        if matches!(value, Some(Ok(v) | Err(v)) if v > 0) {
+            use_match();
+        } else {
+            use_default();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_matches_result_0 = false;" in result
+        assert "auto _rust_match_subject_0 = value;" in result
+        assert "if (is_Some(_rust_match_subject_0))" in result
+        assert "bool _rust_match_or_matched_0 = false;" in result
+        assert "auto v = unwrap_Ok(" in result
+        assert "auto v = unwrap_Err(" in result
+        assert "if ((v > 0))" in result
+        assert "_rust_matches_result_0 = true;" in result
+        assert "if (_rust_matches_result_0)" in result
+        assert "use_match();" in result
+        assert "use_default();" in result
+    except Exception as e:
+        pytest.fail(f"Matches macro if conversion failed: {e}")
+
+
+def test_matches_macro_return_and_while_conversion():
+    code = """
+    fn is_small(mode: i32) -> bool {
+        return matches!(mode, 0 | 1);
+    }
+
+    fn drain() {
+        while matches!(next_value(), Some(item)) {
+            consume();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_matches_result_0 = false;" in result
+        assert "auto _rust_match_subject_0 = mode;" in result
+        assert "bool _rust_match_or_matched_0 = false;" in result
+        assert "_rust_matches_result_0 = true;" in result
+        assert "return _rust_matches_result_0;" in result
+
+        assert "while (true)" in result
+        assert "bool _rust_matches_result_1 = false;" in result
+        assert "auto _rust_match_subject_1 = next_value();" in result
+        assert "if (is_Some(_rust_match_subject_1))" in result
+        assert "auto item = unwrap_Some(_rust_match_subject_1);" in result
+        assert "_rust_matches_result_1 = true;" in result
+        assert "if (!_rust_matches_result_1)" in result
+        assert "break;" in result
+        assert "consume();" in result
+    except Exception as e:
+        pytest.fail(f"Matches macro return/while conversion failed: {e}")
+
+
+def test_let_condition_chain_if_conversion():
+    code = """
+    fn branch(ready: bool, value: Option<i32>) {
+        if ready && let Some(v) = value && v > 0 {
+            use_value(v);
+        } else {
+            use_default();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "if (ready)" in result
+        assert "if (is_Some(value))" in result
+        assert "auto v = unwrap_Some(value);" in result
+        assert "if ((v > 0))" in result
+        assert "_rust_match_matched_0 = true;" in result
+        assert "use_value(v);" in result
+        assert "if (!_rust_match_matched_0)" in result
+        assert "use_default();" in result
+    except Exception as e:
+        pytest.fail(f"Let condition chain if conversion failed: {e}")
+
+
+def test_let_condition_chain_if_expression_conversion():
+    code = """
+    fn score(ready: bool, value: Option<i32>) -> i32 {
+        let result: i32 = if ready && let Some(v) = value && v > 0 {
+            v
+        } else {
+            0
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int result;" in result
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "if (ready)" in result
+        assert "if (is_Some(value))" in result
+        assert "auto v = unwrap_Some(value);" in result
+        assert "if ((v > 0))" in result
+        assert "result = v;" in result
+        assert "if (!_rust_match_matched_0)" in result
+        assert "result = 0;" in result
+    except Exception as e:
+        pytest.fail(f"Let condition chain if expression conversion failed: {e}")
+
+
+def test_let_condition_chain_while_conversion():
+    code = """
+    fn drain() {
+        while has_next() && let Some(item) = next_value() && item != 0 {
+            consume(item);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "while (true)" in result
+        assert "bool _rust_match_matched_0 = false;" in result
+        assert "if (has_next())" in result
+        assert "auto _rust_match_subject_0 = next_value();" in result
+        assert "if (is_Some(_rust_match_subject_0))" in result
+        assert "auto item = unwrap_Some(_rust_match_subject_0);" in result
+        assert "if ((item != 0))" in result
+        assert "_rust_match_matched_0 = true;" in result
+        assert "consume(item);" in result
+        assert "if (!_rust_match_matched_0)" in result
+        assert "break;" in result
+    except Exception as e:
+        pytest.fail(f"Let condition chain while conversion failed: {e}")
+
+
+def test_multiple_let_condition_chain_conversion():
+    code = """
+    fn pair(left: Option<i32>, right: Option<i32>) {
+        if let Some(a) = left && let Some(b) = right && a < b {
+            use_pair(a, b);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "if (is_Some(left))" in result
+        assert "auto a = unwrap_Some(left);" in result
+        assert "if (is_Some(right))" in result
+        assert "auto b = unwrap_Some(right);" in result
+        assert "if ((a < b))" in result
+        assert "use_pair(a, b);" in result
+        assert "bool _rust_match_matched_" not in result
+    except Exception as e:
+        pytest.fail(f"Multiple let condition chain conversion failed: {e}")
+
+
+def test_closure_expression_conversion():
+    code = """
+    fn closures(values: Values) {
+        let add = |x, y| x + y;
+        let typed = |x: i32| x + 1;
+        let always = || true;
+        let moved = move |v| v * 2;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "add = lambda(x, y, (x + y));" in result
+        assert "typed = lambda(int x, (x + 1));" in result
+        assert "always = lambda(true);" in result
+        assert "moved = lambda(v, (v * 2));" in result
+    except Exception as e:
+        pytest.fail(f"Closure expression conversion failed: {e}")
+
+
+def test_closure_iterator_method_conversion():
+    code = """
+    fn iterator_methods(values: Values) {
+        let mapped = values.map(|x| x + 1);
+        let filtered = values.filter(|x| x > 0);
+        let chained = values.map(|x| x + 1).filter(|y| y > 2);
+        let total = values.fold(0, |acc, x| acc + x);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "mapped = map(values, lambda(x, (x + 1)));" in result
+        assert "filtered = filter(values, lambda(x, (x > 0)));" in result
+        assert (
+            "chained = filter(map(values, lambda(x, (x + 1))), " "lambda(y, (y > 2)));"
+        ) in result
+        assert "total = fold(values, 0, lambda(acc, x, (acc + x)));" in result
+    except Exception as e:
+        pytest.fail(f"Closure iterator method conversion failed: {e}")
+
+
+def test_closure_block_body_conversion():
+    code = """
+    fn closure_blocks(values: Values) {
+        let doubled = |x| {
+            let y = x + 1;
+            y * 2
+        };
+        let mapped = values.map(|x| {
+            prepare(x);
+            x + 1
+        });
+        let choose = |x| {
+            if x > 0 {
+                let kept = x;
+                kept
+            } else {
+                let fallback = 0;
+                fallback
+            }
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "doubled = lambda(x, { y = (x + 1); return (y * 2); });" in result
+        assert (
+            "mapped = map(values, lambda(x, { prepare(x); return (x + 1); }));"
+            in result
+        )
+        assert (
+            "choose = lambda(x, { if ((x > 0)) { kept = x; return kept; } "
+            "else { fallback = 0; return fallback; } });"
+        ) in result
+    except Exception as e:
+        pytest.fail(f"Closure block body conversion failed: {e}")
+
+
+def test_closure_pattern_parameter_conversion():
+    code = """
+    fn closure_pattern_params(values: Values) {
+        let tupled = values.map(|(x, y)| x + y);
+        let pointed = values.map(|Point { x, y }| x + y);
+        let optioned = values.map(|Some(v)| v);
+        let ignored = values.filter(|_| true);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert (
+            "tupled = map(values, lambda(_rust_closure_arg_0, { "
+            "auto x = _rust_tuple_0(_rust_closure_arg_0); "
+            "auto y = _rust_tuple_1(_rust_closure_arg_0); "
+            "return (x + y); }));"
+        ) in result
+        assert (
+            "pointed = map(values, lambda(_rust_closure_arg_1, { "
+            "auto x = _rust_closure_arg_1.x; "
+            "auto y = _rust_closure_arg_1.y; "
+            "return (x + y); }));"
+        ) in result
+        assert (
+            "optioned = map(values, lambda(_rust_closure_arg_2, { "
+            "if (is_Some(_rust_closure_arg_2)) { "
+            "auto v = unwrap_Some(_rust_closure_arg_2); "
+            "return v; } }));"
+        ) in result
+        assert "ignored = filter(values, lambda(_rust_closure_arg_3, true));" in result
+    except Exception as e:
+        pytest.fail(f"Closure pattern parameter conversion failed: {e}")
+
+
+def test_closure_explicit_result_try_conversion():
+    code = """
+    fn outer(value: Result<i32, i32>) -> Option<i32> {
+        let parse = |value: Result<i32, i32>| -> Result<i32, i32> {
+            let v: i32 = value?;
+            return Ok(v);
+        };
+        return Some(1);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "parse = lambda(Result<i32, i32> value, {" in result
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "return Err(unwrap_Err(_rust_try_subject_0));" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "return Ok(v);" in result
+        assert "return None;" not in result
+    except Exception as e:
+        pytest.fail(f"Closure explicit Result try conversion failed: {e}")
+
+
+def test_closure_explicit_option_try_conversion():
+    code = """
+    fn outer(value: Option<i32>) -> Result<i32, i32> {
+        let lift = |value: Option<i32>| -> Option<i32> {
+            let v: i32 = value?;
+            Some(v)
+        };
+        return Ok(1);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "lift = lambda(Option<i32> value, {" in result
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "if (is_None(_rust_try_subject_0))" in result
+        assert "return None;" in result
+        assert "auto _rust_try_value_0 = unwrap_Some(_rust_try_subject_0);" in result
+        assert "return Some(v);" in result
+        assert "return Err(unwrap_Err(_rust_try_subject_0));" not in result
+    except Exception as e:
+        pytest.fail(f"Closure explicit Option try conversion failed: {e}")
+
+
+def test_closure_inferred_result_try_conversion():
+    code = """
+    fn outer(value: Result<i32, i32>) -> Option<i32> {
+        let parse = |value: Result<i32, i32>| {
+            let v: i32 = value?;
+            Ok(v)
+        };
+        let inline = |value: Result<i32, i32>| Ok(value?);
+        return Some(1);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "parse = lambda(Result<i32, i32> value, {" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "return Err(unwrap_Err(_rust_try_subject_0));" in result
+        assert "return Ok(v);" in result
+        assert "inline = lambda(Result<i32, i32> value, {" in result
+        assert "if (is_Err(_rust_try_subject_1))" in result
+        assert "return Ok(_rust_try_value_1);" in result
+    except Exception as e:
+        pytest.fail(f"Closure inferred Result try conversion failed: {e}")
+
+
+def test_closure_inferred_option_try_conversion():
+    code = """
+    fn outer(value: Option<i32>) -> Result<i32, i32> {
+        let lift = |value: Option<i32>| {
+            let v: i32 = value?;
+            Some(v)
+        };
+        return Ok(1);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "lift = lambda(Option<i32> value, {" in result
+        assert "if (is_None(_rust_try_subject_0))" in result
+        assert "return None;" in result
+        assert "return Some(v);" in result
+    except Exception as e:
+        pytest.fail(f"Closure inferred Option try conversion failed: {e}")
+
+
+def test_await_postfix_conversion():
+    code = """
+    fn decode_future(
+        future: Result<i32, i32>,
+        object: FutureObject,
+    ) -> Result<i32, i32> {
+        let raw = compute().await;
+        let field = object.await.value;
+        let value: i32 = future.await?;
+        return Ok(value);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "raw = compute();" in result
+        assert "field = object.value;" in result
+        assert "auto _rust_try_subject_0 = future;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "value = _rust_try_value_0;" in result
+        assert ".await" not in result
+    except Exception as e:
+        pytest.fail(f"Await postfix conversion failed: {e}")
+
+
+def test_await_try_binary_conversion():
+    code = """
+    fn add_futures(
+        left: Result<i32, i32>,
+        right: Result<i32, i32>,
+    ) -> Result<i32, i32> {
+        let sum: i32 = left.await? + right.await?;
+        return Ok(sum);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = left;" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "auto _rust_try_subject_1 = right;" in result
+        assert "auto _rust_try_value_1 = unwrap_Ok(_rust_try_subject_1);" in result
+        assert "sum = (_rust_try_value_0 + _rust_try_value_1);" in result
+    except Exception as e:
+        pytest.fail(f"Await try binary conversion failed: {e}")
+
+
+def test_async_function_transparent_conversion():
+    code = """
+    pub async fn decode_future(future: Result<i32, i32>) -> Result<i32, i32> {
+        let value: i32 = future.await?;
+        return Ok(value);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "Result<i32, i32> decode_future(Result<i32, i32> future)" in result
+        assert "auto _rust_try_subject_0 = future;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "value = _rust_try_value_0;" in result
+        assert "return Ok(value);" in result
+        assert "async" not in result
+        assert ".await" not in result
+    except Exception as e:
+        pytest.fail(f"Async function transparent conversion failed: {e}")
+
+
+def test_async_block_expression_conversion():
+    code = """
+    fn decode(value: Result<i32, i32>, fallback: i32) -> Result<i32, i32> {
+        let result: i32 = async {
+            let v: i32 = value.await?;
+            v + 1
+        };
+        let second: i32 = 0;
+        second = async move {
+            fallback + result
+        };
+        return Ok(second);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "int result;" in result
+        assert "int v;" in result
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "v = _rust_try_value_0;" in result
+        assert "result = (v + 1);" in result
+        assert "int second = 0;" in result
+        assert "second = (fallback + result);" in result
+        assert "async" not in result
+        assert ".await" not in result
+    except Exception as e:
+        pytest.fail(f"Async block expression conversion failed: {e}")
+
+
+def test_result_try_expression_conversion():
+    code = """
+    fn decode(left: Result<i32, i32>, right: Result<i32, i32>) -> Result<i32, i32> {
+        let value: i32 = left?;
+        let sum: i32 = value + right?;
+        return Ok(sum);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = left;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "return Err(unwrap_Err(_rust_try_subject_0));" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "int value;" in result
+        assert "value = _rust_try_value_0;" in result
+
+        assert "auto _rust_try_subject_1 = right;" in result
+        assert "auto _rust_try_value_1 = unwrap_Ok(_rust_try_subject_1);" in result
+        assert "int sum;" in result
+        assert "sum = (value + _rust_try_value_1);" in result
+        assert "return Ok(sum);" in result
+    except Exception as e:
+        pytest.fail(f"Result try expression conversion failed: {e}")
+
+
+def test_option_try_expression_conversion():
+    code = """
+    fn decode(value: Option<i32>) -> Option<i32> {
+        let unwrapped: i32 = value?;
+        return Some(unwrapped);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "if (is_None(_rust_try_subject_0))" in result
+        assert "return None;" in result
+        assert "auto _rust_try_value_0 = unwrap_Some(_rust_try_subject_0);" in result
+        assert "unwrapped = _rust_try_value_0;" in result
+        assert "return Some(unwrapped);" in result
+    except Exception as e:
+        pytest.fail(f"Option try expression conversion failed: {e}")
+
+
+def test_nested_try_expression_conversion():
+    code = """
+    fn wrap(value: Result<i32, i32>, receiver: Receiver) -> Result<i32, i32> {
+        let wrapped = Ok(value?);
+        receiver.store(value?);
+        return wrapped;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "wrapped = Ok(_rust_try_value_0);" in result
+        assert "auto _rust_try_subject_1 = value;" in result
+        assert "receiver.store(_rust_try_value_1);" in result
+        assert "return wrapped;" in result
+    except Exception as e:
+        pytest.fail(f"Nested try expression conversion failed: {e}")
+
+
+def test_try_pattern_subject_conversion():
+    code = """
+    fn decode(value: Result<Option<i32>, i32>) -> Result<i32, i32> {
+        let Some(v) = value? else {
+            return Ok(0);
+        };
+        let present: bool = matches!(value?, Some(1));
+        return Ok(v);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "if (is_Some(_rust_try_value_0))" in result
+        assert "v = unwrap_Some(_rust_try_value_0);" in result
+        assert "auto _rust_try_subject_1 = value;" in result
+        assert "auto _rust_try_value_1 = unwrap_Ok(_rust_try_subject_1);" in result
+        assert "present = false;" in result
+        assert "if (is_Some(_rust_try_value_1))" in result
+        assert "return Ok(v);" in result
+    except Exception as e:
+        pytest.fail(f"Try pattern subject conversion failed: {e}")
+
+
+def test_try_match_scrutinee_conversion():
+    code = """
+    fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        let mapped: i32 = match value? {
+            0 => 1,
+            _ => 2,
+        };
+        return Ok(mapped);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "switch (_rust_try_value_0)" in result
+        assert "mapped = 1;" in result
+        assert "mapped = 2;" in result
+        assert "return Ok(mapped);" in result
+    except Exception as e:
+        pytest.fail(f"Try match scrutinee conversion failed: {e}")
+
+
+def test_try_match_scrutinee_hoists_post_try_side_effects():
+    code = """
+    fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        return match value? + adjust() {
+            0 => 1,
+            _ => 2,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "auto _rust_match_subject_0 = (_rust_try_value_0 + adjust());" in result
+        assert "switch (_rust_match_subject_0)" in result
+    except Exception as e:
+        pytest.fail(f"Try match scrutinee side-effect hoist failed: {e}")
+
+
+def test_try_match_guard_conversion():
+    code = """
+    fn decode(value: Option<i32>, ready: Result<bool, i32>) -> Result<i32, i32> {
+        return match value {
+            Some(v) if ready? => v,
+            _ => 0,
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "is_Some(value)" in result
+        assert "auto _rust_try_subject_0 = ready;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "if (_rust_try_value_0)" in result
+        assert "return v;" in result
+    except Exception as e:
+        pytest.fail(f"Try match guard conversion failed: {e}")
+
+
+def test_try_for_loop_setup_conversion():
+    code = """
+    fn iterate(
+        start: Result<i32, i32>,
+        end: Result<i32, i32>,
+        step: Result<i32, i32>,
+        count: Result<i32, i32>,
+    ) -> Result<i32, i32> {
+        let total: i32 = 0;
+        for i in start?..end? {
+            total += i;
+        }
+        for j in (0..end?).step_by(step?) {
+            total += j;
+        }
+        for k in count? {
+            total += k;
+        }
+        return Ok(total);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = start;" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "auto _rust_try_subject_1 = end;" in result
+        assert "for (int i = _rust_try_value_0; i < _rust_try_value_1; i++)" in result
+        assert "auto _rust_try_subject_2 = end;" in result
+        assert "auto _rust_try_subject_3 = step;" in result
+        assert (
+            "for (int j = 0; j < _rust_try_value_2; j += _rust_try_value_3)" in result
+        )
+        assert "auto _rust_try_subject_4 = count;" in result
+        assert "for (int k = 0; k < _rust_try_value_4; k++)" in result
+        assert "return Ok(total);" in result
+    except Exception as e:
+        pytest.fail(f"Try for loop setup conversion failed: {e}")
+
+
+def test_try_for_loop_setup_hoists_post_try_side_effects():
+    code = """
+    fn iterate(end: Result<i32, i32>) -> Result<i32, i32> {
+        for i in 0..(end? + limit()) {
+            use_value(i);
+        }
+        return Ok(0);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = end;" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "int _for_bound_0 = (_rust_try_value_0 + limit());" in result
+        assert "for (int i = 0; i < _for_bound_0; i++)" in result
+    except Exception as e:
+        pytest.fail(f"Try for loop side-effect hoist failed: {e}")
+
+
+def test_try_struct_initialization_conversion():
+    code = """
+    struct Output {
+        position: Vec3<f32>,
+        value: i32,
+    }
+
+    fn build(
+        position: Result<Vec3<f32>, i32>,
+        value: Result<i32, i32>,
+    ) -> Result<Output, i32> {
+        return Ok(Output {
+            position: position?,
+            value: value?,
+        });
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = position;" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "auto _rust_try_subject_1 = value;" in result
+        assert "auto _rust_try_value_1 = unwrap_Ok(_rust_try_subject_1);" in result
+        assert (
+            "return Ok(Output { position: _rust_try_value_0, "
+            "value: _rust_try_value_1 });"
+        ) in result
+    except Exception as e:
+        pytest.fail(f"Try struct initialization conversion failed: {e}")
+
+
+def test_result_try_block_conversion():
+    code = """
+    fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        let result: Result<i32, i32> = try {
+            let v: i32 = value?;
+            v + 1
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "Result<i32, i32> result = lambda({" in result
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "return Err(unwrap_Err(_rust_try_subject_0));" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "return Ok((v + 1));" in result
+        assert "})();" in result
+        assert "return result;" in result
+    except Exception as e:
+        pytest.fail(f"Result try block conversion failed: {e}")
+
+
+def test_option_try_block_conversion():
+    code = """
+    fn decode(value: Option<i32>) -> Option<i32> {
+        let result: Option<i32> = try {
+            let v: i32 = value?;
+            v + 1
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "Option<i32> result = lambda({" in result
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "if (is_None(_rust_try_subject_0))" in result
+        assert "return None;" in result
+        assert "auto _rust_try_value_0 = unwrap_Some(_rust_try_subject_0);" in result
+        assert "return Some((v + 1));" in result
+        assert "return result;" in result
+    except Exception as e:
+        pytest.fail(f"Option try block conversion failed: {e}")
+
+
+def test_try_block_as_try_operand_conversion():
+    code = """
+    fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        let unwrapped: i32 = try {
+            let v: i32 = value?;
+            v + 1
+        }?;
+        return Ok(unwrapped);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_subject_0 = lambda({" in result
+        assert "return Ok((v + 1));" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_1);" in result
+        assert "auto _rust_try_value_1 = unwrap_Ok(_rust_try_subject_0);" in result
+        assert "unwrapped = _rust_try_value_1;" in result
+        assert "return Ok(unwrapped);" in result
+    except Exception as e:
+        pytest.fail(f"Try block operand conversion failed: {e}")
+
+
+def test_try_block_final_result_expression_conversion():
+    code = """
+    fn decode(value: Result<i32, i32>, ready: bool) -> Result<i32, i32> {
+        let result: Result<i32, i32> = try {
+            if ready {
+                value?
+            } else {
+                0
+            }
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _rust_try_value_0;" in result
+        assert "if (ready)" in result
+        assert "return Err(unwrap_Err(_rust_try_subject_0));" in result
+        assert "_rust_try_value_0 = _rust_try_value_1;" in result
+        assert "_rust_try_value_0 = 0;" in result
+        assert "return Ok(_rust_try_value_0);" in result
+    except Exception as e:
+        pytest.fail(f"Try block final result expression conversion failed: {e}")
 
 
 def test_complex_shader_conversion():

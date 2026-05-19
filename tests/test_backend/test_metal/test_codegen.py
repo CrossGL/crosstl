@@ -4,6 +4,13 @@ from typing import List
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.directx_codegen import (
+    HLSLCodeGen as TranslatorHLSLCodeGen,
+)
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 def tokenize_code(code: str) -> List:
@@ -32,6 +39,12 @@ def convert(code: str) -> str:
 
 def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def parse_crossgl(code: str):
+    tokens = CrossGLLexer(code).get_tokens()
+    parser = CrossGLParser(tokens)
+    return parser.parse()
 
 
 def test_codegen_emits_shader_and_stages():
@@ -168,8 +181,68 @@ def test_codegen_texture_and_sampler_translation():
     """
     result = convert(code)
     assert re.search(r"sampler2d", result, re.IGNORECASE)
-    assert "texture(" in result or "texture2D(" in result
+    assert "texture(albedo, samp, in.uv)" in result
     assert "albedo" in result
+
+
+def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
+    code = """
+    float4 sampleColor(texture2d<float> albedo, sampler linearSampler, float2 uv, float lod) {
+        float4 base = albedo.sample(linearSampler, uv);
+        float4 mip = albedo.sample(linearSampler, uv, lod);
+        return base + mip;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "texture(albedo, linearSampler, uv)" in crossgl
+    assert "textureLod(albedo, linearSampler, uv, lod)" in crossgl
+    assert "texture(albedo, uv)" not in crossgl
+    assert "textureLod(albedo, uv, lod)" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "texture(albedo, uv)" in glsl
+    assert "textureLod(albedo, uv, lod)" in glsl
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "Texture2D albedo" in hlsl
+    assert "SamplerState linearSampler" in hlsl
+    assert "albedo.Sample(linearSampler, uv)" in hlsl
+    assert "albedo.SampleLevel(linearSampler, uv, lod)" in hlsl
+
+    metal = MetalCodeGen().generate(ast)
+    assert "texture2d<float> albedo" in metal
+    assert "sampler linearSampler" in metal
+    assert "albedo.sample(linearSampler, uv)" in metal
+    assert "albedo.sample(linearSampler, uv, level(lod))" in metal
+
+
+def test_codegen_binding_attributes_do_not_roundtrip_as_semantics():
+    code = """
+    float4 sampleBound(texture2d<float> tex [[texture(1)]], sampler samp [[sampler(2)]], float2 uv) {
+        return tex.sample(samp, uv);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "@texture(1)" in crossgl
+    assert "@sampler(2)" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "vec4 sampleBound(sampler2D tex, vec2 uv)" in glsl
+    assert "tex texture" not in glsl
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "float4 sampleBound(Texture2D tex, SamplerState samp, float2 uv)" in hlsl
+    assert ": texture" not in hlsl
+    assert ": sampler" not in hlsl
+
+    metal = MetalCodeGen().generate(ast)
+    assert "float4 sampleBound(texture2d<float> tex, sampler samp, float2 uv)" in metal
+    assert "[[texture]]" not in metal
+    assert "[[sampler]]" not in metal
 
 
 def test_codegen_control_flow_and_ops():

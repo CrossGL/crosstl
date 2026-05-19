@@ -352,15 +352,7 @@ class MetalCodeGen:
                             # Dynamic arrays in Metal use array<type>
                             code += f"    array<{self.map_type(element_type)}> {member.name};\n"
                     else:
-                        semantic = None
-                        if hasattr(member, "semantic"):
-                            semantic = member.semantic
-                        elif hasattr(member, "attributes"):
-                            for attr in member.attributes:
-                                if hasattr(attr, "name"):
-                                    semantic = attr.name
-                                    break
-
+                        semantic = self.semantic_from_node(member)
                         if hasattr(member, "member_type"):
                             if str(type(member.member_type)).find("ArrayType") != -1:
                                 # Handle array types with C-style syntax for struct members
@@ -466,17 +458,25 @@ class MetalCodeGen:
                 "image2DArray",
             ]:
                 mapped_type = self.map_resource_type_with_format(vtype, node)
-                self.texture_variables.append(
-                    (node, texture_register, mapped_type, array_size)
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture"}, ("t", "u")
                 )
+                if binding is None:
+                    binding = texture_register
+                self.texture_variables.append((node, binding, mapped_type, array_size))
                 self.texture_variable_types[node.name] = mapped_type
                 explicit_format = self.explicit_image_format(node)
                 if explicit_format:
                     self.image_variable_formats[node.name] = explicit_format
-                texture_register += resource_count
+                texture_register = max(texture_register, binding + resource_count)
             elif vtype in ["sampler"]:
-                self.sampler_variables.append((node, sampler_register, array_size))
-                sampler_register += resource_count
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "sampler"}, ("s",)
+                )
+                if binding is None:
+                    binding = sampler_register
+                self.sampler_variables.append((node, binding, array_size))
+                sampler_register = max(sampler_register, binding + resource_count)
             else:
                 code += f"{self.map_type(vtype)} {node.name}{array_suffix};\n"
 
@@ -687,7 +687,9 @@ class MetalCodeGen:
 
             semantic = self.semantic_from_node(p)
 
-            param_attr = self.parameter_attribute(raw_param_type, semantic, shader_type)
+            param_attr = self.parameter_attribute(
+                raw_param_type, semantic, shader_type, p
+            )
             declaration = self.format_parameter_declaration(
                 raw_param_type, param_type, p.name, p
             )
@@ -728,13 +730,19 @@ class MetalCodeGen:
         self.current_function_return_type = raw_return_type
 
         if shader_type == "vertex":
-            params_str = self.append_global_resource_parameters(params_str)
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name
+            )
             code += f"vertex {return_type} vertex_{func.name}({params_str}) {{\n"
         elif shader_type == "fragment":
-            params_str = self.append_global_resource_parameters(params_str)
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name
+            )
             code += f"fragment {return_type} fragment_{func.name}({params_str}) {{\n"
         elif shader_type in ["compute", "ray_generation"]:
-            params_str = self.append_global_resource_parameters(params_str)
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name
+            )
             code += f"kernel {return_type} kernel_{func.name}({params_str}) {{\n"
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
@@ -766,15 +774,7 @@ class MetalCodeGen:
             stage_keyword = rt_stage_map.get(shader_type, shader_type)
             code += f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
         else:
-            # Handle semantic - get from attributes in new AST
-            semantic = None
-            if hasattr(func, "semantic"):
-                semantic = func.semantic
-            elif hasattr(func, "attributes"):
-                for attr in func.attributes:
-                    if hasattr(attr, "name"):
-                        semantic = attr.name
-                        break
+            semantic = self.semantic_from_node(func)
             code += f"{return_type} {func.name}({params_str}) {self.map_semantic(semantic)} {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
@@ -835,13 +835,25 @@ class MetalCodeGen:
                     used_names.add(base_name)
         return used_names
 
-    def append_global_resource_parameters(self, params_str):
+    def append_global_resource_parameters(self, params_str, func_name=None):
         resource_params = []
+        dependencies = (
+            self.function_global_resource_dependencies.get(func_name, set())
+            if func_name
+            else None
+        )
         if self.cbuffer_variables:
-            for i, cbuffer in enumerate(self.cbuffer_variables):
+            buffer_index = 0
+            for cbuffer in self.cbuffer_variables:
+                binding = self.explicit_resource_binding_index(
+                    cbuffer, {"binding", "buffer"}, ("b",)
+                )
+                if binding is None:
+                    binding = buffer_index
+                buffer_index = max(buffer_index, binding + 1)
                 parameter_name = self.cbuffer_parameter_name(cbuffer)
                 resource_params.append(
-                    f"constant {cbuffer.name}& {parameter_name} [[buffer({i})]]"
+                    f"constant {cbuffer.name}& {parameter_name} [[buffer({binding})]]"
                 )
         if self.texture_variables:
             for (
@@ -856,8 +868,11 @@ class MetalCodeGen:
                 resource_params.append(f"{declaration} [[texture({i})]]")
         if self.sampler_variables:
             for sampler_variable, i, array_size in self.sampler_variables:
+                sampler_name = getattr(sampler_variable, "name", None)
+                if dependencies is not None and sampler_name not in dependencies:
+                    continue
                 declaration = self.format_resource_parameter(
-                    "sampler", sampler_variable.name, array_size
+                    "sampler", sampler_name, array_size
                 )
                 resource_params.append(f"{declaration} [[sampler({i})]]")
         if not resource_params:
@@ -1806,13 +1821,32 @@ class MetalCodeGen:
             return 3
         return None
 
-    def parameter_attribute(self, raw_param_type, semantic, shader_type):
+    def parameter_attribute(self, raw_param_type, semantic, shader_type, node=None):
         if semantic:
             return self.map_semantic(semantic)
+        if shader_type in {"vertex", "fragment", "compute"}:
+            resource_attr = self.resource_parameter_attribute(raw_param_type, node)
+            if resource_attr:
+                return resource_attr
         if self.is_resource_parameter_type(raw_param_type):
             return ""
         if shader_type in {"vertex", "fragment"}:
             return " [[stage_in]]"
+        return ""
+
+    def resource_parameter_attribute(self, raw_param_type, node=None):
+        if node is None:
+            return ""
+        if self.is_sampler_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "sampler"}, ("s",)
+            )
+            return f" [[sampler({binding})]]" if binding is not None else ""
+        if self.is_resource_parameter_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "texture"}, ("t", "u")
+            )
+            return f" [[texture({binding})]]" if binding is not None else ""
         return ""
 
     def format_parameter_declaration(
@@ -2139,7 +2173,7 @@ class MetalCodeGen:
                 dependencies.add(sampler_name)
                 return
 
-        if not self.texture_sampling_uses_implicit_sampler(func_name):
+        if not self.texture_call_needs_implicit_sampler_dependency(func_name, args):
             return
         implicit_sampler_name = f"{texture_name}Sampler" if texture_name else None
         if (
@@ -2162,7 +2196,50 @@ class MetalCodeGen:
             "textureProjOffset",
             "textureProjLodOffset",
             "textureProjGradOffset",
+            "textureQueryLod",
         }
+
+    def texture_call_needs_implicit_sampler_dependency(self, func_name, args):
+        if not self.texture_sampling_uses_implicit_sampler(func_name):
+            return False
+
+        texture_type = self.texture_resource_type(args[0])
+        if self.storage_image_texture_operation_expression(func_name, texture_type):
+            return False
+
+        if func_name in {"texture", "textureLod", "textureGrad"}:
+            return not self.is_multisample_texture_resource(texture_type)
+
+        if func_name == "textureQueryLod":
+            return not (
+                self.is_multisample_texture_resource(texture_type)
+                or self.is_storage_image_resource(texture_type)
+            )
+
+        if func_name in {
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+        }:
+            return self.texture_sample_supports_offset(texture_type)
+
+        if func_name in {
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+        }:
+            texture_type = self.resource_base_type(texture_type)
+            return (
+                texture_type.startswith("texture1d<")
+                or texture_type.startswith("texture2d<")
+                or texture_type.startswith("texture2d_array<")
+                or texture_type.startswith("texture3d<")
+            )
+
+        return True
 
     def global_texture_names(self):
         return {
@@ -2380,13 +2457,68 @@ class MetalCodeGen:
         attr_name = str(attr_name).lower()
         return attr_name == "format" or attr_name in self.supported_image_formats()
 
+    def is_resource_binding_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {
+            "binding",
+            "buffer",
+            "packoffset",
+            "register",
+            "sampler",
+            "set",
+            "space",
+            "texture",
+        }
+
+    def binding_index_value(self, value, prefixes=()):
+        if hasattr(value, "value") and value.value is not None:
+            raw_value = value.value
+        elif hasattr(value, "name") and value.name is not None:
+            raw_value = value.name
+        else:
+            raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def explicit_resource_binding_index(
+        self, node, attribute_names=(), register_prefixes=()
+    ):
+        if not hasattr(node, "attributes"):
+            return None
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name or not arguments:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in attribute_names:
+                binding = self.binding_index_value(arguments[0])
+            elif attr_name == "register":
+                binding = self.binding_index_value(arguments[0], register_prefixes)
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
     def semantic_from_node(self, node):
         if hasattr(node, "semantic"):
             return node.semantic
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
-            if self.is_image_format_attribute(attr):
+            if self.is_image_format_attribute(
+                attr
+            ) or self.is_resource_binding_attribute(attr):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
@@ -3307,6 +3439,20 @@ class MetalCodeGen:
             f"{func_name} on {texture_type} */ float4(0.0)"
         )
 
+    def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
+        return (
+            f"/* unsupported Metal multisample texture comparison: "
+            f"{func_name} on {texture_type} */ 0.0"
+        )
+
+    def unsupported_multisample_texture_gather_compare_call(
+        self, func_name, texture_type
+    ):
+        return (
+            f"/* unsupported Metal multisample texture gather comparison: "
+            f"{func_name} on {texture_type} */ float4(0.0)"
+        )
+
     def unsupported_multisample_texture_query_lod_call(self, texture_type):
         return (
             "/* unsupported Metal multisample texture query: "
@@ -3533,6 +3679,11 @@ class MetalCodeGen:
                 func_name, "requires a compare argument"
             )
 
+        if self.is_multisample_texture_resource(texture_type):
+            return self.unsupported_multisample_texture_compare_call(
+                func_name, texture_type
+            )
+
         compare = self.generate_expression(extra_args[0])
         if func_name in {
             "textureCompareProj",
@@ -3727,6 +3878,11 @@ class MetalCodeGen:
         if not extra_args:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires a compare argument"
+            )
+
+        if self.is_multisample_texture_resource(texture_type):
+            return self.unsupported_multisample_texture_gather_compare_call(
+                func_name, texture_type
             )
 
         compare = self.generate_expression(extra_args[0])
