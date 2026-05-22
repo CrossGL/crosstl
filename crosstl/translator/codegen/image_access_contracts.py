@@ -2,7 +2,6 @@
 
 from ..ast import FunctionCallNode
 
-
 IMAGE_ATOMIC_INTRINSIC_NAMES = {
     "imageAtomicAdd",
     "imageAtomicMin",
@@ -56,20 +55,20 @@ SUPPORTED_IMAGE_FORMATS = frozenset(
 )
 
 IMAGE_FORMAT_CHANNEL_COUNTS = {
-    image_format: 4
-    if image_format.startswith("rgba")
-    else 2
-    if image_format.startswith("rg")
-    else 1
+    image_format: (
+        4
+        if image_format.startswith("rgba")
+        else 2 if image_format.startswith("rg") else 1
+    )
     for image_format in SUPPORTED_IMAGE_FORMATS
 }
 
 IMAGE_FORMAT_COMPONENT_KINDS = {
-    image_format: "uint"
-    if image_format.endswith("ui")
-    else "int"
-    if image_format.endswith("i")
-    else "float"
+    image_format: (
+        "uint"
+        if image_format.endswith("ui")
+        else "int" if image_format.endswith("i") else "float"
+    )
     for image_format in SUPPORTED_IMAGE_FORMATS
 }
 

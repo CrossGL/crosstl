@@ -30,7 +30,11 @@ def convert_type_node_to_string(type_node):
         return f"float{type_node.cols}x{type_node.rows}"
     if hasattr(type_node, "element_type") and hasattr(type_node, "size"):
         element_type = convert_type_node_to_string(type_node.element_type)
-        return f"{element_type}[]" if type_node.size is None else f"{element_type}[{type_node.size}]"
+        return (
+            f"{element_type}[]"
+            if type_node.size is None
+            else f"{element_type}[{type_node.size}]"
+        )
     return str(type_node)
 
 
@@ -66,7 +70,8 @@ def collect_for(struct, var=None, *, literal_int_value=None):
         resource_base_type=lambda vtype: getattr(vtype, "name", str(vtype)),
         glsl_buffer_block_layout=lambda node: node.attributes[0].arguments[0].value,
         convert_type_node_to_string=convert_type_node_to_string,
-        literal_int_value=literal_int_value or (lambda value: value if isinstance(value, int) else None),
+        literal_int_value=literal_int_value
+        or (lambda value: value if isinstance(value, int) else None),
         map_type=lambda type_name: f"mapped_{type_name}",
         target_type_key="target_type",
         unsupported_type_message="type is not supported by test lowering",

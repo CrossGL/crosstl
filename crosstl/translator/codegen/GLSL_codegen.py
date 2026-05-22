@@ -1691,7 +1691,9 @@ class GLSLCodeGen:
         if func_name == "buffer_store" and len(args) >= 3:
             index = self.generate_expression(args[1])
             value = self.generate_expression(args[2])
-            return f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
+            return (
+                f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
+            )
         if func_name == "buffer_append" and len(args) >= 2:
             return (
                 "/* unsupported GLSL buffer append: requires explicit "
@@ -2705,7 +2707,9 @@ class GLSLCodeGen:
             return None
         return {
             "function_name": (
-                "imageSize" if self.is_storage_image_type(texture_type) else "textureSize"
+                "imageSize"
+                if self.is_storage_image_type(texture_type)
+                else "textureSize"
             ),
         }
 
@@ -3712,7 +3716,9 @@ class GLSLCodeGen:
         element_type = type_name.split("<", 1)[1][:-1].strip()
         return self.map_type(element_type)
 
-    def structured_buffer_block_declaration(self, vtype, name, binding, array_size=None):
+    def structured_buffer_block_declaration(
+        self, vtype, name, binding, array_size=None
+    ):
         element_type = self.structured_buffer_element_type(vtype)
         readonly = (
             "readonly "

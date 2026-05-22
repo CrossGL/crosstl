@@ -10866,11 +10866,12 @@ def test_directx_texture_query_resource_descriptors():
             "return_expr": "int(samples)",
         },
     }
-    assert codegen.texture_query_size_expression("colorImage") == "imageSize(colorImage)"
+    assert (
+        codegen.texture_query_size_expression("colorImage") == "imageSize(colorImage)"
+    )
     assert codegen.texture_query_size_expression("msTex") == "textureSize(msTex)"
     assert (
-        codegen.texture_query_size_expression("colorMap")
-        == "textureSize(colorMap, 0)"
+        codegen.texture_query_size_expression("colorMap") == "textureSize(colorMap, 0)"
     )
     assert (
         codegen.texture_query_levels_expression("colorImage")
@@ -10885,9 +10886,15 @@ def test_directx_texture_query_resource_descriptors():
         == "/* unsupported DirectX texture samples query: requires multisample texture */ 0"
     )
     assert codegen.texture_samples_expression("msArray") == "textureSamples(msArray)"
-    assert ("imageSize", "RWTexture2D<float4>") in codegen.required_texture_query_helpers
+    assert (
+        "imageSize",
+        "RWTexture2D<float4>",
+    ) in codegen.required_texture_query_helpers
     assert ("textureSize", "Texture2D") in codegen.required_texture_query_helpers
-    assert ("textureSize", "Texture2DMS<float4>") in codegen.required_texture_query_helpers
+    assert (
+        "textureSize",
+        "Texture2DMS<float4>",
+    ) in codegen.required_texture_query_helpers
     assert (
         "textureQueryLevels",
         "Texture2D",

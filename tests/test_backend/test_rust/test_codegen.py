@@ -3655,7 +3655,9 @@ def test_closure_block_body_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "let doubled = lambda(x, { let y = (x + 1); return (y * 2); });" in result
+        assert (
+            "let doubled = lambda(x, { let y = (x + 1); return (y * 2); });" in result
+        )
         assert (
             "let mapped = map(values, lambda(x, { prepare(x); return (x + 1); }));"
             in result
@@ -3687,7 +3689,9 @@ def test_closure_transparent_block_body_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "let guarded = lambda(x, { let y = (x + 1); return (y * 2); });" in result
+        assert (
+            "let guarded = lambda(x, { let y = (x + 1); return (y * 2); });" in result
+        )
         assert "let folded = lambda({ let value = 2; return (value + 1); });" in result
         assert "let suspended = lambda(x, { let y = (x + 1); return y; });" in result
     except Exception as e:

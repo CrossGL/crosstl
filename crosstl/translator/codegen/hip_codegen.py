@@ -528,7 +528,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if var_type is None and initial_value is not None:
             inferred_type = self.expression_result_type(initial_value)
             self.register_variable_type(node.name, inferred_type)
-            declaration = self.format_typed_declarator(inferred_type or "auto", node.name)
+            declaration = self.format_typed_declarator(
+                inferred_type or "auto", node.name
+            )
         else:
             var_type = var_type or "int"
             self.register_variable_type(node.name, var_type)

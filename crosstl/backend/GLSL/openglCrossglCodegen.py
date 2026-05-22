@@ -335,8 +335,7 @@ class GLSLToCrossGLConverter:
             (
                 str(name)
                 for name, value in layout.items()
-                if value is None
-                and str(name).lower() in {"std140", "std430", "scalar"}
+                if value is None and str(name).lower() in {"std140", "std430", "scalar"}
             ),
             "std430",
         )
@@ -380,7 +379,9 @@ class GLSLToCrossGLConverter:
             return ""
 
         members = getattr(struct, "members", None) or getattr(struct, "fields", [])
-        has_runtime_array = any(getattr(member, "is_array", False) for member in members)
+        has_runtime_array = any(
+            getattr(member, "is_array", False) for member in members
+        )
         if not has_runtime_array or self.ssbo_element_member(var) is not None:
             return ""
 
@@ -676,10 +677,9 @@ class GLSLToCrossGLConverter:
             diagnostic = self.unsupported_runtime_array_ssbo_diagnostic(global_var)
             if diagnostic:
                 result += self.indent_str + diagnostic + "\n"
-                declaration = (
-                    self.generate_variable_declaration(global_var)
-                    + self.ssbo_block_attribute_suffix(global_var)
-                )
+                declaration = self.generate_variable_declaration(
+                    global_var
+                ) + self.ssbo_block_attribute_suffix(global_var)
                 result += self.indent_str + declaration + ";\n"
                 continue
             result += (
@@ -796,7 +796,9 @@ class GLSLToCrossGLConverter:
                 if getattr(field, "semantic", None):
                     semantic = f" @ {field.semantic}"
                 array_suffix = self.array_suffix(field)
-            result += self.indent() + f"{var_type} {var_name}{array_suffix}{semantic};\n"
+            result += (
+                self.indent() + f"{var_type} {var_name}{array_suffix}{semantic};\n"
+            )
         self.decrease_indent()
 
         result += self.indent() + "};"
@@ -1176,7 +1178,10 @@ class GLSLToCrossGLConverter:
         index = self.generate_expression(node.index)
         array_expr = node.array
 
-        if isinstance(array_expr, VariableNode) and array_expr.name in self.structured_buffer_names:
+        if (
+            isinstance(array_expr, VariableNode)
+            and array_expr.name in self.structured_buffer_names
+        ):
             return array_expr.name, index
 
         if isinstance(array_expr, MemberAccessNode):
@@ -1186,7 +1191,10 @@ class GLSLToCrossGLConverter:
                 and (base_name, array_expr.member)
                 in self.structured_buffer_instance_members
             ):
-                return self.generate_buffer_receiver_expression(array_expr.object), index
+                return (
+                    self.generate_buffer_receiver_expression(array_expr.object),
+                    index,
+                )
 
         return None
 
@@ -1197,7 +1205,10 @@ class GLSLToCrossGLConverter:
             return None
 
         target = node.name.object
-        if isinstance(target, VariableNode) and target.name in self.structured_buffer_names:
+        if (
+            isinstance(target, VariableNode)
+            and target.name in self.structured_buffer_names
+        ):
             return target.name
         if isinstance(target, MemberAccessNode):
             base_name = self.expression_base_name(target.object)

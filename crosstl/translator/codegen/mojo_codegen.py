@@ -282,9 +282,11 @@ class MojoCodeGen:
                         node.name,
                         vtype or self.expression_result_type(node.initial_value),
                     )
-                    if isinstance(
-                        node.initial_value, ArrayLiteralNode
-                    ) and vtype is not None and self.is_array_type_name(vtype):
+                    if (
+                        isinstance(node.initial_value, ArrayLiteralNode)
+                        and vtype is not None
+                        and self.is_array_type_name(vtype)
+                    ):
                         init_expr = self.generate_array_literal_expression(
                             node.initial_value, vtype
                         )
@@ -741,9 +743,11 @@ class MojoCodeGen:
                     stmt.name,
                     var_type or self.expression_result_type(stmt.initial_value),
                 )
-                if isinstance(
-                    stmt.initial_value, ArrayLiteralNode
-                ) and var_type is not None and self.is_array_type_name(var_type):
+                if (
+                    isinstance(stmt.initial_value, ArrayLiteralNode)
+                    and var_type is not None
+                    and self.is_array_type_name(var_type)
+                ):
                     init_expr = self.generate_array_literal_expression(
                         stmt.initial_value, var_type
                     )

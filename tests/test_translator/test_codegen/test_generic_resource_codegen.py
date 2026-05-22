@@ -68,12 +68,17 @@ def test_structured_buffer_parameters_preserve_element_type_for_core_backends():
     ast = parse(shader)
 
     hlsl = HLSLCodeGen().generate(ast)
-    assert "void scale(RWStructuredBuffer<float> data, StructuredBuffer<float> input, uint index)" in hlsl
+    assert (
+        "void scale(RWStructuredBuffer<float> data, StructuredBuffer<float> input, uint index)"
+        in hlsl
+    )
     assert "float value = input.Load(index);" in hlsl
     assert "data.Store(index, (value * 2.0));" in hlsl
 
     metal = MetalCodeGen().generate(ast)
-    assert "void scale(device float* data, const device float* input, uint index)" in metal
+    assert (
+        "void scale(device float* data, const device float* input, uint index)" in metal
+    )
     assert "float value = input[index];" in metal
     assert "data[index] = value * 2.0;" in metal
 

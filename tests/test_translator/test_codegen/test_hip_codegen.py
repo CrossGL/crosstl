@@ -244,8 +244,7 @@ class TestHipCodeGen:
         assert "fmaxf(min_value.x, fminf(max_value.x, value.x))" in hip_code
         assert (
             "float3 c = cgl_float3_clamp("
-            "v, make_float3(0.0, 0.0, 0.0), make_float3(1.0, 1.0, 1.0));"
-            in hip_code
+            "v, make_float3(0.0, 0.0, 0.0), make_float3(1.0, 1.0, 1.0));" in hip_code
         )
         assert "float x = fmaxf(0.0, fminf(1.0, 0.25));" in hip_code
         assert "fmaxf(make_float3" not in hip_code

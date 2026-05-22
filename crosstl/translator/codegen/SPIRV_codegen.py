@@ -4261,7 +4261,9 @@ class VulkanSPIRVCodeGen:
         type_name, builtin_name, storage_class = info
         type_id = self.map_crossgl_type(type_name)
         if storage_class == "Constant":
-            builtin_id = self.register_workgroup_size_builtin(name, type_id, builtin_name)
+            builtin_id = self.register_workgroup_size_builtin(
+                name, type_id, builtin_name
+            )
         else:
             builtin_id = self.register_builtin_input(name, type_id, builtin_name)
 
@@ -4287,9 +4289,7 @@ class VulkanSPIRVCodeGen:
     ) -> SpirvId:
         uint_type = self.register_primitive_type("uint")
         x, y, z = self.compute_local_size(self.current_stage)
-        components = [
-            self.register_constant(value, uint_type) for value in (x, y, z)
-        ]
+        components = [self.register_constant(value, uint_type) for value in (x, y, z)]
 
         id_value = self.get_id()
         component_list = " ".join(f"%{component.id}" for component in components)

@@ -58,12 +58,10 @@ def test_array_postfix_update_tokenization():
 
 
 def test_preprocessor_version_directive_tokenization():
-    tokens = tokenize_code(
-        """
+    tokens = tokenize_code("""
         #version 450
         void main() {}
-        """
-    )
+        """)
 
     assert tokens[:4] == [
         ("VOID", "void"),
@@ -75,12 +73,10 @@ def test_preprocessor_version_directive_tokenization():
 
 
 def test_preprocessor_extension_directive_tokenization():
-    tokens = tokenize_code(
-        """
+    tokens = tokenize_code("""
         #extension GL_EXT_nonuniform_qualifier : enable
         layout(set = 0, binding = 0) uniform sampler2D albedoTex;
-        """
-    )
+        """)
 
     assert tokens[:2] == [("LAYOUT", "layout"), ("LPAREN", "(")]
     assert ("IDENTIFIER", "GL_EXT_nonuniform_qualifier") not in tokens
@@ -88,12 +84,10 @@ def test_preprocessor_extension_directive_tokenization():
 
 
 def test_one_dimensional_sampler_tokenization():
-    tokens = tokenize_code(
-        """
+    tokens = tokenize_code("""
         uniform sampler1D ramp;
         uniform sampler1DArray ramps;
-        """
-    )
+        """)
 
     assert ("SAMPLER1D", "sampler1D") in tokens
     assert ("SAMPLER1DARRAY", "sampler1DArray") in tokens

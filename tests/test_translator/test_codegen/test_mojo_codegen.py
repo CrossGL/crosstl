@@ -161,7 +161,9 @@ def test_compute_stage_local_helper_functions_emit_before_entry_point():
     entry_signature = "fn main() -> None:"
     assert helper_signature in generated_code
     assert entry_signature in generated_code
-    assert generated_code.index(helper_signature) < generated_code.index(entry_signature)
+    assert generated_code.index(helper_signature) < generated_code.index(
+        entry_signature
+    )
     assert "var y: Float32 = helper(1.0)" in generated_code
 
 

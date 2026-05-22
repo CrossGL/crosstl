@@ -550,9 +550,7 @@ class HLSLCodeGen:
                 continue
 
             if self.is_glsl_buffer_block_variable(node, vtype):
-                code += self.glsl_buffer_block_diagnostic(
-                    "HLSL", vtype, var_name, node
-                )
+                code += self.glsl_buffer_block_diagnostic("HLSL", vtype, var_name, node)
 
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if var_name in comparison_sampler_names and mapped_type == "SamplerState":
@@ -4086,8 +4084,9 @@ class HLSLCodeGen:
         return {
             "texture_type": texture_type,
             "storage_image": storage_image,
-            "multisample": texture_type
-            in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"},
+            "multisample": (
+                texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}
+            ),
             "size_descriptor": (
                 self.image_size_helper_descriptor(texture_type)
                 if storage_image
@@ -5686,7 +5685,9 @@ class HLSLCodeGen:
             )
         return "\n".join(lines)
 
-    def hlsl_byteaddress_matrix_compound_store(self, buffer_name, offset, value, op, access):
+    def hlsl_byteaddress_matrix_compound_store(
+        self, buffer_name, offset, value, op, access
+    ):
         compound_ops = {
             "+=": "+",
             "-=": "-",
@@ -5785,11 +5786,7 @@ class HLSLCodeGen:
         failure_detail = self.glsl_buffer_block_lowering_failure_detail(
             type_name, var_name
         )
-        reason = (
-            f"; {failure_detail}"
-            if failure_detail
-            else ""
-        )
+        reason = f"; {failure_detail}" if failure_detail else ""
         return (
             f"// unsupported {target} GLSL buffer block {declaration}{details}: "
             "mixed metadata/runtime-array layout requires ByteAddressBuffer "

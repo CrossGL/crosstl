@@ -3453,10 +3453,7 @@ def test_metal_unsigned_constructor_image_coordinates_are_not_rewrapped():
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "float4 color = outputImage.read(uint2(1u, 2u));" in generated_code
-    assert (
-        "float4 volumeColor = volumeImage.read(uint3(1u, 2u, 3u));"
-        in generated_code
-    )
+    assert "float4 volumeColor = volumeImage.read(uint3(1u, 2u, 3u));" in generated_code
     assert "outputImage.write(color, uint2(1u, 2u));" in generated_code
     assert "volumeImage.write(volumeColor, uint3(1u, 2u, 3u));" in generated_code
     assert "uint2(uint2" not in generated_code

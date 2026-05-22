@@ -1054,8 +1054,7 @@ class MetalToCrossGLConverter:
             return None
 
         qualifiers = {
-            str(qualifier).lower()
-            for qualifier in getattr(var, "qualifiers", []) or []
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         }
         if not qualifiers.intersection({"device", "constant"}):
             return None
@@ -1082,9 +1081,9 @@ class MetalToCrossGLConverter:
         )
 
     def is_structured_buffer_element_access(self, expr):
-        return isinstance(expr, ArrayAccessNode) and self.is_structured_buffer_expression(
-            expr.array
-        )
+        return isinstance(
+            expr, ArrayAccessNode
+        ) and self.is_structured_buffer_expression(expr.array)
 
     def generate_without_structured_buffer_index_lowering(self, expr, is_main=False):
         previous = self.suppress_structured_buffer_index_lowering

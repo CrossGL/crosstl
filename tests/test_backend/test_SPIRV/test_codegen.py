@@ -142,7 +142,9 @@ def test_function_parameter_qualifiers_codegen_smoke():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "void accumulate(float3 normal, float weight, float4 color)" in generated_code
+    assert (
+        "void accumulate(float3 normal, float weight, float4 color)" in generated_code
+    )
     assert "color = float4(normal, weight);" in generated_code
     assert "Unhandled statement type" not in generated_code
 

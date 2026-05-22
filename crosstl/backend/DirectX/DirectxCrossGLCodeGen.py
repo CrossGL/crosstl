@@ -375,13 +375,15 @@ class HLSLToCrossGLConverter:
                 "usage": None,
                 "buffer_when_max_args": None,
                 "resource": "buffer",
-                "operation": {
-                    "Store": "store",
-                    "Append": "append",
-                    "Consume": "consume",
-                    "Load": "load",
-                    "GetDimensions": "dimensions",
-                }.get(member),
+                "operation": (
+                    {
+                        "Store": "store",
+                        "Append": "append",
+                        "Consume": "consume",
+                        "Load": "load",
+                        "GetDimensions": "dimensions",
+                    }.get(member)
+                ),
             }
         return None
 

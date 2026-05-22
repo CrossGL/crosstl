@@ -312,10 +312,7 @@ def test_codegen_ssbo_compound_writes_use_load_store_contract():
 
     assert "RWStructuredBuffer<int> valuesBlock @binding(0);" in crossgl
     assert "RWStructuredBuffer<int> layers[2] @binding(1);" in crossgl
-    assert (
-        "buffer_store(valuesBlock, 0, buffer_load(valuesBlock, 0) + 3);"
-        in crossgl
-    )
+    assert "buffer_store(valuesBlock, 0, buffer_load(valuesBlock, 0) + 3);" in crossgl
     assert (
         "buffer_store(layers[1], 2, buffer_load(layers[1], 2) * buffer_load(valuesBlock, 0));"
         in crossgl
@@ -463,9 +460,7 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic(
     assert "struct ParticlesBlock" in crossgl
     assert "uint count;" in crossgl
     assert "float data[];" in crossgl
-    assert (
-        "ParticlesBlock particles @glsl_buffer_block(std430) @binding(0);" in crossgl
-    )
+    assert "ParticlesBlock particles @glsl_buffer_block(std430) @binding(0);" in crossgl
     assert "RWStructuredBuffer<float> particles" not in crossgl
     assert "buffer_load(particles" not in crossgl
     assert "particles.data[0]" in crossgl
@@ -495,10 +490,7 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic(
     assert "unsupported Metal GLSL buffer block ParticlesBlock" not in metal
     assert "uint n = (*reinterpret_cast<const device uint*>(particles + 0));" in metal
     assert "float v = (*reinterpret_cast<const device float*>(particles + 4));" in metal
-    assert (
-        "(*reinterpret_cast<device float*>(particles + 4)) = v + float(n);"
-        in metal
-    )
+    assert "(*reinterpret_cast<device float*>(particles + 4)) = v + float(n);" in metal
 
 
 def test_codegen_mixed_ssbo_metal_vec3_metadata_uses_scalar_pointer_offsets():
@@ -528,29 +520,24 @@ def test_codegen_mixed_ssbo_metal_vec3_metadata_uses_scalar_pointer_offsets():
         "float x = float3((*reinterpret_cast<const device float*>"
         "(metalVecBlock + 0)), (*reinterpret_cast<const device float*>"
         "(metalVecBlock + 4)), (*reinterpret_cast<const device float*>"
-        "(metalVecBlock + 8))).x;"
-        in metal
+        "(metalVecBlock + 8))).x;" in metal
     )
     assert "float3 __crossgl_buffer_store_0 = b;" in metal
     assert (
         "(*reinterpret_cast<device float*>(metalVecBlock + 0)) = "
-        "__crossgl_buffer_store_0.x;"
-        in metal
+        "__crossgl_buffer_store_0.x;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>(metalVecBlock + 4)) = "
-        "__crossgl_buffer_store_0.y;"
-        in metal
+        "__crossgl_buffer_store_0.y;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>(metalVecBlock + 8)) = "
-        "__crossgl_buffer_store_0.z;"
-        in metal
+        "__crossgl_buffer_store_0.z;" in metal
     )
     assert (
         "float tail = (*reinterpret_cast<const device float*>"
-        "(metalVecBlock + 12));"
-        in metal
+        "(metalVecBlock + 12));" in metal
     )
 
 
@@ -581,27 +568,23 @@ def test_codegen_mixed_ssbo_metal_vec3_runtime_arrays_use_16_byte_stride():
         "(*reinterpret_cast<const device float*>"
         "(metalDirectionsBlock + (16 + i * 16 + 4))), "
         "(*reinterpret_cast<const device float*>"
-        "(metalDirectionsBlock + (16 + i * 16 + 8))));"
-        in metal
+        "(metalDirectionsBlock + (16 + i * 16 + 8))));" in metal
     )
     assert "float3 __crossgl_buffer_store_0 = d;" in metal
     assert (
         "(*reinterpret_cast<device float*>"
         "(metalDirectionsBlock + (16 + i * 16))) = "
-        "__crossgl_buffer_store_0.x;"
-        in metal
+        "__crossgl_buffer_store_0.x;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>"
         "(metalDirectionsBlock + (16 + i * 16 + 4))) = "
-        "__crossgl_buffer_store_0.y;"
-        in metal
+        "__crossgl_buffer_store_0.y;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>"
         "(metalDirectionsBlock + (16 + i * 16 + 8))) = "
-        "__crossgl_buffer_store_0.z;"
-        in metal
+        "__crossgl_buffer_store_0.z;" in metal
     )
 
 
@@ -627,13 +610,11 @@ def test_codegen_mixed_ssbo_metal_readonly_blocks_use_const_device_pointer():
     metal = MetalCodeGen().generate(shader_ast)
     assert "const device uchar* metalReadBlock [[buffer(43)]]" in metal
     assert (
-        "uint i = (*reinterpret_cast<const device uint*>(metalReadBlock + 0));"
-        in metal
+        "uint i = (*reinterpret_cast<const device uint*>(metalReadBlock + 0));" in metal
     )
     assert (
         "float v = (*reinterpret_cast<const device float*>"
-        "(metalReadBlock + (4 + i * 4)));"
-        in metal
+        "(metalReadBlock + (4 + i * 4)));" in metal
     )
     assert "readonly device buffer cannot be written" in metal
 
@@ -715,7 +696,10 @@ def test_codegen_mixed_ssbo_metal_mat3_metadata_uses_column_offsets():
     metal = MetalCodeGen().generate(shader_ast)
     assert "device uchar* metalMatrixBlock [[buffer(44)]]" in metal
     assert "unsupported Metal GLSL buffer block MetalMatrixBlock" not in metal
-    assert "float s = (*reinterpret_cast<const device float*>(metalMatrixBlock + 0));" in metal
+    assert (
+        "float s = (*reinterpret_cast<const device float*>(metalMatrixBlock + 0));"
+        in metal
+    )
     assert "float3x3 t = float3x3(" in metal
     assert "(*reinterpret_cast<const device float*>(metalMatrixBlock + 16))" in metal
     assert "(*reinterpret_cast<const device float*>(metalMatrixBlock + 32))" in metal
@@ -723,18 +707,15 @@ def test_codegen_mixed_ssbo_metal_mat3_metadata_uses_column_offsets():
     assert "float3x3 __crossgl_matrix_store_0 = t;" in metal
     assert (
         "(*reinterpret_cast<device float*>(metalMatrixBlock + 16)) = "
-        "__crossgl_matrix_store_0[0].x;"
-        in metal
+        "__crossgl_matrix_store_0[0].x;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>(metalMatrixBlock + 56)) = "
-        "__crossgl_matrix_store_0[2].z;"
-        in metal
+        "__crossgl_matrix_store_0[2].z;" in metal
     )
     assert (
         "float tail = (*reinterpret_cast<const device float*>"
-        "(metalMatrixBlock + 64));"
-        in metal
+        "(metalMatrixBlock + 64));" in metal
     )
 
 
@@ -762,18 +743,15 @@ def test_codegen_mixed_ssbo_metal_non_square_matrix_metadata_uses_column_offsets
     assert "float3x2 t = float3x2(" in metal
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalNonSquareMatrixBlock + 16))"
-        in metal
+        "(metalNonSquareMatrixBlock + 16))" in metal
     )
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalNonSquareMatrixBlock + 40))"
-        in metal
+        "(metalNonSquareMatrixBlock + 40))" in metal
     )
     assert (
         "float tail = (*reinterpret_cast<const device float*>"
-        "(metalNonSquareMatrixBlock + 48));"
-        in metal
+        "(metalNonSquareMatrixBlock + 48));" in metal
     )
 
 
@@ -801,26 +779,22 @@ def test_codegen_mixed_ssbo_metal_runtime_matrix_arrays_use_column_offsets():
     assert "float4x4 selected = float4x4(" in metal
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalRuntimeMatrixBlock + (16 + i * 64)))"
-        in metal
+        "(metalRuntimeMatrixBlock + (16 + i * 64)))" in metal
     )
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalRuntimeMatrixBlock + (16 + i * 64 + 48 + 12)))"
-        in metal
+        "(metalRuntimeMatrixBlock + (16 + i * 64 + 48 + 12)))" in metal
     )
     assert "float4x4 __crossgl_matrix_store_0 = selected;" in metal
     assert (
         "(*reinterpret_cast<device float*>"
         "(metalRuntimeMatrixBlock + (16 + i * 64))) = "
-        "__crossgl_matrix_store_0[0].x;"
-        in metal
+        "__crossgl_matrix_store_0[0].x;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>"
         "(metalRuntimeMatrixBlock + (16 + i * 64 + 48 + 12))) = "
-        "__crossgl_matrix_store_0[3].w;"
-        in metal
+        "__crossgl_matrix_store_0[3].w;" in metal
     )
 
 
@@ -849,13 +823,11 @@ def test_codegen_mixed_ssbo_metal_matrix_compound_store_uses_temp():
     assert ") + value);" in metal
     assert (
         "(*reinterpret_cast<device float*>(metalMatrixBlock + 16)) = "
-        "__crossgl_matrix_store_0[0].x;"
-        in metal
+        "__crossgl_matrix_store_0[0].x;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>(metalMatrixBlock + 76)) = "
-        "__crossgl_matrix_store_0[3].w;"
-        in metal
+        "__crossgl_matrix_store_0[3].w;" in metal
     )
     assert "unsupported Metal GLSL buffer block matrix compound store" not in metal
 
@@ -911,36 +883,35 @@ def test_codegen_mixed_ssbo_metal_fixed_matrix_arrays_use_column_offsets():
     metal = MetalCodeGen().generate(shader_ast)
     assert "device uchar* metalMatrixArrayBlock [[buffer(49)]]" in metal
     assert "float4x4 first = float4x4(" in metal
-    assert "(*reinterpret_cast<const device float*>(metalMatrixArrayBlock + 0))" in metal
-    assert "(*reinterpret_cast<const device float*>(metalMatrixArrayBlock + 60))" in metal
+    assert (
+        "(*reinterpret_cast<const device float*>(metalMatrixArrayBlock + 0))" in metal
+    )
+    assert (
+        "(*reinterpret_cast<const device float*>(metalMatrixArrayBlock + 60))" in metal
+    )
     assert "float4x4 selected = float4x4(" in metal
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalMatrixArrayBlock + (i * 64)))"
-        in metal
+        "(metalMatrixArrayBlock + (i * 64)))" in metal
     )
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalMatrixArrayBlock + (i * 64 + 48 + 12)))"
-        in metal
+        "(metalMatrixArrayBlock + (i * 64 + 48 + 12)))" in metal
     )
     assert "float4x4 __crossgl_matrix_store_0 = selected;" in metal
     assert "float4x4 __crossgl_matrix_store_1 = first;" in metal
     assert (
         "(*reinterpret_cast<device float*>(metalMatrixArrayBlock + 0)) = "
-        "__crossgl_matrix_store_0[0].x;"
-        in metal
+        "__crossgl_matrix_store_0[0].x;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>"
         "(metalMatrixArrayBlock + (i * 64 + 48 + 12))) = "
-        "__crossgl_matrix_store_1[3].w;"
-        in metal
+        "__crossgl_matrix_store_1[3].w;" in metal
     )
     assert (
         "float tail = (*reinterpret_cast<const device float*>"
-        "(metalMatrixArrayBlock + 128));"
-        in metal
+        "(metalMatrixArrayBlock + 128));" in metal
     )
 
 
@@ -965,17 +936,17 @@ def test_codegen_mixed_ssbo_metal_fixed_matrix_array_compound_store_uses_temp():
     metal = MetalCodeGen().generate(shader_ast)
     assert "device uchar* metalMatrixArrayBlock [[buffer(52)]]" in metal
     assert "float4x4 __crossgl_matrix_store_0 = (float4x4(" in metal
-    assert "(*reinterpret_cast<const device float*>(metalMatrixArrayBlock + 64))" in metal
+    assert (
+        "(*reinterpret_cast<const device float*>(metalMatrixArrayBlock + 64))" in metal
+    )
     assert ") + value);" in metal
     assert (
         "(*reinterpret_cast<device float*>(metalMatrixArrayBlock + 64)) = "
-        "__crossgl_matrix_store_0[0].x;"
-        in metal
+        "__crossgl_matrix_store_0[0].x;" in metal
     )
     assert (
         "(*reinterpret_cast<device float*>(metalMatrixArrayBlock + 124)) = "
-        "__crossgl_matrix_store_0[3].w;"
-        in metal
+        "__crossgl_matrix_store_0[3].w;" in metal
     )
     assert "unsupported Metal GLSL buffer block matrix compound store" not in metal
 
@@ -1004,8 +975,7 @@ def test_codegen_mixed_ssbo_metal_readonly_fixed_matrix_array_write_is_diagnosti
     assert "float4x4 selected = float4x4(" in metal
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalReadMatrixArrayBlock + (i * 64)))"
-        in metal
+        "(metalReadMatrixArrayBlock + (i * 64)))" in metal
     )
     assert "readonly device buffer cannot be written" in metal
     assert "(*reinterpret_cast<device float*>" not in metal
@@ -1035,8 +1005,7 @@ def test_codegen_mixed_ssbo_metal_readonly_runtime_matrix_array_write_is_diagnos
     assert "float4x4 selected = float4x4(" in metal
     assert (
         "(*reinterpret_cast<const device float*>"
-        "(metalRuntimeMatrixBlock + (16 + i * 64)))"
-        in metal
+        "(metalRuntimeMatrixBlock + (16 + i * 64)))" in metal
     )
     assert "readonly device buffer cannot be written" in metal
     assert "(*reinterpret_cast<device float*>" not in metal
@@ -1200,8 +1169,7 @@ def test_codegen_mixed_ssbo_hlsl_dynamic_indices_and_compound_store():
     assert "float v = asfloat(dynamicBlock.Load((4 + i * 4)));" in hlsl
     assert (
         "dynamicBlock.Store((4 + i * 4), "
-        "asuint((asfloat(dynamicBlock.Load((4 + i * 4))) + 1.0)));"
-        in hlsl
+        "asuint((asfloat(dynamicBlock.Load((4 + i * 4))) + 1.0)));" in hlsl
     )
 
 
@@ -1252,8 +1220,7 @@ def test_codegen_mixed_ssbo_hlsl_integer_mod_compound_store_is_supported():
     assert "RWByteAddressBuffer intOpsBlock : register(u65);" in hlsl
     assert (
         "intOpsBlock.Store((4 + i * 4), "
-        "(intOpsBlock.Load((4 + i * 4)) % 3u));"
-        in hlsl
+        "(intOpsBlock.Load((4 + i * 4)) % 3u));" in hlsl
     )
     assert "unsupported HLSL GLSL buffer block compound store" not in hlsl
 
@@ -1273,7 +1240,10 @@ def test_codegen_mixed_ssbo_hlsl_readonly_blocks_use_srv_registers():
     """
 
     crossgl = generate_crossgl(code, "compute")
-    assert "ReadBlock readBlock @glsl_buffer_block(std430) @binding(5) @readonly;" in crossgl
+    assert (
+        "ReadBlock readBlock @glsl_buffer_block(std430) @binding(5) @readonly;"
+        in crossgl
+    )
 
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
@@ -1549,8 +1519,7 @@ def test_codegen_mixed_ssbo_hlsl_mat2_metadata_before_runtime_array():
     assert "RWByteAddressBuffer matrix2Block : register(u12);" in hlsl
     assert (
         "float2x2 t = float2x2(asfloat(matrix2Block.Load2(0)), "
-        "asfloat(matrix2Block.Load2(8)));"
-        in hlsl
+        "asfloat(matrix2Block.Load2(8)));" in hlsl
     )
     assert "float v = asfloat(matrix2Block.Load(16));" in hlsl
 
@@ -1605,8 +1574,7 @@ def test_codegen_mixed_ssbo_hlsl_mat3_metadata_aligns_after_scalar():
     assert "float s = asfloat(matrix3Block.Load(0));" in hlsl
     assert (
         "float3x3 t = float3x3(asfloat(matrix3Block.Load3(16)), "
-        "asfloat(matrix3Block.Load3(32)), asfloat(matrix3Block.Load3(48)));"
-        in hlsl
+        "asfloat(matrix3Block.Load3(32)), asfloat(matrix3Block.Load3(48)));" in hlsl
     )
     assert "float v = asfloat(matrix3Block.Load(64));" in hlsl
 
@@ -1690,8 +1658,7 @@ def test_codegen_mixed_ssbo_hlsl_non_square_matrix_metadata_layout(
     load_method = f"Load{components}"
     store_method = f"Store{components}"
     column_loads = ", ".join(
-        f"asfloat(nonSquareBlock.{load_method}({offset}))"
-        for offset in column_offsets
+        f"asfloat(nonSquareBlock.{load_method}({offset}))" for offset in column_offsets
     )
     assert f"RWByteAddressBuffer nonSquareBlock : register(u{binding});" in hlsl
     assert "float s = asfloat(nonSquareBlock.Load(0));" in hlsl
@@ -1729,8 +1696,7 @@ def test_codegen_mixed_ssbo_hlsl_mat4_metadata_aligns_after_scalar():
     assert (
         "float4x4 t = float4x4(asfloat(matrix4Block.Load4(16)), "
         "asfloat(matrix4Block.Load4(32)), asfloat(matrix4Block.Load4(48)), "
-        "asfloat(matrix4Block.Load4(64)));"
-        in hlsl
+        "asfloat(matrix4Block.Load4(64)));" in hlsl
     )
     assert "float v = asfloat(matrix4Block.Load(80));" in hlsl
 
@@ -1929,16 +1895,14 @@ def test_codegen_mixed_ssbo_hlsl_writable_matrix_arrays_use_column_stores():
     assert (
         "float4x4 first = float4x4(asfloat(matrixArrayBlock.Load4(0)), "
         "asfloat(matrixArrayBlock.Load4(16)), asfloat(matrixArrayBlock.Load4(32)), "
-        "asfloat(matrixArrayBlock.Load4(48)));"
-        in hlsl
+        "asfloat(matrixArrayBlock.Load4(48)));" in hlsl
     )
     assert (
         "float4x4 selected = float4x4("
         "asfloat(matrixArrayBlock.Load4((i * 64))), "
         "asfloat(matrixArrayBlock.Load4((i * 64 + 16))), "
         "asfloat(matrixArrayBlock.Load4((i * 64 + 32))), "
-        "asfloat(matrixArrayBlock.Load4((i * 64 + 48))));"
-        in hlsl
+        "asfloat(matrixArrayBlock.Load4((i * 64 + 48))));" in hlsl
     )
     assert "matrixArrayBlock.Store4(0, asuint(selected[0]));" in hlsl
     assert "matrixArrayBlock.Store4(16, asuint(selected[1]));" in hlsl
@@ -2005,9 +1969,7 @@ def test_codegen_mixed_ssbo_hlsl_writable_non_square_matrix_arrays_use_column_st
         for offset in column_offsets
     )
     dynamic_offsets = [
-        f"(i * {matrix_stride})"
-        if offset == 0
-        else f"(i * {matrix_stride} + {offset})"
+        f"(i * {matrix_stride})" if offset == 0 else f"(i * {matrix_stride} + {offset})"
         for offset in column_offsets
     ]
     dynamic_loads = ", ".join(
@@ -2015,22 +1977,24 @@ def test_codegen_mixed_ssbo_hlsl_writable_non_square_matrix_arrays_use_column_st
         for offset in dynamic_offsets
     )
 
-    assert f"RWByteAddressBuffer nonSquareMatrixArrayBlock : register(u{binding});" in hlsl
+    assert (
+        f"RWByteAddressBuffer nonSquareMatrixArrayBlock : register(u{binding});" in hlsl
+    )
     assert f"{hlsl_type} first = {hlsl_type}({first_loads});" in hlsl
     assert f"{hlsl_type} selected = {hlsl_type}({dynamic_loads});" in hlsl
     for column, offset in enumerate(column_offsets):
         assert (
             f"nonSquareMatrixArrayBlock.{store_method}({offset}, "
-            f"asuint(selected[{column}]));"
-            in hlsl
+            f"asuint(selected[{column}]));" in hlsl
         )
     for column, offset in enumerate(dynamic_offsets):
         assert (
             f"nonSquareMatrixArrayBlock.{store_method}({offset}, "
-            f"asuint(first[{column}]));"
-            in hlsl
+            f"asuint(first[{column}]));" in hlsl
         )
-    assert f"float tail = asfloat(nonSquareMatrixArrayBlock.Load({data_offset}));" in hlsl
+    assert (
+        f"float tail = asfloat(nonSquareMatrixArrayBlock.Load({data_offset}));" in hlsl
+    )
     assert "unsupported HLSL GLSL buffer block matrix store" not in hlsl
 
 
@@ -2059,8 +2023,7 @@ def test_codegen_mixed_ssbo_hlsl_matrix_metadata_compound_store_uses_temp():
         "float4x4 __crossgl_matrix_store_0 = "
         "(float4x4(asfloat(matrixBlock.Load4(16)), "
         "asfloat(matrixBlock.Load4(32)), asfloat(matrixBlock.Load4(48)), "
-        "asfloat(matrixBlock.Load4(64))) + value);"
-        in hlsl
+        "asfloat(matrixBlock.Load4(64))) + value);" in hlsl
     )
     assert "matrixBlock.Store4(16, asuint(__crossgl_matrix_store_0[0]));" in hlsl
     assert "matrixBlock.Store4(32, asuint(__crossgl_matrix_store_0[1]));" in hlsl
@@ -2104,8 +2067,7 @@ def test_codegen_mixed_ssbo_hlsl_matrix_compound_supported_ops_use_temp(
         "float4x4 __crossgl_matrix_store_0 = "
         f"(float4x4(asfloat(matrixBlock.Load4(16)), "
         f"asfloat(matrixBlock.Load4(32)), asfloat(matrixBlock.Load4(48)), "
-        f"asfloat(matrixBlock.Load4(64))) {binary_op} {rhs_expr});"
-        in hlsl
+        f"asfloat(matrixBlock.Load4(64))) {binary_op} {rhs_expr});" in hlsl
     )
     assert "matrixBlock.Store4(16, asuint(__crossgl_matrix_store_0[0]));" in hlsl
     assert "matrixBlock.Store4(32, asuint(__crossgl_matrix_store_0[1]));" in hlsl
@@ -2165,8 +2127,7 @@ def test_codegen_mixed_ssbo_hlsl_matrix_array_compound_store_uses_temp():
         "(float4x4(asfloat(matrixArrayBlock.Load4(64)), "
         "asfloat(matrixArrayBlock.Load4(80)), "
         "asfloat(matrixArrayBlock.Load4(96)), "
-        "asfloat(matrixArrayBlock.Load4(112))) + value);"
-        in hlsl
+        "asfloat(matrixArrayBlock.Load4(112))) + value);" in hlsl
     )
     assert "matrixArrayBlock.Store4(64, asuint(__crossgl_matrix_store_0[0]));" in hlsl
     assert "matrixArrayBlock.Store4(80, asuint(__crossgl_matrix_store_0[1]));" in hlsl
@@ -2225,9 +2186,11 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_arrays_use_column_loads(
         for offset in column_offsets
     )
     dynamic_offsets = [
-        f"({runtime_offset} + i * {matrix_stride})"
-        if offset == runtime_offset
-        else f"({runtime_offset} + i * {matrix_stride} + {offset - runtime_offset})"
+        (
+            f"({runtime_offset} + i * {matrix_stride})"
+            if offset == runtime_offset
+            else f"({runtime_offset} + i * {matrix_stride} + {offset - runtime_offset})"
+        )
         for offset in column_offsets
     ]
     dynamic_loads = ", ".join(
@@ -2294,9 +2257,11 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_stores_use_column_stores(
         for offset in column_offsets
     )
     dynamic_offsets = [
-        f"({runtime_offset} + i * {matrix_stride})"
-        if offset == runtime_offset
-        else f"({runtime_offset} + i * {matrix_stride} + {offset - runtime_offset})"
+        (
+            f"({runtime_offset} + i * {matrix_stride})"
+            if offset == runtime_offset
+            else f"({runtime_offset} + i * {matrix_stride} + {offset - runtime_offset})"
+        )
         for offset in column_offsets
     ]
     dynamic_loads = ", ".join(
@@ -2310,14 +2275,12 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_stores_use_column_stores(
     for column, offset in enumerate(dynamic_offsets):
         assert (
             f"runtimeMatrixBlock.{store_method}({offset}, "
-            f"asuint(selected[{column}]));"
-            in hlsl
+            f"asuint(selected[{column}]));" in hlsl
         )
     for column, offset in enumerate(column_offsets):
         assert (
             f"runtimeMatrixBlock.{store_method}({offset}, "
-            f"asuint(first[{column}]));"
-            in hlsl
+            f"asuint(first[{column}]));" in hlsl
         )
     assert "unsupported HLSL GLSL buffer block runtime matrix array store" not in hlsl
 
@@ -2368,9 +2331,11 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_compound_store_uses_temp(
     load_method = f"Load{components}"
     store_method = f"Store{components}"
     dynamic_offsets = [
-        f"({runtime_offset} + i * {matrix_stride})"
-        if offset == runtime_offset
-        else f"({runtime_offset} + i * {matrix_stride} + {offset - runtime_offset})"
+        (
+            f"({runtime_offset} + i * {matrix_stride})"
+            if offset == runtime_offset
+            else f"({runtime_offset} + i * {matrix_stride} + {offset - runtime_offset})"
+        )
         for offset in column_offsets
     ]
     dynamic_loads = ", ".join(
@@ -2381,14 +2346,12 @@ def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_compound_store_uses_temp(
     assert f"RWByteAddressBuffer runtimeMatrixBlock : register(u{binding});" in hlsl
     assert (
         f"{hlsl_type} __crossgl_matrix_store_0 = "
-        f"({hlsl_type}({dynamic_loads}) + selected);"
-        in hlsl
+        f"({hlsl_type}({dynamic_loads}) + selected);" in hlsl
     )
     for column, offset in enumerate(dynamic_offsets):
         assert (
             f"runtimeMatrixBlock.{store_method}({offset}, "
-            f"asuint(__crossgl_matrix_store_0[{column}]));"
-            in hlsl
+            f"asuint(__crossgl_matrix_store_0[{column}]));" in hlsl
         )
     assert "unsupported HLSL GLSL buffer block matrix compound store" not in hlsl
 
@@ -2415,8 +2378,7 @@ def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic():
     assert "ByteAddressBuffer offset lowering" in hlsl
     assert (
         "unsupported member transforms: runtime arrays must be the final "
-        "buffer block member"
-        in hlsl
+        "buffer block member" in hlsl
     )
     assert "RWByteAddressBuffer matrixBlock" not in hlsl
 

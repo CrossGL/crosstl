@@ -346,10 +346,11 @@ class SlangParser:
         return statements
 
     def parse_statement(self):
-        if (
-            self.current_token[0] == "IDENTIFIER"
-            and self.tokens[self.pos + 1][0] in {"LPAREN", "LBRACKET", "DOT"}
-        ):
+        if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {
+            "LPAREN",
+            "LBRACKET",
+            "DOT",
+        }:
             return self.parse_expression_statement()
         if self.current_token[0] in self.DECLARATION_TYPE_TOKENS | {"IDENTIFIER"}:
             return self.parse_variable_declaration_or_assignment()

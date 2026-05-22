@@ -235,8 +235,7 @@ def test_metal_storage_image_type_helpers_ignore_access_mode():
 
     assert is_metal_storage_image_resource(readonly_texture)
     assert (
-        metal_storage_image_access_agnostic_type(readonly_texture)
-        == readwrite_texture
+        metal_storage_image_access_agnostic_type(readonly_texture) == readwrite_texture
     )
     assert metal_storage_image_component_type(readonly_texture) == "int"
     assert is_metal_integer_image_type(readonly_texture)

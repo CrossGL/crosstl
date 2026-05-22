@@ -445,7 +445,9 @@ class VulkanParser:
                 value = self.parse_expression()
                 return AssignmentNode(target, value, op_name)
             else:
-                raise SyntaxError(f"Unexpected token in update: {self.current_token[0]}")
+                raise SyntaxError(
+                    f"Unexpected token in update: {self.current_token[0]}"
+                )
         elif self.current_token[0] == "PRE_INCREMENT":
             self.eat("PRE_INCREMENT")
             return UnaryOpNode("PRE_INCREMENT", self.parse_update_target())

@@ -464,7 +464,9 @@ def test_standalone_function_call_statement_codegen():
         assert "helper(x);" in lines
         assert "x;" not in lines
     except SyntaxError:
-        pytest.fail("Standalone function call parsing or code generation not implemented.")
+        pytest.fail(
+            "Standalone function call parsing or code generation not implemented."
+        )
 
 
 if __name__ == "__main__":

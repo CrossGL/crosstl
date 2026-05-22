@@ -702,8 +702,12 @@ class TestCudaCodeGen:
             "cudaTextureObject_t paramLayers, cudaTextureObject_t paramProbes"
         ) in cuda_code
         assert "float4 color = tex2D(paramTex, uv);" in cuda_code
-        assert "float4 volumeColor = tex3D(paramVolume, uvw.x, uvw.y, uvw.z);" in cuda_code
-        assert "float4 envColor = texCubemap(paramEnv, uvw.x, uvw.y, uvw.z);" in cuda_code
+        assert (
+            "float4 volumeColor = tex3D(paramVolume, uvw.x, uvw.y, uvw.z);" in cuda_code
+        )
+        assert (
+            "float4 envColor = texCubemap(paramEnv, uvw.x, uvw.y, uvw.z);" in cuda_code
+        )
         assert (
             "float4 layerColor = tex2DLayered<float4>"
             "(paramLayers, uvw.x, uvw.y, uvw.z);" in cuda_code

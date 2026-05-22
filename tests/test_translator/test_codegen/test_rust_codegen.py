@@ -937,12 +937,10 @@ def test_double_vector_and_matrix_types_emit_rust_names():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut preciseUV: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);"
-        in generated_code
+        "let mut preciseUV: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
     )
     assert (
-        "let mut mask: Vec2<bool> = Vec2::<bool>::new(true, false);"
-        in generated_code
+        "let mut mask: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
     )
     assert "let mut flags: Vec3<bool>;" in generated_code
     assert (
@@ -982,8 +980,7 @@ def test_generic_vector_constructors_emit_rust_names():
     assert "let mut index: Vec3<i32> = Vec3::<i32>::new(1, 2, 3);" in generated_code
     assert "let mut mask: Vec4<u32> = Vec4::<u32>::new(1, 2, 3, 4);" in generated_code
     assert (
-        "let mut flags: Vec2<bool> = Vec2::<bool>::new(true, false);"
-        in generated_code
+        "let mut flags: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
     )
     assert "Vec2<f64>::new" not in generated_code
     assert "Vec3<i32>::new" not in generated_code
@@ -1048,7 +1045,9 @@ def test_scalar_vector_constructors_splat_rust_values():
         "let mut scaled: Vec3<f32> = Vec3::<f32>::new(weight, weight, weight);"
         in generated_code
     )
-    assert "let mut pixel: Vec2<i32> = Vec2::<i32>::new(index, index);" in generated_code
+    assert (
+        "let mut pixel: Vec2<i32> = Vec2::<i32>::new(index, index);" in generated_code
+    )
     assert (
         "let mut mask: Vec4<bool> = "
         "Vec4::<bool>::new(enabled, enabled, enabled, enabled);" in generated_code

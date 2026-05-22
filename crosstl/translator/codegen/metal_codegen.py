@@ -1967,7 +1967,9 @@ class MetalCodeGen:
         return self.resource_base_type(vtype) == "sampler"
 
     def is_resource_parameter_type(self, vtype):
-        return self.is_structured_buffer_type(vtype) or self.resource_base_type(vtype) in {
+        return self.is_structured_buffer_type(vtype) or self.resource_base_type(
+            vtype
+        ) in {
             "sampler",
             "sampler1D",
             "sampler1DArray",
@@ -2001,9 +2003,11 @@ class MetalCodeGen:
         }
 
     def is_texture_or_image_resource_type(self, vtype):
-        return self.is_resource_parameter_type(vtype) and not self.is_sampler_type(
-            vtype
-        ) and not self.is_structured_buffer_type(vtype)
+        return (
+            self.is_resource_parameter_type(vtype)
+            and not self.is_sampler_type(vtype)
+            and not self.is_structured_buffer_type(vtype)
+        )
 
     def is_integer_coordinate_type(self, vtype):
         type_name = self.type_name_string(vtype)
@@ -2688,23 +2692,28 @@ class MetalCodeGen:
         ]
 
     def required_function_resource_argument_names(self, func_name):
-        return [
-            texture_variable.name
-            for texture_variable, _, _ in self.required_function_textures(func_name)
-        ] + [
-            buffer_variable.name
-            for buffer_variable, _, _ in self.required_function_structured_buffers(
-                func_name
-            )
-        ] + [
-            buffer_variable.name
-            for buffer_variable, _, _ in self.required_function_glsl_buffer_blocks(
-                func_name
-            )
-        ] + [
-            sampler_variable.name
-            for sampler_variable, _ in self.required_function_samplers(func_name)
-        ]
+        return (
+            [
+                texture_variable.name
+                for texture_variable, _, _ in self.required_function_textures(func_name)
+            ]
+            + [
+                buffer_variable.name
+                for buffer_variable, _, _ in self.required_function_structured_buffers(
+                    func_name
+                )
+            ]
+            + [
+                buffer_variable.name
+                for buffer_variable, _, _ in self.required_function_glsl_buffer_blocks(
+                    func_name
+                )
+            ]
+            + [
+                sampler_variable.name
+                for sampler_variable, _ in self.required_function_samplers(func_name)
+            ]
+        )
 
     def iter_ast_nodes(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):

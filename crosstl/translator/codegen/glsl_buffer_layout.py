@@ -57,8 +57,7 @@ def byte_offset_add(base_offset, delta):
 
 def byte_offset_sequence(base_offset, count, stride):
     return [
-        (index, byte_offset_add(base_offset, index * stride))
-        for index in range(count)
+        (index, byte_offset_add(base_offset, index * stride)) for index in range(count)
     ]
 
 
@@ -90,7 +89,10 @@ def glsl_buffer_compound_binary_operator(operator, component_type):
     binary_operator = GLSL_BUFFER_COMPOUND_BINARY_OPERATORS.get(operator)
     if binary_operator is None:
         return None
-    if component_type == "float" and operator not in GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS:
+    if (
+        component_type == "float"
+        and operator not in GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS
+    ):
         return None
     if component_type in {"float", "int", "uint"}:
         return binary_operator

@@ -557,9 +557,7 @@ class RustToCrossGLConverter:
         if isinstance(stmt.value, AssignmentNode):
             code = ""
             if stmt.vtype:
-                code += (
-                    f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
-                )
+                code += f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
             return code + self.generate_assignment_expression_result(
                 stmt.value,
                 indent,
@@ -1521,17 +1519,13 @@ class RustToCrossGLConverter:
         indent_str = "    " * indent
 
         if stmt.operator == "=" and isinstance(stmt.right, LoopNode):
-            return self.generate_loop_expression_assignment(
-                stmt, indent, loop_contexts
-            )
+            return self.generate_loop_expression_assignment(stmt, indent, loop_contexts)
         if stmt.operator == "=" and self.is_block_expression_node(stmt.right):
             return self.generate_block_expression_assignment(
                 stmt, indent, loop_contexts
             )
         if stmt.operator == "=" and isinstance(stmt.right, IfNode):
-            return self.generate_if_expression_assignment(
-                stmt, indent, loop_contexts
-            )
+            return self.generate_if_expression_assignment(stmt, indent, loop_contexts)
         if stmt.operator == "=" and isinstance(stmt.right, MatchNode):
             return self.generate_match_expression_assignment(
                 stmt, indent, loop_contexts
@@ -4817,9 +4811,7 @@ class RustToCrossGLConverter:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         elif isinstance(expr, RangeNode):
-            start = (
-                "" if expr.start is None else self.generate_expression(expr.start)
-            )
+            start = "" if expr.start is None else self.generate_expression(expr.start)
             end = "" if expr.end is None else self.generate_expression(expr.end)
             return self.format_range_expression(start, end, expr.inclusive)
         elif isinstance(expr, VectorConstructorNode):

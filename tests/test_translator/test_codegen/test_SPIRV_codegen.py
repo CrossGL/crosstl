@@ -622,10 +622,7 @@ class TestVulkanSPIRVCodeGen:
             assert variable_id in entry_match.group(2)
 
         workgroup_size_id = spirv_named_id(spv_code, "gl_WorkGroupSize")
-        assert (
-            f"OpDecorate {workgroup_size_id} BuiltIn WorkgroupSize"
-            in spv_code
-        )
+        assert f"OpDecorate {workgroup_size_id} BuiltIn WorkgroupSize" in spv_code
         assert re.search(
             rf"{re.escape(workgroup_size_id)} = OpConstantComposite %\d+ "
             r"%\d+ %\d+ %\d+",
