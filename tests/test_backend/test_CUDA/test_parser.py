@@ -7,6 +7,7 @@ from crosstl.backend.CUDA.CudaAst import (
     AssignmentNode,
     BinaryOpNode,
     CastNode,
+    CudaBuiltinNode,
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
@@ -158,6 +159,33 @@ class TestCudaParser:
         assert launch.shared_mem == "128"
         assert launch.stream == "stream"
         assert launch.args == ["data", "1"]
+
+    def test_templated_kernel_launch_parsing(self):
+        """Test CUDA template-id kernel launch parsing"""
+        code = """
+        template <typename T>
+        __global__ void scale(T* data, T factor) {
+            data[threadIdx.x] *= factor;
+        }
+
+        void host(float* data) {
+            scale<float><<<1, 32>>>(data, 2.0f);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        host = next(function for function in ast.functions if function.name == "host")
+        launch = host.body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "scale<float>"
+        assert launch.blocks == "1"
+        assert launch.threads == "32"
+        assert launch.shared_mem is None
+        assert launch.stream is None
+        assert launch.args == ["data", "2.0f"]
 
     def test_computed_kernel_launch_config_parsing(self):
         """Test CUDA computed kernel launch configuration parsing"""
@@ -815,6 +843,61 @@ class TestCudaParser:
         assert second_loop.init[0].value == "a"
         assert second_loop.init[1].value == "b"
 
+    def test_multi_expression_for_update_parsing(self):
+        """Test comma-separated expressions in for updates"""
+        code = """
+        void host(int n) {
+            for (int i = 0, j = n; i < j; ++i, --j) {
+                sink(i);
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        loop = ast.functions[0].body[0]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.update, list)
+        assert len(loop.update) == 2
+        assert isinstance(loop.update[0], UnaryOpNode)
+        assert loop.update[0].op == "++"
+        assert loop.update[0].operand == "i"
+        assert isinstance(loop.update[1], UnaryOpNode)
+        assert loop.update[1].op == "--"
+        assert loop.update[1].operand == "j"
+
+    def test_grid_stride_for_update_compound_assignment_parsing(self):
+        """Test CUDA grid-stride for-loop updates"""
+        code = """
+        __global__ void kernel(float* data, int n) {
+            for (int i = blockIdx.x * blockDim.x + threadIdx.x;
+                 i < n;
+                 i += blockDim.x * gridDim.x) {
+                data[i] = 0.0f;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        loop = ast.kernels[0].body[0]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.update, AssignmentNode)
+        assert loop.update.left == "i"
+        assert loop.update.operator == "+="
+        assert isinstance(loop.update.right, BinaryOpNode)
+        assert loop.update.right.op == "*"
+        assert isinstance(loop.update.right.left, CudaBuiltinNode)
+        assert loop.update.right.left.builtin_name == "blockDim"
+        assert loop.update.right.left.component == "x"
+        assert isinstance(loop.update.right.right, CudaBuiltinNode)
+        assert loop.update.right.right.builtin_name == "gridDim"
+        assert loop.update.right.right.component == "x"
+
     def test_range_based_for_loop_parsing(self):
         """Test C++ range-based for declarations"""
         code = """
@@ -1012,6 +1095,39 @@ class TestCudaParser:
         assert isinstance(body[5].right, UnaryOpNode)
         assert body[5].right.op == "*"
 
+    def test_pointer_member_access_operator_parsing(self):
+        """Test pointer and value member access preserve their operators"""
+        code = """
+        struct Item { int value; };
+        void helper(Item* p, Item v) {
+            int a = p->value;
+            int b = v.value;
+            p->value = b;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        pointer_read = body[0].value
+        value_read = body[1].value
+        pointer_write = body[2].left
+
+        assert isinstance(pointer_read, MemberAccessNode)
+        assert pointer_read.object == "p"
+        assert pointer_read.member == "value"
+        assert pointer_read.is_pointer is True
+        assert isinstance(value_read, MemberAccessNode)
+        assert value_read.object == "v"
+        assert value_read.member == "value"
+        assert value_read.is_pointer is False
+        assert isinstance(pointer_write, MemberAccessNode)
+        assert pointer_write.object == "p"
+        assert pointer_write.member == "value"
+        assert pointer_write.is_pointer is True
+
     def test_bitwise_logical_and_shift_expression_parsing(self):
         """Test bitwise, shift, logical, and compound shift expressions"""
         code = """
@@ -1120,3 +1236,24 @@ class TestCudaParser:
         assert len(body[2].default_case) == 2
         assert isinstance(body[3].value, TernaryOpNode)
         assert isinstance(body[3].value.true_expr, CastNode)
+
+    def test_empty_default_switch_parsing_preserves_default_case(self):
+        """Test empty default labels remain distinguishable from no default"""
+        code = """
+        void f(int value) {
+            switch (value) {
+                case 0:
+                    break;
+                default:
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        switch = ast.functions[0].body[0]
+        assert isinstance(switch, SwitchNode)
+        assert len(switch.cases) == 1
+        assert switch.default_case == []

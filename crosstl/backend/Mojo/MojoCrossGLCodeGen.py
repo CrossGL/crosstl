@@ -1,5 +1,7 @@
 """Reverse code generator that emits CrossGL from Mojo AST nodes."""
 
+import re
+
 from .MojoAst import *
 from .MojoParser import *
 from .MojoLexer import *
@@ -8,11 +10,25 @@ from .MojoLexer import *
 class MojoToCrossGLConverter:
     """Serialize Mojo backend AST nodes back into CrossGL source."""
 
+    VERTEX_ATTRIBUTES = {"vertex", "vertex_main", "vertex_shader"}
+    FRAGMENT_ATTRIBUTES = {"fragment", "fragment_main", "fragment_shader"}
+    COMPUTE_ATTRIBUTES = {"compute", "compute_main", "compute_shader"}
+    SHADER_STAGE_ATTRIBUTES = (
+        VERTEX_ATTRIBUTES | FRAGMENT_ATTRIBUTES | COMPUTE_ATTRIBUTES
+    )
+    MATRIX_TYPE_PATTERN = re.compile(r"^Matrix\[(DType\.\w+),\s*(\d+),\s*(\d+)\]$")
+    MATRIX_DTYPE_PREFIXES = {
+        "DType.float16": "half",
+        "DType.float32": "mat",
+        "DType.float64": "dmat",
+    }
+
     def __init__(self):
         """Initialize Mojo-to-CrossGL type, semantic, and function mappings."""
         self.type_map = {
             # Scalar Types
             "void": "void",
+            "None": "void",
             "Int": "int",
             "Int8": "int8_t",
             "Int16": "int16_t",
@@ -128,8 +144,12 @@ class MojoToCrossGLConverter:
             if imports:
                 code += "    // Imports\n"
                 for imp in imports:
-                    code += f"    // import {imp.module_name}"
-                    if imp.alias:
+                    if getattr(imp, "items", None):
+                        items = ", ".join(imp.items)
+                        code += f"    // from {imp.module_name} import {items}"
+                    else:
+                        code += f"    // import {imp.module_name}"
+                    if imp.alias and not getattr(imp, "items", None):
                         code += f" as {imp.alias}"
                     code += "\n"
                 code += "\n"
@@ -137,30 +157,33 @@ class MojoToCrossGLConverter:
         if hasattr(ast, "functions"):
             structs = [f for f in ast.functions if isinstance(f, StructNode)]
             for struct_node in structs:
-                code += f"    struct {struct_node.name} {{\n"
-                for member in struct_node.members:
-                    semantic = (
-                        self.map_semantic(member.attributes)
-                        if hasattr(member, "attributes")
-                        else ""
-                    )
-                    code += f"        {self.map_type(member.vtype)} {member.name}{semantic};\n"
-                code += "    }\n\n"
+                code += self.generate_struct_like_declaration(
+                    struct_node.name,
+                    struct_node.members,
+                )
+
+            classes = [f for f in ast.functions if isinstance(f, ClassNode)]
+            for class_node in classes:
+                code += self.generate_struct_like_declaration(
+                    class_node.name,
+                    class_node.members,
+                )
 
         if hasattr(ast, "functions"):
             cbuffers = [f for f in ast.functions if isinstance(f, ConstantBufferNode)]
             if cbuffers:
                 code += "    // Constant Buffers\n"
                 for cbuffer in cbuffers:
-                    code += f"    cbuffer {cbuffer.name} {{\n"
-                    for member in cbuffer.members:
-                        code += (
-                            f"        {self.map_type(member.vtype)} {member.name};\n"
-                        )
-                    code += "    }\n\n"
+                    code += self.generate_constant_buffer(cbuffer)
+
+        globals_code = self.generate_global_variables(ast)
+        if globals_code:
+            code += globals_code
 
         if hasattr(ast, "functions"):
             functions = [f for f in ast.functions if isinstance(f, FunctionNode)]
+            for class_node in [f for f in ast.functions if isinstance(f, ClassNode)]:
+                functions.extend(getattr(class_node, "methods", []))
             for func in functions:
                 if (
                     func.qualifier == "vertex"
@@ -195,11 +218,56 @@ class MojoToCrossGLConverter:
         code += "}\n"
         return code
 
+    def generate_global_variables(self, ast):
+        global_variables = getattr(ast, "global_variables", []) or []
+        if not global_variables:
+            return ""
+
+        code = "    // Global Variables\n"
+        for variable in global_variables:
+            if not isinstance(variable, VariableDeclarationNode):
+                continue
+            code += f"    {self.generate_variable_declaration(variable)};\n"
+        return code + "\n"
+
+    def generate_struct_like_declaration(self, name, members):
+        code = f"    struct {name} {{\n"
+        for member in members:
+            if not isinstance(member, (VariableDeclarationNode, VariableNode)):
+                continue
+
+            semantic = (
+                self.map_attributes(member.attributes)
+                if hasattr(member, "attributes")
+                else ""
+            )
+            semantic_suffix = f" {semantic}" if semantic else ""
+            code += (
+                f"        {self.map_type(member.vtype)} "
+                f"{member.name}{semantic_suffix};\n"
+            )
+        code += "    }\n\n"
+        return code
+
+    def generate_constant_buffer(self, cbuffer):
+        attributes = self.map_attributes(getattr(cbuffer, "attributes", []))
+        attributes_suffix = f" {attributes}" if attributes else ""
+        code = f"    cbuffer {cbuffer.name}{attributes_suffix} {{\n"
+        for member in cbuffer.members:
+            member_attributes = self.map_attributes(getattr(member, "attributes", []))
+            member_suffix = f" {member_attributes}" if member_attributes else ""
+            code += (
+                f"        {self.map_type(member.vtype)} "
+                f"{member.name}{member_suffix};\n"
+            )
+        code += "    }\n\n"
+        return code
+
     def has_vertex_attribute(self, func):
         if not hasattr(func, "attributes") or not func.attributes:
             return False
         for attr in func.attributes:
-            if hasattr(attr, "name") and attr.name in ["vertex", "vertex_main"]:
+            if hasattr(attr, "name") and attr.name in self.VERTEX_ATTRIBUTES:
                 return True
         return False
 
@@ -207,7 +275,7 @@ class MojoToCrossGLConverter:
         if not hasattr(func, "attributes") or not func.attributes:
             return False
         for attr in func.attributes:
-            if hasattr(attr, "name") and attr.name in ["fragment", "fragment_main"]:
+            if hasattr(attr, "name") and attr.name in self.FRAGMENT_ATTRIBUTES:
                 return True
         return False
 
@@ -215,7 +283,7 @@ class MojoToCrossGLConverter:
         if not hasattr(func, "attributes") or not func.attributes:
             return False
         for attr in func.attributes:
-            if hasattr(attr, "name") and attr.name in ["compute", "compute_main"]:
+            if hasattr(attr, "name") and attr.name in self.COMPUTE_ATTRIBUTES:
                 return True
         return False
 
@@ -237,9 +305,7 @@ class MojoToCrossGLConverter:
         params_str = ", ".join(params) if params else ""
         return_type = self.map_type(func.return_type) if func.return_type else "void"
 
-        func_attributes = ""
-        if hasattr(func, "attributes") and func.attributes:
-            func_attributes = self.map_semantic(func.attributes)
+        func_attributes = self.map_function_attributes(func)
 
         code += (
             f"{indent_str}{return_type} {func.name}({params_str}){func_attributes} {{\n"
@@ -256,6 +322,9 @@ class MojoToCrossGLConverter:
         indent_str = "    " * indent
 
         for stmt in body:
+            if isinstance(stmt, PassNode):
+                continue
+
             code += indent_str
             if isinstance(stmt, VariableDeclarationNode):
                 code += self.generate_variable_declaration(stmt) + ";\n"
@@ -267,18 +336,27 @@ class MojoToCrossGLConverter:
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt) + ";\n"
             elif isinstance(stmt, ReturnNode):
-                code += f"return {self.generate_expression(stmt.value)};\n"
+                if stmt.value is None:
+                    code += "return;\n"
+                else:
+                    code += f"return {self.generate_expression(stmt.value)};\n"
+            elif isinstance(stmt, BreakNode):
+                code += "break;\n"
+            elif isinstance(stmt, ContinueNode):
+                code += "continue;\n"
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt)};\n"
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent)
+            elif isinstance(stmt, RangeForNode):
+                code += self.generate_range_for_loop(stmt, indent)
             elif isinstance(stmt, WhileNode):
                 code += self.generate_while_loop(stmt, indent)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent)
             elif isinstance(stmt, SwitchNode):
                 code += self.generate_switch_statement(stmt, indent)
-            elif isinstance(stmt, FunctionCallNode):
+            elif isinstance(stmt, (FunctionCallNode, MethodCallNode, CallNode)):
                 code += f"{self.generate_expression(stmt)};\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
@@ -289,11 +367,20 @@ class MojoToCrossGLConverter:
         return code
 
     def generate_variable_declaration(self, node):
-        var_type = "var" if node.var_type == "var" else "let"
-        if hasattr(node, "initial_value") and node.initial_value:
-            return f"{var_type} {node.name} = {self.generate_expression(node.initial_value)}"
+        if node.vtype:
+            declaration = f"{self.map_type(node.vtype)} {node.name}"
         else:
-            return f"{var_type} {node.name}"
+            var_type = "var" if node.var_type == "var" else "let"
+            declaration = f"{var_type} {node.name}"
+
+        attributes = self.map_attributes(getattr(node, "attributes", []))
+        if attributes:
+            declaration += f" {attributes}"
+
+        if hasattr(node, "initial_value") and node.initial_value is not None:
+            value = self.generate_expression(node.initial_value)
+            declaration += f" = {value}"
+        return declaration
 
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
@@ -303,7 +390,7 @@ class MojoToCrossGLConverter:
 
     def generate_for_loop(self, node, indent):
         indent_str = "    " * indent
-        init = self.generate_expression(node.init) if node.init else ""
+        init = self.generate_for_initializer(node.init) if node.init else ""
         condition = (
             self.generate_expression(node.condition) if node.condition else "true"
         )
@@ -314,6 +401,56 @@ class MojoToCrossGLConverter:
             code += self.generate_function_body(node.body, indent + 1)
         code += indent_str + "}\n"
         return code
+
+    def generate_for_initializer(self, node):
+        if isinstance(node, VariableDeclarationNode):
+            if node.vtype:
+                declaration = f"{self.map_type(node.vtype)} {node.name}"
+            else:
+                declaration = f"{node.var_type} {node.name}"
+            if getattr(node, "initial_value", None) is not None:
+                value = self.generate_expression(node.initial_value)
+                declaration += f" = {value}"
+            return declaration
+        return self.generate_expression(node)
+
+    def generate_range_for_loop(self, node, indent):
+        indent_str = "    " * indent
+
+        if self.is_range_call(node.iterable):
+            code = self.generate_range_call_for_loop(node)
+        else:
+            iterable = self.generate_expression(node.iterable)
+            code = f"for {node.name} in {iterable} {{\n"
+
+        if hasattr(node, "body") and node.body:
+            code += self.generate_function_body(node.body, indent + 1)
+        code += indent_str + "}\n"
+        return code
+
+    def is_range_call(self, node):
+        return isinstance(node, FunctionCallNode) and node.name == "range"
+
+    def generate_range_call_for_loop(self, node):
+        args = getattr(node.iterable, "args", [])
+        if len(args) == 1:
+            start = "0"
+            stop = self.generate_expression(args[0])
+            step = "1"
+        elif len(args) == 2:
+            start = self.generate_expression(args[0])
+            stop = self.generate_expression(args[1])
+            step = "1"
+        elif len(args) == 3:
+            start = self.generate_expression(args[0])
+            stop = self.generate_expression(args[1])
+            step = self.generate_expression(args[2])
+        else:
+            iterable = self.generate_expression(node.iterable)
+            return f"for {node.name} in {iterable} {{\n"
+
+        update = f"{node.name}++" if step == "1" else f"{node.name} += {step}"
+        return f"for (int {node.name} = {start}; {node.name} < {stop}; {update}) {{\n"
 
     def generate_while_loop(self, node, indent):
         indent_str = "    " * indent
@@ -372,10 +509,43 @@ class MojoToCrossGLConverter:
 
                 if hasattr(case, "body") and case.body:
                     code += self.generate_function_body(case.body, indent + 2)
-                code += indent_str + "        break;\n"
+                if not self.body_ends_with_control_transfer(
+                    getattr(case, "body", []),
+                ):
+                    code += indent_str + "        break;\n"
 
         code += indent_str + "}\n"
         return code
+
+    def body_ends_with_control_transfer(self, body):
+        if not body:
+            return False
+
+        last_statement = body[-1]
+        if isinstance(last_statement, (BreakNode, ContinueNode, ReturnNode)):
+            return True
+
+        if isinstance(last_statement, IfNode):
+            return self.if_statement_ends_with_control_transfer(last_statement)
+
+        return False
+
+    def if_statement_ends_with_control_transfer(self, node):
+        if_body = getattr(node, "if_body", None) or []
+        else_body = getattr(node, "else_body", None)
+        if not self.body_ends_with_control_transfer(if_body):
+            return False
+
+        if isinstance(else_body, list):
+            return self.body_ends_with_control_transfer(else_body)
+
+        if isinstance(else_body, IfNode):
+            return self.if_statement_ends_with_control_transfer(else_body)
+
+        if else_body is not None:
+            return self.body_ends_with_control_transfer([else_body])
+
+        return False
 
     def generate_expression(self, expr):
         """Render a Mojo backend expression node as CrossGL syntax."""
@@ -410,6 +580,24 @@ class MojoToCrossGLConverter:
             args_str = ", ".join(args)
             func_name = self.map_function(expr.name)
             return f"{func_name}({args_str})"
+        elif isinstance(expr, MethodCallNode):
+            obj = self.generate_expression(expr.object)
+            args = []
+            if hasattr(expr, "args") and expr.args:
+                args = [self.generate_expression(arg) for arg in expr.args]
+            args_str = ", ".join(args)
+            full_name = f"{obj}.{expr.method}"
+            func_name = self.map_function(full_name)
+            if func_name != full_name:
+                return f"{func_name}({args_str})"
+            return f"{obj}.{expr.method}({args_str})"
+        elif isinstance(expr, CallNode):
+            callee = self.generate_expression(expr.callee)
+            args = []
+            if hasattr(expr, "args") and expr.args:
+                args = [self.generate_expression(arg) for arg in expr.args]
+            args_str = ", ".join(args)
+            return f"{callee}({args_str})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
@@ -437,18 +625,71 @@ class MojoToCrossGLConverter:
         """Map a Mojo type name to the closest CrossGL type name."""
         if mojo_type is None:
             return "void"
-        return self.type_map.get(mojo_type, mojo_type)
+        mapped_type = self.type_map.get(mojo_type)
+        if mapped_type:
+            return mapped_type
+        matrix_type = self.map_matrix_type(mojo_type)
+        if matrix_type:
+            return matrix_type
+        return mojo_type
+
+    def map_matrix_type(self, mojo_type):
+        if not isinstance(mojo_type, str):
+            return None
+
+        match = self.MATRIX_TYPE_PATTERN.match(mojo_type)
+        if not match:
+            return None
+
+        dtype, columns, rows = match.groups()
+        prefix = self.MATRIX_DTYPE_PREFIXES.get(dtype)
+        if prefix is None:
+            return None
+
+        if columns == rows and prefix in {"mat", "dmat"}:
+            return f"{prefix}{columns}"
+        return f"{prefix}{columns}x{rows}"
 
     def map_semantic(self, attributes):
         """Map Mojo decorators or attributes to CrossGL semantic annotations."""
+        return self.map_attributes(attributes)
+
+    def map_attributes(self, attributes):
+        """Map Mojo decorators or attributes to CrossGL annotation syntax."""
         if not attributes:
             return ""
 
+        mapped_attributes = []
         for attr in attributes:
             if hasattr(attr, "name"):
-                semantic = self.semantic_map.get(attr.name, attr.name)
-                return f"@ {semantic}"
-        return ""
+                mapped_attributes.append(self.map_attribute(attr))
+        return " ".join(mapped_attributes)
+
+    def map_attribute(self, attr):
+        name = self.semantic_map.get(attr.name, attr.name)
+        args = getattr(attr, "args", getattr(attr, "arguments", [])) or []
+        if not args:
+            return f"@ {name}"
+
+        args_str = ", ".join(self.generate_attribute_argument(arg) for arg in args)
+        return f"@ {name}({args_str})"
+
+    def generate_attribute_argument(self, arg):
+        if isinstance(arg, str):
+            return arg.strip()
+        return self.generate_expression(arg)
+
+    def map_function_attributes(self, func):
+        if not hasattr(func, "attributes") or not func.attributes:
+            return ""
+
+        non_stage_attributes = [
+            attr
+            for attr in func.attributes
+            if not (hasattr(attr, "name") and attr.name in self.SHADER_STAGE_ATTRIBUTES)
+        ]
+        semantic = self.map_semantic(non_stage_attributes)
+        return f" {semantic}" if semantic else ""
 
     def map_function(self, func_name):
         return self.function_map.get(func_name, func_name)

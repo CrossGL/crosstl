@@ -63,6 +63,37 @@ class TestHipCodeGen:
 
         assert "__global__ void main()" in hip_code
 
+    def test_compute_stage_local_helper_functions_emit_before_kernel(self):
+        """Test compute-stage helper functions are emitted before kernel calls."""
+        source_code = """
+        shader TestShader {
+            compute {
+                float helper(float x) {
+                    return x + 1.0;
+                }
+
+                void main() {
+                    float y = helper(1.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        assert len(next(iter(ast.stages.values())).local_functions) == 1
+
+        hip_code = HipCodeGen().generate(ast)
+
+        helper_signature = "__device__ float helper(float x)"
+        kernel_signature = "__global__ void main()"
+        assert helper_signature in hip_code
+        assert kernel_signature in hip_code
+        assert hip_code.index(helper_signature) < hip_code.index(kernel_signature)
+        assert "float y = helper(1.0);" in hip_code
+
     def test_type_conversion(self):
         """Test CrossGL to HIP type conversion"""
         codegen = HipCodeGen()
@@ -187,6 +218,39 @@ class TestHipCodeGen:
         assert "(base * weight)" not in hip_code
         assert "(weight + base)" not in hip_code
         assert "make_float4(1.0);" not in hip_code
+
+    def test_vector_clamp_expands_hip_components(self):
+        """Test HIP lowers vector clamp through a component-wise helper."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    vec3 v = vec3(2.0, -1.0, 0.5);
+                    vec3 c = clamp(v, vec3(0.0), vec3(1.0));
+                    float x = clamp(0.25, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "__device__ inline float3 cgl_float3_clamp" in hip_code
+        assert "fmaxf(min_value.x, fminf(max_value.x, value.x))" in hip_code
+        assert (
+            "float3 c = cgl_float3_clamp("
+            "v, make_float3(0.0, 0.0, 0.0), make_float3(1.0, 1.0, 1.0));"
+            in hip_code
+        )
+        assert "float x = fmaxf(0.0, fminf(1.0, 0.25));" in hip_code
+        assert "fmaxf(make_float3" not in hip_code
+        assert "fminf(make_float3" not in hip_code
+        assert " = clamp(" not in hip_code
 
     def test_matrix_types_and_constructors_emit_hip_names(self):
         """Test HIP maps parser-produced matrix types and constructors."""
@@ -429,6 +493,43 @@ class TestHipCodeGen:
         # For now, just check that basic variables are generated
         assert "float shared_data;" in hip_code
         assert "float constants;" in hip_code
+
+    def test_for_in_statement_lowers_to_counted_hip_loops(self):
+        """Test HIP lowers CrossGL for-in loops to counted integer loops."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int total = 0;
+                    for i in 4 {
+                        total = total + i;
+                    }
+                    for j in 2..5 {
+                        total = total + j;
+                    }
+                    for k in 1..=4 {
+                        total = total + k;
+                    }
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "for (int i = 0; i < 4; ++i)" in hip_code
+        assert "for (int j = 2; j < 5; ++j)" in hip_code
+        assert "for (int k = 1; k <= 4; ++k)" in hip_code
+        assert "total = (total + i);" in hip_code
+        assert "total = (total + j);" in hip_code
+        assert "total = (total + k);" in hip_code
+        assert "ForInNode" not in hip_code
+        assert "RangeNode" not in hip_code
 
     def test_atomic_operations(self):
         """Test atomic operations code generation"""
@@ -4310,6 +4411,33 @@ class TestHipCodeGen:
         assert "value += 2;" in hip_code
         assert "NotImplemented" not in hip_code
 
+    def test_do_while_loop_generation(self):
+        """Test HIP emits do-while loops."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int value = 0;
+                    do {
+                        value += 1;
+                    } while (value < 4);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "\n    do\n    {\n" in hip_code
+        assert "value += 1;" in hip_code
+        assert "} while ((value < 4));" in hip_code
+        assert "DoWhileNode" not in hip_code
+
     def test_switch_generation(self):
         """Test HIP emits switch, case, default, and case bodies."""
         source_code = """
@@ -4349,6 +4477,71 @@ class TestHipCodeGen:
         assert "value = -1;" in hip_code
         assert hip_code.count("break;") == 2
         assert "NotImplemented" not in hip_code
+
+    def test_match_literal_and_wildcard_arms_lower_to_switch(self):
+        """Test HIP lowers simple match arms to switch cases."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 => {
+                            value = 1;
+                        }
+                        _ => {
+                            value = 2;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "switch (mode)" in hip_code
+        assert "case 0:" in hip_code
+        assert "value = 1;" in hip_code
+        assert "default:" in hip_code
+        assert "value = 2;" in hip_code
+        assert hip_code.count("break;") == 2
+        assert "MatchNode" not in hip_code
+
+    def test_match_guarded_arm_rejected_for_hip_switch_lowering(self):
+        """Test HIP rejects match forms that cannot be lowered to switch."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 if mode > 0 => {
+                            value = 1;
+                        }
+                        _ => {
+                            value = 2;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        with pytest.raises(ValueError, match="Unsupported match arm for HIP"):
+            codegen.generate(ast)
 
     def test_direct_ast_expression_statements_are_emitted(self):
         """Test direct HIP AST function bodies emit expression-returning nodes."""
@@ -4427,6 +4620,35 @@ class TestHipCodeGen:
         assert "marker = 'y';" in hip_code
         assert "True" not in hip_code
         assert "False" not in hip_code
+
+    def test_inferred_let_declarations_emit_inferred_hip_types(self):
+        """Test typeless let declarations infer HIP types from literal initializers."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    let scalar = 1.0;
+                    let flag = true;
+                    let label = "debug";
+                    let marker = 'x';
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "float scalar = 1.0;" in hip_code
+        assert "bool flag = true;" in hip_code
+        assert 'string label = "debug";' in hip_code
+        assert "char marker = 'x';" in hip_code
+        assert "None scalar" not in hip_code
+        assert "None flag" not in hip_code
 
     def test_direct_literal_nodes_emit_hip_escaping(self):
         """Test direct HIP literal formatting escapes quotes."""

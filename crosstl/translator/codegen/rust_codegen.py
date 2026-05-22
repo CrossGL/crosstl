@@ -6,20 +6,32 @@ from ..ast import (
     ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
+    BreakNode,
+    CaseNode,
     CbufferNode,
+    ContinueNode,
+    DoWhileNode,
+    ForInNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     IfNode,
     LiteralNode,
+    LiteralPatternNode,
+    LoopNode,
+    MatchNode,
     MemberAccessNode,
     ReturnNode,
+    RangeNode,
     ShaderNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WhileNode,
+    WildcardPatternNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
@@ -170,11 +182,19 @@ class RustCodeGen:
         }
         self.variable_types = {}
         self.current_return_type = None
+        self.do_while_contexts = []
+        self.for_contexts = []
+        self.loop_depth = 0
+        self.do_while_counter = 0
 
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
         self.variable_types = {}
         self.current_return_type = None
+        self.do_while_contexts = []
+        self.for_contexts = []
+        self.loop_depth = 0
+        self.do_while_counter = 0
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -543,18 +563,11 @@ class RustCodeGen:
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
-            if hasattr(stmt, "var_type"):
-                vtype = stmt.var_type
-            elif hasattr(stmt, "vtype"):
-                vtype = stmt.vtype
-            else:
-                vtype = "f32"
-
+            initial_value = getattr(stmt, "initial_value", None)
+            vtype = self.variable_declaration_type(stmt, initial_value)
             self.register_variable_type(stmt.name, vtype)
-            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
-                init_expr = self.generate_expression_with_type(
-                    stmt.initial_value, vtype
-                )
+            if initial_value is not None:
+                init_expr = self.generate_expression_with_type(initial_value, vtype)
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
             else:
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)};\n"
@@ -570,6 +583,24 @@ class RustCodeGen:
 
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
+
+        elif isinstance(stmt, ForInNode):
+            return self.generate_for_in(stmt, indent)
+
+        elif isinstance(stmt, WhileNode):
+            return self.generate_while(stmt, indent)
+
+        elif isinstance(stmt, LoopNode):
+            return self.generate_loop(stmt, indent)
+
+        elif isinstance(stmt, DoWhileNode):
+            return self.generate_do_while(stmt, indent)
+
+        elif isinstance(stmt, MatchNode):
+            return self.generate_match(stmt, indent)
+
+        elif isinstance(stmt, SwitchNode):
+            return self.generate_switch(stmt, indent)
 
         elif isinstance(stmt, ReturnNode):
             if hasattr(stmt, "value") and stmt.value is not None:
@@ -594,6 +625,22 @@ class RustCodeGen:
                 # Void return
                 return f"{indent_str}return;\n"
 
+        elif isinstance(stmt, BreakNode):
+            context = self.active_do_while_context()
+            if context:
+                break_flag = context["break_flag"]
+                return f"{indent_str}{break_flag} = true;\n{indent_str}break;\n"
+            return f"{indent_str}break;\n"
+
+        elif isinstance(stmt, ContinueNode):
+            if self.active_do_while_context():
+                return f"{indent_str}break;\n"
+            context = self.active_for_context()
+            if context:
+                update = context["update"]
+                return f"{indent_str}{update};\n{indent_str}continue;\n"
+            return f"{indent_str}continue;\n"
+
         elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
             stmt.__class__
         ):
@@ -614,6 +661,138 @@ class RustCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_switch(self, node, indent):
+        indent_str = "    " * indent
+        arm_indent = "    " * (indent + 1)
+        expression = self.generate_expression(getattr(node, "expression", ""))
+
+        code = f"{indent_str}match {expression} {{\n"
+        has_default = False
+        for case in getattr(node, "cases", []) or []:
+            if not isinstance(case, CaseNode):
+                continue
+            value = getattr(case, "value", None)
+            pattern = "_" if value is None else self.generate_expression(value)
+            has_default = has_default or value is None
+            code += f"{arm_indent}{pattern} => {{\n"
+            code += self.generate_switch_case_body(
+                getattr(case, "statements", []), indent + 2
+            )
+            code += f"{arm_indent}}},\n"
+
+        default_case = getattr(node, "default_case", None)
+        if default_case is not None:
+            has_default = True
+            code += f"{arm_indent}_ => {{\n"
+            code += self.generate_switch_case_body(default_case, indent + 2)
+            code += f"{arm_indent}}},\n"
+        elif not has_default:
+            code += f"{arm_indent}_ => {{}},\n"
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_match(self, node, indent):
+        indent_str = "    " * indent
+        arm_indent = "    " * (indent + 1)
+        expression = self.generate_expression(getattr(node, "expression", ""))
+
+        code = f"{indent_str}match {expression} {{\n"
+        has_wildcard = False
+        for arm in getattr(node, "arms", []) or []:
+            if not self.is_supported_match_arm(arm):
+                raise ValueError(
+                    "Unsupported match arm for Rust codegen; only unguarded "
+                    "literal and wildcard patterns are supported"
+                )
+
+            pattern = getattr(arm, "pattern", None)
+            if isinstance(pattern, WildcardPatternNode):
+                arm_pattern = "_"
+                has_wildcard = True
+            else:
+                arm_pattern = self.generate_expression(pattern.literal)
+
+            code += f"{arm_indent}{arm_pattern} => {{\n"
+            code += self.generate_switch_case_body(getattr(arm, "body", []), indent + 2)
+            code += f"{arm_indent}}},\n"
+
+        if not has_wildcard:
+            code += f"{arm_indent}_ => {{}},\n"
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def is_supported_match_arm(self, arm):
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
+    def generate_switch_case_body(self, body, indent):
+        statements = self.statement_list(body)
+        code = ""
+        for stmt in statements:
+            if isinstance(stmt, BreakNode):
+                continue
+            code += self.generate_statement(stmt, indent)
+        return code
+
+    def statement_list(self, body):
+        if hasattr(body, "statements"):
+            return body.statements
+        if isinstance(body, list):
+            return body
+        if body is None:
+            return []
+        return [body]
+
+    def active_do_while_context(self):
+        if not self.do_while_contexts:
+            return None
+        context = self.do_while_contexts[-1]
+        if context["loop_depth"] == self.loop_depth:
+            return context
+        return None
+
+    def active_for_context(self):
+        if not self.for_contexts:
+            return None
+        context = self.for_contexts[-1]
+        if context["loop_depth"] == self.loop_depth:
+            return context
+        return None
+
+    def get_variable_type(self, node):
+        if hasattr(node, "var_type"):
+            vtype = node.var_type
+        elif hasattr(node, "vtype"):
+            vtype = node.vtype
+        else:
+            return None
+
+        if vtype is None:
+            return None
+        if isinstance(vtype, str) and vtype.strip() in {"", "None"}:
+            return None
+        return vtype
+
+    def variable_declaration_type(self, node, initial_value=None):
+        declared_type = self.get_variable_type(node)
+        if declared_type is not None:
+            return declared_type
+
+        inferred_type = self.expression_result_type(initial_value)
+        if inferred_type is not None:
+            return inferred_type
+        return "float"
+
+    def statement_body_terminates_inner_loop(self, body):
+        statements = self.statement_list(body)
+        if not statements:
+            return False
+        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
 
     def generate_array_declaration(self, node, indent=0):
         indent_str = "    " * indent
@@ -759,17 +938,108 @@ class RustCodeGen:
         code = f"{indent_str}{init};\n"
         code += f"{indent_str}while {condition} {{\n"
 
-        if hasattr(node.body, "statements"):
-            for stmt in node.body.statements:
+        self.loop_depth += 1
+        self.for_contexts.append({"loop_depth": self.loop_depth, "update": update})
+        try:
+            for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(node.body, list):
-            for stmt in node.body:
-                code += self.generate_statement(stmt, indent + 1)
-        else:
-            code += self.generate_statement(node.body, indent + 1)
+        finally:
+            self.for_contexts.pop()
+            self.loop_depth -= 1
 
         # Add update at the end of the loop
         code += f"{indent_str}    {update};\n"
+        code += f"{indent_str}}}\n"
+
+        return code
+
+    def generate_for_in(self, node, indent):
+        indent_str = "    " * indent
+        pattern = getattr(node, "pattern", "item")
+        iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
+
+        code = f"{indent_str}for {pattern} in {iterable} {{\n"
+
+        self.loop_depth += 1
+        try:
+            for stmt in self.statement_list(getattr(node, "body", [])):
+                code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.loop_depth -= 1
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_for_in_iterable(self, iterable_node):
+        if isinstance(iterable_node, RangeNode):
+            start = self.generate_expression(iterable_node.start)
+            end = self.generate_expression(iterable_node.end)
+            operator = "..=" if iterable_node.inclusive else ".."
+            return f"{start}{operator}{end}"
+
+        iterable = self.generate_expression(iterable_node)
+        return f"0..{iterable}"
+
+    def generate_while(self, node, indent):
+        indent_str = "    " * indent
+        condition = self.generate_expression(node.condition)
+
+        code = f"{indent_str}while {condition} {{\n"
+
+        self.loop_depth += 1
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.loop_depth -= 1
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_loop(self, node, indent):
+        indent_str = "    " * indent
+        code = f"{indent_str}loop {{\n"
+
+        self.loop_depth += 1
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.loop_depth -= 1
+
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_do_while(self, node, indent):
+        indent_str = "    " * indent
+        break_flag = f"__cgl_do_break_{self.do_while_counter}"
+        self.do_while_counter += 1
+        condition = self.generate_expression(node.condition)
+
+        code = f"{indent_str}let mut {break_flag}: bool = false;\n"
+        code += f"{indent_str}loop {{\n"
+        code += f"{indent_str}    loop {{\n"
+
+        self.loop_depth += 1
+        self.do_while_contexts.append(
+            {"loop_depth": self.loop_depth, "break_flag": break_flag}
+        )
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 2)
+        finally:
+            self.do_while_contexts.pop()
+            self.loop_depth -= 1
+
+        if not self.statement_body_terminates_inner_loop(node.body):
+            code += f"{indent_str}        break;\n"
+        code += f"{indent_str}    }}\n"
+        code += f"{indent_str}    if {break_flag} {{\n"
+        code += f"{indent_str}        break;\n"
+        code += f"{indent_str}    }}\n"
+        code += f"{indent_str}    if !({condition}) {{\n"
+        code += f"{indent_str}        break;\n"
+        code += f"{indent_str}    }}\n"
         code += f"{indent_str}}}\n"
 
         return code
@@ -849,7 +1119,7 @@ class RustCodeGen:
                     if arg_type is not None and not self.vector_type_info(arg_type):
                         generated_args *= vector_info["size"]
                 args_str = ", ".join(generated_args)
-                return f"{rust_type}::new({args_str})"
+                return f"{self.rust_constructor_path(rust_type)}::new({args_str})"
 
             if func_name in [
                 "mat2",
@@ -879,10 +1149,10 @@ class RustCodeGen:
             ]:
                 rust_type = self.map_type(func_name)
                 args_str = ", ".join(self.generate_expression(arg) for arg in args)
-                return f"{rust_type}::new({args_str})"
+                return f"{self.rust_constructor_path(rust_type)}::new({args_str})"
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
-            return f"{callee}({args_str})"
+            return f"{func_name or callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
             member = getattr(expr, "member", "")
@@ -1107,6 +1377,13 @@ class RustCodeGen:
                 return f"Vec<{base_mapped}>"
 
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def rust_constructor_path(self, rust_type):
+        """Return a Rust path suitable for associated constructor calls."""
+        rust_type = str(rust_type)
+        if "<" not in rust_type:
+            return rust_type
+        return rust_type.replace("<", "::<", 1)
 
     def map_operator(self, op):
         op_map = {

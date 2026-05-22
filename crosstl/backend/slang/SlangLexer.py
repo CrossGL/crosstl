@@ -40,7 +40,11 @@ TOKENS = tuple(
         ("REGISTER", r"\bregister\b"),
         ("STRING", r'"[^"]*"'),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-        ("NUMBER", r"\d+(\.\d+)?"),
+        (
+            "NUMBER",
+            r"0[xX][0-9a-fA-F]+[uUlL]*|"
+            r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFhHuUlL]*",
+        ),
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
         ("LPAREN", r"\("),
@@ -57,6 +61,7 @@ TOKENS = tuple(
         ("GREATER_THAN", r">"),
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
+        ("NOT", r"!"),
         ("PLUS_EQUALS", r"\+="),
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),

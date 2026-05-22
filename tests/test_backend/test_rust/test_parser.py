@@ -11,6 +11,7 @@ from crosstl.backend.Rust.RustAst import (
     ClosureNode,
     ClosureParameterNode,
     ConditionChainNode,
+    ConstBlockNode,
     ConstNode,
     EnumNode,
     EnumVariantNode,
@@ -39,8 +40,10 @@ from crosstl.backend.Rust.RustAst import (
     TryBlockNode,
     TryNode,
     UnaryOpNode,
+    UnsafeBlockNode,
     UseNode,
     ArrayNode,
+    ArrayAccessNode,
     BlockNode,
     BreakNode,
     ContinueNode,
@@ -395,6 +398,53 @@ def test_generic_impl_where_clause_parsing():
         pytest.fail(f"Generic impl where-clause parsing failed: {e}")
 
 
+def test_shader_type_token_declaration_names_parsing():
+    code = """
+    struct Vec2<T> {
+        x: T,
+        y: T,
+    }
+
+    impl<T> Vec2<T> {
+        fn x(&self) -> T {
+            return self.x;
+        }
+    }
+
+    enum Option {
+        None,
+        Some(i32),
+        Vec3 { value: i32 },
+    }
+
+    trait Result {
+        type Vec4;
+        fn Some(&self) -> i32;
+    }
+
+    type Mat4 = Vec2<f32>;
+    """
+    try:
+        ast = parse_code(code)
+
+        assert ast.structs[0].name == "Vec2"
+        assert [member.name for member in ast.structs[0].members] == ["x", "y"]
+        assert ast.impl_blocks[0].struct_name == "Vec2<T>"
+        assert ast.impl_blocks[0].functions[0].name == "x"
+        assert ast.enums[0].name == "Option"
+        assert [variant.name for variant in ast.enums[0].variants] == [
+            "None",
+            "Some",
+            "Vec3",
+        ]
+        assert ast.traits[0].name == "Result"
+        assert ast.traits[0].associated_types[0].name == "Vec4"
+        assert ast.traits[0].methods[0].name == "Some"
+        assert ast.type_aliases[0].name == "Mat4"
+    except Exception as e:
+        pytest.fail(f"Shader type-token declaration name parsing failed: {e}")
+
+
 def test_use_statement_parsing():
     code = """
     use std::collections::HashMap;
@@ -698,6 +748,30 @@ def test_reference_array_type_parsing():
         assert params[1].vtype == "&mut Vec3<f32>[2]"
     except Exception as e:
         pytest.fail(f"Reference array type parsing failed: {e}")
+
+
+def test_lifetime_reference_type_parsing():
+    code = """
+    fn borrow<'a>(value: &'a Vec3<f32>) -> &'a Vec3<f32> {
+        return value;
+    }
+
+    fn borrow_mut<'a>(value: &'a mut Vec3<f32>) -> &'a mut Vec3<f32> {
+        return value;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        borrowed, borrowed_mut = ast.functions
+
+        assert borrowed.generics == ["'a"]
+        assert borrowed.params[0].vtype == "&Vec3<f32>"
+        assert borrowed.return_type == "&Vec3<f32>"
+        assert borrowed_mut.generics == ["'a"]
+        assert borrowed_mut.params[0].vtype == "&mut Vec3<f32>"
+        assert borrowed_mut.return_type == "&mut Vec3<f32>"
+    except Exception as e:
+        pytest.fail(f"Lifetime reference type parsing failed: {e}")
 
 
 def test_function_call_parsing():
@@ -1954,15 +2028,39 @@ def test_array_access_parsing():
     code = """
     fn test_array() {
         let arr = [1, 2, 3, 4, 5];
+        let start = 1;
+        let end = 3;
         let element = arr[0];
         let slice = &arr[1..3];
+        let prefix = &arr[..end];
+        let suffix = &arr[start..];
+        let full = &arr[..];
     }
     """
     try:
         ast = parse_code(code)
         assert len(ast.functions) == 1
         func = ast.functions[0]
-        assert len(func.body) >= 3
+        assert len(func.body) >= 8
+
+        closed_range = func.body[4].value.expression.index
+        prefix_range = func.body[5].value.expression.index
+        suffix_range = func.body[6].value.expression.index
+        full_range = func.body[7].value.expression.index
+
+        assert isinstance(func.body[3].value, ArrayAccessNode)
+        assert isinstance(closed_range, RangeNode)
+        assert closed_range.start == "1"
+        assert closed_range.end == "3"
+        assert isinstance(prefix_range, RangeNode)
+        assert prefix_range.start is None
+        assert prefix_range.end == "end"
+        assert isinstance(suffix_range, RangeNode)
+        assert suffix_range.start == "start"
+        assert suffix_range.end is None
+        assert isinstance(full_range, RangeNode)
+        assert full_range.start is None
+        assert full_range.end is None
     except Exception as e:
         pytest.fail(f"Array access parsing failed: {e}")
 
@@ -2058,6 +2156,43 @@ def test_assignment_operations_parsing():
         ]
     except Exception as e:
         pytest.fail(f"Assignment operations parsing failed: {e}")
+
+
+def test_assignment_expression_parsing():
+    code = """
+    fn test_assignment_expr() {
+        let mut a = 0;
+        (a = 1);
+        let unit = (a = 2);
+        let compound = (a += 3);
+        let block_unit = { a = 4; };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[1], AssignmentNode)
+        assert body[1].operator == "="
+        assert body[1].right == "1"
+
+        assert isinstance(body[2], LetNode)
+        assert isinstance(body[2].value, AssignmentNode)
+        assert body[2].value.operator == "="
+        assert body[2].value.right == "2"
+
+        assert isinstance(body[3], LetNode)
+        assert isinstance(body[3].value, AssignmentNode)
+        assert body[3].value.operator == "+="
+        assert body[3].value.right == "3"
+
+        assert isinstance(body[4], LetNode)
+        assert isinstance(body[4].value, BlockNode)
+        assert isinstance(body[4].value.statements[0], AssignmentNode)
+        assert body[4].value.statements[0].operator == "="
+        assert body[4].value.statements[0].right == "4"
+    except Exception as e:
+        pytest.fail(f"Assignment expression parsing failed: {e}")
 
 
 def test_control_flow_parsing():
@@ -2821,6 +2956,148 @@ def test_async_function_and_block_parsing():
         pytest.fail(f"Async function and block parsing failed: {e}")
 
 
+def test_unsafe_extern_function_and_block_parsing():
+    code = """
+    #[no_mangle]
+    pub unsafe extern "C" fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        let result: i32 = unsafe {
+            let v: i32 = value?;
+            v + 1
+        };
+        return Ok(result);
+    }
+
+    impl Loader {
+        pub unsafe fn method(&self, value: Result<i32, i32>) -> Result<i32, i32> {
+            return unsafe {
+                value
+            };
+        }
+    }
+
+    trait Fetch {
+        unsafe fn fetch(&self) -> i32;
+    }
+
+    unsafe extern "C" {
+        fn foreign_decode(value: i32) -> i32;
+    }
+
+    fn after_extern_block() -> i32 {
+        return 1;
+    }
+    """
+    try:
+        ast = parse_code(code)
+
+        decode = ast.functions[0]
+        assert decode.is_unsafe is True
+        assert decode.abi == "C"
+        assert decode.visibility == "pub"
+        assert decode.attributes[0].name == "no_mangle"
+
+        result_block = decode.body[0].value
+        assert isinstance(result_block, UnsafeBlockNode)
+        assert isinstance(result_block.block, BlockNode)
+        assert isinstance(result_block.block.statements[0], LetNode)
+        assert isinstance(result_block.block.statements[0].value, TryNode)
+
+        method = ast.impl_blocks[0].methods[0]
+        assert method.is_unsafe is True
+        assert method.abi is None
+        assert isinstance(method.body[0].value, UnsafeBlockNode)
+
+        trait_method = ast.traits[0].methods[0]
+        assert trait_method.is_unsafe is True
+        assert trait_method.body == []
+
+        assert ast.functions[1].name == "after_extern_block"
+    except Exception as e:
+        pytest.fail(f"Unsafe extern function and block parsing failed: {e}")
+
+
+def test_const_function_and_block_parsing():
+    code = """
+    pub const SCALE: i32 = 2;
+
+    pub const unsafe extern "C" fn scale(value: i32) -> i32 {
+        let result: i32 = const {
+            let base: i32 = SCALE;
+            base + value
+        };
+        return result;
+    }
+
+    impl Loader {
+        pub const fn method(&self, value: i32) -> i32 {
+            return const {
+                value + 1
+            };
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+
+        assert len(ast.global_variables) == 1
+        assert isinstance(ast.global_variables[0], ConstNode)
+        assert ast.global_variables[0].name == "SCALE"
+
+        scale = ast.functions[0]
+        assert scale.is_const is True
+        assert scale.is_unsafe is True
+        assert scale.abi == "C"
+
+        result_block = scale.body[0].value
+        assert isinstance(result_block, ConstBlockNode)
+        assert isinstance(result_block.block, BlockNode)
+        assert isinstance(result_block.block.statements[0], LetNode)
+        assert isinstance(result_block.block.expression, BinaryOpNode)
+
+        method = ast.impl_blocks[0].methods[0]
+        assert method.is_const is True
+        assert method.is_unsafe is False
+        assert isinstance(method.body[0].value, ConstBlockNode)
+    except Exception as e:
+        pytest.fail(f"Const function and block parsing failed: {e}")
+
+
+def test_local_const_static_item_parsing():
+    code = """
+    fn local_items(value: i32) -> i32 {
+        const OFFSET: i32 = 1;
+        static mut CACHE: i32 = 2;
+        let result: i32 = {
+            const INNER: i32 = 3;
+            static ENABLED: bool = true;
+            value + OFFSET + INNER
+        };
+        return result;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0], ConstNode)
+        assert body[0].name == "OFFSET"
+        assert body[0].vtype == "i32"
+
+        assert isinstance(body[1], StaticNode)
+        assert body[1].name == "CACHE"
+        assert body[1].is_mutable is True
+
+        block = body[2].value
+        assert isinstance(block, BlockNode)
+        assert isinstance(block.statements[0], ConstNode)
+        assert block.statements[0].name == "INNER"
+        assert isinstance(block.statements[1], StaticNode)
+        assert block.statements[1].name == "ENABLED"
+        assert block.expression is not None
+    except Exception as e:
+        pytest.fail(f"Local const/static item parsing failed: {e}")
+
+
 def test_try_expression_host_parsing():
     code = """
     struct Output {
@@ -3016,6 +3293,39 @@ def test_trait_parsing():
         assert trait.methods[1].where_clauses == [("V", ["Clone"])]
     except Exception as e:
         pytest.fail(f"Trait parsing failed: {e}")
+
+
+def test_trait_default_method_body_parsing():
+    code = """
+    trait ShaderMath {
+        fn saturate(x: f32) -> f32 {
+            clamp(x, 0.0, 1.0)
+        }
+
+        unsafe fn raw(x: f32) -> f32 {
+            x
+        }
+
+        fn passthrough(x: f32) -> f32;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        trait = ast.traits[0]
+
+        assert [method.name for method in trait.methods] == [
+            "saturate",
+            "raw",
+            "passthrough",
+        ]
+        assert len(trait.methods[0].body) == 1
+        assert isinstance(trait.methods[0].body[0], FunctionCallNode)
+        assert trait.methods[0].body[0].name == "clamp"
+        assert trait.methods[1].is_unsafe is True
+        assert trait.methods[1].body == ["x"]
+        assert trait.methods[2].body == []
+    except Exception as e:
+        pytest.fail(f"Trait default method body parsing failed: {e}")
 
 
 def test_error_handling():

@@ -107,6 +107,26 @@ class TestCudaCodeGen:
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
 
+    def test_fmod_builtins_convert_to_crossgl_mod(self):
+        """Test CUDA fmod functions convert back to CrossGL mod."""
+        code = """
+        __global__ void wrap(float* out, float x) {
+            out[0] = fmodf(x, 1.0f);
+            out[1] = fmod(x, 2.0);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = mod(x, 1.0f);" in result
+        assert "out[1] = mod(x, 2.0);" in result
+        assert "fmod" not in result
+
     def test_kernel_launch_conversion(self):
         """Test CUDA kernel launch configuration conversion"""
         code = """
@@ -126,6 +146,29 @@ class TestCudaCodeGen:
 
         assert "// Kernel launch: kernel<<<grid, block, 128, stream>>>()" in result
         assert "// Arguments: data, 1" in result
+
+    def test_templated_kernel_launch_conversion(self):
+        """Test CUDA template-id kernel launch conversion"""
+        code = """
+        template <typename T>
+        __global__ void scale(T* data, T factor) {
+            data[threadIdx.x] *= factor;
+        }
+
+        void host(float* data) {
+            scale<float><<<1, 32>>>(data, 2.0f);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel launch: scale<float><<<1, 32>>>()" in result
+        assert "// Arguments: data, 2.0f" in result
 
     def test_computed_kernel_launch_config_conversion(self):
         """Test CUDA computed kernel launch configuration conversion"""
@@ -523,6 +566,52 @@ class TestCudaCodeGen:
         assert "var pb: ptr<f32> = b;" in result
         assert "for (; (pa != pb); (++pa)) {" in result
         assert "for (var i: i32 = 0, var j:" not in result
+
+    def test_multi_expression_for_update_conversion(self):
+        """Test comma-separated for updates lower into one header"""
+        code = """
+        void host(int n) {
+            for (int i = 0, j = n; i < j; ++i, --j) {
+                sink(i);
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "for (; (i < j); (++i), (--j)) {" in result
+        assert "sink(i);" in result
+
+    def test_grid_stride_for_update_compound_assignment_conversion(self):
+        """Test CUDA grid-stride for-loop updates lower into CrossGL"""
+        code = """
+        __global__ void kernel(float* data, int n) {
+            for (int i = blockIdx.x * blockDim.x + threadIdx.x;
+                 i < n;
+                 i += blockDim.x * gridDim.x) {
+                data[i] = 0.0f;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "for (var i: i32 = ((gl_WorkGroupID.x * gl_WorkGroupSize.x) + "
+            "gl_LocalInvocationID.x); (i < n); i += "
+            "(gl_WorkGroupSize.x * gl_NumWorkGroups.x)) {"
+        ) in result
+        assert "data[i] = 0.0f;" in result
 
     def test_auto_pointer_reference_local_declarations_conversion(self):
         """Test auto pointer and reference declarations convert"""
@@ -1052,6 +1141,28 @@ class TestCudaCodeGen:
         assert "BinaryOpNode" not in result
         assert "UnaryOpNode" not in result
 
+    def test_pointer_member_access_operator_conversion(self):
+        """Test pointer and value member access preserve their operators"""
+        code = """
+        struct Item { int value; };
+        void helper(Item* p, Item v) {
+            int a = p->value;
+            int b = v.value;
+            p->value = b;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var a: i32 = p->value;" in result
+        assert "var b: i32 = v.value;" in result
+        assert "p->value = b;" in result
+
     def test_bitwise_logical_and_shift_expression_conversion(self):
         """Test bitwise, shift, logical, and compound shift conversion"""
         code = """
@@ -1146,3 +1257,27 @@ class TestCudaCodeGen:
         assert "SwitchNode" not in result
         assert "TernaryOpNode" not in result
         assert "CastNode" not in result
+
+    def test_empty_default_switch_codegen_emits_default_label(self):
+        """Test empty default labels are emitted instead of dropped."""
+        code = """
+        void f(int value) {
+            switch (value) {
+                case 0:
+                    break;
+                default:
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "switch (value) {" in result
+        assert "case 0:" in result
+        assert "default:" in result
+        assert result.index("case 0:") < result.index("default:")

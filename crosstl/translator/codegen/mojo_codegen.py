@@ -6,18 +6,30 @@ from ..ast import (
     ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
+    BreakNode,
+    CaseNode,
     CbufferNode,
+    ContinueNode,
+    DoWhileNode,
+    ForInNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
+    LiteralPatternNode,
+    LoopNode,
+    MatchNode,
     MemberAccessNode,
     ReturnNode,
+    RangeNode,
     ShaderNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WhileNode,
+    WildcardPatternNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
@@ -138,8 +150,13 @@ class MojoCodeGen:
         self.required_constructor_helpers = {}
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
+        self.required_fract_helpers = set()
         self.current_return_type = None
         self.current_shader = None
+        self.do_while_contexts = []
+        self.for_contexts = []
+        self.loop_depth = 0
+        self.do_while_counter = 0
         self.type_mapping = {
             # Scalar Types
             "void": "None",
@@ -235,7 +252,12 @@ class MojoCodeGen:
         self.required_constructor_helpers = {}
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
+        self.required_fract_helpers = set()
         self.current_return_type = None
+        self.do_while_contexts = []
+        self.for_contexts = []
+        self.loop_depth = 0
+        self.do_while_counter = 0
         self.collect_function_return_types(ast)
 
         header = "# Generated Mojo Shader Code\n"
@@ -254,25 +276,30 @@ class MojoCodeGen:
             if isinstance(node, ArrayNode):
                 code += self.generate_array_declaration(node)
             else:
-                # Handle both old and new AST variable structures
-                if hasattr(node, "var_type"):
-                    vtype = self.convert_type_node_to_string(node.var_type)
-                elif hasattr(node, "vtype"):
-                    vtype = node.vtype
-                else:
-                    vtype = "float"
-                self.register_variable_type(node.name, vtype)
                 if hasattr(node, "initial_value") and node.initial_value is not None:
+                    vtype = self.variable_declared_type(node)
+                    self.register_variable_type(
+                        node.name,
+                        vtype or self.expression_result_type(node.initial_value),
+                    )
                     if isinstance(
                         node.initial_value, ArrayLiteralNode
-                    ) and self.is_array_type_name(vtype):
+                    ) and vtype is not None and self.is_array_type_name(vtype):
                         init_expr = self.generate_array_literal_expression(
                             node.initial_value, vtype
                         )
                     else:
                         init_expr = self.generate_expression(node.initial_value)
+                    if vtype is None:
+                        code += f"var {node.name} = {init_expr}\n"
+                        continue
                     code += f"var {node.name}: {self.map_type(vtype)} = {init_expr}\n"
-                elif self.is_array_type_name(vtype):
+                    continue
+
+                # Handle both old and new AST variable structures
+                vtype = self.variable_declared_type(node) or "float"
+                self.register_variable_type(node.name, vtype)
+                if self.is_array_type_name(vtype):
                     code += (
                         f"var {node.name} = "
                         f"{self.array_initial_value_for_type(vtype)}\n"
@@ -309,18 +336,21 @@ class MojoCodeGen:
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
+            emitted_local_functions = set()
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
                     stage_name = (
                         str(stage_type).split(".")[-1].lower()
                     )  # Extract stage name from enum
                     code += f"# {stage_name.title()} Shader\n"
+                    for func in getattr(stage, "local_functions", []):
+                        if id(func) in emitted_local_functions:
+                            continue
+                        code += self.generate_function(func)
+                        emitted_local_functions.add(id(func))
                     code += self.generate_function(
                         stage.entry_point, shader_type=stage_name
                     )
-                if hasattr(stage, "local_functions"):
-                    for func in stage.local_functions:
-                        code += self.generate_function(func)
 
         return header + self.generate_required_helpers() + code
 
@@ -386,6 +416,19 @@ class MojoCodeGen:
             return f"{prefix}{type_node.rows}x{type_node.cols}"
         else:
             return str(type_node)
+
+    def variable_declared_type(self, node):
+        """Return the explicit type on a variable declaration, if one exists."""
+        var_type = getattr(node, "var_type", None)
+        if var_type is not None:
+            return self.convert_type_node_to_string(var_type)
+
+        vtype = getattr(node, "vtype", None)
+        if vtype is None or vtype == "":
+            return None
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            return self.convert_type_node_to_string(vtype)
+        return vtype
 
     def format_array_size(self, size):
         if size is None:
@@ -670,9 +713,8 @@ class MojoCodeGen:
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
-            if hasattr(stmt, "var_type"):
-                var_type = self.convert_type_node_to_string(stmt.var_type)
-            elif hasattr(stmt, "vtype") and stmt.vtype:
+            var_type = self.variable_declared_type(stmt)
+            if getattr(stmt, "vtype", None) and var_type is not None:
                 # Old AST structure - check if this is actually an array declaration disguised as a variable
                 vtype_str = str(stmt.vtype)
                 if (
@@ -693,22 +735,27 @@ class MojoCodeGen:
                             f"InlineArray[{base_type}, {size}]"
                             "(unsafe_uninitialized=True)\n"
                         )
-                var_type = stmt.vtype
-            else:
-                var_type = "float"
 
-            self.register_variable_type(stmt.name, var_type)
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+                self.register_variable_type(
+                    stmt.name,
+                    var_type or self.expression_result_type(stmt.initial_value),
+                )
                 if isinstance(
                     stmt.initial_value, ArrayLiteralNode
-                ) and self.is_array_type_name(var_type):
+                ) and var_type is not None and self.is_array_type_name(var_type):
                     init_expr = self.generate_array_literal_expression(
                         stmt.initial_value, var_type
                     )
                 else:
                     init_expr = self.generate_expression(stmt.initial_value)
+                if var_type is None:
+                    return f"{indent_str}var {stmt.name} = {init_expr}\n"
                 return f"{indent_str}var {stmt.name}: {self.map_type(var_type)} = {init_expr}\n"
-            elif self.is_array_type_name(var_type):
+
+            var_type = var_type or "float"
+            self.register_variable_type(stmt.name, var_type)
+            if self.is_array_type_name(var_type):
                 return (
                     f"{indent_str}var {stmt.name} = "
                     f"{self.array_initial_value_for_type(var_type)}\n"
@@ -728,6 +775,18 @@ class MojoCodeGen:
             return self.generate_if(stmt, indent)
         elif isinstance(stmt, ForNode):
             return self.generate_for(stmt, indent)
+        elif isinstance(stmt, ForInNode):
+            return self.generate_for_in(stmt, indent)
+        elif isinstance(stmt, WhileNode):
+            return self.generate_while(stmt, indent)
+        elif isinstance(stmt, LoopNode):
+            return self.generate_loop(stmt, indent)
+        elif isinstance(stmt, DoWhileNode):
+            return self.generate_do_while(stmt, indent)
+        elif isinstance(stmt, MatchNode):
+            return self.generate_match(stmt, indent)
+        elif isinstance(stmt, SwitchNode):
+            return self.generate_switch(stmt, indent)
         elif isinstance(stmt, ReturnNode):
             if isinstance(stmt.value, list):
                 # Multiple return values
@@ -742,6 +801,20 @@ class MojoCodeGen:
                 return f"{indent_str}return " f"{return_value}\n"
             else:
                 return f"{indent_str}return {self.generate_expression(stmt.value)}\n"
+        elif isinstance(stmt, BreakNode):
+            context = self.active_do_while_context()
+            if context:
+                break_flag = context["break_flag"]
+                return f"{indent_str}{break_flag} = True\n{indent_str}break\n"
+            return f"{indent_str}break\n"
+        elif isinstance(stmt, ContinueNode):
+            if self.active_do_while_context():
+                return f"{indent_str}break\n"
+            context = self.active_for_context()
+            if context:
+                update = context["update"]
+                return f"{indent_str}{update}\n{indent_str}continue\n"
+            return f"{indent_str}continue\n"
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
             # Try to handle it gracefully
@@ -753,6 +826,123 @@ class MojoCodeGen:
                 return f"{indent_str}{expr_result}\n"
             else:
                 return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_switch(self, node, indent):
+        indent_str = "    " * indent
+        expression = self.generate_expression(getattr(node, "expression", ""))
+        code = ""
+        emitted_condition = False
+        default_body = None
+
+        for case in getattr(node, "cases", []) or []:
+            if not isinstance(case, CaseNode):
+                continue
+            value = getattr(case, "value", None)
+            if value is None:
+                default_body = getattr(case, "statements", [])
+                continue
+
+            keyword = "if" if not emitted_condition else "elif"
+            condition = f"{expression} == {self.generate_expression(value)}"
+            code += f"{indent_str}{keyword} {condition}:\n"
+            code += self.generate_switch_case_body(
+                getattr(case, "statements", []), indent + 1
+            )
+            emitted_condition = True
+
+        explicit_default = getattr(node, "default_case", None)
+        if explicit_default is not None:
+            default_body = explicit_default
+
+        if default_body is not None:
+            code += f"{indent_str}else:\n"
+            code += self.generate_switch_case_body(default_body, indent + 1)
+        elif not emitted_condition:
+            code += f"{indent_str}pass\n"
+
+        return code
+
+    def generate_switch_case_body(self, body, indent):
+        statements = self.statement_list(body)
+        code = ""
+        for stmt in statements:
+            if isinstance(stmt, BreakNode):
+                continue
+            code += self.generate_statement(stmt, indent)
+        if not code:
+            code = f"{'    ' * indent}pass\n"
+        return code
+
+    def generate_match(self, node, indent):
+        indent_str = "    " * indent
+        expression = self.generate_expression(getattr(node, "expression", ""))
+        code = ""
+        emitted_condition = False
+        wildcard_body = None
+
+        for arm in getattr(node, "arms", []) or []:
+            if not self.is_supported_match_arm(arm):
+                raise ValueError(
+                    "Unsupported match arm for Mojo codegen; only unguarded "
+                    "literal and wildcard patterns are supported"
+                )
+
+            pattern = getattr(arm, "pattern", None)
+            body = getattr(arm, "body", [])
+            if isinstance(pattern, WildcardPatternNode):
+                wildcard_body = body
+                continue
+
+            keyword = "if" if not emitted_condition else "elif"
+            condition = f"{expression} == {self.generate_expression(pattern.literal)}"
+            code += f"{indent_str}{keyword} {condition}:\n"
+            code += self.generate_switch_case_body(body, indent + 1)
+            emitted_condition = True
+
+        if wildcard_body is not None:
+            code += f"{indent_str}else:\n"
+            code += self.generate_switch_case_body(wildcard_body, indent + 1)
+        elif not emitted_condition:
+            code += f"{indent_str}pass\n"
+
+        return code
+
+    def is_supported_match_arm(self, arm):
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
+    def statement_list(self, body):
+        if hasattr(body, "statements"):
+            return body.statements
+        if isinstance(body, list):
+            return body
+        if body is None:
+            return []
+        return [body]
+
+    def active_do_while_context(self):
+        if not self.do_while_contexts:
+            return None
+        context = self.do_while_contexts[-1]
+        if context["loop_depth"] == self.loop_depth:
+            return context
+        return None
+
+    def active_for_context(self):
+        if not self.for_contexts:
+            return None
+        context = self.for_contexts[-1]
+        if context["loop_depth"] == self.loop_depth:
+            return context
+        return None
+
+    def statement_body_terminates_inner_loop(self, body):
+        statements = self.statement_list(body)
+        if not statements:
+            return False
+        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
 
     def generate_array_declaration(self, node, indent=0):
         indent_str = "    " * indent
@@ -862,17 +1052,108 @@ class MojoCodeGen:
         code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
 
-        if hasattr(node.body, "statements"):
-            for stmt in node.body.statements:
+        self.loop_depth += 1
+        self.for_contexts.append({"loop_depth": self.loop_depth, "update": update})
+        try:
+            for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(node.body, list):
-            for stmt in node.body:
-                code += self.generate_statement(stmt, indent + 1)
-        else:
-            code += self.generate_statement(node.body, indent + 1)
+        finally:
+            self.for_contexts.pop()
+            self.loop_depth -= 1
 
         # Add update at the end of the loop
         code += f"{indent_str}    {update}\n"
+
+        return code
+
+    def generate_for_in(self, node, indent):
+        indent_str = "    " * indent
+        pattern = getattr(node, "pattern", "item")
+        iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
+
+        code = f"{indent_str}for {pattern} in {iterable}:\n"
+
+        self.loop_depth += 1
+        try:
+            body_code = ""
+            for stmt in self.statement_list(getattr(node, "body", [])):
+                body_code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.loop_depth -= 1
+
+        if body_code:
+            code += body_code
+        else:
+            code += f"{indent_str}    pass\n"
+
+        return code
+
+    def generate_for_in_iterable(self, iterable_node):
+        if isinstance(iterable_node, RangeNode):
+            start = self.generate_expression(iterable_node.start)
+            end = self.generate_expression(iterable_node.end)
+            if iterable_node.inclusive:
+                end = f"({end} + 1)"
+            return f"range({start}, {end})"
+
+        iterable = self.generate_expression(iterable_node)
+        return f"range({iterable})"
+
+    def generate_while(self, node, indent):
+        indent_str = "    " * indent
+        condition = self.generate_expression(node.condition)
+
+        code = f"{indent_str}while {condition}:\n"
+
+        self.loop_depth += 1
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.loop_depth -= 1
+
+        return code
+
+    def generate_loop(self, node, indent):
+        indent_str = "    " * indent
+        code = f"{indent_str}while True:\n"
+
+        self.loop_depth += 1
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.loop_depth -= 1
+
+        return code
+
+    def generate_do_while(self, node, indent):
+        indent_str = "    " * indent
+        break_flag = f"__cgl_do_break_{self.do_while_counter}"
+        self.do_while_counter += 1
+        condition = self.generate_expression(node.condition)
+
+        code = f"{indent_str}var {break_flag}: Bool = False\n"
+        code += f"{indent_str}while True:\n"
+        code += f"{indent_str}    while True:\n"
+
+        self.loop_depth += 1
+        self.do_while_contexts.append(
+            {"loop_depth": self.loop_depth, "break_flag": break_flag}
+        )
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 2)
+        finally:
+            self.do_while_contexts.pop()
+            self.loop_depth -= 1
+
+        if not self.statement_body_terminates_inner_loop(node.body):
+            code += f"{indent_str}        break\n"
+        code += f"{indent_str}    if {break_flag}:\n"
+        code += f"{indent_str}        break\n"
+        code += f"{indent_str}    if not {condition}:\n"
+        code += f"{indent_str}        break\n"
 
         return code
 
@@ -931,6 +1212,9 @@ class MojoCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
 
+            if func_name == "fract":
+                return self.generate_fract_call(expr.args)
+
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
 
@@ -943,7 +1227,8 @@ class MojoCodeGen:
 
             # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            return f"{callee}({args})"
+            call_name = func_name if func_name is not None else callee
+            return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             swizzle_indices = self.get_swizzle_indices(expr.member)
@@ -1091,6 +1376,31 @@ class MojoCodeGen:
             column_args.append(f"{column_type}({', '.join(column_components)})")
 
         return f"{matrix_type}({', '.join(column_args)})"
+
+    def generate_fract_call(self, args):
+        if not args:
+            return "fract()"
+
+        arg = args[0]
+        arg_expr = self.generate_expression(arg)
+        arg_type = self.expression_result_type(arg)
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            dtype, source_width, storage_width, _ = vector_info
+            if dtype in {"DType.float32", "DType.float64"}:
+                self.required_fract_helpers.add(
+                    ("vector", dtype, source_width, storage_width)
+                )
+                helper_name = self.fract_vector_helper_name(
+                    dtype, source_width, storage_width
+                )
+                return f"{helper_name}({arg_expr})"
+
+        dtype = self.expression_mojo_dtype(arg) or "DType.float32"
+        if dtype not in {"DType.float32", "DType.float64"}:
+            dtype = "DType.float32"
+        self.required_fract_helpers.add(("scalar", dtype, 1, 1))
+        return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"
 
     def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
         component_count = columns * rows
@@ -1284,10 +1594,17 @@ class MojoCodeGen:
             and not self.required_constructor_helpers
             and not self.required_matrix_types
             and not self.required_matrix_constructor_helpers
+            and not self.required_fract_helpers
         ):
             return ""
 
         code = ""
+        if self.required_fract_helpers:
+            code += "# CrossGL math helpers\n"
+            for key in sorted(self.required_fract_helpers):
+                code += self.generate_fract_helper(key)
+            code += "\n"
+
         if self.required_matrix_types:
             code += "# CrossGL matrix types\n"
             for key in sorted(self.required_matrix_types):
@@ -1317,6 +1634,36 @@ class MojoCodeGen:
                 self.required_matrix_constructor_helpers[key]
             )
         return code + "\n"
+
+    def generate_fract_helper(self, key):
+        kind, dtype, source_width, storage_width = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+
+        if kind == "scalar":
+            helper_name = self.fract_scalar_helper_name(dtype)
+            code = f"fn {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+            code += "    return x - floor(x)\n\n"
+            return code
+
+        helper_name = self.fract_vector_helper_name(dtype, source_width, storage_width)
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        components = [
+            f"v[{index}] - floor(v[{index}])" for index in range(source_width)
+        ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        code = f"fn {helper_name}(v: {vector_type}) -> {vector_type}:\n"
+        code += f"    return {vector_type}({', '.join(components)})\n\n"
+        return code
+
+    def fract_scalar_helper_name(self, dtype):
+        return f"_crossgl_fract_{MOJO_DTYPE_SUFFIX[dtype]}"
+
+    def fract_vector_helper_name(self, dtype, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_fract_{dtype_suffix}_{source_width}_{storage_width}"
 
     def generate_vector_binary_helper(self, dtype, op, helper_kind):
         scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
@@ -1775,6 +2122,8 @@ class MojoCodeGen:
                 return func_name
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
+            if func_name == "fract" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
             return self.function_return_types.get(func_name)
         if isinstance(expr, MemberAccessNode):
             swizzle_indices = self.get_swizzle_indices(expr.member)

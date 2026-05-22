@@ -138,6 +138,9 @@ class FunctionNode(ASTNode):
         generics=None,
         where_clauses=None,
         is_async=False,
+        is_unsafe=False,
+        abi=None,
+        is_const=False,
     ):
         self.return_type = return_type
         self.name = name
@@ -148,12 +151,16 @@ class FunctionNode(ASTNode):
         self.generics = generics or []
         self.where_clauses = where_clauses or []
         self.is_async = is_async
+        self.is_unsafe = is_unsafe
+        self.abi = abi
+        self.is_const = is_const
 
     def __repr__(self):
         return (
             f"FunctionNode(name={self.name}, return_type={self.return_type}, "
             f"params={len(self.params)}, visibility={self.visibility}, "
-            f"is_async={self.is_async})"
+            f"is_async={self.is_async}, is_unsafe={self.is_unsafe}, "
+            f"abi={self.abi}, is_const={self.is_const})"
         )
 
 
@@ -370,6 +377,26 @@ class AsyncBlockNode(ASTNode):
     def __repr__(self):
         move = "move " if self.is_move else ""
         return f"AsyncBlockNode({move}block={self.block})"
+
+
+class UnsafeBlockNode(ASTNode):
+    """Node representing a Rust `unsafe { ... }` block expression."""
+
+    def __init__(self, block):
+        self.block = block
+
+    def __repr__(self):
+        return f"UnsafeBlockNode(block={self.block})"
+
+
+class ConstBlockNode(ASTNode):
+    """Node representing a Rust `const { ... }` block expression."""
+
+    def __init__(self, block):
+        self.block = block
+
+    def __repr__(self):
+        return f"ConstBlockNode(block={self.block})"
 
 
 class TryNode(ASTNode):

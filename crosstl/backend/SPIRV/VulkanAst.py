@@ -2,16 +2,20 @@
 
 from ..common_ast import (
     ASTNode,
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
     CaseNode,
+    ContinueNode,
+    DiscardNode,
     DoWhileNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
     MemberAccessNode,
+    MethodCallNode,
     ReturnNode,
     ShaderNode,
     StructNode,
@@ -24,16 +28,20 @@ from ..common_ast import (
 
 # Keep common AST imports used for re-exports (autoflake-safe).
 _COMMON_NODES = (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
     CaseNode,
+    ContinueNode,
+    DiscardNode,
     DoWhileNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
     MemberAccessNode,
+    MethodCallNode,
     ReturnNode,
     ShaderNode,
     StructNode,
@@ -74,6 +82,7 @@ class LayoutNode(ASTNode):
         variable_name=None,
         struct_fields=None,
         block_name=None,
+        declaration_qualifiers=None,
     ):
         self.qualifiers = qualifiers
         self.declaration = declaration
@@ -83,13 +92,15 @@ class LayoutNode(ASTNode):
         self.variable_name = variable_name
         self.struct_fields = struct_fields or []
         self.block_name = block_name
+        self.declaration_qualifiers = declaration_qualifiers or []
 
     def __repr__(self):
         return (
             "LayoutNode("
             f"qualifiers={self.qualifiers}, layout_type={self.layout_type}, "
             f"data_type={self.data_type}, variable_name={self.variable_name}, "
-            f"block_name={self.block_name})"
+            f"block_name={self.block_name}, "
+            f"declaration_qualifiers={self.declaration_qualifiers})"
         )
 
 

@@ -1,11 +1,14 @@
 """Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
 
 from .VulkanAst import (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
     CaseNode,
+    ContinueNode,
     DefaultNode,
+    DiscardNode,
     DoWhileNode,
     ForNode,
     FunctionCallNode,
@@ -13,11 +16,13 @@ from .VulkanAst import (
     IfNode,
     LayoutNode,
     MemberAccessNode,
+    MethodCallNode,
     ReturnNode,
     StructNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
+    UniformNode,
     VariableNode,
     WhileNode,
 )
@@ -91,6 +96,7 @@ class VulkanToCrossGLConverter:
         }
         self.indentation = 0
         self.code = []
+        self.flattened_uniform_block_instances = {}
 
     def get_indent(self):
         """Return whitespace for the current indentation level."""
@@ -98,7 +104,13 @@ class VulkanToCrossGLConverter:
 
     def generate(self, ast):
         """Generate complete CrossGL source from a parsed Vulkan backend AST."""
+        self.flattened_uniform_block_instances = {}
         code = "shader main {\n"
+        compute_layouts = [
+            node
+            for node in getattr(ast, "global_variables", [])
+            if isinstance(node, LayoutNode) and self.is_compute_layout(node)
+        ]
         top_level_nodes = []
         top_level_nodes.extend(getattr(ast, "structs", []))
         top_level_nodes.extend(getattr(ast, "global_variables", []))
@@ -106,9 +118,13 @@ class VulkanToCrossGLConverter:
 
         for node in top_level_nodes:
             if isinstance(node, LayoutNode):
+                if self.is_compute_layout(node):
+                    continue
                 code += self.generate_layout(node)
             elif isinstance(node, StructNode):
                 code += self.generate_struct(node)
+            elif isinstance(node, UniformNode):
+                code += self.generate_uniform(node)
             elif isinstance(node, FunctionNode):
                 # Determine if this is a vertex or fragment shader based on the function name
                 if node.name == "main":
@@ -118,7 +134,14 @@ class VulkanToCrossGLConverter:
                             is_vertex_shader = True
                             break
 
-                    if is_vertex_shader:
+                    if compute_layouts:
+                        code += "    // Compute Shader\n"
+                        code += "    compute {\n"
+                        for layout in compute_layouts:
+                            code += self.generate_compute_layout(layout)
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
+                    elif is_vertex_shader:
                         code += "    // Vertex Shader\n"
                         code += "    vertex {\n"
                         code += self.generate_function(node)
@@ -133,6 +156,24 @@ class VulkanToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def is_compute_layout(self, node):
+        """Return true for GLSL compute local-size layout declarations."""
+        if not isinstance(node, LayoutNode):
+            return False
+        if (node.layout_type or "").lower() != "in":
+            return False
+        return any(
+            name in {"local_size_x", "local_size_y", "local_size_z"}
+            for name, _ in node.qualifiers
+        )
+
+    def generate_compute_layout(self, node):
+        qualifiers = ", ".join(
+            f"{name} = {value}" if value is not None else name
+            for name, value in node.qualifiers
+        )
+        return f"        layout({qualifiers}) in;\n"
 
     def is_position_assignment(self, stmt):
         """Check if a statement is assigning to gl_Position"""
@@ -163,6 +204,7 @@ class VulkanToCrossGLConverter:
         if layout_type == "uniform":
             if node.struct_fields:
                 block_name = node.block_name or node.variable_name or "UniformBuffer"
+                self.record_flattened_uniform_block_instance(node)
                 code += f"    cbuffer {block_name} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
@@ -175,16 +217,34 @@ class VulkanToCrossGLConverter:
                 variable_name = (
                     node.variable_name or block_name[0].lower() + block_name[1:]
                 )
+                buffer_type = (
+                    "StructuredBuffer"
+                    if "readonly" in getattr(node, "declaration_qualifiers", [])
+                    else "RWStructuredBuffer"
+                )
                 code += f"    struct {block_name} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    };\n\n"
-                code += f"    RWStructuredBuffer<{block_name}> {variable_name};\n\n"
+                code += f"    {buffer_type}<{block_name}> {variable_name};\n\n"
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
                 code += f"    {self.map_type(node.data_type)} {node.variable_name};\n"
 
         return code
+
+    def record_flattened_uniform_block_instance(self, node):
+        if not node.variable_name:
+            return
+        instance_name = str(node.variable_name).split("[", 1)[0]
+        if not instance_name:
+            return
+        self.flattened_uniform_block_instances[instance_name] = {
+            str(field_name).split("[", 1)[0] for _, field_name in node.struct_fields
+        }
+
+    def generate_uniform(self, node):
+        return f"    {self.map_type(node.vtype)} {node.name};\n"
 
     def generate_struct(self, node):
         code = f"    struct {node.name} {{\n"
@@ -240,10 +300,16 @@ class VulkanToCrossGLConverter:
                 code += self.generate_if_statement(stmt, indent)
             elif isinstance(stmt, SwitchNode):
                 code += self.generate_switch_statement(stmt, indent)
-            elif isinstance(stmt, FunctionCallNode):
-                code += f"{self.generate_function_call(stmt)};\n"
+            elif isinstance(stmt, (FunctionCallNode, MethodCallNode)):
+                code += f"{self.generate_expression(stmt)};\n"
+            elif isinstance(stmt, UnaryOpNode):
+                code += f"{self.generate_expression(stmt)};\n"
             elif isinstance(stmt, BreakNode):
                 code += "break;\n"
+            elif isinstance(stmt, ContinueNode):
+                code += "continue;\n"
+            elif isinstance(stmt, DiscardNode):
+                code += "discard;\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:
@@ -301,11 +367,37 @@ class VulkanToCrossGLConverter:
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
+        elif isinstance(expr, MethodCallNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+            return f"{self.generate_expression(expr.object)}.{expr.method}({args})"
         elif isinstance(expr, MemberAccessNode):
+            flattened_member = self.flattened_uniform_block_member(expr)
+            if flattened_member is not None:
+                return flattened_member
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, ArrayAccessNode):
+            array = self.generate_expression(expr.array)
+            index = self.generate_expression(expr.index)
+            return f"{array}[{index}]"
         else:
             return str(expr)
+
+    def expression_base_name(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, VariableNode):
+            return expr.name
+        return None
+
+    def flattened_uniform_block_member(self, expr):
+        instance_name = self.expression_base_name(expr.object)
+        if instance_name is None:
+            return None
+        fields = self.flattened_uniform_block_instances.get(instance_name)
+        if fields is None or expr.member not in fields:
+            return None
+        return expr.member
 
     def generate_function_call(self, node):
         args = ", ".join(self.generate_expression(arg) for arg in node.args)
@@ -379,25 +471,50 @@ class VulkanToCrossGLConverter:
         expression = self.generate_expression(node.expression)
 
         code = f"switch ({expression}) {{\n"
+        emitted_default = False
 
         for case in node.cases:
             if isinstance(case, CaseNode):
                 if case.value is None:
                     code += "    " * (indent + 1) + "default:\n"
-                    code += self.generate_function_body(case.body, indent=indent + 2)
-                    code += "    " * (indent + 2) + "break;\n"
+                    code += self.generate_function_body(
+                        self.switch_case_body(case), indent=indent + 2
+                    )
+                    emitted_default = True
                     continue
                 value = self.generate_expression(case.value)
                 code += "    " * (indent + 1) + f"case {value}:\n"
-                code += self.generate_function_body(case.body, indent=indent + 2)
-                code += "    " * (indent + 2) + "break;\n"
+                code += self.generate_function_body(
+                    self.switch_case_body(case), indent=indent + 2
+                )
             elif isinstance(case, DefaultNode):
                 code += "    " * (indent + 1) + "default:\n"
-                code += self.generate_function_body(case.statements, indent=indent + 2)
-                code += "    " * (indent + 2) + "break;\n"
+                code += self.generate_function_body(
+                    self.switch_case_body(case), indent=indent + 2
+                )
+                emitted_default = True
+
+        default_case = getattr(node, "default_case", None)
+        if default_case is not None and not emitted_default:
+            code += "    " * (indent + 1) + "default:\n"
+            code += self.generate_function_body(
+                self.switch_case_body(default_case), indent=indent + 2
+            )
 
         code += "    " * indent + "}\n"
         return code
+
+    def switch_case_body(self, case):
+        """Return statements for parser and AST switch case variants."""
+        if case is None:
+            return []
+        if hasattr(case, "body"):
+            return case.body or []
+        if hasattr(case, "statements"):
+            return case.statements or []
+        if isinstance(case, list):
+            return case
+        return [case]
 
     def map_type(self, vulkan_type):
         """Map a Vulkan/SPIR-V type name to the closest CrossGL type name."""

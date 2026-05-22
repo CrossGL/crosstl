@@ -2,15 +2,18 @@
 
 from crosstl.backend.HIP.HipAst import (
     AssignmentNode,
+    ArrayAccessNode,
     BinaryOpNode,
     CastNode,
     DeleteNode,
     DesignatedInitializerNode,
     DoWhileNode,
     ForNode,
+    FunctionNode,
     FunctionCallNode,
     IfNode,
     InitializerListNode,
+    KernelNode,
     KernelLaunchNode,
     MemberAccessNode,
     NewNode,
@@ -22,6 +25,7 @@ from crosstl.backend.HIP.HipAst import (
     UnaryOpNode,
     VariableNode,
     WhileNode,
+    ReturnNode,
 )
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser, HipProgramNode
@@ -187,6 +191,39 @@ class TestHipParser:
         assert launch.stream == "stream"
         assert launch.args == ["data", "1"]
 
+    def test_templated_kernel_launch_parsing(self):
+        """Test HIP template-id kernel launch parsing"""
+        code = """
+        template <typename T>
+        __global__ void scale(T* data, T factor) {
+            data[threadIdx.x] *= factor;
+        }
+
+        void host(float* data) {
+            scale<float><<<dim3(1), dim3(32)>>>(data, 2.0f);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        host = next(
+            statement for statement in ast.statements if statement.name == "host"
+        )
+        launch = host.body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "scale<float>"
+        assert isinstance(launch.blocks, FunctionCallNode)
+        assert launch.blocks.name == "dim3"
+        assert launch.blocks.args == ["1"]
+        assert isinstance(launch.threads, FunctionCallNode)
+        assert launch.threads.name == "dim3"
+        assert launch.threads.args == ["32"]
+        assert launch.shared_mem is None
+        assert launch.stream is None
+        assert launch.args == ["data", "2.0f"]
+
     def test_computed_kernel_launch_config_parsing(self):
         """Test HIP computed kernel launch configuration parsing"""
         code = """
@@ -246,6 +283,41 @@ class TestHipParser:
         assert launch.shared_mem == "0"
         assert launch.stream == "0"
         assert launch.args == ["packedArgs"]
+
+    def test_templated_hip_launch_kernel_ggl_parsing(self):
+        """Test hipLaunchKernelGGL accepts a template-id kernel argument"""
+        code = """
+        template <typename T>
+        __global__ void scale(T* data, T factor) {
+            data[threadIdx.x] *= factor;
+        }
+
+        void host(float* data) {
+            hipLaunchKernelGGL(
+                scale<float>, dim3(1), dim3(32), 0, 0, data, 2.0f
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        host = next(
+            statement for statement in ast.statements if statement.name == "host"
+        )
+        launch = host.body[0]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "scale<float>"
+        assert isinstance(launch.blocks, FunctionCallNode)
+        assert launch.blocks.name == "dim3"
+        assert launch.blocks.args == ["1"]
+        assert isinstance(launch.threads, FunctionCallNode)
+        assert launch.threads.name == "dim3"
+        assert launch.threads.args == ["32"]
+        assert launch.shared_mem == "0"
+        assert launch.stream == "0"
+        assert launch.args == ["data", "2.0f"]
 
     def test_hip_launch_kernel_casted_packed_args_parsing(self):
         """Test casted packed args parse in hipLaunchKernelGGL"""
@@ -866,6 +938,31 @@ class TestHipParser:
         assert second_loop.init[0].value == "a"
         assert second_loop.init[1].value == "b"
 
+    def test_multi_expression_for_update_parsing(self):
+        """Test comma-separated expressions in for updates"""
+        code = """
+        void host(int n) {
+            for (int i = 0, j = n; i < j; ++i, --j) {
+                sink(i);
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        loop = ast.statements[0].body[0]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.update, list)
+        assert len(loop.update) == 2
+        assert isinstance(loop.update[0], UnaryOpNode)
+        assert loop.update[0].op == "++"
+        assert loop.update[0].operand == "i"
+        assert isinstance(loop.update[1], UnaryOpNode)
+        assert loop.update[1].op == "--"
+        assert loop.update[1].operand == "j"
+
     def test_range_based_for_loop_parsing(self):
         """Test C++ range-based for declarations"""
         code = """
@@ -942,6 +1039,55 @@ class TestHipParser:
         assert "static" in ast.statements[3].qualifiers
         assert "inline" in ast.statements[3].qualifiers
 
+    def test_template_prefixed_kernel_parsing(self):
+        """Test C++ template-prefixed HIP kernels"""
+        code = """
+        template <typename T>
+        __global__ void fill(T* data, T value) {
+            data[threadIdx.x] = value;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.statements[0]
+        assignment = kernel.body[0]
+
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "fill"
+        assert kernel.params == [
+            {"type": "T *", "name": "data"},
+            {"type": "T", "name": "value"},
+        ]
+        assert isinstance(assignment, AssignmentNode)
+        assert isinstance(assignment.left, ArrayAccessNode)
+        assert assignment.left.array == "data"
+
+    def test_template_prefixed_host_function_parsing(self):
+        """Test C++ template-prefixed HIP host functions"""
+        code = """
+        template <class T>
+        __host__ T clampValue(T x) {
+            return x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "T"
+        assert function.name == "clampValue"
+        assert "__host__" in function.qualifiers
+        assert function.params == [{"type": "T", "name": "x"}]
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "x"
+
     def test_braced_for_body_and_sync_statement_parsing(self):
         """Test braced for bodies and sync calls parse as statements"""
         code = """
@@ -963,6 +1109,40 @@ class TestHipParser:
         assert body[0].init.name == "j"
         assert isinstance(body[0].body[0], FunctionCallNode)
         assert isinstance(body[1], SyncNode)
+
+    def test_c_style_for_structured_assignment_updates_parsing(self):
+        """Test array and member assignment targets in for updates"""
+        code = """
+        void helper(float* values, int n) {
+            int value = 1;
+            for (int i = 0; i < n; values[i] += value) {
+                values[i] = value;
+            }
+            for (int j = 0; j < n; object.field = value) {
+                sink(j);
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        array_loop = ast.statements[0].body[1]
+        assert isinstance(array_loop, ForNode)
+        assert isinstance(array_loop.update, AssignmentNode)
+        assert array_loop.update.operator == "+="
+        assert isinstance(array_loop.update.left, ArrayAccessNode)
+        assert array_loop.update.left.array == "values"
+        assert array_loop.update.left.index == "i"
+
+        member_loop = ast.statements[0].body[2]
+        assert isinstance(member_loop, ForNode)
+        assert isinstance(member_loop.update, AssignmentNode)
+        assert member_loop.update.operator == "="
+        assert isinstance(member_loop.update.left, MemberAccessNode)
+        assert member_loop.update.left.object == "object"
+        assert member_loop.update.left.member == "field"
 
     def test_local_pointer_declarations_and_unary_pointer_expressions(self):
         """Test local pointer declarations, address-of, and dereference"""
@@ -995,6 +1175,39 @@ class TestHipParser:
         assert isinstance(body[5].right, UnaryOpNode)
         assert body[5].right.op == "*"
         assert isinstance(body[7], BinaryOpNode)
+
+    def test_pointer_member_access_operator_parsing(self):
+        """Test pointer and value member access preserve their operators"""
+        code = """
+        struct Item { int value; };
+        void helper(Item* p, Item v) {
+            int a = p->value;
+            int b = v.value;
+            p->value = b;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[1].body
+        pointer_read = body[0].value
+        value_read = body[1].value
+        pointer_write = body[2].left
+
+        assert isinstance(pointer_read, MemberAccessNode)
+        assert pointer_read.object == "p"
+        assert pointer_read.member == "value"
+        assert pointer_read.is_pointer is True
+        assert isinstance(value_read, MemberAccessNode)
+        assert value_read.object == "v"
+        assert value_read.member == "value"
+        assert value_read.is_pointer is False
+        assert isinstance(pointer_write, MemberAccessNode)
+        assert pointer_write.object == "p"
+        assert pointer_write.member == "value"
+        assert pointer_write.is_pointer is True
 
     def test_bitwise_logical_and_shift_expression_parsing(self):
         """Test bitwise, shift, logical, and compound shift expressions"""
@@ -1113,3 +1326,24 @@ class TestHipParser:
         assert len(body[3].default_case) == 2
         assert isinstance(body[4].value, TernaryOpNode)
         assert isinstance(body[4].value.true_expr, CastNode)
+
+    def test_empty_default_switch_parsing_preserves_default_case(self):
+        """Test empty default labels remain distinguishable from no default"""
+        code = """
+        void f(int value) {
+            switch (value) {
+                case 0:
+                    break;
+                default:
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        switch = ast.statements[0].body[0]
+        assert isinstance(switch, SwitchNode)
+        assert len(switch.cases) == 1
+        assert switch.default_case == []

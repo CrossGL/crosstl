@@ -202,6 +202,65 @@ def test_for_loop_control_flow_emits_slang_loop():
     assert "y = y + 1.0;" in generated_code
 
 
+def test_optional_for_loop_clauses_emit_empty_slang_slots():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int i = 0;
+                for (; ; ) {
+                    i = i + 1;
+                    if (i > 3) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (; ; )" in generated_code
+    assert "None" not in generated_code
+    assert "break;" in generated_code
+
+
+def test_for_in_statement_lowers_to_counted_slang_loops():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int total = 0;
+                for i in 4 {
+                    total = total + i;
+                }
+                for j in 2..5 {
+                    total = total + j;
+                }
+                for k in 1..=4 {
+                    total = total + k;
+                }
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (int i = 0; i < 4; ++i)" in generated_code
+    assert "for (int j = 2; j < 5; ++j)" in generated_code
+    assert "for (int k = 1; k <= 4; ++k)" in generated_code
+    assert "total = total + i;" in generated_code
+    assert "total = total + j;" in generated_code
+    assert "total = total + k;" in generated_code
+    assert "ForInNode" not in generated_code
+    assert "RangeNode" not in generated_code
+
+
 def test_while_loop_control_flow_emits_slang_loop():
     code = """
     shader main {
@@ -222,6 +281,29 @@ def test_while_loop_control_flow_emits_slang_loop():
     assert "while (i < 4)" in generated_code
     assert "i = i + 1;" in generated_code
     assert "WhileNode(" not in generated_code
+
+
+def test_do_while_loop_control_flow_emits_slang_loop():
+    code = """
+    shader main {
+        vertex {
+            void main() {
+                int i = 0;
+                do {
+                    i = i + 1;
+                } while (i < 4);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "\n    do\n    {\n" in generated_code
+    assert "i = i + 1;" in generated_code
+    assert "\n    } while (i < 4);" in generated_code
+    assert "DoWhileNode(" not in generated_code
 
 
 def test_control_flow_blocks_are_indented_consistently():
@@ -285,6 +367,66 @@ def test_switch_break_continue_and_void_return_emit_slang_syntax():
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code
     assert "return None;" not in generated_code
+
+
+def test_match_literal_and_wildcard_arms_lower_to_slang_switch():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:" in generated_code
+    assert "value = 1;" in generated_code
+    assert "default:" in generated_code
+    assert "value = 2;" in generated_code
+    assert generated_code.count("break;") == 2
+    assert "MatchNode" not in generated_code
+
+
+def test_match_guarded_arm_rejected_for_slang_switch_lowering():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 if mode > 0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="Unsupported match arm for Slang"):
+        generate_code(ast)
 
 
 def test_array_access_and_ternary_expressions_emit_slang_syntax():
@@ -4592,6 +4734,31 @@ def test_bool_string_and_char_literals_emit_slang_syntax():
     assert "marker = 'y';" in generated_code
     assert "True" not in generated_code
     assert "False" not in generated_code
+
+
+def test_inferred_let_declarations_emit_inferred_slang_types():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                let scalar = 1.0;
+                let flag = true;
+                let label = "debug";
+                let marker = 'x';
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float scalar = 1.0;" in generated_code
+    assert "bool flag = true;" in generated_code
+    assert 'string label = "debug";' in generated_code
+    assert "char marker = 'x';" in generated_code
+    assert "None scalar" not in generated_code
+    assert "None flag" not in generated_code
 
 
 def test_direct_literal_nodes_emit_slang_escaping():

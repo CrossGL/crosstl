@@ -181,6 +181,203 @@ def test_for_statement():
         pytest.fail("For statement codegen not implemented.")
 
 
+def test_for_continue_emits_update_before_continue_in_rust():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int total = 0;
+                for (int i = 0; i < 4; i++) {
+                    if (i == 1) {
+                        continue;
+                    }
+                    for (int j = 0; j < 2; j++) {
+                        if (j == 0) {
+                            continue;
+                        }
+                        total += j;
+                    }
+                    total += i;
+                }
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "if (i == 1) {\n            i += 1;\n            continue;\n        }"
+        in generated_code
+    )
+    assert (
+        "if (j == 0) {\n                j += 1;\n                continue;\n            }"
+        in generated_code
+    )
+    assert (
+        "if (j == 0) {\n                i += 1;\n                continue;\n            }"
+        not in generated_code
+    )
+    assert "DoWhileNode" not in generated_code
+
+
+def test_for_in_statement_lowers_to_rust_ranges_and_scopes_loop_contexts():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int total = 0;
+                for i in 4 {
+                    if (i == 1) {
+                        continue;
+                    }
+                    total += i;
+                }
+                for j in 2..5 {
+                    total += j;
+                }
+                for k in 1..=4 {
+                    total += k;
+                }
+                for (int outer = 0; outer < 2; outer++) {
+                    for inner in 3 {
+                        if (inner == 1) {
+                            continue;
+                        }
+                        total += inner;
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for i in 0..4 {" in generated_code
+    assert "for j in 2..5 {" in generated_code
+    assert "for k in 1..=4 {" in generated_code
+    assert "total += i;" in generated_code
+    assert "total += j;" in generated_code
+    assert "total += k;" in generated_code
+    assert "total += inner;" in generated_code
+    assert (
+        "if (inner == 1) {\n                continue;\n            }" in generated_code
+    )
+    assert "outer += 1;\n                continue;" not in generated_code
+    assert "ForInNode" not in generated_code
+    assert "RangeNode" not in generated_code
+
+
+def test_while_statement_lowers_to_rust_while_and_scopes_loop_contexts():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int value = 0;
+                while (value < 4) {
+                    if (value == 2) {
+                        continue;
+                    }
+                    value += 1;
+                }
+                for (int i = 0; i < 3; i++) {
+                    int j = 0;
+                    while (j < 2) {
+                        if (j == 1) {
+                            continue;
+                        }
+                        j += 1;
+                    }
+                }
+                do {
+                    int k = 0;
+                    while (k < 2) {
+                        if (k == 1) {
+                            break;
+                        }
+                        k += 1;
+                    }
+                    value += 1;
+                } while (value < 8);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "while (value < 4) {" in generated_code
+    assert "while (j < 2) {" in generated_code
+    assert "if (value == 2) {\n            continue;\n        }" in generated_code
+    assert "if (j == 1) {\n                continue;\n            }" in generated_code
+    assert (
+        "if (j == 1) {\n                i += 1;\n                continue;"
+        not in generated_code
+    )
+    assert "__cgl_do_break_0 = true;" not in generated_code
+    assert "WhileNode" not in generated_code
+
+
+def test_loop_statement_lowers_to_rust_loop_and_scopes_loop_contexts():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int value = 0;
+                loop {
+                    value += 1;
+                    if (value == 2) {
+                        continue;
+                    }
+                    if (value > 3) {
+                        break;
+                    }
+                }
+                for (int i = 0; i < 3; i++) {
+                    loop {
+                        if (i == 1) {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                do {
+                    loop {
+                        if (value == 4) {
+                            break;
+                        }
+                        continue;
+                    }
+                    value += 1;
+                } while (value < 8);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "loop {" in generated_code
+    assert "value += 1;" in generated_code
+    assert "if (value == 2) {\n            continue;\n        }" in generated_code
+    assert "if (i == 1) {\n                continue;\n            }" in generated_code
+    assert (
+        "if (i == 1) {\n                i += 1;\n                continue;"
+        not in generated_code
+    )
+    assert "__cgl_do_break_0 = true;" not in generated_code
+    assert "LoopNode" not in generated_code
+
+
 def test_increment_and_decrement_emit_rust_assignment_updates():
     code = """
     shader main {
@@ -210,6 +407,45 @@ def test_increment_and_decrement_emit_rust_assignment_updates():
     assert "--i" not in generated_code
     assert "i--" not in generated_code
     assert "++j" not in generated_code
+
+
+def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int value = 0;
+                do {
+                    value += 1;
+                    if (value == 2) {
+                        continue;
+                    }
+                    if (value == 4) {
+                        break;
+                    }
+                    value += 2;
+                } while (value < 8);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let mut __cgl_do_break_0: bool = false;" in generated_code
+    assert "loop {\n        loop {" in generated_code
+    assert "value += 1;" in generated_code
+    assert "if (value == 2) {\n                break;\n            }" in generated_code
+    assert (
+        "if (value == 4) {\n"
+        "                __cgl_do_break_0 = true;\n"
+        "                break;\n"
+        "            }"
+    ) in generated_code
+    assert "if !((value < 8))" in generated_code
+    assert "DoWhileNode" not in generated_code
 
 
 def test_bool_string_and_char_literals_emit_rust_syntax():
@@ -339,6 +575,29 @@ def test_function_call(shader, expected_output):
     code_gen = RustCodeGen()
     generated_code = code_gen.generate(ast)
     assert expected_output in generated_code
+
+
+def test_builtin_function_call_names_are_mapped():
+    code = """
+    shader main {
+        fragment {
+            float main() {
+                float a = mix(0.0, 1.0, 0.25);
+                float b = mod(5.0, 2.0);
+                return a + b;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "lerp(0.0, 1.0, 0.25)" in generated_code
+    assert "modulo(5.0, 2.0)" in generated_code
+    assert "mix(0.0, 1.0, 0.25)" not in generated_code
+    assert "mod(5.0, 2.0)" not in generated_code
 
 
 @pytest.mark.parametrize(
@@ -650,7 +909,7 @@ def test_vector_constructor():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "Vec4::new" in generated_code or "Vec4<f32>::new" in generated_code
+        assert "Vec4::<f32>::new" in generated_code
         print(generated_code)
     except SyntaxError:
         pytest.fail("Vector constructor codegen not implemented")
@@ -677,15 +936,21 @@ def test_double_vector_and_matrix_types_emit_rust_names():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut preciseUV: Vec2<f64> = Vec2<f64>::new(1.0, 2.0);" in generated_code
-    assert "let mut mask: Vec2<bool> = Vec2<bool>::new(true, false);" in generated_code
+    assert (
+        "let mut preciseUV: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);"
+        in generated_code
+    )
+    assert (
+        "let mut mask: Vec2<bool> = Vec2::<bool>::new(true, false);"
+        in generated_code
+    )
     assert "let mut flags: Vec3<bool>;" in generated_code
     assert (
-        "let mut transform: Mat2<f32> = " "Mat2<f32>::new(1.0, 0.0, 0.0, 1.0);"
+        "let mut transform: Mat2<f32> = " "Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0);"
     ) in generated_code
     assert "let mut affine: Mat3x4<f32>;" in generated_code
     assert (
-        "let mut precise: Mat2<f64> = " "Mat2<f64>::new(1.0, 0.0, 0.0, 1.0);"
+        "let mut precise: Mat2<f64> = " "Mat2::<f64>::new(1.0, 0.0, 0.0, 1.0);"
     ) in generated_code
     assert "let mut jacobian: Mat4x3<f64>;" in generated_code
     assert "dvec2(" not in generated_code
@@ -713,13 +978,44 @@ def test_generic_vector_constructors_emit_rust_names():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut precise: Vec2<f64> = Vec2<f64>::new(1.0, 2.0);" in generated_code
-    assert "let mut index: Vec3<i32> = Vec3<i32>::new(1, 2, 3);" in generated_code
-    assert "let mut mask: Vec4<u32> = Vec4<u32>::new(1, 2, 3, 4);" in generated_code
-    assert "let mut flags: Vec2<bool> = Vec2<bool>::new(true, false);" in generated_code
+    assert "let mut precise: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
+    assert "let mut index: Vec3<i32> = Vec3::<i32>::new(1, 2, 3);" in generated_code
+    assert "let mut mask: Vec4<u32> = Vec4::<u32>::new(1, 2, 3, 4);" in generated_code
+    assert (
+        "let mut flags: Vec2<bool> = Vec2::<bool>::new(true, false);"
+        in generated_code
+    )
+    assert "Vec2<f64>::new" not in generated_code
+    assert "Vec3<i32>::new" not in generated_code
+    assert "Vec4<u32>::new" not in generated_code
+    assert "Vec2<bool>::new" not in generated_code
     assert "vec2<" not in generated_code
     assert "vec3<" not in generated_code
     assert "vec4<" not in generated_code
+
+
+def test_inferred_let_vector_declarations_preserve_vector_type():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                let value = vec4(1.0, 2.0, 3.0, 4.0);
+                let x = value.x;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "let mut value: Vec4<f32> = Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0);"
+        in generated_code
+    )
+    assert "let mut x: f32 = value.x;" in generated_code
+    assert "let mut value: f32 = Vec4" not in generated_code
 
 
 def test_scalar_vector_constructors_splat_rust_values():
@@ -745,26 +1041,120 @@ def test_scalar_vector_constructors_splat_rust_values():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut base: Vec4<f32> = Vec4<f32>::new(1.0, 1.0, 1.0, 1.0);"
+        "let mut base: Vec4<f32> = Vec4::<f32>::new(1.0, 1.0, 1.0, 1.0);"
         in generated_code
     )
     assert (
-        "let mut scaled: Vec3<f32> = Vec3<f32>::new(weight, weight, weight);"
+        "let mut scaled: Vec3<f32> = Vec3::<f32>::new(weight, weight, weight);"
         in generated_code
     )
-    assert "let mut pixel: Vec2<i32> = Vec2<i32>::new(index, index);" in generated_code
+    assert "let mut pixel: Vec2<i32> = Vec2::<i32>::new(index, index);" in generated_code
     assert (
         "let mut mask: Vec4<bool> = "
-        "Vec4<bool>::new(enabled, enabled, enabled, enabled);" in generated_code
+        "Vec4::<bool>::new(enabled, enabled, enabled, enabled);" in generated_code
     )
     assert (
         "let mut offset: Vec4<f32> = "
-        "Vec4<f32>::new(0.25, 0.5, 0.75, 1.0);" in generated_code
+        "Vec4::<f32>::new(0.25, 0.5, 0.75, 1.0);" in generated_code
     )
-    assert "Vec4<f32>::new(1.0);" not in generated_code
-    assert "Vec3<f32>::new(weight);" not in generated_code
-    assert "Vec2<i32>::new(index);" not in generated_code
-    assert "Vec4<bool>::new(enabled);" not in generated_code
+    assert "Vec4::<f32>::new(1.0);" not in generated_code
+    assert "Vec3::<f32>::new(weight);" not in generated_code
+    assert "Vec2::<i32>::new(index);" not in generated_code
+    assert "Vec4::<bool>::new(enabled);" not in generated_code
+
+
+def test_switch_statement_emits_rust_match():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int out = 0;
+                switch (mode) {
+                    case 0:
+                        out = 1;
+                        break;
+                    default:
+                        out = 2;
+                }
+                return out;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "match mode" in generated_code
+    assert "0 =>" in generated_code
+    assert "_ =>" in generated_code
+    assert "out = 1;" in generated_code
+    assert "out = 2;" in generated_code
+    assert "return out;" in generated_code
+    assert "SwitchNode" not in generated_code
+    assert "CaseNode" not in generated_code
+    assert "BreakNode" not in generated_code
+
+
+def test_match_statement_emits_rust_match():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "match mode" in generated_code
+    assert "0 =>" in generated_code
+    assert "_ =>" in generated_code
+    assert "value = 1;" in generated_code
+    assert "value = 2;" in generated_code
+    assert "MatchNode" not in generated_code
+    assert "MatchArmNode" not in generated_code
+
+
+def test_match_guarded_arm_is_rejected_for_rust_codegen():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 if mode > 0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="Unsupported match arm for Rust"):
+        generate_code(ast)
 
 
 def test_generic_vector_composite_types_emit_rust_names():
@@ -883,8 +1273,8 @@ def test_array_literals_emit_rust_array_initializers():
     ) in generated_code
     assert (
         "let mut colors: [Vec3<f32>; 2] = "
-        "[Vec3<f32>::new(1.0, 2.0, 3.0), "
-        "Vec3<f32>::new(4.0, 5.0, 6.0)];"
+        "[Vec3::<f32>::new(1.0, 2.0, 3.0), "
+        "Vec3::<f32>::new(4.0, 5.0, 6.0)];"
     ) in generated_code
     assert "ArrayLiteralNode" not in generated_code
 

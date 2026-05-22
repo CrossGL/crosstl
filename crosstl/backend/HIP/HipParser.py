@@ -218,6 +218,9 @@ class HipParser:
         if self.match("HASH"):
             return self.parse_preprocessor()
 
+        if self.match("TEMPLATE"):
+            return self.parse_template_prefixed_declaration()
+
         # Parse device/host/global qualifiers
         if self.match("__DEVICE__", "__HOST__", "__GLOBAL__"):
             return self.parse_function_with_qualifier()
@@ -278,6 +281,24 @@ class HipParser:
         else:
             # Parse expression statement
             return self.parse_expression_statement()
+
+    def parse_template_prefixed_declaration(self):
+        self.consume("TEMPLATE")
+        self.parse_template_suffix()
+        self.skip_newlines()
+
+        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__"):
+            return self.parse_function_with_qualifier()
+        if self.match("STRUCT"):
+            return self.parse_struct()
+        if self.match("CLASS"):
+            return self.parse_class()
+        if self.is_function_declaration():
+            return self.parse_simple_function()
+
+        raise SyntaxError(
+            f"Expected declaration after template prefix, got {self.current_token.type}"
+        )
 
     def is_identifier_value(self, value):
         return self.match("IDENTIFIER") and self.current_token.value == value
@@ -793,13 +814,21 @@ class HipParser:
 
         update = None
         if not self.match("RPAREN"):
-            update = self.parse_expression()
+            update = self.parse_for_update_expression()
         self.consume("RPAREN")
 
         self.skip_newlines()
         body = self.parse_statement()
 
         return ForNode(init, condition, update, body)
+
+    def parse_for_update_expression(self):
+        updates = [self.parse_expression()]
+        while self.match("COMMA"):
+            self.advance()
+            updates.append(self.parse_expression())
+
+        return updates if len(updates) > 1 else updates[0]
 
     def is_range_for_statement(self):
         index = self.skip_range_for_type_at_pos(self.pos)
@@ -1202,7 +1231,14 @@ class HipParser:
                         if index + 1 < len(self.tokens)
                         else "EOF"
                     )
-                    return next_type in {"LPAREN", "SCOPE", "DOT"}
+                    return next_type in {
+                        "LPAREN",
+                        "SCOPE",
+                        "DOT",
+                        "KERNEL_LAUNCH_START",
+                        "COMMA",
+                        "RPAREN",
+                    }
             elif token_type == "RSHIFT":
                 depth -= 2
                 if depth == 0:
@@ -1211,7 +1247,14 @@ class HipParser:
                         if index + 1 < len(self.tokens)
                         else "EOF"
                     )
-                    return next_type in {"LPAREN", "SCOPE", "DOT"}
+                    return next_type in {
+                        "LPAREN",
+                        "SCOPE",
+                        "DOT",
+                        "KERNEL_LAUNCH_START",
+                        "COMMA",
+                        "RPAREN",
+                    }
                 if depth < 0:
                     return False
             elif token_type in {"SEMICOLON", "ASSIGN"}:

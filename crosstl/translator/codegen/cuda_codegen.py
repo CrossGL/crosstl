@@ -2,8 +2,13 @@
 
 from ..ast import (
     AssignmentNode,
+    BreakNode,
+    ContinueNode,
+    ForInNode,
     ForNode,
     IfNode,
+    LiteralPatternNode,
+    RangeNode,
     ReturnNode,
     StructNode,
     VariableNode,
@@ -15,6 +20,7 @@ from ..ast import (
     ExpressionStatementNode,
     IdentifierNode,
     BlockNode,
+    WildcardPatternNode,
 )
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
@@ -26,6 +32,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     """Emit CUDA source from the shared CrossGL translator AST."""
 
     resource_diagnostic_backend = "CUDA"
+    sampled_resource_type_aliases = {
+        "Texture1D": "sampler1D",
+        "Texture2D": "sampler2D",
+        "Texture2DArray": "sampler2DArray",
+        "Texture2DMS": "sampler2DMS",
+        "Texture2DMSArray": "sampler2DMSArray",
+        "Texture3D": "sampler3D",
+        "TextureCube": "samplerCube",
+        "TextureCubeArray": "samplerCubeArray",
+    }
 
     def __init__(self):
         """Initialize CUDA type maps and per-generation visitor state."""
@@ -124,6 +140,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         else:
             self.emit_statement(body)
 
+    def statement_list(self, body):
+        """Normalize block-like statement containers to a list."""
+        if body is None:
+            return []
+        if isinstance(body, list):
+            return body
+        if hasattr(body, "statements"):
+            return body.statements
+        return [body]
+
+    def statement_body_terminates(self, body):
+        """Return true when the body already exits the active control flow."""
+        statements = self.statement_list(body)
+        if not statements:
+            return False
+        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
+
+    def is_supported_switch_match_arm(self, arm):
+        """CUDA switch lowering supports only unguarded literal/default arms."""
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
     def visit_ShaderNode(self, node):
         """Render a full shader/program AST as a CUDA translation unit."""
         self.emit("#include <cuda_runtime.h>")
@@ -152,6 +192,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         # Handle legacy shader structure
         if hasattr(node, "stages") and node.stages:
+            emitted_local_functions = set()
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
                     # Set the stage type context for proper qualifier handling
@@ -169,6 +210,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                                 stage.entry_point.qualifiers.append("compute")
                         else:
                             stage.entry_point.qualifiers = ["compute"]
+
+                    for func in getattr(stage, "local_functions", []):
+                        if id(func) in emitted_local_functions:
+                            continue
+                        self.visit(func)
+                        self.emit("")
+                        emitted_local_functions.add(id(func))
 
                     self.visit(stage.entry_point)
                     self.emit("")
@@ -258,11 +306,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def format_variable_declaration(self, node):
         var_type = None
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
 
         if hasattr(node, "var_type"):
             var_type = node.var_type
         elif hasattr(node, "vtype"):
             var_type = node.vtype
+
+        if not var_type and initial_value is not None:
+            inferred_type = self.expression_result_type(initial_value)
+            self.register_variable_type(node.name, inferred_type or "auto")
+            return f"auto {node.name} = {self.visit(initial_value)}"
 
         if var_type:
             self.register_variable_type(node.name, var_type)
@@ -282,7 +336,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             declaration = (
                 f"{qualifier_str}{self.format_typed_declarator(var_type, node.name)}"
             )
-            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
             if initial_value is not None:
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
@@ -380,6 +433,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.format_literal(node.value, literal_type)
 
     def visit_AssignmentNode(self, node):
+        return self.format_assignment_expression(node)
+
+    def format_assignment_expression(self, node):
         target = self.visit(node.target)
         value = self.visit(node.value)
         operator = getattr(node, "operator", "=")
@@ -392,9 +448,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 operator[0],
             )
             if lowered_value is not None:
-                self.emit(f"{target} = {lowered_value};")
-                return
-        self.emit(f"{target} {operator} {value};")
+                return f"{target} = {lowered_value}"
+        return f"{target} {operator} {value}"
 
     def visit_BinaryOpNode(self, node):
         left = self.visit(node.left)
@@ -438,6 +493,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return resource_call
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
+        scalar_clamp = self.generate_scalar_clamp_call(func_name, raw_args, args)
+        if scalar_clamp is not None:
+            return scalar_clamp
+
         vector_info = self.vector_type_info(func_name)
         if vector_info and len(args) == 1:
             arg_type = self.expression_result_type(raw_args[0])
@@ -448,6 +507,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def generate_scalar_clamp_call(self, func_name, raw_args, args):
+        if func_name != "clamp" or len(args) != 3:
+            return None
+
+        value_type = self.expression_result_type(raw_args[0])
+        if self.vector_type_info(value_type):
+            return None
+
+        return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
 
     def visit_MemberAccessNode(self, node):
         """Visit member access"""
@@ -537,6 +606,28 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level -= 1
         self.emit("}")
 
+    def visit_ForInNode(self, node):
+        """Lower CrossGL for-in loops to counted CUDA loops."""
+        pattern = getattr(node, "pattern", "item")
+        iterable = getattr(node, "iterable", None)
+
+        if isinstance(iterable, RangeNode):
+            start = self.visit(iterable.start)
+            end = self.visit(iterable.end)
+            comparator = "<=" if iterable.inclusive else "<"
+        else:
+            start = "0"
+            end = self.visit(iterable)
+            comparator = "<"
+
+        self.emit(
+            f"for (int {pattern} = {start}; {pattern} {comparator} {end}; ++{pattern}) {{"
+        )
+        self.indent_level += 1
+        self.emit_body(getattr(node, "body", []))
+        self.indent_level -= 1
+        self.emit("}")
+
     def visit_WhileNode(self, node):
         """Visit while loop"""
         condition = self.visit(node.condition) if node.condition else ""
@@ -550,6 +641,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level -= 1
         self.emit("}")
 
+    def visit_DoWhileNode(self, node):
+        """Visit do-while loop."""
+        self.emit("do {")
+
+        self.indent_level += 1
+        if hasattr(node, "body"):
+            self.emit_body(node.body)
+        self.indent_level -= 1
+
+        condition = self.visit(node.condition) if node.condition else ""
+        self.emit(f"}} while ({condition});")
+
     def visit_SwitchNode(self, node):
         """Visit switch statement"""
         expression = self.visit(node.expression)
@@ -558,6 +661,34 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level += 1
         for case in getattr(node, "cases", []):
             self.visit(case)
+        self.indent_level -= 1
+
+        self.emit("}")
+
+    def visit_MatchNode(self, node):
+        """Lower simple CrossGL match statements to CUDA switch statements."""
+        expression = self.visit(node.expression)
+        self.emit(f"switch ({expression}) {{")
+
+        self.indent_level += 1
+        for arm in getattr(node, "arms", []):
+            if not self.is_supported_switch_match_arm(arm):
+                raise ValueError(
+                    "Unsupported match arm for CUDA codegen; only unguarded "
+                    "literal and wildcard patterns can be lowered to switch"
+                )
+
+            pattern = arm.pattern
+            if isinstance(pattern, WildcardPatternNode):
+                self.emit("default:")
+            else:
+                self.emit(f"case {self.visit(pattern.literal)}:")
+
+            self.indent_level += 1
+            self.emit_body(arm.body)
+            if not self.statement_body_terminates(arm.body):
+                self.emit("break;")
+            self.indent_level -= 1
         self.indent_level -= 1
 
         self.emit("}")
@@ -712,6 +843,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "buffer": "CUdeviceptr",
         }
 
+        sampled_resource_type = self.canonical_sampled_resource_type(crossgl_type)
+        if sampled_resource_type:
+            return type_mapping.get(sampled_resource_type, sampled_resource_type)
+
         # Handle arrays
         if crossgl_type.startswith("array<") and crossgl_type.endswith(">"):
             # Extract element type and size
@@ -720,19 +855,31 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 parts = inner.split(",")
                 element_type = parts[0].strip()
                 size = parts[1].strip()
-                cuda_element_type = type_mapping.get(element_type, element_type)
+                cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
                 return f"{cuda_element_type}[{size}]"
             else:
-                cuda_element_type = type_mapping.get(inner, inner)
+                cuda_element_type = self.convert_crossgl_type_to_cuda(inner)
                 return f"{cuda_element_type}*"
 
         # Handle pointers
         if crossgl_type.startswith("ptr<") and crossgl_type.endswith(">"):
             element_type = crossgl_type[4:-1]  # Remove "ptr<" and ">"
-            cuda_element_type = type_mapping.get(element_type, element_type)
+            cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
             return f"{cuda_element_type}*"
 
         return type_mapping.get(crossgl_type, crossgl_type)
+
+    def canonical_sampled_resource_type(self, type_name):
+        """Return the sampler spelling for HLSL-style sampled resources."""
+        if not isinstance(type_name, str):
+            return None
+        base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+        return self.sampled_resource_type_aliases.get(base_type)
+
+    def resource_base_type(self, type_name):
+        """Normalize resource aliases before resource dispatch decisions."""
+        base_type = ResourceDiagnosticMixin.resource_base_type(self, type_name)
+        return self.canonical_sampled_resource_type(base_type) or base_type
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
@@ -845,6 +992,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicExchange": "atomicExch",
             "atomicCompareExchange": "atomicCAS",
             # Synchronization
+            "barrier": "__syncthreads",
+            "memoryBarrier": "__threadfence",
             "workgroupBarrier": "__syncthreads",
             # Texture functions
             "texture": "tex2D",

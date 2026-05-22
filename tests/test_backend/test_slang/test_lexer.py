@@ -127,5 +127,26 @@ def test_bitwise_not_tokenization():
     assert has_not, "Bitwise NOT operator (~) not tokenized correctly"
 
 
+def test_logical_not_tokenization():
+    tokens = tokenize_code("bool enabled = !disabled; disabled != enabled;")
+
+    assert ("NOT", "!") in tokens
+    assert ("NOT_EQUAL", "!=") in tokens
+
+
+def test_numeric_literal_tokenization():
+    tokens = tokenize_code("1e-3f 1.0f .5f 1. 0xffu 123u")
+
+    assert tokens == [
+        ("NUMBER", "1e-3f"),
+        ("NUMBER", "1.0f"),
+        ("NUMBER", ".5f"),
+        ("NUMBER", "1."),
+        ("NUMBER", "0xffu"),
+        ("NUMBER", "123u"),
+        ("EOF", ""),
+    ]
+
+
 if __name__ == "__main__":
     pytest.main()

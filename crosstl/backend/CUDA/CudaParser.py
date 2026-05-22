@@ -836,12 +836,20 @@ class CudaParser:
 
         update = None
         if self.current_token[0] != "RPAREN":
-            update = self.parse_expression()
+            update = self.parse_for_update_expression()
         self.eat("RPAREN")
 
         body = self.parse_statement()
 
         return ForNode(init, condition, update, body)
+
+    def parse_for_update_expression(self):
+        """Parse one or more comma-separated expressions in a for update."""
+        updates = [self.parse_assignment_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            updates.append(self.parse_assignment_expression())
+        return updates if len(updates) > 1 else updates[0]
 
     def is_range_for_statement(self):
         """Check if the current parenthesized for header is a range-for loop."""
@@ -1222,7 +1230,14 @@ class CudaParser:
                         if index + 1 < len(self.tokens)
                         else "EOF"
                     )
-                    return next_type in {"LPAREN", "SCOPE", "DOT"}
+                    return next_type in {
+                        "LPAREN",
+                        "SCOPE",
+                        "DOT",
+                        "KERNEL_LAUNCH_START",
+                        "COMMA",
+                        "RPAREN",
+                    }
             elif token_type == "SHIFT_RIGHT":
                 depth -= 2
                 if depth == 0:
@@ -1231,7 +1246,14 @@ class CudaParser:
                         if index + 1 < len(self.tokens)
                         else "EOF"
                     )
-                    return next_type in {"LPAREN", "SCOPE", "DOT"}
+                    return next_type in {
+                        "LPAREN",
+                        "SCOPE",
+                        "DOT",
+                        "KERNEL_LAUNCH_START",
+                        "COMMA",
+                        "RPAREN",
+                    }
                 if depth < 0:
                     return False
             elif token_type in {"SEMICOLON", "ASSIGN", "EOF"}:

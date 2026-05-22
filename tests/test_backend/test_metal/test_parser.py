@@ -1,5 +1,6 @@
 import pytest
 from typing import List
+from crosstl.backend.common_ast import MethodCallNode, TextureSampleNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -26,6 +27,22 @@ def parse_ok(code: str):
 def parse_fails(code: str):
     with pytest.raises(SyntaxError):
         parse_code(code)
+
+
+def iter_ast_nodes(node):
+    if node is None or isinstance(node, (str, int, float, bool)):
+        return
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from iter_ast_nodes(value)
+        return
+    if isinstance(node, (list, tuple, set)):
+        for value in node:
+            yield from iter_ast_nodes(value)
+        return
+    yield node
+    for value in getattr(node, "__dict__", {}).values():
+        yield from iter_ast_nodes(value)
 
 
 def test_parse_vertex_fragment_program():
@@ -192,6 +209,53 @@ def test_parse_access_qualified_textures_and_methods():
     }
     """
     parse_ok(code)
+
+
+def test_parse_texture_method_ast_shapes():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 fragment_main(texture2d<float, access::read_write> tex [[texture(0)]],
+                                  sampler samp [[sampler(0)]]) {
+        float4 base = tex.sample(
+            samp,
+            float2(0.5, 0.5)
+        );
+        float4 mip = tex.sample(
+            samp,
+            float2(0.5, 0.5),
+            1.0
+        );
+        float4 readValue = tex.read(uint2(0, 0));
+        tex.write(
+            base,
+            uint2(0, 0)
+        );
+        float compareValue = tex.sample_compare_level(
+            samp, float2(0.5, 0.5), 0.5, 0.0
+        );
+        float4 gathered = tex.gather_compare(
+            samp,
+            float2(0.5, 0.5),
+            0.5
+        );
+        return base + mip + readValue + gathered + float4(compareValue);
+    }
+    """
+    ast = parse_ok(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    samples = [node for node in nodes if isinstance(node, TextureSampleNode)]
+    assert len(samples) == 2
+    assert samples[0].lod is None
+    assert samples[1].lod is not None
+
+    methods = [node.method for node in nodes if isinstance(node, MethodCallNode)]
+    assert {"read", "write", "sample_compare_level", "gather_compare"}.issubset(
+        set(methods)
+    )
+    assert "sample" not in methods
 
 
 def test_parse_packed_and_simd_types():

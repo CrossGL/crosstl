@@ -34,6 +34,7 @@ from .ast import (
     ForNode,
     ForInNode,
     WhileNode,
+    DoWhileNode,
     LoopNode,
     MatchNode,
     MatchArmNode,
@@ -845,6 +846,14 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
+        while self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            var_type = ArrayType(var_type, size)
+
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes.extend(self.parse_attributes())
 
@@ -1102,6 +1111,7 @@ class Parser:
         elif self.current_token[0] in [
             "SAMPLER",
             "SAMPLER1D",
+            "SAMPLER1DARRAY",
             "SAMPLER2D",
             "SAMPLER3D",
             "SAMPLERCUBE",
@@ -1113,16 +1123,22 @@ class Parser:
             "SAMPLERCUBEARRAYSHADOW",
             "SAMPLER2DMS",
             "SAMPLER2DMSARRAY",
+            "IIMAGE1D",
+            "IIMAGE1DARRAY",
             "IIMAGE2D",
             "IIMAGE3D",
             "IIMAGE2DARRAY",
             "IIMAGE2DMS",
             "IIMAGE2DMSARRAY",
+            "UIMAGE1D",
+            "UIMAGE1DARRAY",
             "UIMAGE2D",
             "UIMAGE3D",
             "UIMAGE2DARRAY",
             "UIMAGE2DMS",
             "UIMAGE2DMSARRAY",
+            "IMAGE1D",
+            "IMAGE1DARRAY",
             "IMAGE2D",
             "IMAGE3D",
             "IMAGECUBE",
@@ -1133,6 +1149,7 @@ class Parser:
             sampler_types = {
                 "SAMPLER": "sampler",
                 "SAMPLER1D": "sampler1D",
+                "SAMPLER1DARRAY": "sampler1DArray",
                 "SAMPLER2D": "sampler2D",
                 "SAMPLER3D": "sampler3D",
                 "SAMPLERCUBE": "samplerCube",
@@ -1144,16 +1161,22 @@ class Parser:
                 "SAMPLERCUBEARRAYSHADOW": "samplerCubeArrayShadow",
                 "SAMPLER2DMS": "sampler2DMS",
                 "SAMPLER2DMSARRAY": "sampler2DMSArray",
+                "IIMAGE1D": "iimage1D",
+                "IIMAGE1DARRAY": "iimage1DArray",
                 "IIMAGE2D": "iimage2D",
                 "IIMAGE3D": "iimage3D",
                 "IIMAGE2DARRAY": "iimage2DArray",
                 "IIMAGE2DMS": "iimage2DMS",
                 "IIMAGE2DMSARRAY": "iimage2DMSArray",
+                "UIMAGE1D": "uimage1D",
+                "UIMAGE1DARRAY": "uimage1DArray",
                 "UIMAGE2D": "uimage2D",
                 "UIMAGE3D": "uimage3D",
                 "UIMAGE2DARRAY": "uimage2DArray",
                 "UIMAGE2DMS": "uimage2DMS",
                 "UIMAGE2DMSARRAY": "uimage2DMSArray",
+                "IMAGE1D": "image1D",
+                "IMAGE1DARRAY": "image1DArray",
                 "IMAGE2D": "image2D",
                 "IMAGE3D": "image3D",
                 "IMAGECUBE": "imageCube",
@@ -1303,6 +1326,11 @@ class Parser:
                 self.eat("IDENTIFIER")
 
             arguments = []
+            if name in {"gl_FragData"} and self.current_token[0] == "LBRACKET":
+                self.eat("LBRACKET")
+                if self.current_token[0] != "RBRACKET":
+                    arguments.append(self.parse_expression())
+                self.eat("RBRACKET")
             if self.current_token[0] == "LPAREN":
                 self.eat("LPAREN")
                 while self.current_token[0] != "RPAREN":
@@ -1336,6 +1364,8 @@ class Parser:
             return self.parse_for_statement()
         elif self.current_token[0] == "WHILE":
             return self.parse_while_statement()
+        elif self.current_token[0] == "DO":
+            return self.parse_do_while_statement()
         elif self.current_token[0] == "LOOP":
             return self.parse_loop_statement()
         elif self.current_token[0] == "MATCH":
@@ -1506,6 +1536,16 @@ class Parser:
         body = self.parse_statement()
 
         return WhileNode(condition=condition, body=body)
+
+    def parse_do_while_statement(self):
+        """Parse a do-while loop statement."""
+        self.eat("DO")
+        body = self.parse_statement()
+        self.eat("WHILE")
+        condition = self.parse_expression()
+        self.eat("SEMICOLON")
+
+        return DoWhileNode(body=body, condition=condition)
 
     def parse_loop_statement(self):
         """Parse an unconditional loop statement."""
@@ -2127,6 +2167,7 @@ class Parser:
             "DMAT4X4",
             "SAMPLER",
             "SAMPLER1D",
+            "SAMPLER1DARRAY",
             "SAMPLER2D",
             "SAMPLER3D",
             "SAMPLERCUBE",
@@ -2138,16 +2179,22 @@ class Parser:
             "SAMPLERCUBEARRAYSHADOW",
             "SAMPLER2DMS",
             "SAMPLER2DMSARRAY",
+            "IIMAGE1D",
+            "IIMAGE1DARRAY",
             "IIMAGE2D",
             "IIMAGE3D",
             "IIMAGE2DARRAY",
             "IIMAGE2DMS",
             "IIMAGE2DMSARRAY",
+            "UIMAGE1D",
+            "UIMAGE1DARRAY",
             "UIMAGE2D",
             "UIMAGE3D",
             "UIMAGE2DARRAY",
             "UIMAGE2DMS",
             "UIMAGE2DMSARRAY",
+            "IMAGE1D",
+            "IMAGE1DARRAY",
             "IMAGE2D",
             "IMAGE3D",
             "IMAGECUBE",

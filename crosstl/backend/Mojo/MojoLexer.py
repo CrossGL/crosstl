@@ -26,6 +26,7 @@ TOKENS = tuple(
         ("DEFAULT", r"\bdefault\b"),
         ("BREAK", r"\bbreak\b"),
         ("CONTINUE", r"\bcontinue\b"),
+        ("FROM", r"\bfrom\b"),
         ("IMPORT", r"\bimport\b"),
         ("AS", r"\bas\b"),
         ("IN", r"\bin\b"),
@@ -46,6 +47,7 @@ TOKENS = tuple(
         ("RBRACE", r"\}"),
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
+        ("ATTRIBUTE", r"\[\[[^\]]*\]\]"),
         ("LBRACKET", r"\["),
         ("RBRACKET", r"\]"),
         ("SEMICOLON", r";"),
@@ -63,6 +65,7 @@ TOKENS = tuple(
         ("GREATER_THAN", r">"),
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
+        ("NOT", r"!"),
         ("PLUS_EQUALS", r"\+="),
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),
@@ -85,7 +88,6 @@ TOKENS = tuple(
         ("WHITESPACE", r"\s+"),
         ("MOD", r"%"),
         ("AT", r"@"),
-        ("ATTRIBUTE", r"\[\[[^\]]*\]\]"),
     ]
 )
 
@@ -106,9 +108,17 @@ KEYWORDS = {
     "default": "DEFAULT",
     "break": "BREAK",
     "continue": "CONTINUE",
+    "from": "FROM",
     "import": "IMPORT",
     "as": "AS",
     "in": "IN",
+    "and": "AND",
+    "or": "OR",
+    "not": "NOT",
+    "True": "BOOL_LITERAL",
+    "False": "BOOL_LITERAL",
+    "true": "BOOL_LITERAL",
+    "false": "BOOL_LITERAL",
     "pass": "PASS",
     "def": "DEF",
     "class": "CLASS",
@@ -127,37 +137,83 @@ class MojoLexer:
         """Initialize the lexer with raw Mojo source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
-        self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
-        """Yield Mojo tokens while skipping whitespace and comments."""
-        pos = 0
-        while pos < self._length:
-            token = self._next_token(pos)
-            if token is None:
-                raise SyntaxError(
-                    f"Illegal character '{self.code[pos]}' at position {pos}"
-                )
-            new_pos, token_type, text = token
+        """Yield Mojo tokens, including layout tokens for indentation blocks."""
+        indent_stack = [0]
+        layout_code = self._remove_multiline_comments(self.code)
 
-            if token_type == "IDENTIFIER" and text in KEYWORDS:
-                token_type = KEYWORDS[text]
+        for line in layout_code.splitlines():
+            stripped_line = line.strip()
+            if not stripped_line or stripped_line.startswith("#"):
+                continue
 
-            if token_type not in SKIP_TOKENS:
-                yield (token_type, text)
+            indent_text = line[: len(line) - len(line.lstrip(" \t"))]
+            indent_width = len(indent_text.expandtabs(4))
+            while indent_width < indent_stack[-1]:
+                indent_stack.pop()
+                yield ("DEDENT", "")
 
-            pos = new_pos
+            if indent_width != indent_stack[-1]:
+                if indent_width > indent_stack[-1]:
+                    indent_stack.append(indent_width)
+                    yield ("INDENT", indent_text)
+                else:
+                    raise SyntaxError("Inconsistent Mojo indentation")
+
+            pos = len(indent_text)
+            while pos < len(line):
+                token = self._next_token(line, pos)
+                if token is None:
+                    raise SyntaxError(
+                        f"Illegal character '{line[pos]}' at position {pos}"
+                    )
+                new_pos, token_type, text = token
+
+                if token_type == "COMMENT_SINGLE":
+                    break
+
+                if token_type == "IDENTIFIER" and text in KEYWORDS:
+                    token_type = KEYWORDS[text]
+
+                if token_type == "AND":
+                    text = "&&"
+                elif token_type == "OR":
+                    text = "||"
+                elif token_type == "NOT":
+                    text = "!"
+                elif token_type == "BOOL_LITERAL":
+                    text = text.lower()
+
+                if token_type not in SKIP_TOKENS:
+                    yield (token_type, text)
+
+                pos = new_pos
+
+            yield ("NEWLINE", "\n")
+
+        while len(indent_stack) > 1:
+            indent_stack.pop()
+            yield ("DEDENT", "")
 
         yield ("EOF", "")
 
-    def _next_token(self, pos: int) -> Tuple[int, str, str]:
-        """Match the next token at ``pos`` and return its end offset."""
+    def _remove_multiline_comments(self, code: str) -> str:
+        """Remove triple-quoted comments while preserving line layout."""
+
+        def preserve_layout(match):
+            return "".join("\n" if char == "\n" else " " for char in match.group(0))
+
+        return re.sub(r'"""[\s\S]*?"""', preserve_layout, code)
+
+    def _next_token(self, source: str, pos: int) -> Tuple[int, str, str]:
+        """Match the next token in ``source`` at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
-            match = pattern.match(self.code, pos)
+            match = pattern.match(source, pos)
             if match:
                 return match.end(0), token_type, match.group(0)
         return None

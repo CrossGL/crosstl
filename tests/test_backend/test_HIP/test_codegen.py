@@ -87,9 +87,31 @@ class TestHipCodeGen:
         assert codegen.convert_hip_builtin_function("sqrtf") == "sqrt"
         assert codegen.convert_hip_builtin_function("sinf") == "sin"
         assert codegen.convert_hip_builtin_function("cosf") == "cos"
+        assert codegen.convert_hip_builtin_function("fmodf") == "mod"
+        assert codegen.convert_hip_builtin_function("fmod") == "mod"
         assert (
             codegen.convert_hip_builtin_function("__syncthreads") == "workgroupBarrier"
         )
+
+    def test_fmod_builtins_convert_to_crossgl_mod(self):
+        """Test HIP fmod functions convert back to CrossGL mod."""
+        code = """
+        __global__ void wrap(float* out, float x) {
+            out[0] = fmodf(x, 1.0f);
+            out[1] = fmod(x, 2.0);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = mod(x, 1.0f);" in result
+        assert "out[1] = mod(x, 2.0);" in result
+        assert "fmod" not in result
 
     def test_struct_conversion(self):
         """Test struct conversion"""
@@ -182,6 +204,32 @@ class TestHipCodeGen:
         assert "// Kernel launch: kernel<<<grid, block, 128, stream>>>()" in result
         assert "// Arguments: data, 1" in result
 
+    def test_templated_kernel_launch_conversion(self):
+        """Test HIP template-id kernel launch conversion"""
+        code = """
+        template <typename T>
+        __global__ void scale(T* data, T factor) {
+            data[threadIdx.x] *= factor;
+        }
+
+        void host(float* data) {
+            scale<float><<<dim3(1), dim3(32)>>>(data, 2.0f);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: scale<float><<<vec3<u32>(1), vec3<u32>(32)>>>()"
+            in result
+        )
+        assert "// Arguments: data, 2.0f" in result
+
     def test_computed_kernel_launch_config_conversion(self):
         """Test HIP computed kernel launch configuration conversion"""
         code = """
@@ -228,6 +276,35 @@ class TestHipCodeGen:
         assert "var packedArgs: array<ptr<void>> = {(&data), (&n)};" in result
         assert "// Kernel launch: kernel<<<grid, block, 0, 0>>>()" in result
         assert "// Arguments: data, n" in result
+        assert "hipLaunchKernelGGL" not in result
+
+    def test_templated_hip_launch_kernel_ggl_conversion(self):
+        """Test hipLaunchKernelGGL converts a template-id kernel argument"""
+        code = """
+        template <typename T>
+        __global__ void scale(T* data, T factor) {
+            data[threadIdx.x] *= factor;
+        }
+
+        void host(float* data) {
+            hipLaunchKernelGGL(
+                scale<float>, dim3(1), dim3(32), 0, 0, data, 2.0f
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// Kernel launch: scale<float><<<vec3<u32>(1), vec3<u32>(32), 0, 0>>>()"
+            in result
+        )
+        assert "// Arguments: data, 2.0f" in result
         assert "hipLaunchKernelGGL" not in result
 
     def test_hip_launch_kernel_casted_packed_args_conversion(self):
@@ -583,6 +660,26 @@ class TestHipCodeGen:
         assert "var pb: ptr<f32> = b;" in result
         assert "for (; (pa != pb); (++pa)) {" in result
         assert "for (var i: i32 = 0, var j:" not in result
+
+    def test_multi_expression_for_update_conversion(self):
+        """Test comma-separated for updates lower into one header"""
+        code = """
+        void host(int n) {
+            for (int i = 0, j = n; i < j; ++i, --j) {
+                sink(i);
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "for (; (i < j); (++i), (--j)) {" in result
+        assert "sink(i);" in result
 
     def test_auto_pointer_reference_local_declarations_conversion(self):
         """Test auto pointer and reference declarations convert"""
@@ -1103,6 +1200,32 @@ class TestHipCodeGen:
         assert "workgroupBarrier();" in result
         assert "None" not in result
 
+    def test_c_style_for_structured_assignment_updates_conversion(self):
+        """Test array and member assignment targets survive for updates"""
+        code = """
+        void helper(float* values, int n) {
+            int value = 1;
+            for (int i = 0; i < n; values[i] += value) {
+                values[i] = value;
+            }
+            for (int j = 0; j < n; object.field = value) {
+                sink(j);
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "for (var i: i32 = 0; (i < n); values[i] += value) {" in result
+        assert "values[i] = value;" in result
+        assert "for (var j: i32 = 0; (j < n); object.field = value) {" in result
+        assert "sink(j);" in result
+
     def test_local_pointer_declarations_and_unary_pointer_conversion(self):
         """Test local pointer declarations, address-of, and dereference"""
         code = """
@@ -1132,6 +1255,28 @@ class TestHipCodeGen:
         assert "ip[0] = 1u;" in result
         assert "BinaryOpNode" not in result
         assert "UnaryOpNode" not in result
+
+    def test_pointer_member_access_operator_conversion(self):
+        """Test pointer and value member access preserve their operators"""
+        code = """
+        struct Item { int value; };
+        void helper(Item* p, Item v) {
+            int a = p->value;
+            int b = v.value;
+            p->value = b;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var a: i32 = p->value;" in result
+        assert "var b: i32 = v.value;" in result
+        assert "p->value = b;" in result
 
     def test_bitwise_logical_and_shift_expression_conversion(self):
         """Test bitwise, shift, logical, and compound shift conversion"""
@@ -1261,3 +1406,27 @@ class TestHipCodeGen:
         assert "SwitchNode" not in result
         assert "TernaryOpNode" not in result
         assert "CastNode" not in result
+
+    def test_empty_default_switch_codegen_emits_default_label(self):
+        """Test empty default labels are emitted instead of dropped."""
+        code = """
+        void f(int value) {
+            switch (value) {
+                case 0:
+                    break;
+                default:
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "switch (value) {" in result
+        assert "case 0:" in result
+        assert "default:" in result
+        assert result.index("case 0:") < result.index("default:")

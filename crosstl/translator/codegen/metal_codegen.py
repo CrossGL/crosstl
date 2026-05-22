@@ -74,6 +74,36 @@ from .stage_utils import (
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .glsl_buffer_layout import (
+    byte_offset_expression,
+    collect_lowered_glsl_buffer_blocks,
+    glsl_buffer_compound_binary_operator,
+    matrix_column_offsets,
+    vector_component_offsets,
+)
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    explicit_image_access,
+    explicit_image_format,
+    image_format_channel_count,
+    image_format_component_type,
+    image_access_satisfies_requirement,
+    is_image_format_attribute,
+    is_metal_float_image_resource,
+    is_metal_integer_image_type,
+    is_metal_storage_image_resource,
+    is_resource_access_attribute,
+    is_scalar_image_format,
+    is_two_component_image_format,
+    metal_storage_image_access_agnostic_type,
+    metal_storage_image_component_type,
+    storage_image_format_store_constructor,
+    storage_image_load_component_suffix,
+    storage_image_store_value_expression,
+    storage_image_two_component_store_expression,
+    supported_image_formats,
+)
 
 
 class CharTypeMapper:
@@ -107,12 +137,15 @@ class MetalCodeGen:
         self.char_mapper = CharTypeMapper()
         self.texture_variables = []
         self.sampler_variables = []
+        self.structured_buffer_variables = []
         self.cbuffer_variables = []
         self.cbuffer_parameter_names = {}
         self.cbuffer_member_references = {}
         self.ambiguous_cbuffer_members = set()
         self.cbuffers_by_name = {}
         self.user_function_names = set()
+        self.function_parameter_names = {}
+        self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
         self.current_sampler_parameters = set()
@@ -128,6 +161,14 @@ class MetalCodeGen:
         self.current_expression_expected_type = None
         self.local_variable_types = {}
         self.struct_member_types = {}
+        self.structs_by_name = {}
+        self.glsl_buffer_block_struct_names = set()
+        self.lowered_glsl_buffer_blocks = {}
+        self.lowered_glsl_buffer_block_struct_names = set()
+        self.glsl_buffer_block_lowering_failures = {}
+        self.glsl_buffer_block_struct_lowering_failures = {}
+        self.glsl_buffer_block_variables = []
+        self.metal_temp_variable_index = 0
         self.type_mapping = {
             # Scalar Types
             "void": "void",
@@ -178,6 +219,7 @@ class MetalCodeGen:
             "bool3": "bool3",
             "bool4": "bool4",
             "sampler1D": "texture1d<float>",
+            "sampler1DArray": "texture1d_array<float>",
             "sampler2D": "texture2d<float>",
             "sampler3D": "texture3d<float>",
             "samplerCube": "texturecube<float>",
@@ -189,12 +231,18 @@ class MetalCodeGen:
             "sampler2DArrayShadow": "depth2d_array<float>",
             "samplerCubeShadow": "depthcube<float>",
             "samplerCubeArrayShadow": "depthcube_array<float>",
+            "iimage1D": "texture1d<int, access::read_write>",
+            "iimage1DArray": "texture1d_array<int, access::read_write>",
             "iimage2D": "texture2d<int, access::read_write>",
             "iimage3D": "texture3d<int, access::read_write>",
             "iimage2DArray": "texture2d_array<int, access::read_write>",
+            "uimage1D": "texture1d<uint, access::read_write>",
+            "uimage1DArray": "texture1d_array<uint, access::read_write>",
             "uimage2D": "texture2d<uint, access::read_write>",
             "uimage3D": "texture3d<uint, access::read_write>",
             "uimage2DArray": "texture2d_array<uint, access::read_write>",
+            "image1D": "texture1d<float, access::read_write>",
+            "image1DArray": "texture1d_array<float, access::read_write>",
             "image2D": "texture2d<float, access::read_write>",
             "image3D": "texture3d<float, access::read_write>",
             "imageCube": "texture2d_array<float, access::read_write>",
@@ -203,6 +251,15 @@ class MetalCodeGen:
             "mat2": "float2x2",
             "mat3": "float3x3",
             "mat4": "float4x4",
+            "mat2x2": "float2x2",
+            "mat2x3": "float3x2",
+            "mat2x4": "float4x2",
+            "mat3x2": "float2x3",
+            "mat3x3": "float3x3",
+            "mat3x4": "float4x3",
+            "mat4x2": "float2x4",
+            "mat4x3": "float3x4",
+            "mat4x4": "float4x4",
             "half2x2": "half2x2",
             "half3x3": "half3x3",
             "half4x4": "half4x4",
@@ -274,6 +331,13 @@ class MetalCodeGen:
 
         self.texture_variables = []
         self.sampler_variables = []
+        self.structured_buffer_variables = []
+        self.glsl_buffer_block_variables = []
+        self.lowered_glsl_buffer_blocks = {}
+        self.lowered_glsl_buffer_block_struct_names = set()
+        self.glsl_buffer_block_lowering_failures = {}
+        self.glsl_buffer_block_struct_lowering_failures = {}
+        self.metal_temp_variable_index = 0
         self.cbuffer_variables = getattr(ast, "cbuffers", []) or []
         self.cbuffers_by_name = {
             cbuffer.name: cbuffer
@@ -284,6 +348,16 @@ class MetalCodeGen:
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
         }
+        self.function_parameter_names = collect_function_parameter_names(all_functions)
+        self.function_image_access_requirements = (
+            collect_function_image_access_requirements(
+                all_functions,
+                self.function_parameter_names,
+                self.iter_ast_nodes,
+                self.function_call_name,
+                self.expression_name,
+            )
+        )
         self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
             all_functions
         )
@@ -314,6 +388,38 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.structs_by_name = {
+            node.name: node
+            for node in getattr(ast, "structs", [])
+            if isinstance(node, StructNode)
+        }
+        global_vars = getattr(ast, "global_variables", [])
+        self.glsl_buffer_block_struct_names = (
+            self.collect_glsl_buffer_block_struct_names(global_vars)
+        )
+        (
+            self.lowered_glsl_buffer_blocks,
+            self.glsl_buffer_block_lowering_failures,
+            self.glsl_buffer_block_struct_lowering_failures,
+        ) = collect_lowered_glsl_buffer_blocks(
+            global_vars,
+            structs_by_name=self.structs_by_name,
+            is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
+            resource_base_type=self.resource_base_type,
+            glsl_buffer_block_layout=self.glsl_buffer_block_layout,
+            convert_type_node_to_string=self.convert_type_node_to_string,
+            literal_int_value=lambda expr: self.literal_int_value(
+                expr, self.literal_int_constants
+            ),
+            map_type=self.map_type,
+            target_type_key="metal_type",
+            unsupported_type_message=(
+                "type is not supported by Metal pointer/offset lowering"
+            ),
+        )
+        self.lowered_glsl_buffer_block_struct_names = {
+            block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
+        }
         self.struct_member_types = collect_struct_member_types(
             getattr(ast, "structs", []), self.type_name_string
         )
@@ -338,6 +444,12 @@ class MetalCodeGen:
         structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
+                if node.name in self.lowered_glsl_buffer_block_struct_names:
+                    continue
+                if node.name in self.glsl_buffer_block_struct_names:
+                    code += self.glsl_buffer_block_diagnostic(
+                        "Metal", node.name, None, None
+                    )
                 code += f"struct {node.name} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
@@ -390,9 +502,9 @@ class MetalCodeGen:
                         code += f"    {member_type} {member.name}{semantic_attr};\n"
                 code += "};\n"
 
-        global_vars = getattr(ast, "global_variables", [])
         texture_register = 0
         sampler_register = 0
+        buffer_register = 0
         for i, node in enumerate(global_vars):
             # Handle both old and new AST variable structures
             resource_count = 1
@@ -433,8 +545,38 @@ class MetalCodeGen:
                 vtype = "float"
                 array_suffix = ""
 
-            if vtype in [
+            var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
+            if lowered_block is not None:
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = buffer_register
+                self.glsl_buffer_block_variables.append(
+                    (node, binding, lowered_block, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
+                continue
+
+            if self.is_glsl_buffer_block_variable(node, vtype):
+                code += self.glsl_buffer_block_diagnostic(
+                    "Metal", vtype, var_name, node
+                )
+
+            if self.is_structured_buffer_type(vtype):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = buffer_register
+                self.structured_buffer_variables.append(
+                    (node, binding, vtype, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
+            elif vtype in [
                 "sampler1D",
+                "sampler1DArray",
                 "sampler2D",
                 "sampler3D",
                 "samplerCube",
@@ -446,12 +588,18 @@ class MetalCodeGen:
                 "sampler2DArrayShadow",
                 "samplerCubeShadow",
                 "samplerCubeArrayShadow",
+                "iimage1D",
+                "iimage1DArray",
                 "iimage2D",
                 "iimage3D",
                 "iimage2DArray",
+                "uimage1D",
+                "uimage1DArray",
                 "uimage2D",
                 "uimage3D",
                 "uimage2DArray",
+                "image1D",
+                "image1DArray",
                 "image2D",
                 "image3D",
                 "imageCube",
@@ -465,7 +613,9 @@ class MetalCodeGen:
                     binding = texture_register
                 self.texture_variables.append((node, binding, mapped_type, array_size))
                 self.texture_variable_types[node.name] = mapped_type
-                explicit_format = self.explicit_image_format(node)
+                explicit_format = explicit_image_format(
+                    node, self.attribute_value_to_string
+                )
                 if explicit_format:
                     self.image_variable_formats[node.name] = explicit_format
                 texture_register = max(texture_register, binding + resource_count)
@@ -664,10 +814,11 @@ class MetalCodeGen:
         self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
-                if hasattr(p.param_type, "name"):
-                    raw_param_type = p.param_type.name
-                else:
-                    raw_param_type = p.param_type
+                raw_param_type = (
+                    self.type_name_string(p.param_type)
+                    if getattr(p.param_type, "generic_args", None)
+                    else p.param_type
+                )
             elif hasattr(p, "vtype"):
                 raw_param_type = p.vtype
             else:
@@ -676,11 +827,13 @@ class MetalCodeGen:
 
             if self.is_sampler_type(raw_param_type):
                 sampler_parameters.add(p.name)
-            elif self.is_resource_parameter_type(raw_param_type):
+            elif self.is_texture_or_image_resource_type(raw_param_type):
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
                 )
-                explicit_format = self.explicit_image_format(p)
+                explicit_format = explicit_image_format(
+                    p, self.attribute_value_to_string
+                )
                 if explicit_format:
                     image_format_parameters[p.name] = explicit_format
             param_type = self.map_resource_type_with_format(raw_param_type, p)
@@ -866,6 +1019,30 @@ class MetalCodeGen:
                     texture_type, texture_variable.name, array_size
                 )
                 resource_params.append(f"{declaration} [[texture({i})]]")
+        if self.structured_buffer_variables:
+            for (
+                buffer_variable,
+                i,
+                buffer_type,
+                array_size,
+            ) in self.structured_buffer_variables:
+                buffer_name = getattr(buffer_variable, "name", None)
+                declaration = self.format_structured_buffer_parameter(
+                    buffer_type, buffer_name, array_size
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.glsl_buffer_block_variables:
+            for (
+                buffer_variable,
+                i,
+                block,
+                array_size,
+            ) in self.glsl_buffer_block_variables:
+                buffer_name = getattr(buffer_variable, "name", None)
+                declaration = self.format_glsl_buffer_block_parameter(
+                    block, buffer_name, array_size
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.sampler_variables:
             for sampler_variable, i, array_size in self.sampler_variables:
                 sampler_name = getattr(sampler_variable, "name", None)
@@ -886,6 +1063,12 @@ class MetalCodeGen:
         for texture_variable, _, _, _ in self.texture_variables:
             if getattr(texture_variable, "name", None):
                 names.add(texture_variable.name)
+        for buffer_variable, _, _, _ in self.structured_buffer_variables:
+            if getattr(buffer_variable, "name", None):
+                names.add(buffer_variable.name)
+        for buffer_variable, _, _, _ in self.glsl_buffer_block_variables:
+            if getattr(buffer_variable, "name", None):
+                names.add(buffer_variable.name)
         for sampler_variable, _, _ in self.sampler_variables:
             if getattr(sampler_variable, "name", None):
                 names.add(sampler_variable.name)
@@ -914,6 +1097,30 @@ class MetalCodeGen:
                 resource_params.append(
                     self.format_resource_parameter(
                         texture_type, texture_name, array_size
+                    )
+                )
+        for (
+            buffer_variable,
+            buffer_type,
+            array_size,
+        ) in self.required_function_structured_buffers(func_name):
+            buffer_name = getattr(buffer_variable, "name", None)
+            if buffer_name:
+                resource_params.append(
+                    self.format_structured_buffer_parameter(
+                        buffer_type, buffer_name, array_size
+                    )
+                )
+        for (
+            buffer_variable,
+            block,
+            array_size,
+        ) in self.required_function_glsl_buffer_blocks(func_name):
+            buffer_name = getattr(buffer_variable, "name", None)
+            if buffer_name:
+                resource_params.append(
+                    self.format_glsl_buffer_block_parameter(
+                        block, buffer_name, array_size
                     )
                 )
         for sampler_variable, array_size in self.required_function_samplers(func_name):
@@ -1001,7 +1208,7 @@ class MetalCodeGen:
             else:
                 return f"{indent_str}array<{element_type}, {size}> {stmt.name};\n"
         elif isinstance(stmt, AssignmentNode):
-            return f"{indent_str}{self.generate_assignment(stmt)};\n"
+            return self.generate_statement_code(self.generate_assignment(stmt), indent)
         elif isinstance(stmt, BreakNode):
             return f"{indent_str}break;\n"
         elif isinstance(stmt, ContinueNode):
@@ -1042,9 +1249,21 @@ class MetalCodeGen:
         ):
             # Handle ExpressionStatementNode
             expr_code = self.generate_expression_statement(stmt)
-            return f"{indent_str}{expr_code};\n"
+            return self.generate_statement_code(expr_code, indent)
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
+    def generate_statement_code(self, code, indent=0):
+        indent_str = "    " * indent
+        lines = [line.rstrip() for line in str(code).splitlines() if line.strip()]
+        if not lines:
+            return ""
+
+        result = ""
+        for line in lines:
+            terminator = "" if line.endswith((";", "}")) else ";"
+            result += f"{indent_str}{line}{terminator}\n"
+        return result
 
     def local_variable_qualifier(self, node):
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
@@ -1221,6 +1440,8 @@ class MetalCodeGen:
     def generate_expression_statement(self, stmt):
         """Generate code for expression statements."""
         if hasattr(stmt, "expression"):
+            if isinstance(stmt.expression, AssignmentNode):
+                return self.generate_assignment(stmt.expression)
             expr = self.generate_expression(stmt.expression)
             return expr
         else:
@@ -1231,18 +1452,24 @@ class MetalCodeGen:
         # Handle both old and new AST assignment structures
         if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
-            lhs = self.generate_expression(node.target)
+            target = node.target
             rhs = self.generate_expression_with_expected(
                 node.value, self.expression_result_type(node.target)
             )
             op = getattr(node, "operator", "=")
         else:
             # Old AST structure
-            lhs = self.generate_expression(node.left)
+            target = node.left
             rhs = self.generate_expression_with_expected(
                 node.right, self.expression_result_type(node.left)
             )
             op = getattr(node, "operator", "=")
+
+        block_store = self.generate_glsl_buffer_block_store(target, rhs, op)
+        if block_store is not None:
+            return block_store
+
+        lhs = self.generate_expression(target)
         return f"{lhs} {op} {rhs}"
 
     def generate_if(self, node, indent):
@@ -1541,6 +1768,9 @@ class MetalCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{query}.{expr.operation}({args})"
         elif isinstance(expr, ArrayAccessNode):
+            block_load = self.generate_glsl_buffer_block_array_load(expr)
+            if block_load is not None:
+                return block_load
             # Handle array access
             array = self.generate_expression(expr.array)
             index = self.generate_expression(expr.index)
@@ -1563,6 +1793,10 @@ class MetalCodeGen:
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
                 return texture_call
+
+            buffer_call = self.generate_buffer_call(func_name, expr.args)
+            if buffer_call is not None:
+                return buffer_call
             # Special handling for common GLSL functions
             elif func_name == "normalize":
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
@@ -1592,6 +1826,7 @@ class MetalCodeGen:
                 return f"{metal_type}({args})"
             else:
                 # Standard function call
+                self.validate_function_image_access_arguments(func_name, expr.args)
                 args = [self.generate_expression(arg) for arg in expr.args]
                 if func_name in self.user_function_names:
                     args.extend(
@@ -1604,6 +1839,9 @@ class MetalCodeGen:
                 args = ", ".join(args)
                 return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
+            block_load = self.generate_glsl_buffer_block_member_load(expr)
+            if block_load is not None:
+                return block_load
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
         elif isinstance(expr, TernaryOpNode):
@@ -1646,6 +1884,37 @@ class MetalCodeGen:
         else:
             return str(expr)
 
+    def generate_buffer_call(self, func_name, args):
+        if func_name == "buffer_load" and len(args) >= 2:
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            return f"{buffer}[{index}]"
+        if func_name == "buffer_store" and len(args) >= 3:
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            value = self.generate_expression(args[2])
+            return f"{buffer}[{index}] = {value}"
+        if func_name == "buffer_append" and len(args) >= 2:
+            return (
+                "/* unsupported Metal buffer append: requires explicit "
+                "counter buffer */"
+            )
+        if func_name == "buffer_consume" and args:
+            return (
+                "0 /* unsupported Metal buffer consume: requires explicit "
+                "counter buffer */"
+            )
+        if func_name == "buffer_dimensions" and args:
+            diagnostic = (
+                "0 /* unsupported Metal buffer dimensions: device buffers do not "
+                "carry length */"
+            )
+            if len(args) >= 2:
+                target = self.generate_expression(args[1])
+                return f"{target} = {diagnostic}"
+            return diagnostic
+        return None
+
     def default_sampler_expression(self):
         return "sampler(mag_filter::linear, min_filter::linear)"
 
@@ -1654,13 +1923,54 @@ class MetalCodeGen:
             sampler_variable.name for sampler_variable, _, _ in self.sampler_variables
         } | self.current_sampler_parameters
 
+    def structured_buffer_type_name(self, vtype):
+        return str(self.resource_base_type(vtype)).split("<", 1)[0]
+
+    def is_structured_buffer_type(self, vtype):
+        return self.structured_buffer_type_name(vtype) in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
+    def structured_buffer_element_type(self, vtype):
+        type_name = str(self.resource_base_type(vtype))
+        if "<" not in type_name or not type_name.endswith(">"):
+            return "uint"
+        element_type = type_name.split("<", 1)[1][:-1].strip()
+        return self.map_type(element_type)
+
+    def structured_buffer_address_space(self, vtype):
+        if self.structured_buffer_type_name(vtype) == "StructuredBuffer":
+            return "const device"
+        return "device"
+
+    def format_structured_buffer_parameter(self, vtype, name, array_size=None):
+        element_type = self.structured_buffer_element_type(vtype)
+        address_space = self.structured_buffer_address_space(vtype)
+        pointer_type = f"{address_space} {element_type}*"
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{pointer_type}, {array_size}> {name}"
+        return f"{pointer_type} {name}"
+
+    def format_glsl_buffer_block_parameter(self, block, name, array_size=None):
+        address_space = "const device" if block.get("readonly") else "device"
+        pointer_type = f"{address_space} uchar*"
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{pointer_type}, {array_size}> {name}"
+        return f"{pointer_type} {name}"
+
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) == "sampler"
 
     def is_resource_parameter_type(self, vtype):
-        return self.resource_base_type(vtype) in {
+        return self.is_structured_buffer_type(vtype) or self.resource_base_type(vtype) in {
             "sampler",
             "sampler1D",
+            "sampler1DArray",
             "sampler2D",
             "sampler3D",
             "samplerCube",
@@ -1672,12 +1982,18 @@ class MetalCodeGen:
             "sampler2DArrayShadow",
             "samplerCubeShadow",
             "samplerCubeArrayShadow",
+            "iimage1D",
+            "iimage1DArray",
             "iimage2D",
             "iimage3D",
             "iimage2DArray",
+            "uimage1D",
+            "uimage1DArray",
             "uimage2D",
             "uimage3D",
             "uimage2DArray",
+            "image1D",
+            "image1DArray",
             "image2D",
             "image3D",
             "imageCube",
@@ -1687,7 +2003,7 @@ class MetalCodeGen:
     def is_texture_or_image_resource_type(self, vtype):
         return self.is_resource_parameter_type(vtype) and not self.is_sampler_type(
             vtype
-        )
+        ) and not self.is_structured_buffer_type(vtype)
 
     def is_integer_coordinate_type(self, vtype):
         type_name = self.type_name_string(vtype)
@@ -1713,56 +2029,113 @@ class MetalCodeGen:
             "uint4",
         }
 
-    def resource_coordinate_dimension(self, texture_type):
+    def texture_dimension_descriptor(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        if not texture_type or "cube" in texture_type:
-            return None
-        if texture_type.startswith("texture1d_array<"):
-            return 2
-        if texture_type.startswith("texture1d<"):
-            return 1
-        if texture_type.startswith("texture2d_ms_array<"):
-            return 3
-        if texture_type.startswith("texture2d_ms<"):
-            return 2
+        sampling = self.texture_sampling_capabilities(texture_type)
+        is_multisample = "_ms" in texture_type
+        is_storage_image = "access::" in texture_type
+
+        coordinate_dimension = None
+        if texture_type and "cube" not in texture_type:
+            if texture_type.startswith("texture1d_array<"):
+                coordinate_dimension = 2
+            elif texture_type.startswith("texture1d<"):
+                coordinate_dimension = 1
+            elif texture_type.startswith("texture2d_ms_array<"):
+                coordinate_dimension = 3
+            elif texture_type.startswith("texture2d_ms<"):
+                coordinate_dimension = 2
+            elif texture_type.startswith("texture2d_array<"):
+                coordinate_dimension = 3
+            elif texture_type.startswith("texture2d<"):
+                coordinate_dimension = 2
+            elif texture_type.startswith("depth2d_array<"):
+                coordinate_dimension = 3
+            elif texture_type.startswith("depth2d<"):
+                coordinate_dimension = 2
+            elif texture_type.startswith("texture3d<"):
+                coordinate_dimension = 3
+
+        texel_fetch_offset_dimension = None
+        if texture_type and "cube" not in texture_type and not is_multisample:
+            if texture_type.startswith("texture1d_array<"):
+                texel_fetch_offset_dimension = 1
+            elif texture_type.startswith("texture1d<"):
+                texel_fetch_offset_dimension = 1
+            elif texture_type.startswith("texture2d_array<"):
+                texel_fetch_offset_dimension = 2
+            elif texture_type.startswith("texture2d<"):
+                texel_fetch_offset_dimension = 2
+            elif texture_type.startswith("texture3d<"):
+                texel_fetch_offset_dimension = 3
+
+        sample_offset_dimension = None
         if texture_type.startswith("texture2d_array<"):
-            return 3
-        if texture_type.startswith("texture2d<"):
-            return 2
-        if texture_type.startswith("depth2d_array<"):
-            return 3
-        if texture_type.startswith("depth2d<"):
-            return 2
-        if texture_type.startswith("texture3d<"):
-            return 3
-        return None
+            sample_offset_dimension = 2
+        elif texture_type.startswith("texture2d<"):
+            sample_offset_dimension = 2
+        if not sampling["sample_offset"]:
+            sample_offset_dimension = None
+
+        gradient_dimension = None
+        if texture_type and not is_storage_image and not is_multisample:
+            if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
+                gradient_dimension = 2
+            elif texture_type.startswith(("texture2d<", "depth2d<")):
+                gradient_dimension = 2
+            elif texture_type.startswith("texture3d<"):
+                gradient_dimension = 3
+            elif texture_type.startswith(("texturecube_array<", "depthcube_array<")):
+                gradient_dimension = 3
+            elif texture_type.startswith(("texturecube<", "depthcube<")):
+                gradient_dimension = 3
+
+        query_lod_coordinate_dimension = None
+        if texture_type and not is_storage_image and not is_multisample:
+            if texture_type.startswith("texture1d_array<"):
+                query_lod_coordinate_dimension = 2
+            elif texture_type.startswith("texture1d<"):
+                query_lod_coordinate_dimension = 1
+            elif texture_type.startswith(("texture2d_array<", "depth2d_array<")):
+                query_lod_coordinate_dimension = 3
+            elif texture_type.startswith(("texture2d<", "depth2d<")):
+                query_lod_coordinate_dimension = 2
+            elif texture_type.startswith("texture3d<"):
+                query_lod_coordinate_dimension = 3
+            elif texture_type.startswith(("texturecube_array<", "depthcube_array<")):
+                query_lod_coordinate_dimension = 4
+            elif texture_type.startswith(("texturecube<", "depthcube<")):
+                query_lod_coordinate_dimension = 3
+
+        compare_offset_dimension = 2 if sampling["compare_offset"] else None
+        return {
+            "texture_type": texture_type,
+            "coordinate_dimension": coordinate_dimension,
+            "offset_dimension": sample_offset_dimension,
+            "sample_offset_dimension": sample_offset_dimension,
+            "texel_fetch_offset_dimension": texel_fetch_offset_dimension,
+            "gather_offset_dimension": 2 if sampling["gather_offset"] else None,
+            "compare_offset_dimension": compare_offset_dimension,
+            "compare_lod_offset_dimension": compare_offset_dimension,
+            "compare_grad_offset_dimension": compare_offset_dimension,
+            "gather_compare_offset_dimension": (
+                2 if sampling["gather_compare_offset"] else None
+            ),
+            "gradient_dimension": gradient_dimension,
+            "query_lod_coordinate_dimension": query_lod_coordinate_dimension,
+        }
+
+    def resource_coordinate_dimension(self, texture_type):
+        return self.texture_dimension_descriptor(texture_type)["coordinate_dimension"]
 
     def resource_offset_dimension(self, func_name, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        if not texture_type or "cube" in texture_type:
-            return None
+        descriptor = self.texture_dimension_descriptor(texture_type)
         if func_name == "texelFetchOffset":
-            if self.is_multisample_texture_resource(texture_type):
-                return None
-            if texture_type.startswith("texture1d_array<"):
-                return 1
-            if texture_type.startswith("texture1d<"):
-                return 1
-            if texture_type.startswith("texture2d_array<"):
-                return 2
-            if texture_type.startswith("texture2d<"):
-                return 2
-            if texture_type.startswith("texture3d<"):
-                return 3
-            return None
+            return descriptor["texel_fetch_offset_dimension"]
         if func_name in {"textureGatherOffset", "textureGatherOffsets"}:
-            return 2 if self.texture_gather_supports_offset(texture_type) else None
+            return descriptor["gather_offset_dimension"]
         if func_name == "textureGatherCompareOffset":
-            return (
-                2
-                if self.texture_gather_compare_offset_supported(texture_type)
-                else None
-            )
+            return descriptor["gather_compare_offset_dimension"]
         if func_name in {
             "textureCompareOffset",
             "textureCompareLodOffset",
@@ -1771,55 +2144,18 @@ class MetalCodeGen:
             "textureCompareProjLodOffset",
             "textureCompareProjGradOffset",
         }:
-            return 2 if self.texture_compare_offset_supported(texture_type) else None
-        if (
-            func_name in OFFSET_DIMENSION_INTRINSIC_NAMES
-            and not self.texture_sample_supports_offset(texture_type)
-        ):
-            return None
-        if texture_type.startswith("texture2d_array<"):
-            return 2
-        if texture_type.startswith("texture2d<"):
-            return 2
-        return None
+            return descriptor["compare_offset_dimension"]
+        if func_name in OFFSET_DIMENSION_INTRINSIC_NAMES:
+            return descriptor["sample_offset_dimension"]
+        return descriptor["offset_dimension"]
 
     def resource_gradient_dimension(self, func_name, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        if not texture_type or "access::" in texture_type:
-            return None
-        if "ms" in texture_type:
-            return None
-        if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
-            return 2
-        if texture_type.startswith(("texture2d<", "depth2d<")):
-            return 2
-        if texture_type.startswith("texture3d<"):
-            return 3
-        if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
-            return 3
-        if texture_type.startswith(("texturecube<", "depthcube<")):
-            return 3
-        return None
+        return self.texture_dimension_descriptor(texture_type)["gradient_dimension"]
 
     def resource_query_lod_coordinate_dimension(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        if not texture_type or "access::" in texture_type or "_ms" in texture_type:
-            return None
-        if texture_type.startswith("texture1d_array<"):
-            return 2
-        if texture_type.startswith("texture1d<"):
-            return 1
-        if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
-            return 3
-        if texture_type.startswith(("texture2d<", "depth2d<")):
-            return 2
-        if texture_type.startswith("texture3d<"):
-            return 3
-        if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
-            return 4
-        if texture_type.startswith(("texturecube<", "depthcube<")):
-            return 3
-        return None
+        return self.texture_dimension_descriptor(texture_type)[
+            "query_lod_coordinate_dimension"
+        ]
 
     def parameter_attribute(self, raw_param_type, semantic, shader_type, node=None):
         if semantic:
@@ -1842,6 +2178,11 @@ class MetalCodeGen:
                 node, {"binding", "sampler"}, ("s",)
             )
             return f" [[sampler({binding})]]" if binding is not None else ""
+        if self.is_structured_buffer_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         if self.is_resource_parameter_type(raw_param_type):
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "texture"}, ("t", "u")
@@ -1852,6 +2193,8 @@ class MetalCodeGen:
     def format_parameter_declaration(
         self, raw_param_type, mapped_type, name, node=None
     ):
+        if self.is_structured_buffer_type(raw_param_type):
+            return self.format_structured_buffer_parameter(raw_param_type, name)
         array_type = self.resource_array_parameter(raw_param_type, node)
         if array_type is not None:
             resource_type, array_size = array_type
@@ -2003,7 +2346,10 @@ class MetalCodeGen:
         for node in getattr(root, "global_variables", []) or []:
             var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
-            if var_name and self.is_resource_parameter_type(var_type):
+            if var_name and (
+                self.is_resource_parameter_type(var_type)
+                or self.glsl_buffer_block_attribute(node) is not None
+            ):
                 resource_names.add(var_name)
         return resource_names
 
@@ -2133,6 +2479,10 @@ class MetalCodeGen:
                 local_names.add(node.name)
 
         texture_names = self.global_texture_names()
+        buffer_names = (
+            self.global_structured_buffer_names()
+            | self.global_glsl_buffer_block_names()
+        )
         sampler_names = self.global_sampler_names()
         dependencies = set()
 
@@ -2142,13 +2492,20 @@ class MetalCodeGen:
                 if (
                     name
                     and name not in local_names
-                    and (name in texture_names or name in sampler_names)
+                    and (
+                        name in texture_names
+                        or name in buffer_names
+                        or name in sampler_names
+                    )
                 ):
                     dependencies.add(name)
 
             if isinstance(node, FunctionCallNode):
                 self.add_texture_call_resource_dependencies(
                     node, local_names, texture_names, sampler_names, dependencies
+                )
+                self.add_buffer_call_resource_dependencies(
+                    node, local_names, buffer_names, dependencies
                 )
 
         return dependencies
@@ -2181,6 +2538,25 @@ class MetalCodeGen:
             and implicit_sampler_name not in local_names
         ):
             dependencies.add(implicit_sampler_name)
+
+    def add_buffer_call_resource_dependencies(
+        self, call, local_names, buffer_names, dependencies
+    ):
+        func_name = self.function_call_name(call)
+        if func_name not in {
+            "buffer_load",
+            "buffer_store",
+            "buffer_append",
+            "buffer_consume",
+            "buffer_dimensions",
+        }:
+            return
+        args = getattr(call, "arguments", getattr(call, "args", []))
+        if not args:
+            return
+        buffer_name = self.expression_name(args[0])
+        if buffer_name in buffer_names and buffer_name not in local_names:
+            dependencies.add(buffer_name)
 
     def texture_sampling_uses_implicit_sampler(self, func_name):
         return func_name in {
@@ -2248,6 +2624,20 @@ class MetalCodeGen:
             if getattr(texture_variable, "name", None)
         }
 
+    def global_structured_buffer_names(self):
+        return {
+            buffer_variable.name
+            for buffer_variable, _, _, _ in self.structured_buffer_variables
+            if getattr(buffer_variable, "name", None)
+        }
+
+    def global_glsl_buffer_block_names(self):
+        return {
+            buffer_variable.name
+            for buffer_variable, _, _, _ in self.glsl_buffer_block_variables
+            if getattr(buffer_variable, "name", None)
+        }
+
     def global_sampler_names(self):
         return {
             sampler_variable.name
@@ -2271,10 +2661,46 @@ class MetalCodeGen:
             if getattr(sampler_variable, "name", None) in dependencies
         ]
 
+    def required_function_structured_buffers(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (buffer_variable, buffer_type, array_size)
+            for (
+                buffer_variable,
+                _,
+                buffer_type,
+                array_size,
+            ) in self.structured_buffer_variables
+            if getattr(buffer_variable, "name", None) in dependencies
+        ]
+
+    def required_function_glsl_buffer_blocks(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (buffer_variable, block, array_size)
+            for (
+                buffer_variable,
+                _,
+                block,
+                array_size,
+            ) in self.glsl_buffer_block_variables
+            if getattr(buffer_variable, "name", None) in dependencies
+        ]
+
     def required_function_resource_argument_names(self, func_name):
         return [
             texture_variable.name
             for texture_variable, _, _ in self.required_function_textures(func_name)
+        ] + [
+            buffer_variable.name
+            for buffer_variable, _, _ in self.required_function_structured_buffers(
+                func_name
+            )
+        ] + [
+            buffer_variable.name
+            for buffer_variable, _, _ in self.required_function_glsl_buffer_blocks(
+                func_name
+            )
         ] + [
             sampler_variable.name
             for sampler_variable, _ in self.required_function_samplers(func_name)
@@ -2333,87 +2759,20 @@ class MetalCodeGen:
         return None
 
     def supported_image_formats(self):
-        return {
-            "r8",
-            "r8_snorm",
-            "r8i",
-            "r8ui",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r16i",
-            "r16ui",
-            "r32f",
-            "r32i",
-            "r32ui",
-            "rg8",
-            "rg8_snorm",
-            "rg8i",
-            "rg8ui",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg16i",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-            "rgba8",
-            "rgba8_snorm",
-            "rgba8i",
-            "rgba8ui",
-            "rgba16",
-            "rgba16_snorm",
-            "rgba16f",
-            "rgba16i",
-            "rgba16ui",
-            "rgba32f",
-            "rgba32i",
-            "rgba32ui",
-        }
+        return supported_image_formats()
 
     def scalar_image_format_components(self):
         return {
-            "r8": "float",
-            "r8_snorm": "float",
-            "r16": "float",
-            "r16_snorm": "float",
-            "r16f": "float",
-            "r32f": "float",
-            "r8i": "int",
-            "r16i": "int",
-            "r32i": "int",
-            "r8ui": "uint",
-            "r16ui": "uint",
-            "r32ui": "uint",
+            image_format: image_format_component_type(image_format)
+            for image_format in supported_image_formats()
+            if image_format_channel_count(image_format) == 1
         }
 
     def vector_image_format_components(self):
         return {
-            "rg8": "float",
-            "rg8_snorm": "float",
-            "rg16": "float",
-            "rg16_snorm": "float",
-            "rg16f": "float",
-            "rg8i": "int",
-            "rg16i": "int",
-            "rg8ui": "uint",
-            "rg16ui": "uint",
-            "rg32f": "float",
-            "rg32i": "int",
-            "rg32ui": "uint",
-            "rgba8": "float",
-            "rgba8_snorm": "float",
-            "rgba16": "float",
-            "rgba16_snorm": "float",
-            "rgba16f": "float",
-            "rgba32f": "float",
-            "rgba8i": "int",
-            "rgba16i": "int",
-            "rgba32i": "int",
-            "rgba8ui": "uint",
-            "rgba16ui": "uint",
-            "rgba32ui": "uint",
+            image_format: image_format_component_type(image_format)
+            for image_format in supported_image_formats()
+            if image_format_channel_count(image_format) in {2, 4}
         }
 
     def attribute_value_to_string(self, value):
@@ -2426,36 +2785,6 @@ class MetalCodeGen:
         if hasattr(value, "value"):
             return str(value.value).strip('"')
         return str(value)
-
-    def explicit_image_format(self, node):
-        if not hasattr(node, "attributes"):
-            return None
-        supported_formats = self.supported_image_formats()
-        for attr in node.attributes:
-            attr_name = getattr(attr, "name", None)
-            if not attr_name:
-                continue
-            attr_name = str(attr_name).lower()
-            if attr_name in supported_formats:
-                return attr_name
-            if attr_name == "format":
-                arguments = getattr(attr, "arguments", []) or []
-                if not arguments:
-                    continue
-                format_name = self.attribute_value_to_string(arguments[0])
-                if format_name is None:
-                    continue
-                format_name = str(format_name).lower()
-                if format_name in supported_formats:
-                    return format_name
-        return None
-
-    def is_image_format_attribute(self, attr):
-        attr_name = getattr(attr, "name", None)
-        if not attr_name:
-            return False
-        attr_name = str(attr_name).lower()
-        return attr_name == "format" or attr_name in self.supported_image_formats()
 
     def is_resource_binding_attribute(self, attr):
         attr_name = getattr(attr, "name", None)
@@ -2516,9 +2845,13 @@ class MetalCodeGen:
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
-            if self.is_image_format_attribute(
-                attr
-            ) or self.is_resource_binding_attribute(attr):
+            if (
+                is_image_format_attribute(attr)
+                or self.is_resource_binding_attribute(attr)
+                or is_resource_access_attribute(attr)
+                or self.is_resource_memory_attribute(attr)
+                or self.is_glsl_buffer_block_attribute(attr)
+            ):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
@@ -2542,26 +2875,61 @@ class MetalCodeGen:
 
     def map_image_base_type_with_format(self, vtype, node=None):
         base_type = self.resource_base_type(vtype)
-        explicit_format = self.explicit_image_format(node) if node is not None else None
+        explicit_format = (
+            explicit_image_format(node, self.attribute_value_to_string)
+            if node is not None
+            else None
+        )
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
         texture_types = {
+            "image1D": "texture1d",
+            "iimage1D": "texture1d",
+            "uimage1D": "texture1d",
             "image2D": "texture2d",
             "iimage2D": "texture2d",
             "uimage2D": "texture2d",
             "image3D": "texture3d",
             "iimage3D": "texture3d",
             "uimage3D": "texture3d",
+            "image1DArray": "texture1d_array",
+            "iimage1DArray": "texture1d_array",
+            "uimage1DArray": "texture1d_array",
             "image2DArray": "texture2d_array",
             "iimage2DArray": "texture2d_array",
             "uimage2DArray": "texture2d_array",
             "imageCube": "texture2d_array",
         }
         texture_type = texture_types.get(base_type)
-        if component_type and texture_type:
-            return f"{texture_type}<{component_type}, access::read_write>"
+        if texture_type:
+            if component_type is None:
+                component_type = self.default_image_component_type(base_type)
+            access = (
+                explicit_image_access(node, self.attribute_value_to_string)
+                or "read_write"
+            )
+            return f"{texture_type}<{component_type}, access::{access}>"
         return self.map_type(vtype)
+
+    def default_image_component_type(self, vtype):
+        base_type = self.resource_base_type(vtype)
+        if base_type.startswith("iimage"):
+            return "int"
+        if base_type.startswith("uimage"):
+            return "uint"
+        return "float"
+
+    def is_resource_memory_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {
+            "coherent",
+            "globallycoherent",
+            "restrict",
+            "volatile",
+        }
 
     def resource_base_type(self, vtype):
         if vtype is None:
@@ -2575,6 +2943,270 @@ class MetalCodeGen:
             base_type, _ = parse_array_type(vtype)
             return base_type
         return vtype
+
+    def glsl_buffer_block_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() == "glsl_buffer_block":
+                return attr
+        return None
+
+    def glsl_buffer_block_layout(self, node):
+        attr = self.glsl_buffer_block_attribute(node)
+        arguments = getattr(attr, "arguments", []) if attr is not None else []
+        if arguments:
+            layout = self.attribute_value_to_string(arguments[0])
+            if layout:
+                return layout
+        return "std430"
+
+    def is_glsl_buffer_block_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        return bool(attr_name and str(attr_name).lower() == "glsl_buffer_block")
+
+    def is_glsl_buffer_block_variable(self, node, vtype=None):
+        if self.glsl_buffer_block_attribute(node) is None:
+            return False
+        type_name = self.resource_base_type(vtype or getattr(node, "var_type", None))
+        return str(type_name) in self.structs_by_name
+
+    def collect_glsl_buffer_block_struct_names(self, global_vars):
+        names = set()
+        for node in global_vars:
+            if not self.is_glsl_buffer_block_variable(node):
+                continue
+            type_name = self.resource_base_type(getattr(node, "var_type", None))
+            names.add(str(type_name))
+        return names
+
+    def glsl_buffer_block_lowering_failure_detail(self, type_name, var_name=None):
+        if var_name:
+            reason = self.glsl_buffer_block_lowering_failures.get(var_name)
+            if reason:
+                return reason
+        type_name = str(self.resource_base_type(type_name))
+        return self.glsl_buffer_block_struct_lowering_failures.get(type_name)
+
+    def glsl_buffer_block_member_access(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+        var_name = self.expression_name(object_expr)
+        if not var_name:
+            return None
+        block = self.lowered_glsl_buffer_blocks.get(var_name)
+        if block is None:
+            return None
+        member_name = getattr(expr, "member", None)
+        member = block["members"].get(member_name)
+        if member is None:
+            return None
+        return {
+            "buffer": var_name,
+            "member": member_name,
+            "readonly": block["readonly"],
+            **member,
+        }
+
+    def glsl_buffer_block_array_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        member = self.glsl_buffer_block_member_access(array_expr)
+        if member is None or not member.get("is_array"):
+            return None
+        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
+        index = self.generate_expression(index_expr)
+        offset = byte_offset_expression(member["offset"], index, member["stride"])
+        return {**member, "offset_expr": offset}
+
+    def metal_scalar_load(self, component_type, buffer_name, offset):
+        return (
+            f"(*reinterpret_cast<const device {component_type}*>"
+            f"({buffer_name} + {offset}))"
+        )
+
+    def metal_scalar_store(self, component_type, buffer_name, offset, value):
+        return (
+            f"(*reinterpret_cast<device {component_type}*>"
+            f"({buffer_name} + {offset})) = {value}"
+        )
+
+    def metal_buffer_load(self, buffer_name, offset, access):
+        if access.get("matrix_columns"):
+            columns = []
+            for _, column_offset in matrix_column_offsets(
+                offset, access["matrix_columns"], access["column_stride"]
+            ):
+                column_access = {
+                    "components": access["matrix_rows"],
+                    "component_type": "float",
+                    "metal_type": f"float{access['matrix_rows']}",
+                }
+                columns.append(
+                    self.metal_buffer_load(buffer_name, column_offset, column_access)
+                )
+            return f"{access['metal_type']}({', '.join(columns)})"
+
+        if access["components"] == 1:
+            return self.metal_scalar_load(access["component_type"], buffer_name, offset)
+
+        values = []
+        for _, component_offset in vector_component_offsets(
+            offset, access["components"]
+        ):
+            values.append(
+                self.metal_scalar_load(
+                    access["component_type"], buffer_name, component_offset
+                )
+            )
+        return f"{access['metal_type']}({', '.join(values)})"
+
+    def next_metal_temp_variable(self, prefix):
+        name = f"__crossgl_{prefix}_{self.metal_temp_variable_index}"
+        self.metal_temp_variable_index += 1
+        return name
+
+    def metal_buffer_store(self, buffer_name, offset, value, access):
+        if access.get("matrix_columns"):
+            return self.metal_matrix_store(buffer_name, offset, value, access)
+
+        if access["components"] == 1:
+            return self.metal_scalar_store(
+                access["component_type"], buffer_name, offset, value
+            )
+
+        temp_name = self.next_metal_temp_variable("buffer_store")
+        lines = [f"{access['metal_type']} {temp_name} = {value}"]
+        for component, component_offset in vector_component_offsets(
+            offset, access["components"]
+        ):
+            field = "xyzw"[component]
+            lines.append(
+                self.metal_scalar_store(
+                    access["component_type"],
+                    buffer_name,
+                    component_offset,
+                    f"{temp_name}.{field}",
+                )
+            )
+        return "\n".join(lines)
+
+    def metal_matrix_store(self, buffer_name, offset, value, access):
+        temp_name = self.next_metal_temp_variable("matrix_store")
+        lines = [f"{access['metal_type']} {temp_name} = {value}"]
+        for column, column_offset in matrix_column_offsets(
+            offset, access["matrix_columns"], access["column_stride"]
+        ):
+            for row, element_offset in vector_component_offsets(
+                column_offset, access["matrix_rows"]
+            ):
+                field = "xyzw"[row]
+                lines.append(
+                    self.metal_scalar_store(
+                        "float",
+                        buffer_name,
+                        element_offset,
+                        f"{temp_name}[{column}].{field}",
+                    )
+                )
+        return "\n".join(lines)
+
+    def metal_matrix_compound_store(self, buffer_name, offset, value, op, access):
+        compound_ops = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+        }
+        binary_op = compound_ops.get(op)
+        if binary_op is None:
+            return (
+                "/* unsupported Metal GLSL buffer block matrix compound store: "
+                "requires explicit matrix operation lowering */"
+            )
+
+        current = self.metal_buffer_load(buffer_name, offset, access)
+        rhs = f"({current} {binary_op} {value})"
+        return self.metal_matrix_store(buffer_name, offset, rhs, access)
+
+    def metal_buffer_compound_store_diagnostic(self, op, access):
+        return (
+            "/* unsupported Metal GLSL buffer block compound store: "
+            f"operator {op} is not supported for "
+            f"{access['component_type']} buffer members */"
+        )
+
+    def generate_glsl_buffer_block_member_load(self, expr):
+        access = self.glsl_buffer_block_member_access(expr)
+        if access is None or access.get("is_array"):
+            return None
+        return self.metal_buffer_load(access["buffer"], access["offset"], access)
+
+    def generate_glsl_buffer_block_array_load(self, expr):
+        access = self.glsl_buffer_block_array_access(expr)
+        if access is None:
+            return None
+        return self.metal_buffer_load(access["buffer"], access["offset_expr"], access)
+
+    def generate_glsl_buffer_block_store(self, target, rhs, op):
+        access = self.glsl_buffer_block_array_access(target)
+        if access is None:
+            access = self.glsl_buffer_block_member_access(target)
+            if access is None or access.get("is_array"):
+                return None
+            offset = access["offset"]
+        else:
+            offset = access["offset_expr"]
+
+        if access.get("readonly"):
+            return (
+                "/* unsupported Metal GLSL buffer block store: "
+                "readonly device buffer cannot be written */"
+            )
+
+        if access.get("matrix_columns"):
+            if op != "=":
+                return self.metal_matrix_compound_store(
+                    access["buffer"], offset, rhs, op, access
+                )
+            return self.metal_matrix_store(access["buffer"], offset, rhs, access)
+
+        if op != "=":
+            binary_op = glsl_buffer_compound_binary_operator(
+                op, access["component_type"]
+            )
+            if binary_op is None:
+                return self.metal_buffer_compound_store_diagnostic(op, access)
+            current = self.metal_buffer_load(access["buffer"], offset, access)
+            rhs = f"({current} {binary_op} {rhs})"
+
+        return self.metal_buffer_store(access["buffer"], offset, rhs, access)
+
+    def glsl_buffer_block_diagnostic(self, target, type_name, var_name=None, node=None):
+        declaration = str(self.resource_base_type(type_name))
+        if var_name:
+            declaration += f" {var_name}"
+        details = ""
+        if node is not None:
+            layout = self.glsl_buffer_block_layout(node)
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            details = f" ({layout}"
+            if binding is not None:
+                details += f", binding = {binding}"
+            details += ")"
+        failure_detail = self.glsl_buffer_block_lowering_failure_detail(
+            type_name, var_name
+        )
+        if failure_detail:
+            details += f"; {failure_detail}"
+        return (
+            f"// unsupported {target} GLSL buffer block {declaration}{details}: "
+            "mixed metadata/runtime-array layout requires explicit pointer/offset "
+            "lowering\n"
+        )
 
     def resource_array_count(self, size):
         if size is None:
@@ -2591,7 +3223,8 @@ class MetalCodeGen:
         if hasattr(expr, "name") and isinstance(expr.name, str):
             return expr.name
         if isinstance(expr, ArrayAccessNode):
-            return self.expression_name(expr.array)
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            return self.expression_name(array_expr)
         return None
 
     def texture_sampler_expression(self, texture_name):
@@ -2678,6 +3311,73 @@ class MetalCodeGen:
             f"Metal image operation '{func_name}' requires a storage "
             f"image resource argument: {texture_name}"
         )
+
+    def validate_image_access_argument(self, func_name, args):
+        if not args or func_name not in IMAGE_RESOURCE_INTRINSIC_NAMES:
+            return
+        access = self.storage_image_access_mode(
+            self.texture_argument_resource_type(args[0])
+        )
+        if access is None:
+            return
+        texture_name = expression_debug_name(args[0])
+        if func_name == "imageLoad" and access == "write":
+            raise ValueError(
+                f"Metal image operation '{func_name}' requires read-capable "
+                f"storage image access for {texture_name}: got access::write"
+            )
+        if func_name == "imageStore" and access == "read":
+            raise ValueError(
+                f"Metal image operation '{func_name}' requires write-capable "
+                f"storage image access for {texture_name}: got access::read"
+            )
+        if (
+            func_name
+            in {
+                "imageAtomicAdd",
+                "imageAtomicMin",
+                "imageAtomicMax",
+                "imageAtomicAnd",
+                "imageAtomicOr",
+                "imageAtomicXor",
+                "imageAtomicExchange",
+                "imageAtomicCompSwap",
+            }
+            and access != "read_write"
+        ):
+            raise ValueError(
+                f"Metal image operation '{func_name}' requires read_write "
+                f"storage image access for {texture_name}: got access::{access}"
+            )
+
+    def image_access_requirement_label(self, required_access):
+        return {
+            "read": "read-capable",
+            "write": "write-capable",
+            "read_write": "read_write",
+        }.get(required_access, str(required_access))
+
+    def validate_function_image_access_arguments(self, func_name, args):
+        callee_requirements = self.function_image_access_requirements.get(func_name)
+        if not callee_requirements:
+            return
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+            actual_access = self.storage_image_access_mode(
+                self.texture_argument_resource_type(args[index])
+            )
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+            actual_name = expression_debug_name(args[index])
+            required_label = self.image_access_requirement_label(required_access)
+            raise ValueError(
+                f"Metal function call '{func_name}' requires {required_label} "
+                f"storage image access for argument {actual_name} passed to "
+                f"parameter {param_name}: got access::{actual_access}"
+            )
 
     def validate_integer_coordinate_argument(self, func_name, args):
         if func_name not in INTEGER_COORDINATE_INTRINSIC_NAMES or len(args) < 2:
@@ -3055,6 +3755,7 @@ class MetalCodeGen:
 
     def is_array_texture_resource(self, texture_type):
         return texture_type in {
+            "texture1d_array<float>",
             "texture2d_array<float>",
             "depth2d_array<float>",
             "texturecube_array<float>",
@@ -3069,11 +3770,17 @@ class MetalCodeGen:
 
     def is_storage_image_resource(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            texture_type.startswith("texture2d<")
-            or texture_type.startswith("texture3d<")
-            or texture_type.startswith("texture2d_array<")
-        ) and "access::read_write" in texture_type
+        return is_metal_storage_image_resource(texture_type)
+
+    def storage_image_access_mode(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if "access::read_write>" in texture_type:
+            return "read_write"
+        if "access::read>" in texture_type:
+            return "read"
+        if "access::write>" in texture_type:
+            return "write"
+        return None
 
     def vector_component(self, expression, component):
         if all(char.isalnum() or char in "_.[]" for char in expression):
@@ -3091,6 +3798,10 @@ class MetalCodeGen:
         return coord_xyz, layer
 
     def texture_coordinate_parts(self, texture_type, coord):
+        if texture_type == "texture1d_array<float>":
+            coord_x = self.vector_component(coord, "x")
+            layer = f"uint({self.vector_component(coord, 'y')})"
+            return coord_x, layer
         if texture_type in {"texturecube_array<float>", "depthcube_array<float>"}:
             return self.cube_array_texture_coordinate_parts(coord)
         return self.array_texture_coordinate_parts(coord)
@@ -3107,20 +3818,36 @@ class MetalCodeGen:
             return f"gradient3d({ddx}, {ddy})"
         return f"gradient2d({ddx}, {ddy})"
 
-    def texture_gather_supports_offset(self, texture_type):
-        return texture_type in {"texture2d<float>", "texture2d_array<float>"}
-
-    def texture_gather_supported(self, texture_type):
-        return texture_type in {
-            "texture2d<float>",
-            "texture2d_array<float>",
-            "texturecube<float>",
-            "texturecube_array<float>",
+    def texture_sampling_capabilities(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        color_offset_types = {"texture2d<float>", "texture2d_array<float>"}
+        depth_offset_types = {"depth2d<float>", "depth2d_array<float>"}
+        return {
+            "texture_type": texture_type,
+            "gather": (
+                texture_type
+                in {
+                    "texture2d<float>",
+                    "texture2d_array<float>",
+                    "texturecube<float>",
+                    "texturecube_array<float>",
+                }
+            ),
+            "gather_offset": texture_type in color_offset_types,
+            "sample_offset": texture_type in color_offset_types,
+            "projected_offset": texture_type in color_offset_types,
+            "compare_offset": texture_type in depth_offset_types,
+            "gather_compare_offset": texture_type in depth_offset_types,
         }
 
+    def texture_gather_supports_offset(self, texture_type):
+        return self.texture_sampling_capabilities(texture_type)["gather_offset"]
+
+    def texture_gather_supported(self, texture_type):
+        return self.texture_sampling_capabilities(texture_type)["gather"]
+
     def texture_sample_supports_offset(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        return texture_type in {"texture2d<float>", "texture2d_array<float>"}
+        return self.texture_sampling_capabilities(texture_type)["sample_offset"]
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         return (
@@ -3226,8 +3953,7 @@ class MetalCodeGen:
         return projected_coord
 
     def projected_texture_offset_supported(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        return texture_type in {"texture2d<float>", "texture2d_array<float>"}
+        return self.texture_sampling_capabilities(texture_type)["projected_offset"]
 
     def generate_texture_projected_call(
         self,
@@ -3633,7 +4359,7 @@ class MetalCodeGen:
         )
 
     def texture_compare_offset_supported(self, texture_type):
-        return texture_type in {"depth2d<float>", "depth2d_array<float>"}
+        return self.texture_sampling_capabilities(texture_type)["compare_offset"]
 
     def unsupported_texture_compare_call(self, func_name, reason):
         return f"/* unsupported Metal texture compare: {func_name} {reason} */ 0.0"
@@ -3864,7 +4590,7 @@ class MetalCodeGen:
         )
 
     def texture_gather_compare_offset_supported(self, texture_type):
-        return texture_type in {"depth2d<float>", "depth2d_array<float>"}
+        return self.texture_sampling_capabilities(texture_type)["gather_compare_offset"]
 
     def unsupported_texture_gather_compare_call(self, func_name, reason):
         return (
@@ -3907,89 +4633,213 @@ class MetalCodeGen:
         args = [sampler_arg] + coord_args + [compare, offset]
         return f"{texture_name}.gather_compare({', '.join(args)})"
 
+    def texture_query_resource_descriptor(self, texture_arg):
+        texture_type = self.texture_resource_type(texture_arg)
+        return {
+            "texture_type": texture_type,
+            "storage_image": self.is_storage_image_resource(texture_type),
+            "multisample": self.is_multisample_texture_resource(texture_type),
+            "size_descriptor": self.texture_query_size_descriptor(texture_type),
+        }
+
     def texture_query_size_expression(self, texture_arg, lod_arg=None):
         texture_name = self.generate_expression(texture_arg)
-        texture_type = self.texture_resource_type(texture_arg)
+        query_descriptor = self.texture_query_resource_descriptor(texture_arg)
+        size_descriptor = query_descriptor["size_descriptor"]
+        if size_descriptor is None:
+            return None
+
         lod = self.generate_expression(lod_arg) if lod_arg is not None else "0"
         lod_arg_string = f"uint({lod})"
+        return self.texture_query_size_descriptor_expression(
+            texture_name, size_descriptor, lod_arg_string
+        )
 
+    def texture_query_size_descriptor_expression(
+        self, texture_name, descriptor, lod_arg_string
+    ):
+        dimension_expressions = [
+            self.texture_query_size_dimension_expression(
+                texture_name, method, use_lod, lod_arg_string
+            )
+            for method, use_lod in descriptor["dimensions"]
+        ]
+        if descriptor["return_type"] == "int":
+            return f"int({dimension_expressions[0]})"
+        return f"{descriptor['return_type']}({', '.join(dimension_expressions)})"
+
+    def texture_query_size_dimension_expression(
+        self, texture_name, method, use_lod, lod_arg_string
+    ):
+        args = lod_arg_string if use_lod else ""
+        return f"{texture_name}.{method}({args})"
+
+    def texture_query_size_descriptor(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
         if self.is_storage_image_resource(texture_type):
-            texture_type = self.resource_base_type(texture_type)
-            if texture_type.startswith("texture2d_array<"):
-                return (
-                    f"int3({texture_name}.get_width(), "
-                    f"{texture_name}.get_height(), "
-                    f"{texture_name}.get_array_size())"
-                )
-            if texture_type.startswith("texture3d<"):
-                return (
-                    f"int3({texture_name}.get_width(), "
-                    f"{texture_name}.get_height(), "
-                    f"{texture_name}.get_depth())"
-                )
-            return f"int2({texture_name}.get_width(), " f"{texture_name}.get_height())"
+            return self.storage_image_size_descriptor(texture_type)
+        return self.sampled_texture_size_descriptor(texture_type)
 
-        if texture_type in {"texture1d<float>"}:
-            return f"int({texture_name}.get_width({lod_arg_string}))"
-        if texture_type in {
-            "texture2d<float>",
-            "depth2d<float>",
-            "texturecube<float>",
-            "depthcube<float>",
-        }:
-            return (
-                f"int2({texture_name}.get_width({lod_arg_string}), "
-                f"{texture_name}.get_height({lod_arg_string}))"
-            )
-        if texture_type in {
-            "texture2d_array<float>",
-            "depth2d_array<float>",
-            "texturecube_array<float>",
-            "depthcube_array<float>",
-        }:
-            return (
-                f"int3({texture_name}.get_width({lod_arg_string}), "
-                f"{texture_name}.get_height({lod_arg_string}), "
-                f"{texture_name}.get_array_size())"
-            )
-        if texture_type in {"texture3d<float>"}:
-            return (
-                f"int3({texture_name}.get_width({lod_arg_string}), "
-                f"{texture_name}.get_height({lod_arg_string}), "
-                f"{texture_name}.get_depth({lod_arg_string}))"
-            )
-        if texture_type == "texture2d_ms<float>":
-            return f"int2({texture_name}.get_width(), {texture_name}.get_height())"
-        if texture_type == "texture2d_ms_array<float>":
-            return (
-                f"int3({texture_name}.get_width(), {texture_name}.get_height(), "
-                f"{texture_name}.get_array_size())"
-            )
-        return None
+    def storage_image_size_descriptor(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("texture1d_array<"):
+            return {
+                "return_type": "int2",
+                "dimensions": (("get_width", False), ("get_array_size", False)),
+            }
+        if texture_type.startswith("texture1d<"):
+            return {
+                "return_type": "int",
+                "dimensions": (("get_width", False),),
+            }
+        if texture_type.startswith("texture2d_array<"):
+            return {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", False),
+                    ("get_height", False),
+                    ("get_array_size", False),
+                ),
+            }
+        if texture_type.startswith("texture3d<"):
+            return {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", False),
+                    ("get_height", False),
+                    ("get_depth", False),
+                ),
+            }
+        return {
+            "return_type": "int2",
+            "dimensions": (("get_width", False), ("get_height", False)),
+        }
+
+    def sampled_texture_size_descriptor(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        descriptors = {
+            "texture1d<float>": {
+                "return_type": "int",
+                "dimensions": (("get_width", True),),
+            },
+            "texture1d_array<float>": {
+                "return_type": "int2",
+                "dimensions": (("get_width", True), ("get_array_size", False)),
+            },
+            "texture2d<float>": {
+                "return_type": "int2",
+                "dimensions": (("get_width", True), ("get_height", True)),
+            },
+            "depth2d<float>": {
+                "return_type": "int2",
+                "dimensions": (("get_width", True), ("get_height", True)),
+            },
+            "texturecube<float>": {
+                "return_type": "int2",
+                "dimensions": (("get_width", True), ("get_height", True)),
+            },
+            "depthcube<float>": {
+                "return_type": "int2",
+                "dimensions": (("get_width", True), ("get_height", True)),
+            },
+            "texture2d_array<float>": {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", True),
+                    ("get_height", True),
+                    ("get_array_size", False),
+                ),
+            },
+            "depth2d_array<float>": {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", True),
+                    ("get_height", True),
+                    ("get_array_size", False),
+                ),
+            },
+            "texturecube_array<float>": {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", True),
+                    ("get_height", True),
+                    ("get_array_size", False),
+                ),
+            },
+            "depthcube_array<float>": {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", True),
+                    ("get_height", True),
+                    ("get_array_size", False),
+                ),
+            },
+            "texture3d<float>": {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", True),
+                    ("get_height", True),
+                    ("get_depth", True),
+                ),
+            },
+            "texture2d_ms<float>": {
+                "return_type": "int2",
+                "dimensions": (("get_width", False), ("get_height", False)),
+            },
+            "texture2d_ms_array<float>": {
+                "return_type": "int3",
+                "dimensions": (
+                    ("get_width", False),
+                    ("get_height", False),
+                    ("get_array_size", False),
+                ),
+            },
+        }
+        return descriptors.get(texture_type)
 
     def texture_query_levels_expression(self, texture_arg):
         texture_name = self.generate_expression(texture_arg)
-        texture_type = self.texture_resource_type(texture_arg)
-        if self.is_storage_image_resource(texture_type):
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        texture_type = descriptor["texture_type"]
+        if descriptor["storage_image"]:
             return self.unsupported_texture_query_levels_call(texture_type)
-        if self.is_multisample_texture_resource(texture_type):
+        if descriptor["multisample"]:
             return "1"
         return f"int({texture_name}.get_num_mip_levels())"
 
     def texture_samples_expression(self, texture_arg):
         texture_name = self.generate_expression(texture_arg)
-        texture_type = self.texture_resource_type(texture_arg)
-        if not self.is_multisample_texture_resource(texture_type):
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        if not descriptor["multisample"]:
             return "/* unsupported Metal texture samples query: requires multisample texture */ 0"
         return f"int({texture_name}.get_num_samples())"
 
     def image_coordinate_expression(self, image_type, coord):
+        image_type = self.storage_image_access_agnostic_type(image_type)
+        if image_type in {
+            "texture1d_array<float, access::read_write>",
+            "texture1d_array<int, access::read_write>",
+            "texture1d_array<uint, access::read_write>",
+        }:
+            coord_x = self.unsigned_coordinate_expression(
+                self.vector_component(coord, "x"), 1
+            )
+            layer = f"uint({self.vector_component(coord, 'y')})"
+            return coord_x, layer
+        if image_type in {
+            "texture1d<float, access::read_write>",
+            "texture1d<int, access::read_write>",
+            "texture1d<uint, access::read_write>",
+        }:
+            return self.unsigned_coordinate_expression(coord, 1), None
         if image_type in {
             "texture2d_array<float, access::read_write>",
             "texture2d_array<int, access::read_write>",
             "texture2d_array<uint, access::read_write>",
         }:
-            coord_xy = f"uint2({self.vector_component(coord, 'xy')})"
+            coord_xy = self.unsigned_coordinate_expression(
+                self.vector_component(coord, "xy"), 2
+            )
             layer = f"uint({self.vector_component(coord, 'z')})"
             return coord_xy, layer
         if image_type in {
@@ -3997,50 +4847,29 @@ class MetalCodeGen:
             "texture3d<int, access::read_write>",
             "texture3d<uint, access::read_write>",
         }:
-            return f"uint3({coord})", None
-        return f"uint2({coord})", None
+            return self.unsigned_coordinate_expression(coord, 3), None
+        return self.unsigned_coordinate_expression(coord, 2), None
+
+    def unsigned_coordinate_expression(self, coord, dimensions):
+        constructor = "uint" if dimensions == 1 else f"uint{dimensions}"
+        coord_text = str(coord).strip()
+        if coord_text.startswith(f"{constructor}("):
+            return coord_text
+        return f"{constructor}({coord_text})"
+
+    def storage_image_access_agnostic_type(self, image_type):
+        image_type = self.resource_base_type(image_type)
+        return metal_storage_image_access_agnostic_type(image_type)
 
     def is_integer_image_type(self, image_type):
-        return image_type in {
-            "texture2d<int, access::read_write>",
-            "texture3d<int, access::read_write>",
-            "texture2d_array<int, access::read_write>",
-            "texture2d<uint, access::read_write>",
-            "texture3d<uint, access::read_write>",
-            "texture2d_array<uint, access::read_write>",
-        }
+        image_type = self.storage_image_access_agnostic_type(image_type)
+        return is_metal_integer_image_type(image_type)
 
     def is_scalar_image_format(self, image_format):
-        return image_format in {
-            "r8",
-            "r8_snorm",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r32f",
-            "r8i",
-            "r16i",
-            "r32i",
-            "r8ui",
-            "r16ui",
-            "r32ui",
-        }
+        return is_scalar_image_format(image_format)
 
     def is_two_component_image_format(self, image_format):
-        return image_format in {
-            "rg8",
-            "rg8_snorm",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg8i",
-            "rg16i",
-            "rg8ui",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-        }
+        return is_two_component_image_format(image_format)
 
     def is_scalar_integer_image_resource(self, image_type, image_format):
         if image_format is not None:
@@ -4048,49 +4877,53 @@ class MetalCodeGen:
         return self.is_integer_image_type(image_type)
 
     def is_float_image_resource(self, image_type):
-        return image_type in {
-            "texture2d<float, access::read_write>",
-            "texture3d<float, access::read_write>",
-            "texture2d_array<float, access::read_write>",
+        image_type = self.storage_image_access_agnostic_type(image_type)
+        return is_metal_float_image_resource(image_type)
+
+    def image_store_constructors_by_kind(self):
+        return {
+            "float": "float4",
+            "int": "int4",
+            "uint": "uint4",
+        }
+
+    def image_store_zero_values_by_kind(self):
+        return {
+            "float": "0.0",
+            "int": "0",
+            "uint": "0u",
         }
 
     def image_load_component_suffix(self, image_type, image_format):
-        if self.is_scalar_integer_image_resource(image_type, image_format):
-            return ".x"
-        if self.is_float_image_resource(image_type) and self.is_scalar_value_type(
-            self.current_expression_expected_type
-        ):
-            return ".x"
-        if self.is_two_component_image_format(image_format):
-            if self.is_scalar_value_type(self.current_expression_expected_type):
-                return ".x"
-            return ".xy"
-        return ""
+        return storage_image_load_component_suffix(
+            image_format,
+            expected_scalar=self.is_scalar_value_type(
+                self.current_expression_expected_type
+            ),
+            scalar_integer_resource=self.is_scalar_integer_image_resource(
+                image_type, image_format
+            ),
+            float_resource=self.is_float_image_resource(image_type),
+        )
 
     def image_format_store_constructor(self, image_format):
-        return {
-            "r8": "float4",
-            "r8_snorm": "float4",
-            "r16": "float4",
-            "r16_snorm": "float4",
-            "r16f": "float4",
-            "r32f": "float4",
-            "r8i": "int4",
-            "r16i": "int4",
-            "r32i": "int4",
-            "r8ui": "uint4",
-            "r16ui": "uint4",
-            "r32ui": "uint4",
-        }.get(image_format)
+        return storage_image_format_store_constructor(
+            image_format, self.image_store_constructors_by_kind()
+        )
 
     def integer_image_store_constructor(self, image_type):
+        image_type = self.storage_image_access_agnostic_type(image_type)
         if image_type in {
+            "texture1d<int, access::read_write>",
+            "texture1d_array<int, access::read_write>",
             "texture2d<int, access::read_write>",
             "texture3d<int, access::read_write>",
             "texture2d_array<int, access::read_write>",
         }:
             return "int4"
         if image_type in {
+            "texture1d<uint, access::read_write>",
+            "texture1d_array<uint, access::read_write>",
             "texture2d<uint, access::read_write>",
             "texture3d<uint, access::read_write>",
             "texture2d_array<uint, access::read_write>",
@@ -4101,49 +4934,30 @@ class MetalCodeGen:
     def two_component_image_store_expression(
         self, image_format, value, value_type=None
     ):
-        constructors = {
-            "rg8": ("float4", "0.0"),
-            "rg8_snorm": ("float4", "0.0"),
-            "rg16": ("float4", "0.0"),
-            "rg16_snorm": ("float4", "0.0"),
-            "rg16f": ("float4", "0.0"),
-            "rg8i": ("int4", "0"),
-            "rg16i": ("int4", "0"),
-            "rg8ui": ("uint4", "0u"),
-            "rg16ui": ("uint4", "0u"),
-            "rg32f": ("float4", "0.0"),
-            "rg32i": ("int4", "0"),
-            "rg32ui": ("uint4", "0u"),
-        }
-        constructor = constructors.get(image_format)
-        if constructor is None:
-            return None
-        type_name, zero_value = constructor
-        if self.is_scalar_value_type(value_type):
-            return f"{type_name}({value}, {zero_value}, {zero_value}, {zero_value})"
-        return f"{type_name}({value}, {zero_value}, {zero_value})"
+        return storage_image_two_component_store_expression(
+            image_format,
+            value,
+            self.is_scalar_value_type(value_type),
+            self.image_store_constructors_by_kind(),
+            self.image_store_zero_values_by_kind(),
+        )
 
     def image_store_value_expression(
         self, image_type, image_format, value, value_type=None
     ):
-        two_component_value = self.two_component_image_store_expression(
-            image_format, value, value_type
+        return storage_image_store_value_expression(
+            image_format,
+            value,
+            self.is_scalar_value_type(value_type),
+            scalar_integer_resource=self.is_scalar_integer_image_resource(
+                image_type, image_format
+            ),
+            float_resource=self.is_float_image_resource(image_type),
+            integer_constructor=self.integer_image_store_constructor(image_type),
+            float_constructor="float4",
+            constructors_by_kind=self.image_store_constructors_by_kind(),
+            zero_values_by_kind=self.image_store_zero_values_by_kind(),
         )
-        if two_component_value is not None:
-            return two_component_value
-
-        constructor = None
-        if self.is_scalar_integer_image_resource(image_type, image_format):
-            constructor = self.integer_image_store_constructor(image_type)
-            if constructor is None:
-                constructor = self.image_format_store_constructor(image_format)
-        elif self.is_float_image_resource(image_type) and self.is_scalar_value_type(
-            value_type
-        ):
-            constructor = "float4"
-        if constructor:
-            return f"{constructor}({value})"
-        return value
 
     def image_atomic_method(self, func_name):
         return {
@@ -4156,82 +4970,81 @@ class MetalCodeGen:
             "imageAtomicExchange": "atomic_exchange",
         }.get(func_name)
 
-    def image_atomic_compare_helper_name(self, texture_type):
-        suffixes = {
-            "texture2d<int, access::read_write>": "iimage2D",
-            "texture2d<uint, access::read_write>": "uimage2D",
-            "texture3d<int, access::read_write>": "iimage3D",
-            "texture3d<uint, access::read_write>": "uimage3D",
-            "texture2d_array<int, access::read_write>": "iimage2DArray",
-            "texture2d_array<uint, access::read_write>": "uimage2DArray",
-        }
-        suffix = suffixes.get(texture_type)
-        if not suffix:
+    def image_atomic_compare_descriptor(self, texture_type):
+        texture_type = self.storage_image_access_agnostic_type(texture_type)
+        component_type = metal_storage_image_component_type(texture_type)
+        if component_type not in {"int", "uint"} or "<" not in texture_type:
             return None
-        return f"imageAtomicCompSwap_{suffix}"
+
+        texture_family = texture_type.split("<", 1)[0]
+        suffix_family = {
+            "texture1d": "image1D",
+            "texture1d_array": "image1DArray",
+            "texture2d": "image2D",
+            "texture3d": "image3D",
+            "texture2d_array": "image2DArray",
+        }.get(texture_family)
+        coordinate_type = {
+            "texture1d": "int",
+            "texture1d_array": "int2",
+            "texture2d": "int2",
+            "texture3d": "int3",
+            "texture2d_array": "int3",
+        }.get(texture_family)
+        exchange_expression = {
+            "texture1d": (
+                "image.atomic_compare_exchange_weak(uint(coord), &original, value)"
+            ),
+            "texture1d_array": (
+                "image.atomic_compare_exchange_weak(uint(coord.x), uint(coord.y), &original, value)"
+            ),
+            "texture2d": (
+                "image.atomic_compare_exchange_weak(uint2(coord), &original, value)"
+            ),
+            "texture3d": (
+                "image.atomic_compare_exchange_weak(uint3(coord), &original, value)"
+            ),
+            "texture2d_array": (
+                "image.atomic_compare_exchange_weak(uint2(coord.xy), uint(coord.z), &original, value)"
+            ),
+        }.get(texture_family)
+        if (
+            suffix_family is None
+            or coordinate_type is None
+            or exchange_expression is None
+        ):
+            return None
+
+        return {
+            "helper_name": (
+                f"imageAtomicCompSwap_"
+                f"{'i' if component_type == 'int' else 'u'}{suffix_family}"
+            ),
+            "return_type": component_type,
+            "vector_type": f"{component_type}4",
+            "coord_type": coordinate_type,
+            "exchange_expr": exchange_expression,
+        }
+
+    def image_atomic_compare_helper_name(self, texture_type):
+        descriptor = self.image_atomic_compare_descriptor(texture_type)
+        return descriptor["helper_name"] if descriptor else None
 
     def image_atomic_compare_return_type(self, texture_type):
-        if texture_type in {
-            "texture2d<int, access::read_write>",
-            "texture3d<int, access::read_write>",
-            "texture2d_array<int, access::read_write>",
-        }:
-            return "int"
-        if texture_type in {
-            "texture2d<uint, access::read_write>",
-            "texture3d<uint, access::read_write>",
-            "texture2d_array<uint, access::read_write>",
-        }:
-            return "uint"
-        return None
+        descriptor = self.image_atomic_compare_descriptor(texture_type)
+        return descriptor["return_type"] if descriptor else None
 
     def image_atomic_compare_vector_type(self, texture_type):
-        if texture_type in {
-            "texture2d<int, access::read_write>",
-            "texture3d<int, access::read_write>",
-            "texture2d_array<int, access::read_write>",
-        }:
-            return "int4"
-        if texture_type in {
-            "texture2d<uint, access::read_write>",
-            "texture3d<uint, access::read_write>",
-            "texture2d_array<uint, access::read_write>",
-        }:
-            return "uint4"
-        return None
+        descriptor = self.image_atomic_compare_descriptor(texture_type)
+        return descriptor["vector_type"] if descriptor else None
 
     def image_atomic_compare_coord_type(self, texture_type):
-        if texture_type in {
-            "texture2d<int, access::read_write>",
-            "texture2d<uint, access::read_write>",
-        }:
-            return "int2"
-        if texture_type in {
-            "texture3d<int, access::read_write>",
-            "texture3d<uint, access::read_write>",
-            "texture2d_array<int, access::read_write>",
-            "texture2d_array<uint, access::read_write>",
-        }:
-            return "int3"
-        return None
+        descriptor = self.image_atomic_compare_descriptor(texture_type)
+        return descriptor["coord_type"] if descriptor else None
 
     def image_atomic_compare_exchange_expression(self, texture_type):
-        if texture_type in {
-            "texture2d<int, access::read_write>",
-            "texture2d<uint, access::read_write>",
-        }:
-            return "image.atomic_compare_exchange_weak(uint2(coord), &original, value)"
-        if texture_type in {
-            "texture3d<int, access::read_write>",
-            "texture3d<uint, access::read_write>",
-        }:
-            return "image.atomic_compare_exchange_weak(uint3(coord), &original, value)"
-        if texture_type in {
-            "texture2d_array<int, access::read_write>",
-            "texture2d_array<uint, access::read_write>",
-        }:
-            return "image.atomic_compare_exchange_weak(uint2(coord.xy), uint(coord.z), &original, value)"
-        return None
+        descriptor = self.image_atomic_compare_descriptor(texture_type)
+        return descriptor["exchange_expr"] if descriptor else None
 
     def generate_image_atomic_compare_helpers(self):
         if not self.required_image_atomic_compare_helpers:
@@ -4323,6 +5136,7 @@ class MetalCodeGen:
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)
+        self.validate_image_access_argument(func_name, args)
         self.validate_texture_resource_argument(func_name, args)
         self.validate_integer_coordinate_argument(func_name, args)
         self.validate_coordinate_dimension_argument(func_name, args)
@@ -4505,6 +5319,12 @@ class MetalCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        generic_args = getattr(type_node, "generic_args", [])
+        if hasattr(type_node, "name") and generic_args:
+            args = ", ".join(
+                self.convert_type_node_to_string(arg) for arg in generic_args
+            )
+            return f"{type_node.name}<{args}>"
         if hasattr(type_node, "name"):
             return type_node.name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):

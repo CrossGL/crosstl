@@ -379,7 +379,7 @@ class SwitchNode(ASTNode):
     def __init__(self, expression, cases, default_case=None, default=None):
         self.expression = expression
         self.cases = cases
-        self.default_case = default_case or default
+        self.default_case = default_case if default_case is not None else default
         self.default = self.default_case
 
     def __repr__(self):

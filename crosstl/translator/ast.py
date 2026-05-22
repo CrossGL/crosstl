@@ -637,6 +637,18 @@ class WhileNode(StatementNode):
         return f"WhileNode(condition={self.condition})"
 
 
+class DoWhileNode(StatementNode):
+    """Do-while loop statements."""
+
+    def __init__(self, body: StatementNode, condition: "ExpressionNode", **kwargs):
+        super().__init__(**kwargs)
+        self.body = body
+        self.condition = condition
+
+    def __repr__(self):
+        return f"DoWhileNode(condition={self.condition})"
+
+
 class LoopNode(StatementNode):
     """Infinite loop (Rust style)."""
 

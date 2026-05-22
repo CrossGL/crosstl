@@ -36,6 +36,120 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_structured_buffer_operations_lower_to_device_buffer():
+    code = """
+    shader StructuredBufferMetal {
+        RWStructuredBuffer<int> values @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint len;
+                int v = buffer_load(values, tid.x);
+                buffer_dimensions(values, len);
+                buffer_store(values, tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "device int* values [[buffer(3)]]" in generated
+    assert "int v = values[tid.x];" in generated
+    assert (
+        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
+        in generated
+    )
+    assert "values[tid.x] = v + 1;" in generated
+    assert "RWStructuredBuffer" not in generated
+    assert "buffer_load" not in generated
+    assert "buffer_store" not in generated
+    assert "buffer_dimensions" not in generated
+
+
+def test_readonly_structured_buffer_uses_const_device_pointer():
+    code = """
+    shader StructuredBufferMetal {
+        StructuredBuffer<int> values @ binding(1);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int v = buffer_load(values, tid.x);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "const device int* values [[buffer(1)]]" in generated
+    assert "int v = values[tid.x];" in generated
+
+
+def test_append_consume_structured_buffers_emit_diagnostics():
+    code = """
+    shader StructuredBufferAppendConsumeMetal {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        compute {
+            void main(uint value) {
+                buffer_append(appendValues, int(value));
+                int consumed = buffer_consume(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "device int* appendValues [[buffer(1)]]" in generated
+    assert "device int* consumeValues [[buffer(2)]]" in generated
+    assert (
+        "/* unsupported Metal buffer append: requires explicit counter buffer */;"
+        in generated
+    )
+    assert (
+        "int consumed = 0 /* unsupported Metal buffer consume: requires explicit counter buffer */;"
+        in generated
+    )
+    assert "appendValues[0]" not in generated
+    assert "consumeValues[0]" not in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
+    code = """
+    shader StructuredBufferArrayMetal {
+        RWStructuredBuffer<int> buffers[2] @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID, uint index) {
+                uint len;
+                int v = buffer_load(buffers[index], tid.x);
+                buffer_dimensions(buffers[index], len);
+                buffer_store(buffers[index], tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "array<device int*, 2> buffers [[buffer(3)]]" in generated
+    assert "int v = buffers[index][tid.x];" in generated
+    assert (
+        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
+        in generated
+    )
+    assert "buffers[index][tid.x] = v + 1;" in generated
+
+
 def test_metal_unsigned_integer_literal_suffix_codegen():
     code = """
     shader UIntLiteralCodegen {
@@ -3319,6 +3433,36 @@ def test_metal_storage_image_load_store():
     assert "imageStore(" not in generated_code
 
 
+def test_metal_unsigned_constructor_image_coordinates_are_not_rewrapped():
+    shader = """
+    shader UnsignedConstructorImageCoordinates {
+        image2D outputImage;
+        image3D volumeImage;
+
+        compute {
+            void main() {
+                vec4 color = imageLoad(outputImage, uvec2(1u, 2u));
+                vec4 volumeColor = imageLoad(volumeImage, uvec3(1u, 2u, 3u));
+                imageStore(outputImage, uvec2(1u, 2u), color);
+                imageStore(volumeImage, uvec3(1u, 2u, 3u), volumeColor);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float4 color = outputImage.read(uint2(1u, 2u));" in generated_code
+    assert (
+        "float4 volumeColor = volumeImage.read(uint3(1u, 2u, 3u));"
+        in generated_code
+    )
+    assert "outputImage.write(color, uint2(1u, 2u));" in generated_code
+    assert "volumeImage.write(volumeColor, uint3(1u, 2u, 3u));" in generated_code
+    assert "uint2(uint2" not in generated_code
+    assert "uint3(uint3" not in generated_code
+
+
 def test_metal_direct_stage_image_load_store_and_atomics_use_input_members():
     shader = """
     shader DirectStageImageOps {
@@ -3465,6 +3609,40 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_metal_image_atomic_compare_descriptor_for_integer_storage_textures():
+    codegen = MetalCodeGen()
+
+    uint_array_descriptor = codegen.image_atomic_compare_descriptor(
+        "texture1d_array<uint, access::read>"
+    )
+    assert uint_array_descriptor == {
+        "helper_name": "imageAtomicCompSwap_uimage1DArray",
+        "return_type": "uint",
+        "vector_type": "uint4",
+        "coord_type": "int2",
+        "exchange_expr": (
+            "image.atomic_compare_exchange_weak(uint(coord.x), uint(coord.y), &original, value)"
+        ),
+    }
+
+    int_layer_descriptor = codegen.image_atomic_compare_descriptor(
+        "texture2d_array<int, access::write>"
+    )
+    assert int_layer_descriptor["helper_name"] == "imageAtomicCompSwap_iimage2DArray"
+    assert int_layer_descriptor["return_type"] == "int"
+    assert int_layer_descriptor["vector_type"] == "int4"
+    assert int_layer_descriptor["coord_type"] == "int3"
+    assert (
+        int_layer_descriptor["exchange_expr"]
+        == "image.atomic_compare_exchange_weak(uint2(coord.xy), uint(coord.z), &original, value)"
+    )
+
+    assert (
+        codegen.image_atomic_compare_descriptor("texture2d<float, access::read_write>")
+        is None
+    )
 
 
 def test_metal_direct_stage_image_compare_swap_use_input_members():
@@ -7412,6 +7590,116 @@ def test_metal_texture_grad_uses_dimension_specific_gradient_options():
     assert "gradient2d(ddx3, ddy3)" not in generated_code
 
 
+def test_metal_texture_sampling_capability_descriptors():
+    codegen = MetalCodeGen()
+
+    assert codegen.texture_sampling_capabilities("texture2d<float>") == {
+        "texture_type": "texture2d<float>",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "projected_offset": True,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("texturecube<float>") == {
+        "texture_type": "texturecube<float>",
+        "gather": True,
+        "gather_offset": False,
+        "sample_offset": False,
+        "projected_offset": False,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("texture2d_array<float>[4]") == {
+        "texture_type": "texture2d_array<float>",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "projected_offset": True,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("depth2d<float>") == {
+        "texture_type": "depth2d<float>",
+        "gather": False,
+        "gather_offset": False,
+        "sample_offset": False,
+        "projected_offset": False,
+        "compare_offset": True,
+        "gather_compare_offset": True,
+    }
+    assert codegen.texture_sampling_capabilities("texture3d<float>") == {
+        "texture_type": "texture3d<float>",
+        "gather": False,
+        "gather_offset": False,
+        "sample_offset": False,
+        "projected_offset": False,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+
+
+def test_metal_texture_dimension_descriptors():
+    codegen = MetalCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "coordinate_dimension": None,
+            "offset_dimension": None,
+            "sample_offset_dimension": None,
+            "texel_fetch_offset_dimension": None,
+            "gather_offset_dimension": None,
+            "compare_offset_dimension": None,
+            "compare_lod_offset_dimension": None,
+            "compare_grad_offset_dimension": None,
+            "gather_compare_offset_dimension": None,
+            "gradient_dimension": None,
+            "query_lod_coordinate_dimension": None,
+        }
+        expected.update(overrides)
+        assert codegen.texture_dimension_descriptor(texture_type) == expected
+
+    expect(
+        "texture2d_array<float>[4]",
+        coordinate_dimension=3,
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        gather_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=3,
+    )
+    expect(
+        "texture1d_array<float>",
+        coordinate_dimension=2,
+        texel_fetch_offset_dimension=1,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "depth2d<float>",
+        coordinate_dimension=2,
+        compare_offset_dimension=2,
+        compare_lod_offset_dimension=2,
+        compare_grad_offset_dimension=2,
+        gather_compare_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "texturecube_array<float>",
+        gradient_dimension=3,
+        query_lod_coordinate_dimension=4,
+    )
+    expect("texture2d_ms_array<float>", coordinate_dimension=3)
+    expect(
+        "texture3d<float, access::read_write>",
+        coordinate_dimension=3,
+        texel_fetch_offset_dimension=3,
+    )
+
+
 def test_metal_texture_gather_offset_variants_use_metal_overloads():
     shader = """
     shader GatherOffsetVariants {
@@ -11205,6 +11493,91 @@ def test_metal_array_shadow_texture_resource_arrays_reject_mismatched_fixed_help
         MetalCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_metal_texture_query_size_descriptors():
+    codegen = MetalCodeGen()
+
+    assert codegen.texture_query_size_descriptor("texture1d_array<float>") == {
+        "return_type": "int2",
+        "dimensions": (("get_width", True), ("get_array_size", False)),
+    }
+    assert codegen.texture_query_size_descriptor("texture2d_ms_array<float>") == {
+        "return_type": "int3",
+        "dimensions": (
+            ("get_width", False),
+            ("get_height", False),
+            ("get_array_size", False),
+        ),
+    }
+    assert codegen.texture_query_size_descriptor(
+        "texture2d_array<uint, access::write>"
+    ) == {
+        "return_type": "int3",
+        "dimensions": (
+            ("get_width", False),
+            ("get_height", False),
+            ("get_array_size", False),
+        ),
+    }
+    descriptor = codegen.texture_query_size_descriptor("texture3d<float>")
+    assert (
+        codegen.texture_query_size_descriptor_expression("tex", descriptor, "uint(lod)")
+        == "int3(tex.get_width(uint(lod)), tex.get_height(uint(lod)), tex.get_depth(uint(lod)))"
+    )
+    assert codegen.texture_query_size_descriptor("samplerBuffer") is None
+
+
+def test_metal_texture_query_resource_descriptors():
+    codegen = MetalCodeGen()
+    codegen.texture_variable_types = {
+        "colorImage": "texture2d<float, access::read_write>",
+        "colorMap": "texture2d<float>",
+        "msTex": "texture2d_ms<float>",
+        "msArray": "texture2d_ms_array<float>",
+    }
+
+    assert codegen.texture_query_resource_descriptor("colorImage") == {
+        "texture_type": "texture2d<float, access::read_write>",
+        "storage_image": True,
+        "multisample": False,
+        "size_descriptor": {
+            "return_type": "int2",
+            "dimensions": (("get_width", False), ("get_height", False)),
+        },
+    }
+    assert codegen.texture_query_resource_descriptor("msArray") == {
+        "texture_type": "texture2d_ms_array<float>",
+        "storage_image": False,
+        "multisample": True,
+        "size_descriptor": {
+            "return_type": "int3",
+            "dimensions": (
+                ("get_width", False),
+                ("get_height", False),
+                ("get_array_size", False),
+            ),
+        },
+    }
+    assert (
+        codegen.texture_query_levels_expression("colorImage")
+        == "/* unsupported Metal texture query: textureQueryLevels on texture2d<float, access::read_write> */ 0"
+    )
+    assert codegen.texture_query_levels_expression("msTex") == "1"
+    assert (
+        codegen.texture_query_levels_expression("colorMap")
+        == "int(colorMap.get_num_mip_levels())"
+    )
+    assert (
+        codegen.texture_samples_expression("colorMap")
+        == "/* unsupported Metal texture samples query: requires multisample texture */ 0"
+    )
+    assert codegen.texture_samples_expression("msArray") == (
+        "int(msArray.get_num_samples())"
+    )
+    assert codegen.texture_query_size_expression("colorImage") == (
+        "int2(colorImage.get_width(), colorImage.get_height())"
+    )
+
+
 def test_metal_storage_image_size_queries_use_texture_dimensions():
     shader = """
     shader StorageImageSizeQueries {
@@ -14296,6 +14669,442 @@ def test_shift_operators(shader, expected_outputs):
 
     for expected in expected_outputs:
         assert expected in generated_code
+
+
+def test_metal_sampler_1d_array_sampling_and_queries():
+    shader = """
+    shader OneDArrayTexture {
+        sampler1DArray lineArray;
+        sampler linearSampler;
+
+        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+            ivec2 dims = textureSize(tex, lod);
+            int levels = textureQueryLevels(tex);
+            return texture(tex, samp, uvLayer)
+                + textureLod(tex, samp, uvLayer, lod)
+                + vec4(dims.x, dims.y, levels, 0.0);
+        }
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "texture1d_array<float> lineArray [[texture(0)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float4 sampleLineArray(texture1d_array<float> tex, sampler samp, float2 uvLayer, int lod)"
+        in generated_code
+    )
+    assert "int2(tex.get_width(uint(lod)), tex.get_array_size())" in generated_code
+    assert "int(tex.get_num_mip_levels())" in generated_code
+    assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y))" in generated_code
+    assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y), level(lod))" in generated_code
+
+
+def test_metal_image_1d_and_1d_array_storage_operations():
+    shader = """
+    shader OneDStorageImages {
+        image1D line;
+        image1DArray layers;
+        uimage1D counters @r32ui;
+        uimage1DArray layerCounters @r32ui;
+
+        float touchLine(image1D image, int x, float value) {
+            float oldValue = imageLoad(image, x);
+            imageStore(image, x, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchLayer(image1DArray image, ivec2 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        uint addCounter(uimage1D image @r32ui, int x, uint value) {
+            return imageAtomicAdd(image, x, value);
+        }
+
+        uint exchangeLayer(uimage1DArray image @r32ui, ivec2 coord, uint value) {
+            return imageAtomicExchange(image, coord, value);
+        }
+
+        compute {
+            void main() {
+                int sizeLine = imageSize(line);
+                ivec2 sizeLayer = imageSize(layers);
+                float a = touchLine(line, 1, 0.25);
+                vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
+                uint c = addCounter(counters, 4, 7u);
+                uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "texture1d<float, access::read_write> line [[texture(0)]]" in generated_code
+    assert (
+        "texture1d_array<float, access::read_write> layers [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture1d<uint, access::read_write> counters [[texture(2)]]" in generated_code
+    )
+    assert (
+        "texture1d_array<uint, access::read_write> layerCounters [[texture(3)]]"
+        in generated_code
+    )
+    assert "int sizeLine = int(line.get_width());" in generated_code
+    assert (
+        "int2 sizeLayer = int2(layers.get_width(), layers.get_array_size());"
+        in generated_code
+    )
+    assert "float oldValue = image.read(uint(x)).x;" in generated_code
+    assert "image.write(float4(oldValue + value), uint(x));" in generated_code
+    assert (
+        "float4 oldValue = image.read(uint(coord.x), uint(coord.y));" in generated_code
+    )
+    assert (
+        "image.write(oldValue + value, uint(coord.x), uint(coord.y));" in generated_code
+    )
+    assert "image.atomic_fetch_add(uint(x), value).x" in generated_code
+    assert (
+        "image.atomic_exchange(uint(coord.x), uint(coord.y), value).x" in generated_code
+    )
+
+
+def test_metal_storage_image_access_attributes_select_texture_access():
+    shader = """
+    shader StorageImageAccess {
+        image2D readOnlyImage @readonly;
+        image2D writeOnlyImage @writeonly;
+        uimage2D readWriteImage @r32ui @readwrite;
+
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel).x;
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "texture2d<float, access::read> readOnlyImage [[texture(0)]]" in generated_code
+    )
+    assert (
+        "texture2d<float, access::write> writeOnlyImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> readWriteImage [[texture(2)]]"
+        in generated_code
+    )
+    assert (
+        "float readPixel(texture2d<float, access::read> image, int2 pixel)"
+        in generated_code
+    )
+    assert (
+        "void writePixel(texture2d<float, access::write> image, int2 pixel, float4 value)"
+        in generated_code
+    )
+
+
+def test_metal_storage_image_access_attributes_keep_default_image_helpers():
+    shader = """
+    shader StorageImageAccessDefaults {
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        float readLine(image1D image @readonly, int x) {
+            return imageLoad(image, x);
+        }
+
+        float readLayer(image2DArray image @readonly, ivec3 pixelLayer) {
+            return imageLoad(image, pixelLayer);
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, float value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "float readPixel(texture2d<float, access::read> image, int2 pixel)"
+        in generated_code
+    )
+    assert "return image.read(uint2(pixel)).x;" in generated_code
+    assert (
+        "float readLine(texture1d<float, access::read> image, int x)" in generated_code
+    )
+    assert "return image.read(uint(x)).x;" in generated_code
+    assert (
+        "float readLayer(texture2d_array<float, access::read> image, int3 pixelLayer)"
+        in generated_code
+    )
+    assert (
+        "return image.read(uint2(pixelLayer.xy), uint(pixelLayer.z)).x;"
+        in generated_code
+    )
+    assert (
+        "void writePixel(texture2d<float, access::write> image, int2 pixel, float value)"
+        in generated_code
+    )
+    assert "image.write(float4(value), uint2(pixel));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessInvalidLoad {
+                float readPixel(image2D image @writeonly, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidStore {
+                void writePixel(image2D image @readonly, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidAtomic {
+                uint addCounter(uimage2D image @r32ui @readonly, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read_write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidGlobal {
+                image2D outImage @writeonly;
+
+                compute {
+                    void main() {
+                        float value = imageLoad(outImage, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+    ],
+)
+def test_metal_storage_image_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_storage_image_access_allows_compatible_helper_calls():
+    shader = """
+    shader StorageImageAccessHelperValid {
+        image2D source @readonly;
+        image2D target @writeonly;
+
+        float readPixel(image2D image, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "float value = readPixel(source, int2(0, 0));" in generated_code
+    assert "writePixel(target, int2(0, 0), float4(value));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessHelperInvalidRead {
+                image2D target @writeonly;
+
+                float readPixel(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = readPixel(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'readPixel' requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidWrite {
+                image2D source @readonly;
+
+                void writePixel(image2D image, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        writePixel(source, ivec2(0, 0), vec4(1.0));
+                    }
+                }
+            }
+            """,
+            "function call 'writePixel' requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidAtomic {
+                uimage2D source @r32ui @readonly;
+
+                uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        uint value = addCounter(source, ivec2(0, 0), 1u);
+                    }
+                }
+            }
+            """,
+            "function call 'addCounter' requires read_write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidTransitive {
+                image2D target @writeonly;
+
+                float leaf(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                float mid(image2D image, ivec2 pixel) {
+                    return leaf(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = mid(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'mid' requires read-capable storage image access",
+        ),
+    ],
+)
+def test_metal_storage_image_access_rejects_incompatible_helper_calls(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_generic_image_memory_attributes_do_not_become_semantics():
+    shader = """
+    shader StorageImageMemoryAttrs {
+        image2D coherentImage @coherent;
+        uimage2D globalImage @r32ui @globallycoherent;
+
+        float readPixel(image2D image @coherent, ivec2 pixel) {
+            return imageLoad(image, pixel).x;
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "texture2d<float, access::read_write> coherentImage [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> globalImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "float readPixel(texture2d<float, access::read_write> image, int2 pixel)"
+        in generated_code
+    )
+    assert "[[coherent]]" not in generated_code
+    assert "[[globallycoherent]]" not in generated_code
 
 
 if __name__ == "__main__":

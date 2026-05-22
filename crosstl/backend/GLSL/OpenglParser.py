@@ -551,30 +551,35 @@ class GLSLParser:
             self.eat("IDENTIFIER")
 
             array_size = None
+            is_array = False
             if self.current_token[0] == "LBRACKET":
+                is_array = True
                 self.eat("LBRACKET")
                 if self.current_token[0] != "RBRACKET":
                     array_size = self.parse_expression()
                 self.eat("RBRACKET")
 
             self.eat("SEMICOLON")
-            members.append(
-                VariableNode(
-                    member_type,
-                    member_name,
-                    qualifiers=member_qualifiers,
-                    array_size=array_size,
-                )
+            member_node = VariableNode(
+                member_type,
+                member_name,
+                qualifiers=member_qualifiers,
+                array_size=array_size,
             )
+            member_node.is_array = is_array
+            member_node.interface_block = block_name
+            members.append(member_node)
 
         self.eat("RBRACE")
 
         instance_name = None
         array_size = None
+        instance_is_array = False
         if self.current_token[0] == "IDENTIFIER":
             instance_name = self.current_token[1]
             self.eat("IDENTIFIER")
             if self.current_token[0] == "LBRACKET":
+                instance_is_array = True
                 self.eat("LBRACKET")
                 if self.current_token[0] != "RBRACKET":
                     array_size = self.parse_expression()
@@ -586,15 +591,16 @@ class GLSLParser:
         block_vars = []
 
         if instance_name:
-            block_vars.append(
-                VariableNode(
-                    block_name,
-                    instance_name,
-                    qualifiers=qualifiers,
-                    array_size=array_size,
-                    layout=layout,
-                )
+            block_var = VariableNode(
+                block_name,
+                instance_name,
+                qualifiers=qualifiers,
+                array_size=array_size,
+                layout=layout,
             )
+            block_var.interface_block = block_name
+            block_var.is_array = instance_is_array
+            block_vars.append(block_var)
         else:
             for member in members:
                 member.qualifiers = list(member.qualifiers or []) + list(
@@ -1067,11 +1073,15 @@ class GLSLParser:
     def parse_call_arguments(self):
         self.eat("LPAREN")
         args = []
+        self.skip_newlines()
         if self.current_token[0] != "RPAREN":
-            args.append(self.parse_expression())
-            while self.current_token[0] == "COMMA":
-                self.eat("COMMA")
+            while True:
                 args.append(self.parse_expression())
+                self.skip_newlines()
+                if self.current_token[0] != "COMMA":
+                    break
+                self.eat("COMMA")
+                self.skip_newlines()
         self.eat("RPAREN")
         return args
 

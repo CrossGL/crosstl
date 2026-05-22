@@ -651,5 +651,36 @@ def test_async_keyword_tokenization():
     ) in tokens, "await inside async block not tokenized correctly"
 
 
+def test_unsafe_extern_keyword_tokenization():
+    code = """
+    pub unsafe extern "C" fn load() {
+        let value = unsafe {
+            read_raw()
+        };
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert ("UNSAFE", "unsafe") in tokens, "unsafe keyword not tokenized correctly"
+    assert ("EXTERN", "extern") in tokens, "extern keyword not tokenized correctly"
+    assert ("STRING", '"C"') in tokens, "extern ABI string not tokenized correctly"
+
+
+def test_const_fn_and_block_tokenization():
+    code = """
+    pub const fn load() -> i32 {
+        let value = const {
+            1
+        };
+        value
+    }
+    """
+    tokens = tokenize_code(code)
+
+    assert ("CONST", "const") in tokens, "const keyword not tokenized correctly"
+    assert ("FN", "fn") in tokens, "const fn keyword not tokenized correctly"
+    assert ("LBRACE", "{") in tokens, "const block brace not tokenized correctly"
+
+
 if __name__ == "__main__":
     pytest.main()

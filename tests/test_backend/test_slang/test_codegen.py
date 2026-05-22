@@ -87,6 +87,316 @@ def test_for_codegen():
         pytest.fail("For loop parsing or code generation not implemented.")
 
 
+def test_for_initializer_uint_and_bool_declaration_codegen():
+    code = """
+    void main(){
+        for (uint i = 0; i < 4; i = i + 1) {
+        }
+        for (bool done = false; done == false; done = true) {
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (uint i = 0; i < 4; i = i + 1) {" in generated_code
+    assert "for (bool done = false; done == false; done = true) {" in generated_code
+
+
+def test_break_continue_statement_codegen():
+    code = """
+    void main(){
+        for (int i = 0; i < 4; i = i + 1) {
+            break;
+            continue;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "break;" in generated_code
+    assert "continue;" in generated_code
+
+
+def test_switch_case_codegen():
+    code = """
+    void main() {
+        int mode = 0;
+        switch (mode) {
+            case 0:
+                mode = 1;
+                break;
+            default:
+                mode = 2;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "switch (mode) {" in generated_code
+    assert "case 0:" in generated_code
+    assert "mode = 1;" in generated_code
+    assert "break;" in generated_code
+    assert "default:" in generated_code
+    assert "mode = 2;" in generated_code
+
+
+def test_for_array_assignment_update_codegen():
+    code = """
+    void main(){
+        int value = 1;
+        for (int i = 0; i < 4; items[i] += value) {
+        }
+        for (int i = 0; i < 4; object.field = value) {
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (int i = 0; i < 4; items[i] += value) {" in generated_code
+    assert "for (int i = 0; i < 4; object.field = value) {" in generated_code
+
+
+def test_standalone_array_and_member_assignment_targets_codegen():
+    code = """
+    void main(){
+        items[0] = 1;
+        values[tid.x] += delta;
+        object.field = value;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "items[0] = 1;" in generated_code
+    assert "values[tid.x] += delta;" in generated_code
+    assert "object.field = value;" in generated_code
+
+
+def test_logical_not_codegen():
+    code = """
+    bool negate(bool disabled) {
+        return !disabled;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return !disabled;" in generated_code
+
+
+def test_while_codegen():
+    code = """
+    float countDown(float x) {
+        while (x > 0.0) {
+            x -= 1.0;
+        }
+        return x;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+
+        assert "float countDown(float x)" in generated_code
+        assert "while (x > 0.0)" in generated_code
+        assert "x -= 1.0;" in generated_code
+        assert "return x;" in generated_code
+    except SyntaxError:
+        pytest.fail("While loop parsing or code generation not implemented.")
+
+
+def test_do_while_codegen():
+    code = """
+    float countDown(float x) {
+        do {
+            x -= 1.0;
+        } while (x > 0.0);
+        return x;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+
+        assert "float countDown(float x)" in generated_code
+        assert "do {" in generated_code
+        assert "x -= 1.0;" in generated_code
+        assert "} while (x > 0.0);" in generated_code
+        assert "return x;" in generated_code
+    except SyntaxError:
+        pytest.fail("Do-while loop parsing or code generation not implemented.")
+
+
+def test_top_level_attribute_list_before_shader_function_codegen():
+    code = """
+    [numthreads(8, 8, 1)]
+    [shader("compute")]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        return;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+
+        assert "compute {" in generated_code
+        assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
+        assert "return;" in generated_code
+    except SyntaxError:
+        pytest.fail(
+            "Top-level attribute-list parsing or code generation not implemented."
+        )
+
+
+def test_attribute_list_after_shader_function_codegen():
+    code = """
+    [shader("compute")]
+    [numthreads(8, 8, 1)]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        return;
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+
+        assert "compute {" in generated_code
+        assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
+        assert "return;" in generated_code
+    except SyntaxError:
+        pytest.fail(
+            "Post-shader attribute-list parsing or code generation not implemented."
+        )
+
+
+def test_generic_resource_global_codegen():
+    code = """
+    Texture2D<float4> albedo;
+    SamplerState linearSampler;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D albedo;" in generated_code
+    assert "SamplerState linearSampler;" in generated_code
+
+
+def test_bound_generic_resource_global_codegen():
+    code = """
+    Texture2D<float4> albedo : register(t0);
+    SamplerState linearSampler : register(s0);
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_vars[0].register == "t0"
+    assert ast.global_vars[1].register == "s0"
+    assert "sampler2D albedo;" in generated_code
+    assert "SamplerState linearSampler;" in generated_code
+
+
+def test_bound_cbuffer_codegen():
+    code = """
+    cbuffer Camera : register(b0) {
+        float4x4 viewProj;
+        float4 tint[2];
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.cbuffers[0].register == "b0"
+    assert "cbuffer Camera" in generated_code
+    assert "mat4 viewProj;" in generated_code
+    assert "vec4 tint[2];" in generated_code
+
+
+def test_global_resource_array_codegen():
+    code = """
+    StructuredBuffer<float> inputs[2];
+    Texture2D<float4> textures[3] : register(t0);
+    SamplerState samplers[];
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "StructuredBuffer<float> inputs[2];" in generated_code
+    assert "sampler2D textures[3];" in generated_code
+    assert "SamplerState samplers[];" in generated_code
+
+
+def test_texture_method_call_codegen():
+    code = """
+    Texture2D<float4> albedo;
+    SamplerState linearSampler;
+
+    float4 main(float2 uv) {
+        return albedo.Sample(linearSampler, uv);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return albedo.Sample(linearSampler, uv);" in generated_code
+
+
+def test_standalone_postfix_call_codegen():
+    code = """
+    void main() {
+        getCallback()(1.0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "getCallback()(1.0);" in generated_code
+
+
+def test_scalar_and_matrix_top_level_declarations_codegen():
+    code = """
+    uint addOne(uint x) { return x + 1; }
+    bool enabled(bool x) { return x; }
+    float4x4 ViewProj;
+    int frameIndex;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint addOne(uint x)" in generated_code
+    assert "return x + 1;" in generated_code
+    assert "bool enabled(bool x)" in generated_code
+    assert "return x;" in generated_code
+    assert "mat4 ViewProj;" in generated_code
+    assert "int frameIndex;" in generated_code
+
+
 def test_else_codegen():
     code = """
     [shader("vertex")]
@@ -132,6 +442,29 @@ def test_function_call_codegen():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Function call parsing or code generation not implemented.")
+
+
+def test_standalone_function_call_statement_codegen():
+    code = """
+    void helper(float x) {
+        return;
+    }
+
+    void main() {
+        float x = 1.0;
+        helper(x);
+    }
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+        lines = [line.strip() for line in generated_code.splitlines()]
+
+        assert "helper(x);" in lines
+        assert "x;" not in lines
+    except SyntaxError:
+        pytest.fail("Standalone function call parsing or code generation not implemented.")
 
 
 if __name__ == "__main__":

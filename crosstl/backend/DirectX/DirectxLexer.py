@@ -31,6 +31,7 @@ TOKENS = tuple(
         ("EXTERN", r"\bextern\b"),
         ("VOLATILE", r"\bvolatile\b"),
         ("PRECISE", r"\bprecise\b"),
+        ("GLOBALLYCOHERENT", r"\bgloballycoherent\b"),
         ("ROW_MAJOR", r"\brow_major\b"),
         ("COLUMN_MAJOR", r"\bcolumn_major\b"),
         # Interpolation modifiers
@@ -218,6 +219,7 @@ KEYWORDS = {
     "extern": "EXTERN",
     "volatile": "VOLATILE",
     "precise": "PRECISE",
+    "globallycoherent": "GLOBALLYCOHERENT",
     "row_major": "ROW_MAJOR",
     "column_major": "COLUMN_MAJOR",
     "nointerpolation": "NOINTERPOLATION",
@@ -318,6 +320,7 @@ class TokenType(Enum):
     EXTERN = auto()
     VOLATILE = auto()
     PRECISE = auto()
+    GLOBALLYCOHERENT = auto()
     ROW_MAJOR = auto()
     COLUMN_MAJOR = auto()
     NOINTERPOLATION = auto()

@@ -52,6 +52,8 @@ from .RustAst import (
     ClosureParameterNode,
     AwaitNode,
     AsyncBlockNode,
+    UnsafeBlockNode,
+    ConstBlockNode,
     TryNode,
     TryBlockNode,
 )
@@ -60,6 +62,36 @@ from .RustLexer import RustLexer, Lexer, TokenType
 
 class RustParser:
     """Parse Rust tokens into the Rust backend shader AST."""
+
+    NAME_TOKENS = {
+        "IDENTIFIER",
+        "VEC2",
+        "VEC3",
+        "VEC4",
+        "MAT2",
+        "MAT3",
+        "MAT4",
+        "OPTION",
+        "RESULT",
+        "SOME",
+        "NONE",
+        "OK",
+        "ERR",
+    }
+    PATH_SEGMENT_TOKENS = NAME_TOKENS | {"CRATE", "SELF", "SUPER"}
+    ASSIGNMENT_TOKENS = {
+        "EQUALS",
+        "PLUS_EQUALS",
+        "MINUS_EQUALS",
+        "MULTIPLY_EQUALS",
+        "DIVIDE_EQUALS",
+        "MOD_EQUALS",
+        "BITWISE_AND_EQUALS",
+        "BITWISE_OR_EQUALS",
+        "BITWISE_XOR_EQUALS",
+        "SHIFT_LEFT_EQUALS",
+        "SHIFT_RIGHT_EQUALS",
+    }
 
     def __init__(self, tokens):
         """Initialize the parser with a token stream from ``RustLexer``."""
@@ -96,12 +128,16 @@ class RustParser:
             elif self.current_token[0] == "TRAIT":
                 t = self.parse_trait()
                 traits.append(t)
-            elif self.current_token[0] == "FN":
-                f = self.parse_function()
+            elif self.current_starts_function():
+                f = self.parse_function_with_qualifiers()
                 functions.append(f)
-            elif self.current_token[0] == "ASYNC" and self.peek_token_type() == "FN":
-                f = self.parse_function(is_async=self.parse_async_modifier())
-                functions.append(f)
+            elif (
+                self.current_token[0] == "UNSAFE" and self.peek_token_type() == "EXTERN"
+            ):
+                self.eat("UNSAFE")
+                self.skip_extern_block()
+            elif self.current_token[0] == "EXTERN":
+                self.skip_extern_block()
             elif self.current_token[0] == "CONST":
                 c = self.parse_const()
                 global_variables.append(c)
@@ -110,15 +146,13 @@ class RustParser:
                 global_variables.append(s)
             elif self.current_token[0] == "PUB":
                 visibility = self.parse_visibility()
-                is_async = self.parse_async_modifier()
 
                 if self.current_token[0] == "STRUCT":
                     s = self.parse_struct(visibility=visibility)
                     structs.append(s)
-                elif self.current_token[0] == "FN":
-                    f = self.parse_function(
+                elif self.current_starts_function():
+                    f = self.parse_function_with_qualifiers(
                         visibility=visibility,
-                        is_async=is_async,
                     )
                     functions.append(f)
                 elif self.current_token[0] == "CONST":
@@ -138,6 +172,14 @@ class RustParser:
                 elif self.current_token[0] == "USE":
                     u = self.parse_use_statement(visibility=visibility)
                     use_statements.append(u)
+                elif self.current_token[0] == "EXTERN":
+                    self.skip_extern_block()
+                elif (
+                    self.current_token[0] == "UNSAFE"
+                    and self.peek_token_type() == "EXTERN"
+                ):
+                    self.eat("UNSAFE")
+                    self.skip_extern_block()
                 else:
                     self.eat(self.current_token[0])
             elif self.current_token[0] == "POUND":
@@ -154,17 +196,21 @@ class RustParser:
                 elif self.current_token[0] == "FN":
                     f = self.parse_function(attributes=attrs)
                     functions.append(f)
-                elif (
-                    self.current_token[0] == "ASYNC" and self.peek_token_type() == "FN"
-                ):
-                    f = self.parse_function(
+                elif self.current_starts_function():
+                    f = self.parse_function_with_qualifiers(
                         attributes=attrs,
-                        is_async=self.parse_async_modifier(),
                     )
                     functions.append(f)
+                elif self.current_token[0] == "EXTERN":
+                    self.skip_extern_block()
+                elif (
+                    self.current_token[0] == "UNSAFE"
+                    and self.peek_token_type() == "EXTERN"
+                ):
+                    self.eat("UNSAFE")
+                    self.skip_extern_block()
                 elif self.current_token[0] == "PUB":
                     visibility = self.parse_visibility()
-                    is_async = self.parse_async_modifier()
                     if self.current_token[0] == "STRUCT":
                         s = self.parse_struct(attributes=attrs, visibility=visibility)
                         structs.append(s)
@@ -177,13 +223,20 @@ class RustParser:
                                 attributes=attrs, visibility=visibility
                             )
                         )
-                    elif self.current_token[0] == "FN":
-                        f = self.parse_function(
+                    elif self.current_starts_function():
+                        f = self.parse_function_with_qualifiers(
                             attributes=attrs,
                             visibility=visibility,
-                            is_async=is_async,
                         )
                         functions.append(f)
+                    elif self.current_token[0] == "EXTERN":
+                        self.skip_extern_block()
+                    elif (
+                        self.current_token[0] == "UNSAFE"
+                        and self.peek_token_type() == "EXTERN"
+                    ):
+                        self.eat("UNSAFE")
+                        self.skip_extern_block()
                 else:
                     self.eat(self.current_token[0])
             else:
@@ -213,17 +266,116 @@ class RustParser:
         else:
             raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
 
+    def parse_name_token(self, context="name"):
+        if self.current_token[0] not in self.NAME_TOKENS:
+            raise SyntaxError(f"Expected {context}, got {self.current_token[0]}")
+
+        name = self.current_token[1]
+        self.eat(self.current_token[0])
+        return name
+
     def peek_token_type(self, offset=1):
         index = self.current_index + offset
         if index < len(self.tokens):
             return self.tokens[index][0]
         return "EOF"
 
-    def parse_async_modifier(self):
-        if self.current_token[0] == "ASYNC" and self.peek_token_type() == "FN":
-            self.eat("ASYNC")
-            return True
-        return False
+    def current_starts_function(self):
+        index = self.current_index
+        saw_qualifier = False
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "FN":
+                return True
+            if token_type in {"ASYNC", "CONST", "UNSAFE"}:
+                saw_qualifier = True
+                index += 1
+                continue
+            if token_type == "EXTERN":
+                saw_qualifier = True
+                index += 1
+                if index < len(self.tokens) and self.tokens[index][0] == "STRING":
+                    index += 1
+                continue
+            break
+
+        return (
+            saw_qualifier and index < len(self.tokens) and self.tokens[index][0] == "FN"
+        )
+
+    def parse_function_with_qualifiers(
+        self,
+        attributes=None,
+        visibility=None,
+    ):
+        qualifiers = self.parse_function_qualifiers()
+        return self.parse_function(
+            attributes=attributes,
+            visibility=visibility,
+            **qualifiers,
+        )
+
+    def parse_function_qualifiers(self):
+        qualifiers = {
+            "is_async": False,
+            "is_const": False,
+            "is_unsafe": False,
+            "abi": None,
+        }
+
+        while self.current_token[0] in {"ASYNC", "CONST", "UNSAFE", "EXTERN"}:
+            if self.current_token[0] == "ASYNC":
+                qualifiers["is_async"] = True
+                self.eat("ASYNC")
+            elif self.current_token[0] == "CONST":
+                qualifiers["is_const"] = True
+                self.eat("CONST")
+            elif self.current_token[0] == "UNSAFE":
+                qualifiers["is_unsafe"] = True
+                self.eat("UNSAFE")
+            elif self.current_token[0] == "EXTERN":
+                self.eat("EXTERN")
+                qualifiers["abi"] = "C"
+                if self.current_token[0] == "STRING":
+                    qualifiers["abi"] = self.parse_abi_literal()
+
+        return qualifiers
+
+    def parse_abi_literal(self):
+        value = self.current_token[1]
+        self.eat("STRING")
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            return value[1:-1]
+        return value
+
+    def skip_extern_block(self):
+        self.eat("EXTERN")
+        if self.current_token[0] == "STRING":
+            self.eat("STRING")
+
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_braces()
+            return
+
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            self.eat(self.current_token[0])
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def skip_balanced_braces(self):
+        depth = 0
+        while self.current_token[0] != "EOF":
+            if self.current_token[0] == "LBRACE":
+                depth += 1
+            elif self.current_token[0] == "RBRACE":
+                depth -= 1
+
+            token_type = self.current_token[0]
+            self.eat(token_type)
+
+            if depth == 0:
+                return
 
     def skip_until(self, token_type):
         while self.current_token[0] != token_type and self.current_token[0] != "EOF":
@@ -400,25 +552,7 @@ class RustParser:
         return item["path"]
 
     def parse_use_path_segment(self):
-        segment_tokens = {
-            "IDENTIFIER",
-            "CRATE",
-            "SELF",
-            "SUPER",
-            "VEC2",
-            "VEC3",
-            "VEC4",
-            "MAT2",
-            "MAT3",
-            "MAT4",
-            "OPTION",
-            "RESULT",
-            "SOME",
-            "NONE",
-            "OK",
-            "ERR",
-        }
-        if self.current_token[0] not in segment_tokens:
+        if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
             raise SyntaxError(f"Expected use path segment, got {self.current_token[0]}")
 
         segment = self.current_token[1]
@@ -451,8 +585,7 @@ class RustParser:
 
     def parse_struct(self, attributes=None, visibility=None):
         self.eat("STRUCT")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_token("struct name")
 
         generics = []
         if self.current_token[0] == "LESS_THAN":
@@ -487,8 +620,7 @@ class RustParser:
             if self.current_token[0] == "PUB":
                 member_visibility = self.parse_visibility()
 
-            member_name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            member_name = self.parse_name_token("struct member name")
 
             self.eat("COLON")
 
@@ -551,8 +683,7 @@ class RustParser:
 
     def parse_enum(self, attributes=None, visibility=None):
         self.eat("ENUM")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_token("enum name")
 
         generics = []
         if self.current_token[0] == "LESS_THAN":
@@ -570,8 +701,7 @@ class RustParser:
             if self.current_token[0] == "POUND":
                 variant_attrs = self.parse_attributes()
 
-            variant_name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            variant_name = self.parse_name_token("enum variant name")
 
             kind = "unit"
             fields = []
@@ -702,21 +832,16 @@ class RustParser:
         functions = []
         type_aliases = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            if self.current_token[0] == "FN":
-                f = self.parse_function()
-                functions.append(f)
-            elif self.current_token[0] == "ASYNC" and self.peek_token_type() == "FN":
-                f = self.parse_function(is_async=self.parse_async_modifier())
+            if self.current_starts_function():
+                f = self.parse_function_with_qualifiers()
                 functions.append(f)
             elif self.current_token[0] == "TYPE":
                 type_aliases.append(self.parse_type_alias())
             elif self.current_token[0] == "PUB":
                 visibility = self.parse_visibility()
-                is_async = self.parse_async_modifier()
-                if self.current_token[0] == "FN":
-                    f = self.parse_function(
+                if self.current_starts_function():
+                    f = self.parse_function_with_qualifiers(
                         visibility=visibility,
-                        is_async=is_async,
                     )
                     functions.append(f)
                 elif self.current_token[0] == "TYPE":
@@ -743,8 +868,7 @@ class RustParser:
 
     def parse_trait(self, visibility=None):
         self.eat("TRAIT")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_token("trait name")
 
         generics = []
         if self.current_token[0] == "LESS_THAN":
@@ -759,11 +883,8 @@ class RustParser:
         functions = []
         associated_types = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            if self.current_token[0] == "FN":
-                f = self.parse_function_signature()  # Traits only have signatures
-                functions.append(f)
-            elif self.current_token[0] == "ASYNC" and self.peek_token_type() == "FN":
-                f = self.parse_function_signature(is_async=self.parse_async_modifier())
+            if self.current_starts_function():
+                f = self.parse_trait_function()
                 functions.append(f)
             elif self.current_token[0] == "TYPE":
                 associated_types.append(self.parse_associated_type())
@@ -808,6 +929,8 @@ class RustParser:
 
         if self.current_token[0] == "AMPERSAND":
             self.eat("AMPERSAND")
+            if self.current_token[0] == "LIFETIME":
+                self.eat("LIFETIME")
             if self.current_token[0] == "MUT":
                 self.eat("MUT")
                 return f"&mut {self.parse_type()}"
@@ -945,8 +1068,7 @@ class RustParser:
 
     def parse_associated_type(self):
         self.eat("TYPE")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_token("associated type name")
 
         bounds = []
         if self.current_token[0] == "COLON":
@@ -975,8 +1097,7 @@ class RustParser:
 
     def parse_type_alias(self, visibility=None, attributes=None):
         self.eat("TYPE")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_token("type alias name")
 
         generics = []
         if self.current_token[0] == "LESS_THAN":
@@ -1093,26 +1214,18 @@ class RustParser:
         self.eat("RBRACE")
         return StructInitializationNode(struct_name, fields)
 
-    def parse_function(self, attributes=None, visibility=None, is_async=False):
-        self.eat("FN")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
-
-        generics = []
-        if self.current_token[0] == "LESS_THAN":
-            generics = self.parse_generics()
-
-        params = self.parse_parameters()
-
-        return_type = "()"
-        if self.current_token[0] == "ARROW":
-            self.eat("ARROW")
-            return_type = self.parse_type()
-
-        where_clauses = []
-        if self.current_token[0] == "WHERE":
-            where_clauses = self.parse_where_clause({"LBRACE"})
-
+    def parse_function(
+        self,
+        attributes=None,
+        visibility=None,
+        is_async=False,
+        is_unsafe=False,
+        abi=None,
+        is_const=False,
+    ):
+        name, generics, params, return_type, where_clauses = self.parse_function_header(
+            {"LBRACE"}
+        )
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
@@ -1127,13 +1240,14 @@ class RustParser:
             generics,
             where_clauses,
             is_async,
+            is_unsafe,
+            abi,
+            is_const,
         )
 
-    def parse_function_signature(self, is_async=False):
-        # For trait function signatures (no body)
+    def parse_function_header(self, where_terminators):
         self.eat("FN")
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_name_token("function name")
 
         generics = []
         if self.current_token[0] == "LESS_THAN":
@@ -1148,20 +1262,37 @@ class RustParser:
 
         where_clauses = []
         if self.current_token[0] == "WHERE":
-            where_clauses = self.parse_where_clause({"SEMICOLON"})
+            where_clauses = self.parse_where_clause(where_terminators)
 
-        self.eat("SEMICOLON")
+        return name, generics, params, return_type, where_clauses
+
+    def parse_trait_function(self):
+        qualifiers = self.parse_function_qualifiers()
+        name, generics, params, return_type, where_clauses = self.parse_function_header(
+            {"LBRACE", "SEMICOLON"}
+        )
+
+        body = []
+        if self.current_token[0] == "LBRACE":
+            self.eat("LBRACE")
+            body = self.parse_block()
+            self.eat("RBRACE")
+        else:
+            self.eat("SEMICOLON")
 
         return FunctionNode(
             return_type,
             name,
             params,
-            [],
+            body,
             [],
             None,
             generics,
             where_clauses,
-            is_async,
+            qualifiers["is_async"],
+            qualifiers["is_unsafe"],
+            qualifiers["abi"],
+            qualifiers["is_const"],
         )
 
     def parse_parameters(self):
@@ -1252,43 +1383,34 @@ class RustParser:
             elif self.current_token[0] == "LET":
                 stmt = self.parse_let_statement()
                 statements.append(stmt)
-            elif self.current_token[0] == "IDENTIFIER" or self.current_token[0] in [
-                "VEC2",
-                "VEC3",
-                "VEC4",
-                "MAT2",
-                "MAT3",
-                "MAT4",
-                "ASYNC",
-            ]:
-                left = self.parse_expression()
-
-                if self.current_token[0] in [
-                    "EQUALS",
-                    "PLUS_EQUALS",
-                    "MINUS_EQUALS",
-                    "MULTIPLY_EQUALS",
-                    "DIVIDE_EQUALS",
-                    "MOD_EQUALS",
-                    "BITWISE_AND_EQUALS",
-                    "BITWISE_OR_EQUALS",
-                    "BITWISE_XOR_EQUALS",
-                    "SHIFT_LEFT_EQUALS",
-                    "SHIFT_RIGHT_EQUALS",
-                ]:
-                    op = self.current_token[1]
-                    op_token = self.current_token[0]
-                    self.eat(op_token)
-                    if op_token == "EQUALS":
-                        right = self.parse_result_expression()
-                    else:
-                        right = self.parse_expression()
+            elif (
+                self.current_token[0] == "CONST" and self.peek_token_type() != "LBRACE"
+            ):
+                statements.append(self.parse_const())
+            elif self.current_token[0] == "STATIC":
+                statements.append(self.parse_static())
+            elif (
+                self.current_token[0] == "IDENTIFIER"
+                or self.current_token[0]
+                in [
+                    "VEC2",
+                    "VEC3",
+                    "VEC4",
+                    "MAT2",
+                    "MAT3",
+                    "MAT4",
+                    "ASYNC",
+                    "UNSAFE",
+                ]
+                or (
+                    self.current_token[0] == "CONST"
+                    and self.peek_token_type() == "LBRACE"
+                )
+            ):
+                expression = self.parse_expression()
+                if self.current_token[0] == "SEMICOLON":
                     self.eat("SEMICOLON")
-                    statements.append(AssignmentNode(left, right, op))
-                else:
-                    if self.current_token[0] == "SEMICOLON":
-                        self.eat("SEMICOLON")
-                    statements.append(left)
+                statements.append(expression)
             elif self.current_token[0] == "RETURN":
                 statements.append(self.parse_return_statement())
             elif self.current_token[0] == "BREAK":
@@ -1801,7 +1923,22 @@ class RustParser:
         return LoopNode(body, label)
 
     def parse_expression(self):
-        return self.parse_conditional_expression()
+        return self.parse_assignment_expression()
+
+    def parse_assignment_expression(self):
+        left = self.parse_conditional_expression()
+
+        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+            op = self.current_token[1]
+            op_token = self.current_token[0]
+            self.eat(op_token)
+            if op_token == "EQUALS":
+                right = self.parse_result_expression()
+            else:
+                right = self.parse_assignment_expression()
+            return AssignmentNode(left, right, op)
+
+        return left
 
     def parse_conditional_expression(self):
         if self.current_token[0] == "IF":
@@ -1944,15 +2081,44 @@ class RustParser:
         return left
 
     def parse_range_expression(self):
+        if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            if op == "..=" and self.is_range_expression_boundary():
+                raise SyntaxError("Expected range end after ..=")
+            end = (
+                None
+                if self.is_range_expression_boundary()
+                else self.parse_multiplicative_expression()
+            )
+            return RangeNode(None, end, op == "..=")
+
         left = self.parse_multiplicative_expression()
 
         if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_multiplicative_expression()
+            if op == "..=" and self.is_range_expression_boundary():
+                raise SyntaxError("Expected range end after ..=")
+            right = (
+                None
+                if self.is_range_expression_boundary()
+                else self.parse_multiplicative_expression()
+            )
             return RangeNode(left, right, op == "..=")
 
         return left
+
+    def is_range_expression_boundary(self):
+        return self.current_token[0] in {
+            "COMMA",
+            "FAT_ARROW",
+            "LBRACE",
+            "RBRACE",
+            "RBRACKET",
+            "RPAREN",
+            "SEMICOLON",
+        }
 
     def parse_multiplicative_expression(self):
         left = self.parse_cast_expression()
@@ -2150,6 +2316,12 @@ class RustParser:
         if self.current_token[0] == "ASYNC":
             return self.parse_async_block_expression()
 
+        if self.current_token[0] == "UNSAFE":
+            return self.parse_unsafe_block_expression()
+
+        if self.current_token[0] == "CONST" and self.peek_token_type() == "LBRACE":
+            return self.parse_const_block_expression()
+
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -2313,6 +2485,14 @@ class RustParser:
             self.eat("MOVE")
         return AsyncBlockNode(self.parse_block_expression(), is_move)
 
+    def parse_unsafe_block_expression(self):
+        self.eat("UNSAFE")
+        return UnsafeBlockNode(self.parse_block_expression())
+
+    def parse_const_block_expression(self):
+        self.eat("CONST")
+        return ConstBlockNode(self.parse_block_expression())
+
     def parse_block_expression(self):
         self.eat("LBRACE")
         statements = []
@@ -2401,6 +2581,11 @@ class RustParser:
         return args
 
     def peek_is_statement(self):
+        if self.current_token[0] == "CONST":
+            return self.peek_token_type() != "LBRACE"
+        if self.current_token[0] == "STATIC":
+            return True
+
         return self.current_token[0] in [
             "LET",
             "IF",
@@ -2419,6 +2604,10 @@ class RustParser:
             return self.parse_labeled_statement()
         elif self.current_token[0] == "LET":
             return self.parse_let_statement()
+        elif self.current_token[0] == "CONST":
+            return self.parse_const()
+        elif self.current_token[0] == "STATIC":
+            return self.parse_static()
         elif self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "MATCH":

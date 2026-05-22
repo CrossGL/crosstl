@@ -4,6 +4,7 @@ from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
     ArrayType,
+    DoWhileNode,
     ForInNode,
     FunctionCallNode,
     LiteralNode,
@@ -175,6 +176,25 @@ def test_loop_statement_parses_to_loop_node():
     helper = ast.functions[0]
 
     assert any(isinstance(stmt, LoopNode) for stmt in helper.body.statements)
+
+
+def test_do_while_statement_parses_to_do_while_node():
+    code = """
+    shader main {
+        int helper(int limit) {
+            int i = 0;
+            do {
+                i = i + 1;
+            } while (i < limit);
+            return i;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    helper = ast.functions[0]
+
+    assert any(isinstance(stmt, DoWhileNode) for stmt in helper.body.statements)
 
 
 def test_for_in_statement_parses_to_for_in_node():

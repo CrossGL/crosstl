@@ -1309,6 +1309,82 @@ def test_labeled_match_arm_control_exits_outer_loop_conversion():
         pytest.fail(f"Labeled match arm outer-loop control conversion failed: {e}")
 
 
+def test_transparent_match_arm_labeled_control_conversion():
+    code = """
+    fn test_transparent_match_labeled_control() {
+        'outer: loop {
+            loop {
+                match mode {
+                    0 => unsafe {
+                        continue 'outer;
+                    },
+                    1 => const {
+                        break 'outer;
+                    },
+                    _ => async {
+                        step();
+                    },
+                }
+                after_match();
+            }
+            after_inner();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "bool _rust_break_outer_0 = false;" in result
+        assert "bool _rust_continue_outer_0 = false;" in result
+        assert "_rust_continue_outer_0 = true;" in result
+        assert "_rust_break_outer_0 = true;" in result
+        assert "continue 'outer" not in result
+        assert "break 'outer" not in result
+        assert (
+            "break;\n                        if (_rust_continue_outer_0 || "
+            "_rust_break_outer_0)"
+        ) not in result
+        assert result.index(
+            "if (_rust_continue_outer_0 || _rust_break_outer_0) {"
+        ) < result.index("after_match();")
+    except Exception as e:
+        pytest.fail(f"Transparent match arm labeled control conversion failed: {e}")
+
+
+def test_transparent_block_final_match_labeled_control_conversion():
+    code = """
+    fn test_transparent_block_final_match_labeled_control() {
+        'outer: loop {
+            loop {
+                unsafe {
+                    match mode {
+                        0 => {
+                            continue 'outer;
+                        },
+                        _ => {
+                            break 'outer;
+                        },
+                    }
+                };
+                after_match();
+            }
+            after_inner();
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "_rust_continue_outer_0 = true;" in result
+        assert "_rust_break_outer_0 = true;" in result
+        assert "continue 'outer" not in result
+        assert "break 'outer" not in result
+        propagation = "if (_rust_continue_outer_0 || _rust_break_outer_0) {"
+        assert propagation in result
+        assert result.index("switch (mode)") < result.index(propagation)
+        assert result.index(propagation) < result.index("after_match();")
+    except Exception as e:
+        pytest.fail(f"Transparent block final match labeled control failed: {e}")
+
+
 def test_match_arm_plain_continue_keeps_loop_continue_conversion():
     code = """
     fn test_match_continue_loop() {
@@ -1631,9 +1707,11 @@ def test_let_binding_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "x = 42;" in result
-        assert "y = 3.14;" in result
-        assert "float z = 2.0;" in result
+        lines = [line.strip() for line in result.splitlines()]
+
+        assert "let x = 42;" in lines
+        assert "let mut y = 3.14;" in lines
+        assert "float z = 2.0;" in lines
     except Exception as e:
         pytest.fail(f"Let binding conversion failed: {e}")
 
@@ -2667,12 +2745,21 @@ def test_array_access_conversion():
     fn test_array() {
         let element = array[0];
         let slice_element = slice[index];
+        let closed = &array[1..3];
+        let prefix = &array[..end];
+        let suffix = &array[start..];
+        let full = &array[..];
     }
     """
     try:
         result = parse_and_generate(code)
         assert "array[0]" in result
         assert "slice[index]" in result
+        assert "array[1..3]" in result
+        assert "array[..end]" in result
+        assert "array[start..]" in result
+        assert "array[..]" in result
+        assert "RangeNode" not in result
     except Exception as e:
         pytest.fail(f"Array access conversion failed: {e}")
 
@@ -2707,6 +2794,45 @@ def test_assignment_operations_conversion():
         assert "a >>= 2;" in result
     except Exception as e:
         pytest.fail(f"Assignment operations conversion failed: {e}")
+
+
+def test_assignment_expression_conversion():
+    code = """
+    fn test_assignment_expr() {
+        let mut a = 0;
+        (a = 1);
+        let unit = (a = 2);
+        let compound = (a += 3);
+        let block_unit = { a = 4; };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "a = 1;" in result
+        assert "a = 2;" in result
+        assert "unit = ();" in result
+        assert "a += 3;" in result
+        assert "compound = ();" in result
+        assert "a = 4;" in result
+        assert "AssignmentNode" not in result
+    except Exception as e:
+        pytest.fail(f"Assignment expression conversion failed: {e}")
+
+
+def test_compound_assignment_try_conversion_preserves_operator():
+    code = """
+    fn accumulate(value: Result<i32, i32>) -> Result<i32, i32> {
+        let mut total: i32 = 0;
+        total += value?;
+        Ok(total)
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "total += _rust_try_value_0;" in result
+        assert "total = _rust_try_value_0;" not in result
+    except Exception as e:
+        pytest.fail(f"Compound assignment try conversion failed: {e}")
 
 
 def test_vector_constructor_conversion():
@@ -2800,6 +2926,27 @@ def test_reference_array_conversion():
         assert "first = weights[0];" in result
     except Exception as e:
         pytest.fail(f"Reference array conversion failed: {e}")
+
+
+def test_lifetime_reference_type_conversion():
+    code = """
+    fn borrow<'a>(value: &'a Vec3<f32>) -> &'a Vec3<f32> {
+        return value;
+    }
+
+    fn borrow_mut<'a>(value: &'a mut Vec3<f32>) -> &'a mut Vec3<f32> {
+        return value;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "vec3 borrow(vec3 value)" in result
+        assert "vec3 borrow_mut(vec3 value)" in result
+        assert "return value;" in result
+        assert "'a" not in result
+        assert "&" not in result
+    except Exception as e:
+        pytest.fail(f"Lifetime reference type conversion failed: {e}")
 
 
 def test_use_statement_conversion():
@@ -3127,6 +3274,62 @@ def test_let_else_complex_pattern_conversion():
         pytest.fail(f"Let else complex pattern conversion failed: {e}")
 
 
+def test_transparent_let_else_subject_preserves_block_statements():
+    code = """
+    fn decode(value: Option<i32>) -> i32 {
+        let Some(v) = unsafe {
+            prepare();
+            value
+        } else {
+            return 0;
+        };
+        return v;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "auto _rust_match_subject_0;" in result
+        assert "prepare();" in result
+        assert "_rust_match_subject_0 = value;" in result
+        assert result.index("prepare();") < result.index(
+            "_rust_match_subject_0 = value;"
+        )
+        assert result.index("_rust_match_subject_0 = value;") < result.index(
+            "if (is_Some(_rust_match_subject_0))"
+        )
+        assert "v = unwrap_Some(_rust_match_subject_0);" in result
+        assert "return 0;" in result
+    except Exception as e:
+        pytest.fail(f"Transparent let-else subject conversion failed: {e}")
+
+
+def test_transparent_if_let_subject_preserves_block_statements():
+    code = """
+    fn branch(value: Option<i32>) {
+        if let Some(v) = const {
+            prepare();
+            value
+        } {
+            use_value(v);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "auto _rust_match_subject_0;" in result
+        assert "prepare();" in result
+        assert "_rust_match_subject_0 = value;" in result
+        assert result.index("prepare();") < result.index(
+            "_rust_match_subject_0 = value;"
+        )
+        assert result.index("_rust_match_subject_0 = value;") < result.index(
+            "if (is_Some(_rust_match_subject_0))"
+        )
+        assert "auto v = unwrap_Some(_rust_match_subject_0);" in result
+    except Exception as e:
+        pytest.fail(f"Transparent if-let subject conversion failed: {e}")
+
+
 def test_plain_struct_array_let_pattern_conversion():
     code = """
     fn unpack(point: Point, values: [i32; 3]) {
@@ -3174,6 +3377,28 @@ def test_matches_macro_let_conversion():
         assert "return ok;" in result
     except Exception as e:
         pytest.fail(f"Matches macro let conversion failed: {e}")
+
+
+def test_transparent_matches_subject_preserves_block_statements():
+    code = """
+    fn branch(value: Option<i32>) {
+        let ready: bool = matches!(async {
+            prepare();
+            value
+        }, Some(_));
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "auto _rust_match_subject_0;" in result
+        assert "prepare();" in result
+        assert "_rust_match_subject_0 = value;" in result
+        assert result.index("prepare();") < result.index(
+            "_rust_match_subject_0 = value;"
+        )
+        assert "ready = true;" in result
+    except Exception as e:
+        pytest.fail(f"Transparent matches subject conversion failed: {e}")
 
 
 def test_matches_macro_if_conversion():
@@ -3333,6 +3558,39 @@ def test_multiple_let_condition_chain_conversion():
         pytest.fail(f"Multiple let condition chain conversion failed: {e}")
 
 
+def test_transparent_condition_chain_subjects_preserve_block_statements():
+    code = """
+    fn pair(left: Option<i32>, right: Option<i32>) {
+        if let Some(a) = async {
+            prepare_left();
+            left
+        } && let Some(b) = unsafe {
+            prepare_right();
+            right
+        } && a < b {
+            use_pair(a, b);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "prepare_left();" in result
+        assert "_rust_match_subject_0 = left;" in result
+        assert "prepare_right();" in result
+        assert "_rust_match_subject_1 = right;" in result
+        assert result.index("prepare_left();") < result.index(
+            "_rust_match_subject_0 = left;"
+        )
+        assert result.index("prepare_right();") < result.index(
+            "_rust_match_subject_1 = right;"
+        )
+        assert "auto a = unwrap_Some(_rust_match_subject_0);" in result
+        assert "auto b = unwrap_Some(_rust_match_subject_1);" in result
+        assert "use_pair(a, b);" in result
+    except Exception as e:
+        pytest.fail(f"Transparent condition chain subject conversion failed: {e}")
+
+
 def test_closure_expression_conversion():
     code = """
     fn closures(values: Values) {
@@ -3397,17 +3655,43 @@ def test_closure_block_body_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "doubled = lambda(x, { y = (x + 1); return (y * 2); });" in result
+        assert "let doubled = lambda(x, { let y = (x + 1); return (y * 2); });" in result
         assert (
-            "mapped = map(values, lambda(x, { prepare(x); return (x + 1); }));"
+            "let mapped = map(values, lambda(x, { prepare(x); return (x + 1); }));"
             in result
         )
         assert (
-            "choose = lambda(x, { if ((x > 0)) { kept = x; return kept; } "
-            "else { fallback = 0; return fallback; } });"
+            "let choose = lambda(x, { if ((x > 0)) { let kept = x; return kept; } "
+            "else { let fallback = 0; return fallback; } });"
         ) in result
     except Exception as e:
         pytest.fail(f"Closure block body conversion failed: {e}")
+
+
+def test_closure_transparent_block_body_conversion():
+    code = """
+    fn closure_transparent_blocks() {
+        let guarded = |x| unsafe {
+            let y = x + 1;
+            y * 2
+        };
+        let folded = || const {
+            let value = 2;
+            value + 1
+        };
+        let suspended = |x| async {
+            let y = x + 1;
+            y
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "let guarded = lambda(x, { let y = (x + 1); return (y * 2); });" in result
+        assert "let folded = lambda({ let value = 2; return (value + 1); });" in result
+        assert "let suspended = lambda(x, { let y = (x + 1); return y; });" in result
+    except Exception as e:
+        pytest.fail(f"Closure transparent block body conversion failed: {e}")
 
 
 def test_closure_pattern_parameter_conversion():
@@ -3636,6 +3920,129 @@ def test_async_block_expression_conversion():
         assert ".await" not in result
     except Exception as e:
         pytest.fail(f"Async block expression conversion failed: {e}")
+
+
+def test_unsafe_extern_transparent_conversion():
+    code = """
+    pub unsafe extern "C" fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        let result: i32 = unsafe {
+            let v: i32 = value?;
+            v + 1
+        };
+        return Ok(result);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "Result<i32, i32> decode(Result<i32, i32> value)" in result
+        assert "int result;" in result
+        assert "int v;" in result
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "if (is_Err(_rust_try_subject_0))" in result
+        assert "v = _rust_try_value_0;" in result
+        assert "result = (v + 1);" in result
+        assert "return Ok(result);" in result
+        assert "unsafe" not in result
+        assert "extern" not in result
+    except Exception as e:
+        pytest.fail(f"Unsafe extern transparent conversion failed: {e}")
+
+
+def test_unsafe_block_assignment_conversion():
+    code = """
+    fn decode(value: i32) -> i32 {
+        let result: i32 = 0;
+        result = unsafe {
+            value + 1
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "int result = 0;" in result
+        assert "result = (value + 1);" in result
+        assert "return result;" in result
+        assert "unsafe" not in result
+    except Exception as e:
+        pytest.fail(f"Unsafe block assignment conversion failed: {e}")
+
+
+def test_const_fn_transparent_conversion():
+    code = """
+    pub const unsafe extern "C" fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        let result: i32 = const {
+            let v: i32 = value?;
+            v + 1
+        };
+        return Ok(result);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "Result<i32, i32> decode(Result<i32, i32> value)" in result
+        assert "int result;" in result
+        assert "int v;" in result
+        assert "auto _rust_try_subject_0 = value;" in result
+        assert "v = _rust_try_value_0;" in result
+        assert "result = (v + 1);" in result
+        assert "return Ok(result);" in result
+        assert "const " not in result
+        assert "unsafe" not in result
+        assert "extern" not in result
+    except Exception as e:
+        pytest.fail(f"Const fn transparent conversion failed: {e}")
+
+
+def test_const_block_assignment_conversion():
+    code = """
+    fn decode(value: i32) -> i32 {
+        let result: i32 = 0;
+        result = const {
+            value + 1
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "int result = 0;" in result
+        assert "result = (value + 1);" in result
+        assert "return result;" in result
+        assert "const " not in result
+    except Exception as e:
+        pytest.fail(f"Const block assignment conversion failed: {e}")
+
+
+def test_local_const_static_item_conversion():
+    code = """
+    fn local_items(value: i32) -> i32 {
+        const OFFSET: i32 = 1;
+        static mut CACHE: i32 = 2;
+        let result: i32 = {
+            const INNER: i32 = 3;
+            static ENABLED: bool = true;
+            value + OFFSET + INNER
+        };
+        return result;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "const int OFFSET = 1;" in result
+        assert "static mut int CACHE = 2;" in result
+        assert "int result;" in result
+        assert "const int INNER = 3;" in result
+        assert "static bool ENABLED = true;" in result
+        assert "result = ((value + OFFSET) + INNER);" in result
+        assert "return result;" in result
+    except Exception as e:
+        pytest.fail(f"Local const/static item conversion failed: {e}")
 
 
 def test_result_try_expression_conversion():

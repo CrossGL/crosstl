@@ -41,6 +41,57 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_structured_buffer_dimensions_lower_to_get_dimensions():
+    code = """
+    shader StructuredBufferDimensionsHLSL {
+        RWStructuredBuffer<int> values @ binding(3);
+        RWStructuredBuffer<int> buffers[2] @ binding(4);
+
+        compute {
+            void main(uint index) {
+                uint len;
+                uint arrayLen;
+                buffer_dimensions(values, len);
+                buffer_dimensions(buffers[index], arrayLen);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "values.GetDimensions(len);" in generated
+    assert "buffers[index].GetDimensions(arrayLen);" in generated
+    assert "buffer_dimensions" not in generated
+
+
+def test_structured_buffer_append_consume_lower_to_native_methods():
+    code = """
+    shader StructuredBufferAppendConsumeHLSL {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        compute {
+            void main(uint value) {
+                buffer_append(appendValues, int(value));
+                int consumed = buffer_consume(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "AppendStructuredBuffer<int> appendValues : register(u1);" in generated
+    assert "ConsumeStructuredBuffer<int> consumeValues : register(u2);" in generated
+    assert "appendValues.Append(int(value));" in generated
+    assert "int consumed = consumeValues.Consume();" in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
 def test_hlsl_unsigned_integer_literal_suffix_codegen():
     code = """
     shader UIntLiteralCodegen {
@@ -2826,6 +2877,41 @@ def test_directx_direct_stage_image_load_store_and_atomics_use_input_members():
     assert "imageStore(" not in generated_code
     assert "imageAtomicAdd(counters" not in generated_code
     assert "imageAtomicMin(signedLayers" not in generated_code
+
+
+def test_directx_image_atomic_helper_descriptor_for_integer_storage_textures():
+    codegen = HLSLCodeGen()
+
+    uint_descriptor = codegen.image_atomic_helper_descriptor(
+        "imageAtomicAdd", "RWTexture1DArray<uint>"
+    )
+    assert uint_descriptor == {
+        "helper_name": "imageAtomicAdd_uimage1DArray",
+        "return_type": "uint",
+        "coord_type": "int2",
+        "intrinsic": "InterlockedAdd",
+    }
+
+    int_descriptor = codegen.image_atomic_helper_descriptor(
+        "imageAtomicCompSwap", "RWTexture2DArray<int>"
+    )
+    assert int_descriptor == {
+        "helper_name": "imageAtomicCompSwap_iimage2DArray",
+        "return_type": "int",
+        "coord_type": "int3",
+        "intrinsic": "InterlockedCompareExchange",
+    }
+
+    assert (
+        codegen.image_atomic_helper_descriptor("imageAtomicAdd", "RWTexture2D<float4>")
+        is None
+    )
+    assert (
+        codegen.image_atomic_helper_descriptor(
+            "imageAtomicUnsupported", "RWTexture2D<uint>"
+        )
+        is None
+    )
 
 
 def test_directx_direct_stage_explicit_image_formats_use_input_members():
@@ -6381,6 +6467,96 @@ def test_directx_cube_array_texture_grad_gather_keep_sampler_arguments():
     )
     assert "cubeArraySampler" not in generated_code
     assert "cubeArraysSampler" not in generated_code
+
+
+def test_directx_texture_sampling_capability_descriptors():
+    codegen = HLSLCodeGen()
+
+    assert codegen.texture_sampling_capabilities("Texture2D") == {
+        "texture_type": "Texture2D",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "compare_offset": True,
+        "gather_compare_offset": True,
+    }
+    assert codegen.texture_sampling_capabilities("TextureCube") == {
+        "texture_type": "TextureCube",
+        "gather": True,
+        "gather_offset": False,
+        "sample_offset": False,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("Texture2DArray[4]") == {
+        "texture_type": "Texture2DArray",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "compare_offset": True,
+        "gather_compare_offset": True,
+    }
+    assert codegen.texture_sampling_capabilities("Texture3D") == {
+        "texture_type": "Texture3D",
+        "gather": False,
+        "gather_offset": False,
+        "sample_offset": True,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+
+
+def test_directx_texture_dimension_descriptors():
+    codegen = HLSLCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "coordinate_dimension": None,
+            "offset_dimension": None,
+            "sample_offset_dimension": None,
+            "texel_fetch_offset_dimension": None,
+            "gather_offset_dimension": None,
+            "compare_offset_dimension": None,
+            "compare_lod_offset_dimension": None,
+            "compare_grad_offset_dimension": None,
+            "gather_compare_offset_dimension": None,
+            "gradient_dimension": None,
+            "query_lod_coordinate_dimension": None,
+        }
+        expected.update(overrides)
+        assert codegen.texture_dimension_descriptor(texture_type) == expected
+
+    expect(
+        "Texture2DArray[4]",
+        coordinate_dimension=3,
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        gather_offset_dimension=2,
+        compare_offset_dimension=2,
+        compare_lod_offset_dimension=2,
+        compare_grad_offset_dimension=2,
+        gather_compare_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=3,
+    )
+    expect(
+        "Texture1DArray",
+        coordinate_dimension=2,
+        offset_dimension=1,
+        sample_offset_dimension=1,
+        texel_fetch_offset_dimension=1,
+        gradient_dimension=1,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "TextureCubeArray",
+        gradient_dimension=3,
+        query_lod_coordinate_dimension=4,
+    )
+    expect("Texture2DMSArray<float4>", coordinate_dimension=3)
+    expect("RWTexture3D<float4>", coordinate_dimension=3)
 
 
 def test_directx_texture_gather_offset_variants_keep_sampler_arguments():
@@ -10581,6 +10757,147 @@ def test_directx_array_shadow_texture_resource_arrays_reject_mismatched_fixed_he
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_directx_image_size_helper_descriptor_for_storage_images():
+    codegen = HLSLCodeGen()
+
+    assert codegen.image_size_helper_descriptor("RWTexture1D<float4>") == {
+        "return_type": "int",
+        "dimensions": ("width",),
+        "return_expr": "int(width)",
+    }
+    assert codegen.image_size_helper_descriptor("RWTexture2DArray<int>") == {
+        "return_type": "int3",
+        "dimensions": ("width", "height", "elements"),
+        "return_expr": "int3(width, height, elements)",
+    }
+    assert codegen.image_size_helper_descriptor("RWTexture3D<uint>") == {
+        "return_type": "int3",
+        "dimensions": ("width", "height", "depth"),
+        "return_expr": "int3(width, height, depth)",
+    }
+    assert codegen.image_size_helper_descriptor("Texture2D") is None
+
+
+def test_directx_texture_query_helper_descriptors():
+    codegen = HLSLCodeGen()
+
+    assert codegen.texture_size_helper_descriptor("Texture1D") == {
+        "return_type": "int",
+        "function_params": "int lod",
+        "dimensions": ("width", "levels"),
+        "get_dimensions_args": ("lod", "width", "levels"),
+        "return_expr": "int(width)",
+    }
+    assert codegen.texture_size_helper_descriptor("Texture2DMSArray<float4>") == {
+        "return_type": "int3",
+        "function_params": "",
+        "dimensions": ("width", "height", "elements", "samples"),
+        "get_dimensions_args": ("width", "height", "elements", "samples"),
+        "return_expr": "int3(width, height, elements)",
+    }
+    assert codegen.texture_query_levels_helper_descriptor("Texture3D") == {
+        "return_type": "int",
+        "function_params": "",
+        "dimensions": ("width", "height", "depth", "levels"),
+        "get_dimensions_args": ("0", "width", "height", "depth", "levels"),
+        "return_expr": "int(levels)",
+    }
+    assert codegen.texture_query_levels_helper_descriptor("Texture2DMS<float4>") == {
+        "return_type": "int",
+        "function_params": "",
+        "dimensions": (),
+        "get_dimensions_args": (),
+        "return_expr": "1",
+    }
+    assert codegen.texture_samples_helper_descriptor("Texture2DMSArray<float4>") == {
+        "return_type": "int",
+        "function_params": "",
+        "dimensions": ("width", "height", "elements", "samples"),
+        "get_dimensions_args": ("width", "height", "elements", "samples"),
+        "return_expr": "int(samples)",
+    }
+    assert codegen.texture_samples_helper_descriptor("Texture2D") is None
+
+
+def test_directx_texture_query_resource_descriptors():
+    codegen = HLSLCodeGen()
+    codegen.texture_variable_types = {
+        "colorImage": "RWTexture2D<float4>",
+        "colorMap": "Texture2D",
+        "msTex": "Texture2DMS<float4>",
+        "msArray": "Texture2DMSArray<float4>",
+    }
+
+    assert codegen.texture_query_resource_descriptor("colorImage") == {
+        "texture_type": "RWTexture2D<float4>",
+        "storage_image": True,
+        "multisample": False,
+        "size_descriptor": {
+            "return_type": "int2",
+            "dimensions": ("width", "height"),
+            "return_expr": "int2(width, height)",
+        },
+        "levels_descriptor": None,
+        "samples_descriptor": None,
+    }
+    assert codegen.texture_query_resource_descriptor("msArray") == {
+        "texture_type": "Texture2DMSArray<float4>",
+        "storage_image": False,
+        "multisample": True,
+        "size_descriptor": {
+            "return_type": "int3",
+            "function_params": "",
+            "dimensions": ("width", "height", "elements", "samples"),
+            "get_dimensions_args": ("width", "height", "elements", "samples"),
+            "return_expr": "int3(width, height, elements)",
+        },
+        "levels_descriptor": {
+            "return_type": "int",
+            "function_params": "",
+            "dimensions": (),
+            "get_dimensions_args": (),
+            "return_expr": "1",
+        },
+        "samples_descriptor": {
+            "return_type": "int",
+            "function_params": "",
+            "dimensions": ("width", "height", "elements", "samples"),
+            "get_dimensions_args": ("width", "height", "elements", "samples"),
+            "return_expr": "int(samples)",
+        },
+    }
+    assert codegen.texture_query_size_expression("colorImage") == "imageSize(colorImage)"
+    assert codegen.texture_query_size_expression("msTex") == "textureSize(msTex)"
+    assert (
+        codegen.texture_query_size_expression("colorMap")
+        == "textureSize(colorMap, 0)"
+    )
+    assert (
+        codegen.texture_query_levels_expression("colorImage")
+        == "/* unsupported DirectX texture query: textureQueryLevels on RWTexture2D<float4> */ 0"
+    )
+    assert (
+        codegen.texture_query_levels_expression("colorMap")
+        == "textureQueryLevels(colorMap)"
+    )
+    assert (
+        codegen.texture_samples_expression("colorMap")
+        == "/* unsupported DirectX texture samples query: requires multisample texture */ 0"
+    )
+    assert codegen.texture_samples_expression("msArray") == "textureSamples(msArray)"
+    assert ("imageSize", "RWTexture2D<float4>") in codegen.required_texture_query_helpers
+    assert ("textureSize", "Texture2D") in codegen.required_texture_query_helpers
+    assert ("textureSize", "Texture2DMS<float4>") in codegen.required_texture_query_helpers
+    assert (
+        "textureQueryLevels",
+        "Texture2D",
+    ) in codegen.required_texture_query_helpers
+    assert (
+        "textureSamples",
+        "Texture2DMSArray<float4>",
+    ) in codegen.required_texture_query_helpers
+
+
 def test_directx_storage_image_size_queries_use_get_dimensions_helpers():
     shader = """
     shader StorageImageSizeQueries {
@@ -14619,6 +14936,381 @@ def test_directx_shadow_compare_sampler_parameter_transitive():
     )
     assert "compareShadow(compareSampler, input.uv, input.depth)" in generated_code
     assert "sampleShadow(shadowSampler, input)" in generated_code
+
+
+def test_directx_sampler_1d_array_sampling_and_queries():
+    shader = """
+    shader OneDArrayTexture {
+        sampler1DArray lineArray;
+        sampler linearSampler;
+
+        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+            ivec2 dims = textureSize(tex, lod);
+            int levels = textureQueryLevels(tex);
+            return texture(tex, samp, uvLayer)
+                + textureLod(tex, samp, uvLayer, lod)
+                + vec4(dims.x, dims.y, levels, 0.0);
+        }
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "Texture1DArray lineArray : register(t0);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "int2 textureSize(Texture1DArray tex, int lod)" in generated_code
+    assert "tex.GetDimensions(lod, width, elements, levels);" in generated_code
+    assert "int textureQueryLevels(Texture1DArray tex)" in generated_code
+    assert (
+        "float4 sampleLineArray(Texture1DArray tex, SamplerState samp, float2 uvLayer, int lod)"
+        in generated_code
+    )
+    assert "tex.Sample(samp, uvLayer)" in generated_code
+    assert "tex.SampleLevel(samp, uvLayer, lod)" in generated_code
+
+
+def test_directx_image_1d_and_1d_array_storage_operations():
+    shader = """
+    shader OneDStorageImages {
+        image1D line;
+        image1DArray layers;
+        uimage1D counters @r32ui;
+        uimage1DArray layerCounters @r32ui;
+
+        float touchLine(image1D image, int x, float value) {
+            float oldValue = imageLoad(image, x);
+            imageStore(image, x, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchLayer(image1DArray image, ivec2 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        uint addCounter(uimage1D image @r32ui, int x, uint value) {
+            return imageAtomicAdd(image, x, value);
+        }
+
+        uint exchangeLayer(uimage1DArray image @r32ui, ivec2 coord, uint value) {
+            return imageAtomicExchange(image, coord, value);
+        }
+
+        compute {
+            void main() {
+                int sizeLine = imageSize(line);
+                ivec2 sizeLayer = imageSize(layers);
+                float a = touchLine(line, 1, 0.25);
+                vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
+                uint c = addCounter(counters, 4, 7u);
+                uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "RWTexture1D<float4> line : register(u0);" in generated_code
+    assert "RWTexture1DArray<float4> layers : register(u1);" in generated_code
+    assert "RWTexture1D<uint> counters : register(u2);" in generated_code
+    assert "RWTexture1DArray<uint> layerCounters : register(u3);" in generated_code
+    assert "int imageSize(RWTexture1D<float4> image)" in generated_code
+    assert "int2 imageSize(RWTexture1DArray<float4> image)" in generated_code
+    assert "float oldValue = image[x].x;" in generated_code
+    assert "image[x] = float4((oldValue + value));" in generated_code
+    assert "float4 oldValue = image[coord];" in generated_code
+    assert "image[coord] = (oldValue + value);" in generated_code
+    assert (
+        "uint imageAtomicAdd_uimage1D(RWTexture1D<uint> image, int coord, uint value)"
+        in generated_code
+    )
+    assert (
+        "uint imageAtomicExchange_uimage1DArray(RWTexture1DArray<uint> image, int2 coord, uint value)"
+        in generated_code
+    )
+
+
+def test_directx_uav_metadata_attributes_emit_coherency_and_register_space():
+    shader = """
+    shader UavMetadata {
+        uimage2D counters @r32ui @globallycoherent @register(u4, space2);
+        image2D outImage @register(u5, space2);
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert (
+        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
+        in generated_code
+    )
+    assert "RWTexture2D<float4> outImage : register(u5, space2);" in generated_code
+
+
+def test_directx_generic_image_memory_attributes_do_not_become_semantics():
+    shader = """
+    shader UavMemoryAttrs {
+        uimage2D counters @r32ui @coherent @register(u4, space2);
+
+        uint readCounter(uimage2D image @r32ui @coherent, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert (
+        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
+        in generated_code
+    )
+    assert "uint readCounter(RWTexture2D<uint> image, int2 pixel)" in generated_code
+    assert ": coherent" not in generated_code
+
+
+def test_directx_storage_image_access_attributes_validate_without_semantics():
+    shader = """
+    shader UavAccessAttrs {
+        image2D outImage @writeonly;
+
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                imageStore(outImage, ivec2(0, 0), vec4(1.0));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "RWTexture2D<float4> outImage : register(u0);" in generated_code
+    assert "float readPixel(RWTexture2D<float4> image, int2 pixel)" in generated_code
+    assert (
+        "void writePixel(RWTexture2D<float4> image, int2 pixel, float4 value)"
+        in generated_code
+    )
+    assert ": readonly" not in generated_code
+    assert ": writeonly" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader UavAccessInvalidLoad {
+                float readPixel(image2D image @writeonly, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessInvalidStore {
+                void writePixel(image2D image @readonly, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires write-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessInvalidAtomic {
+                uint addCounter(uimage2D image @r32ui @readonly, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-write storage image access",
+        ),
+        (
+            """
+            shader UavAccessInvalidGlobal {
+                image2D outImage @writeonly;
+
+                compute {
+                    void main() {
+                        float value = imageLoad(outImage, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+    ],
+)
+def test_directx_storage_image_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(ast)
+
+
+def test_directx_storage_image_access_allows_compatible_helper_calls():
+    shader = """
+    shader UavAccessHelperValid {
+        image2D source @readonly;
+        image2D target @writeonly;
+
+        float readPixel(image2D image, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "float value = readPixel(source, int2(0, 0));" in generated_code
+    assert "writePixel(target, int2(0, 0), float4(value));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader UavAccessHelperInvalidRead {
+                image2D target @writeonly;
+
+                float readPixel(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = readPixel(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'readPixel' requires read-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessHelperInvalidWrite {
+                image2D source @readonly;
+
+                void writePixel(image2D image, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        writePixel(source, ivec2(0, 0), vec4(1.0));
+                    }
+                }
+            }
+            """,
+            "function call 'writePixel' requires write-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessHelperInvalidAtomic {
+                uimage2D source @r32ui @readonly;
+
+                uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        uint value = addCounter(source, ivec2(0, 0), 1u);
+                    }
+                }
+            }
+            """,
+            "function call 'addCounter' requires read-write storage image access",
+        ),
+        (
+            """
+            shader UavAccessHelperInvalidTransitive {
+                image2D target @writeonly;
+
+                float leaf(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                float mid(image2D image, ivec2 pixel) {
+                    return leaf(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = mid(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'mid' requires read-capable storage image access",
+        ),
+    ],
+)
+def test_directx_storage_image_access_rejects_incompatible_helper_calls(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(ast)
 
 
 if __name__ == "__main__":

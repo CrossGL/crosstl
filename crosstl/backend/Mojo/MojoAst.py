@@ -7,6 +7,7 @@ from ..common_ast import (
     AttributeNode,
     BinaryOpNode,
     BreakNode,
+    CallNode,
     CastNode,
     ConstantBufferNode,
     ContinueNode,
@@ -15,6 +16,8 @@ from ..common_ast import (
     FunctionNode,
     IfNode,
     MemberAccessNode,
+    MethodCallNode,
+    RangeForNode,
     ReturnNode,
     ShaderNode,
     StructNode,
@@ -33,6 +36,7 @@ _COMMON_NODES = (
     AttributeNode,
     BinaryOpNode,
     BreakNode,
+    CallNode,
     CastNode,
     ConstantBufferNode,
     ContinueNode,
@@ -41,6 +45,8 @@ _COMMON_NODES = (
     FunctionNode,
     IfNode,
     MemberAccessNode,
+    MethodCallNode,
+    RangeForNode,
     ReturnNode,
     ShaderNode,
     StructNode,
@@ -58,8 +64,8 @@ _COMMON_NODES = (
 class VariableDeclarationNode(VariableNode):
     """Node representing a Mojo variable declaration with type inference"""
 
-    def __init__(self, vtype, name, value=None, is_var=True):
-        super().__init__(vtype, name, value)
+    def __init__(self, vtype, name, value=None, is_var=True, attributes=None):
+        super().__init__(vtype, name, value, attributes=attributes)
         self.is_var = is_var  # True for 'var', False for 'let'
         self.var_type = "var" if is_var else "let"
         self.initial_value = value
@@ -87,11 +93,14 @@ class ImportNode(ASTNode):
 class ClassNode(ASTNode):
     """Node representing a class definition"""
 
-    def __init__(self, name, members, methods, base_classes=None):
+    def __init__(
+        self, name, members=None, methods=None, base_classes=None, attributes=None
+    ):
         self.name = name
-        self.members = members
-        self.methods = methods
+        self.members = members or []
+        self.methods = methods or []
         self.base_classes = base_classes or []
+        self.attributes = attributes or []
 
     def __repr__(self):
         return f"ClassNode(name={self.name}, members={len(self.members)}, methods={len(self.methods)})"

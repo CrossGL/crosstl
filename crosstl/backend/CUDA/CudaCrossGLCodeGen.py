@@ -212,6 +212,8 @@ class CudaToCrossGLConverter:
     def format_statement_fragment(self, stmt):
         if stmt is None:
             return ""
+        if isinstance(stmt, list):
+            return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
             var_type = self.convert_cuda_type_to_crossgl(stmt.vtype)
             if stmt.value:
@@ -644,7 +646,8 @@ class CudaToCrossGLConverter:
 
     def visit_MemberAccessNode(self, node):
         obj = self.visit(node.object)
-        return f"{obj}.{node.member}"
+        operator = "->" if getattr(node, "is_pointer", False) else "."
+        return f"{obj}{operator}{node.member}"
 
     def visit_ArrayAccessNode(self, node):
         array = self.visit(node.array)
@@ -768,7 +771,7 @@ class CudaToCrossGLConverter:
         for case in node.cases:
             self.visit(case)
 
-        if node.default_case:
+        if node.default_case is not None:
             self.emit("default:")
             self.indent_level += 1
             for stmt in node.default_case:
@@ -973,6 +976,7 @@ class CudaToCrossGLConverter:
             "logf": "log",
             "expf": "exp",
             "fabsf": "abs",
+            "fmodf": "mod",
             "fminf": "min",
             "fmaxf": "max",
             "floorf": "floor",
@@ -985,6 +989,7 @@ class CudaToCrossGLConverter:
             "log": "log",
             "exp": "exp",
             "fabs": "abs",
+            "fmod": "mod",
             "fmin": "min",
             "fmax": "max",
             "floor": "floor",

@@ -41,6 +41,130 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_structured_buffer_operations_lower_to_ssbo():
+    code = """
+    shader StructuredBufferGLSL {
+        RWStructuredBuffer<int> values @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint len;
+                int v = buffer_load(values, tid.x);
+                buffer_dimensions(values, len);
+                buffer_store(values, tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 3) buffer valuesBuffer { int values[]; };"
+        in generated
+    )
+    assert "int v = values[tid.x];" in generated
+    assert "len = values.length();" in generated
+    assert "values[tid.x] = (v + 1);" in generated
+    assert "RWStructuredBuffer" not in generated
+    assert "buffer_load" not in generated
+    assert "buffer_store" not in generated
+    assert "buffer_dimensions" not in generated
+
+
+def test_readonly_structured_buffer_uses_readonly_ssbo():
+    code = """
+    shader StructuredBufferGLSL {
+        StructuredBuffer<int> values @ binding(1);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int v = buffer_load(values, tid.x);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) readonly buffer valuesBuffer { int values[]; };"
+        in generated
+    )
+    assert "int v = values[tid.x];" in generated
+
+
+def test_append_consume_structured_buffers_emit_diagnostics():
+    code = """
+    shader StructuredBufferAppendConsumeGLSL {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        compute {
+            void main(uint value) {
+                buffer_append(appendValues, int(value));
+                int consumed = buffer_consume(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) buffer appendValuesBuffer { int appendValues[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 2) buffer consumeValuesBuffer { int consumeValues[]; };"
+        in generated
+    )
+    assert (
+        "/* unsupported GLSL buffer append: requires explicit counter buffer */;"
+        in generated
+    )
+    assert (
+        "int consumed = 0 /* unsupported GLSL buffer consume: requires explicit counter buffer */;"
+        in generated
+    )
+    assert "appendValues[0]" not in generated
+    assert "consumeValues[0]" not in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_structured_buffer_arrays_lower_to_ssbo_instance_arrays():
+    code = """
+    shader StructuredBufferArrayGLSL {
+        RWStructuredBuffer<int> buffers[2] @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID, uint index) {
+                uint len;
+                int v = buffer_load(buffers[index], tid.x);
+                buffer_dimensions(buffers[index], len);
+                buffer_store(buffers[index], tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 3) buffer buffersBuffer { int data[]; } buffers[2];"
+        in generated
+    )
+    assert "int v = buffers[index].data[tid.x];" in generated
+    assert "len = buffers[index].data.length();" in generated
+    assert "buffers[index].data[tid.x] = (v + 1);" in generated
+    assert "buffers[index][tid.x]" not in generated
+
+
 def test_glsl_unsigned_integer_literal_suffix_codegen():
     code = """
     shader UIntLiteralCodegen {
@@ -3927,6 +4051,121 @@ def test_opengl_cube_array_texture_grad_gather_filter_sampler_arguments():
     assert "sampleCubeArrayElements(cubeArrays, cubeLayer, ddx, ddy)" in generated_code
     assert "cubeSampler" not in generated_code
     assert "cubeSamplers" not in generated_code
+
+
+def test_opengl_texture_sampling_capability_descriptors():
+    codegen = GLSLCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "gather": False,
+            "gather_offset": False,
+            "sample_offset": False,
+            "compare_offset": False,
+            "compare_lod": False,
+            "compare_grad": False,
+            "compare_lod_offset": False,
+            "compare_grad_offset": False,
+            "gather_compare_offset": False,
+        }
+        expected.update(overrides)
+        assert codegen.texture_sampling_capabilities(texture_type) == expected
+
+    expect(
+        "sampler2D",
+        gather=True,
+        gather_offset=True,
+        sample_offset=True,
+    )
+    expect("samplerCube", gather=True)
+    expect(
+        "sampler2DArray[4]",
+        gather=True,
+        gather_offset=True,
+        sample_offset=True,
+    )
+    expect(
+        "sampler2DShadow",
+        sample_offset=True,
+        compare_offset=True,
+        compare_lod=True,
+        compare_grad=True,
+        compare_lod_offset=True,
+        compare_grad_offset=True,
+        gather_compare_offset=True,
+    )
+    expect(
+        "sampler2DArrayShadow",
+        sample_offset=True,
+        compare_offset=True,
+        compare_grad=True,
+        compare_grad_offset=True,
+        gather_compare_offset=True,
+    )
+    expect("samplerCubeShadow", compare_grad=True)
+    expect("sampler2DMS")
+
+
+def test_opengl_texture_dimension_descriptors():
+    codegen = GLSLCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "coordinate_dimension": None,
+            "offset_dimension": None,
+            "sample_offset_dimension": None,
+            "texel_fetch_offset_dimension": None,
+            "gather_offset_dimension": None,
+            "compare_offset_dimension": None,
+            "compare_lod_offset_dimension": None,
+            "compare_grad_offset_dimension": None,
+            "gather_compare_offset_dimension": None,
+            "gradient_dimension": None,
+            "query_lod_coordinate_dimension": None,
+        }
+        expected.update(overrides)
+        assert codegen.texture_dimension_descriptor(texture_type) == expected
+
+    expect(
+        "sampler2DArray[4]",
+        coordinate_dimension=3,
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        gather_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=3,
+    )
+    expect(
+        "sampler1DArray",
+        coordinate_dimension=2,
+        offset_dimension=1,
+        sample_offset_dimension=1,
+        texel_fetch_offset_dimension=1,
+        gradient_dimension=1,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "sampler2DShadow",
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        compare_offset_dimension=2,
+        compare_lod_offset_dimension=2,
+        compare_grad_offset_dimension=2,
+        gather_compare_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "samplerCubeArray",
+        gradient_dimension=3,
+        query_lod_coordinate_dimension=4,
+    )
+    expect("sampler2DMSArray", coordinate_dimension=3)
+    expect("image3D", coordinate_dimension=3)
 
 
 def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
@@ -10236,6 +10475,58 @@ def test_opengl_storage_image_size_queries_use_image_size():
     assert "textureSize(" not in generated_code
 
 
+def test_opengl_texture_query_resource_descriptors():
+    codegen = GLSLCodeGen()
+    codegen.texture_variable_types = {
+        "colorImage": "image2D",
+        "colorMap": "sampler2D",
+        "msTex": "sampler2DMS",
+        "msArray": "sampler2DMSArray",
+    }
+
+    assert codegen.texture_query_resource_descriptor("colorImage") == {
+        "texture_type": "image2D",
+        "storage_image": True,
+        "multisample": False,
+        "size_descriptor": {"function_name": "imageSize"},
+    }
+    assert codegen.texture_query_resource_descriptor("msArray") == {
+        "texture_type": "sampler2DMSArray",
+        "storage_image": False,
+        "multisample": True,
+        "size_descriptor": {"function_name": "textureSize"},
+    }
+    assert codegen.texture_query_resource_descriptor("colorMap") == {
+        "texture_type": "sampler2D",
+        "storage_image": False,
+        "multisample": False,
+        "size_descriptor": {"function_name": "textureSize"},
+    }
+    assert codegen.texture_query_size_descriptor("sampler2D") == {
+        "function_name": "textureSize"
+    }
+    assert codegen.texture_query_size_descriptor(None) is None
+    assert (
+        codegen.texture_query_levels_expression("colorImage")
+        == "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
+    )
+    assert codegen.texture_query_levels_expression("msTex") == "1"
+    assert codegen.texture_query_levels_expression("colorMap") is None
+    assert (
+        codegen.texture_samples_expression("textureSamples", "colorMap")
+        == "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
+    )
+    assert (
+        codegen.texture_samples_expression("imageSamples", "msTex")
+        == "textureSamples(msTex)"
+    )
+    assert codegen.texture_samples_expression("textureSamples", "msTex") is None
+    assert (
+        codegen.texture_size_query_expression("colorImage") == "imageSize(colorImage)"
+    )
+    assert codegen.texture_size_query_expression("colorMap") is None
+
+
 def test_opengl_storage_image_levels_and_lod_queries_emit_diagnostics():
     shader = """
     shader StorageImageInvalidQueries {
@@ -13037,6 +13328,329 @@ def test_shift_operators(shader, expected_outputs):
 
     for expected in expected_outputs:
         assert expected in generated_code
+
+
+def test_glsl_sampler_1d_array_sampling_and_queries():
+    shader = """
+    shader OneDArrayTexture {
+        sampler1DArray lineArray;
+        sampler linearSampler;
+
+        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+            ivec2 dims = textureSize(tex, lod);
+            int levels = textureQueryLevels(tex);
+            return texture(tex, samp, uvLayer)
+                + textureLod(tex, samp, uvLayer, lod)
+                + vec4(dims.x, dims.y, levels, 0.0);
+        }
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(binding = 0) uniform sampler1DArray lineArray;" in generated_code
+    assert "sampler linearSampler" not in generated_code
+    assert (
+        "vec4 sampleLineArray(sampler1DArray tex, vec2 uvLayer, int lod)"
+        in generated_code
+    )
+    assert "ivec2 dims = textureSize(tex, lod);" in generated_code
+    assert "int levels = textureQueryLevels(tex);" in generated_code
+    assert "texture(tex, uvLayer)" in generated_code
+    assert "textureLod(tex, uvLayer, lod)" in generated_code
+    assert "sampleLineArray(lineArray, vec2(0.5, 0.0), 0)" in generated_code
+
+
+def test_glsl_image_1d_and_1d_array_storage_operations():
+    shader = """
+    shader OneDStorageImages {
+        image1D line;
+        image1DArray layers;
+        uimage1D counters @r32ui;
+        uimage1DArray layerCounters @r32ui;
+
+        float touchLine(image1D image, int x, float value) {
+            float oldValue = imageLoad(image, x);
+            imageStore(image, x, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchLayer(image1DArray image, ivec2 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        uint addCounter(uimage1D image @r32ui, int x, uint value) {
+            return imageAtomicAdd(image, x, value);
+        }
+
+        uint exchangeLayer(uimage1DArray image @r32ui, ivec2 coord, uint value) {
+            return imageAtomicExchange(image, coord, value);
+        }
+
+        compute {
+            void main() {
+                int sizeLine = imageSize(line);
+                ivec2 sizeLayer = imageSize(layers);
+                float a = touchLine(line, 1, 0.25);
+                vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
+                uint c = addCounter(counters, 4, 7u);
+                uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(rgba32f, binding = 0) uniform image1D line;" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image1DArray layers;" in generated_code
+    assert "layout(r32ui, binding = 2) uniform uimage1D counters;" in generated_code
+    assert (
+        "layout(r32ui, binding = 3) uniform uimage1DArray layerCounters;"
+        in generated_code
+    )
+    assert "float oldValue = imageLoad(image, x).x;" in generated_code
+    assert "imageStore(image, x, vec4((oldValue + value)));" in generated_code
+    assert "vec4 oldValue = imageLoad(image, coord);" in generated_code
+    assert "imageStore(image, coord, (oldValue + value));" in generated_code
+    assert "return imageAtomicAdd(image, x, value);" in generated_code
+    assert "return imageAtomicExchange(image, coord, value);" in generated_code
+
+
+def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():
+    shader = """
+    shader StorageImageAccess {
+        image2D outImage @writeonly;
+
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                imageStore(outImage, ivec2(0, 0), vec4(1.0));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert (
+        "layout(rgba32f, binding = 0) writeonly uniform image2D outImage;"
+        in generated_code
+    )
+    assert "float readPixel(readonly image2D image, ivec2 pixel)" in generated_code
+    assert (
+        "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)"
+        in generated_code
+    )
+    assert "image2D image readonly" not in generated_code
+    assert "image2D image writeonly" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessInvalidLoad {
+                float readPixel(image2D image @writeonly, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidStore {
+                void writePixel(image2D image @readonly, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidAtomic {
+                uint addCounter(uimage2D image @r32ui @readonly, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidGlobal {
+                image2D outImage @writeonly;
+
+                compute {
+                    void main() {
+                        float value = imageLoad(outImage, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+def test_glsl_storage_image_access_allows_compatible_helper_calls():
+    shader = """
+    shader StorageImageAccessHelperValid {
+        image2D source @readonly;
+        image2D target @writeonly;
+
+        float readPixel(image2D image, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "float value = readPixel(source, ivec2(0, 0));" in generated_code
+    assert "writePixel(target, ivec2(0, 0), vec4(value));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessHelperInvalidRead {
+                image2D target @writeonly;
+
+                float readPixel(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = readPixel(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'readPixel' requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidWrite {
+                image2D source @readonly;
+
+                void writePixel(image2D image, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        writePixel(source, ivec2(0, 0), vec4(1.0));
+                    }
+                }
+            }
+            """,
+            "function call 'writePixel' requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidAtomic {
+                uimage2D source @r32ui @readonly;
+
+                uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        uint value = addCounter(source, ivec2(0, 0), 1u);
+                    }
+                }
+            }
+            """,
+            "function call 'addCounter' requires read-write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidTransitive {
+                image2D target @writeonly;
+
+                float leaf(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                float mid(image2D image, ivec2 pixel) {
+                    return leaf(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = mid(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'mid' requires read-capable storage image access",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_incompatible_helper_calls(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
 
 
 if __name__ == "__main__":

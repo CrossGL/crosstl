@@ -546,6 +546,105 @@ def test_codegen_rw_texture_array_mapping():
     assert "image1darray" in output.lower()
 
 
+def test_codegen_1d_rw_texture_signedness_mapping():
+    code = textwrap.dedent("""
+        RWTexture1D<float4> line : register(u0);
+        RWTexture1DArray<uint> counters : register(u1);
+        RWTexture1D<int> signedLine : register(u2);
+
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 tid : SV_DispatchThreadID) {
+            float4 c = line[tid.x];
+            uint v = counters[uint2(tid.x, 0)];
+            int s = signedLine[tid.x];
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+    assert "image1D line;" in output
+    assert "uimage1DArray counters;" in output
+    assert "iimage1D signedLine;" in output
+
+    shader_ast = parse_crossgl(output)
+    assert ShaderStage.COMPUTE in shader_ast.stages
+
+
+def test_codegen_rw_texture_indexing_uses_image_operations():
+    code = textwrap.dedent("""
+        RWTexture1D<float4> line : register(u0);
+        RWTexture1DArray<uint> counters : register(u1);
+        RWTexture2D<float4> images[2] : register(u2);
+
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 tid : SV_DispatchThreadID) {
+            float4 c = line[tid.x];
+            line[tid.x] = c;
+            uint v = counters[uint2(tid.x, 0)];
+            counters[uint2(tid.x, 0)] += 1u;
+            float4 d = images[0][tid.xy];
+            images[1][tid.xy] = d;
+            uint original;
+            InterlockedAdd(counters[uint2(tid.x, 0)], 1u, original);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+    assert "vec4 c = imageLoad(line, tid.x);" in output
+    assert "imageStore(line, tid.x, c);" in output
+    assert "uint v = imageLoad(counters, uvec2(tid.x, 0));" in output
+    assert (
+        "imageStore(counters, uvec2(tid.x, 0), "
+        "imageLoad(counters, uvec2(tid.x, 0)) + 1);"
+    ) in output
+    assert "vec4 d = imageLoad(images[0], tid.xy);" in output
+    assert "imageStore(images[1], tid.xy, d);" in output
+    assert "atomicAdd(counters[uvec2(tid.x, 0)], 1, original);" in output
+
+    shader_ast = parse_crossgl(output)
+    assert ShaderStage.COMPUTE in shader_ast.stages
+
+
+def test_codegen_preserves_uav_coherency_and_register_space():
+    code = textwrap.dedent("""
+        globallycoherent RWTexture2D<uint> counters : register(u4, space2);
+        RWTexture2D<float4> outImage : register(u5, space2);
+        globallycoherent RWStructuredBuffer<int> values : register(u6, space2);
+
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 tid : SV_DispatchThreadID) {
+            uint value = counters[tid.xy];
+            values.Store(0, int(value));
+            outImage[tid.xy] = float4(value, 0, 0, 1);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "@ globallycoherent" in output
+    assert "@ register(u4, space2)" in output
+    assert "uimage2D counters;" in output
+    assert "@ register(u5, space2)" in output
+    assert "image2D outImage;" in output
+    assert "@ register(u6, space2)" in output
+    assert "RWStructuredBuffer<int> values;" in output
+    assert "uint value = imageLoad(counters, tid.xy);" in output
+    assert "buffer_store(values, 0, int(value));" in output
+    assert "imageStore(outImage, tid.xy, vec4(value, 0, 0, 1));" in output
+
+    shader_ast = parse_crossgl(output)
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
+
+    assert (
+        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
+        in regenerated_hlsl
+    )
+    assert "RWTexture2D<float4> outImage : register(u5, space2);" in regenerated_hlsl
+    assert (
+        "globallycoherent RWStructuredBuffer<int> values : register(u6, space2);"
+        in regenerated_hlsl
+    )
+
+
 def test_codegen_ray_shader_stages():
     output = generate_crossgl(RAY_STAGES_HLSL)
     lowered = output.lower()
@@ -554,6 +653,60 @@ def test_codegen_ray_shader_stages():
     assert "ray_any_hit" in lowered
     assert "ray_miss" in lowered
     assert "ray_callable" in lowered
+
+
+def test_codegen_texture_method_descriptors():
+    converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter()
+
+    assert converter.texture_method_descriptor("SampleLevel", 3) == {
+        "member": "SampleLevel",
+        "function": "textureLod",
+        "texture_function": "textureLod",
+        "buffer_function": None,
+        "component": None,
+        "usage": "regular",
+        "buffer_when_max_args": None,
+    }
+    assert converter.texture_method_descriptor("SampleCmp", 3)["usage"] == "comparison"
+    assert converter.texture_method_descriptor("GatherBlue", 2) == {
+        "member": "GatherBlue",
+        "function": "textureGather",
+        "texture_function": "textureGather",
+        "buffer_function": None,
+        "component": "2",
+        "usage": "regular",
+        "buffer_when_max_args": None,
+    }
+    assert converter.texture_method_descriptor("Load", 1)["function"] == "buffer_load"
+    assert converter.texture_method_descriptor("Load", 2)["function"] == "texelFetch"
+    assert (
+        converter.texture_method_descriptor("GetDimensions", 1)["function"]
+        == "buffer_dimensions"
+    )
+    assert (
+        converter.texture_method_descriptor("GetDimensions", 2)["function"]
+        == "texture_dimensions"
+    )
+    assert converter.texture_method_descriptor("Store", 2) is None
+    assert converter.resource_method_descriptor("Load", 1)["resource"] == "buffer"
+    assert converter.resource_method_descriptor("Load", 2)["resource"] == "texture"
+    assert (
+        converter.resource_method_descriptor("GetDimensions", 1)["operation"]
+        == "dimensions"
+    )
+    assert converter.resource_method_descriptor("Store", 2) == {
+        "member": "Store",
+        "function": "buffer_store",
+        "texture_function": None,
+        "buffer_function": "buffer_store",
+        "component": None,
+        "usage": None,
+        "buffer_when_max_args": None,
+        "resource": "buffer",
+        "operation": "store",
+    }
+    assert converter.resource_method_descriptor("Append", 1)["operation"] == "append"
+    assert converter.resource_method_descriptor("Consume", 0)["operation"] == "consume"
 
 
 def test_codegen_texture_method_mappings():
@@ -605,6 +758,77 @@ def test_codegen_texture_methods_roundtrip_through_translator_codegen():
     assert "textureGrad(tex, uv, vec2(1.0, 0.0), vec2(0.0, 1.0))" in glsl
     assert "textureGather(tex, uv, 0)" in glsl
     assert "texture_sample" not in glsl
+
+
+def test_codegen_resource_array_receivers_use_canonical_calls():
+    code = textwrap.dedent("""
+        Texture2D textures[2] : register(t0);
+        SamplerState samp : register(s0);
+        RWTexture2D<float4> images[2] : register(u0);
+        RWStructuredBuffer<int> buffers[2] : register(u2);
+
+        float4 main(float2 uv : TEXCOORD0, uint index : TEXCOORD1) : SV_Target0 {
+            float4 c = textures[index].Sample(samp, uv);
+            images[index][uint2(1, 2)] = c;
+            buffers[index].Store(0, 7);
+            int v = buffers[index].Load(0);
+            return c + images[index][uint2(1, 2)] + float4(v);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2D textures[2];" in crossgl
+    assert "image2D images[2];" in crossgl
+    assert "RWStructuredBuffer<int> buffers[2];" in crossgl
+    assert "texture(textures[index], samp, uv)" in crossgl
+    assert "imageStore(images[index], uvec2(1, 2), c);" in crossgl
+    assert "buffer_store(buffers[index], 0, 7);" in crossgl
+    assert "buffer_load(buffers[index], 0)" in crossgl
+    assert ".Sample(" not in crossgl
+    assert ".Store(" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
+    assert "RWStructuredBuffer<int> buffers[2] : register(u2);" in hlsl
+    assert "buffers[index].Store(0, 7);" in hlsl
+    assert "buffers[index].Load(0)" in hlsl
+    assert "buffer_store(" not in hlsl
+    assert "buffer_load(" not in hlsl
+
+
+def test_codegen_append_consume_structured_buffers_roundtrip():
+    code = textwrap.dedent("""
+        AppendStructuredBuffer<int> appendValues : register(u1);
+        ConsumeStructuredBuffer<int> consumeValues : register(u2);
+
+        void main(uint value : TEXCOORD0) {
+            appendValues.Append(int(value));
+            int consumed = consumeValues.Consume();
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "AppendStructuredBuffer<int> appendValues;" in crossgl
+    assert "ConsumeStructuredBuffer<int> consumeValues;" in crossgl
+    assert "buffer_append(appendValues, int(value));" in crossgl
+    assert "int consumed = buffer_consume(consumeValues);" in crossgl
+    assert ".Append(" not in crossgl
+    assert ".Consume(" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
+    assert "AppendStructuredBuffer<int> appendValues : register(u1);" in hlsl
+    assert "ConsumeStructuredBuffer<int> consumeValues : register(u2);" in hlsl
+    assert "appendValues.Append(int(value));" in hlsl
+    assert "int consumed = consumeValues.Consume();" in hlsl
+    assert "buffer_append(" not in hlsl
+    assert "buffer_consume(" not in hlsl
 
 
 def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
@@ -867,6 +1091,10 @@ def test_codegen_get_dimensions_mapping():
     output = generate_crossgl(DIMENSIONS_HLSL)
     assert "texture_dimensions" in output
     assert "buffer_dimensions" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+    assert "buf.GetDimensions(len);" in regenerated_hlsl
+    assert "buffer_dimensions" not in regenerated_hlsl
 
 
 def test_codegen_preserves_parentheses():

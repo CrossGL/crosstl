@@ -159,7 +159,10 @@ class SlangToCrossGLConverter:
                     code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
                 code += "    }\n"
         for node in ast.global_vars:
-            code += f"    {self.map_type(node.vtype)} {node.name};\n"
+            code += (
+                f"    {self.map_type(node.vtype)} "
+                f"{node.name}{self.format_array_suffixes(node)};\n"
+            )
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -198,14 +201,35 @@ class SlangToCrossGLConverter:
         """Render one Slang function node as a CrossGL function."""
         code = " "
         code += "  " * indent
-        params = ", ".join(
-            f"{self.map_type(p.vtype)} {p.name} {self.map_semantic(p.semantic)}"
-            for p in func.params
+        params = ", ".join(self.generate_parameter(p) for p in func.params)
+        semantic = self.map_semantic(func.semantic)
+        semantic_suffix = f" {semantic}" if semantic else ""
+        code += (
+            f"    {self.map_type(func.return_type)} "
+            f"{func.name}({params}){semantic_suffix} {{\n"
         )
-        code += f"    {self.map_type(func.return_type)} {func.name}({params}) {self.map_semantic(func.semantic)} {{\n"
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
         return code
+
+    def generate_parameter(self, param):
+        parameter = f"{self.map_type(param.vtype)} {param.name}"
+        semantic = self.map_semantic(param.semantic)
+        if semantic:
+            parameter += f" {semantic}"
+        return parameter
+
+    def format_array_suffixes(self, node, is_main=False):
+        sizes = getattr(node, "array_sizes", None)
+        if not sizes:
+            return ""
+        parts = []
+        for size in sizes:
+            if size is None:
+                parts.append("[]")
+            else:
+                parts.append(f"[{self.generate_expression(size, is_main)}]")
+        return "".join(parts)
 
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""
@@ -215,15 +239,32 @@ class SlangToCrossGLConverter:
                 code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
+            elif isinstance(stmt, (FunctionCallNode, MethodCallNode, CallNode)):
+                code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
-                    code += f"return {self.generate_expression(stmt.value, is_main)};\n"
+                    if stmt.value is None:
+                        code += "return;\n"
+                    else:
+                        code += (
+                            f"return {self.generate_expression(stmt.value, is_main)};\n"
+                        )
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent, is_main)
+            elif isinstance(stmt, WhileNode):
+                code += self.generate_while_loop(stmt, indent, is_main)
+            elif isinstance(stmt, DoWhileNode):
+                code += self.generate_do_while_loop(stmt, indent, is_main)
+            elif isinstance(stmt, SwitchNode):
+                code += self.generate_switch_statement(stmt, indent, is_main)
             elif isinstance(stmt, IfNode):
                 code += self.generate_if_statement(stmt, indent, is_main)
+            elif isinstance(stmt, BreakNode):
+                code += "break;\n"
+            elif isinstance(stmt, ContinueNode):
+                code += "continue;\n"
         return code
 
     def generate_for_loop(self, node, indent, is_main):
@@ -233,6 +274,38 @@ class SlangToCrossGLConverter:
 
         code = f"for ({init}; {condition}; {update}) {{\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + "}\n"
+        return code
+
+    def generate_while_loop(self, node, indent, is_main):
+        condition = self.generate_expression(node.condition, is_main)
+
+        code = f"while ({condition}) {{\n"
+        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + "}\n"
+        return code
+
+    def generate_do_while_loop(self, node, indent, is_main):
+        condition = self.generate_expression(node.condition, is_main)
+
+        code = "do {\n"
+        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += "    " * indent + f"}} while ({condition});\n"
+        return code
+
+    def generate_switch_statement(self, node, indent, is_main):
+        expression = self.generate_expression(node.expression, is_main)
+
+        code = f"switch ({expression}) {{\n"
+        for case in node.cases:
+            value = self.generate_expression(case.value, is_main)
+            code += "    " * (indent + 1) + f"case {value}:\n"
+            code += self.generate_function_body(case.body, indent + 2, is_main)
+
+        if node.default_case is not None:
+            code += "    " * (indent + 1) + "default:\n"
+            code += self.generate_function_body(node.default_case, indent + 2, is_main)
+
         code += "    " * indent + "}\n"
         return code
 
@@ -266,7 +339,9 @@ class SlangToCrossGLConverter:
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
-            return f"{self.map_type(expr.vtype)} {expr.name}"
+            if expr.vtype:
+                return f"{self.map_type(expr.vtype)} {expr.name}"
+            return expr.name
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
@@ -283,9 +358,25 @@ class SlangToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{expr.name}({args})"
+        elif isinstance(expr, MethodCallNode):
+            obj = self.generate_expression(expr.object, is_main)
+            args = ", ".join(
+                self.generate_expression(arg, is_main) for arg in expr.args
+            )
+            return f"{obj}.{expr.method}({args})"
+        elif isinstance(expr, CallNode):
+            callee = self.generate_expression(expr.callee, is_main)
+            args = ", ".join(
+                self.generate_expression(arg, is_main) for arg in expr.args
+            )
+            return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
-            obj = self.generate_expression(expr.object)
+            obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, ArrayAccessNode):
+            array = self.generate_expression(expr.array, is_main)
+            index = self.generate_expression(expr.index, is_main)
+            return f"{array}[{index}]"
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
         elif isinstance(expr, VectorConstructorNode):
@@ -299,7 +390,11 @@ class SlangToCrossGLConverter:
     def map_type(self, slang_type):
         """Map a Slang type name to the closest CrossGL type name."""
         if slang_type:
-            return self.type_map.get(slang_type, slang_type)
+            slang_type = slang_type.strip()
+            base_type = slang_type.split("<", 1)[0].strip()
+            return self.type_map.get(
+                slang_type, self.type_map.get(base_type, slang_type)
+            )
         return slang_type
 
     def map_semantic(self, semantic):

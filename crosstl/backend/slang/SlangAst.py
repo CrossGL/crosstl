@@ -2,38 +2,56 @@
 
 from ..common_ast import (
     ASTNode,
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
+    BreakNode,
+    CallNode,
+    CaseNode,
+    ContinueNode,
+    DoWhileNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
     MemberAccessNode,
+    MethodCallNode,
     ReturnNode,
     ShaderNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
+    WhileNode,
 )
 
 # Keep common AST imports used for re-exports (autoflake-safe).
 _COMMON_NODES = (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
+    BreakNode,
+    CallNode,
+    CaseNode,
+    ContinueNode,
+    DoWhileNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
     MemberAccessNode,
+    MethodCallNode,
     ReturnNode,
     ShaderNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
+    WhileNode,
 )
 
 # Slang-specific nodes
@@ -44,6 +62,7 @@ class ImportNode(ASTNode):
 
     def __init__(self, module_path, imported_items=None, alias=None):
         self.module_path = module_path
+        self.module_name = module_path
         self.imported_items = imported_items or []
         self.alias = alias
 
@@ -56,6 +75,7 @@ class ExportNode(ASTNode):
 
     def __init__(self, exported_items):
         self.exported_items = exported_items
+        self.item = exported_items
 
     def __repr__(self):
         return f"ExportNode(exported_items={self.exported_items})"
@@ -67,6 +87,8 @@ class TypedefNode(ASTNode):
     def __init__(self, name, target_type):
         self.name = name
         self.target_type = target_type
+        self.original_type = name
+        self.new_type = target_type
 
     def __repr__(self):
         return f"TypedefNode(name={self.name}, target_type={self.target_type})"

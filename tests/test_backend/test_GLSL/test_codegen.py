@@ -163,6 +163,80 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_resource_function_descriptors():
+    converter = GLSLToCrossGLConverter(shader_type="fragment")
+
+    assert "texture2D" not in converter.function_map
+    assert "textureCube" not in converter.function_map
+    assert converter.resource_function_descriptor("texture2D") == {
+        "name": "texture2D",
+        "function": "texture",
+        "resource": "texture",
+        "operation": "sample",
+    }
+    assert converter.resource_function_descriptor("textureLod") == {
+        "name": "textureLod",
+        "function": "textureLod",
+        "resource": "texture",
+        "operation": "sample_lod",
+    }
+    assert converter.resource_function_descriptor("texelFetch") == {
+        "name": "texelFetch",
+        "function": "texelFetch",
+        "resource": "texture",
+        "operation": "fetch",
+    }
+    assert converter.resource_function_descriptor("textureCompare") == {
+        "name": "textureCompare",
+        "function": "textureCompare",
+        "resource": "texture",
+        "operation": "compare",
+    }
+    assert converter.resource_function_descriptor("textureQueryLod") == {
+        "name": "textureQueryLod",
+        "function": "textureQueryLod",
+        "resource": "texture",
+        "operation": "query_lod",
+    }
+    assert converter.resource_function_descriptor("textureSamples") == {
+        "name": "textureSamples",
+        "function": "textureSamples",
+        "resource": "texture",
+        "operation": "query_samples",
+    }
+    assert converter.resource_function_descriptor("imageLoad") == {
+        "name": "imageLoad",
+        "function": "imageLoad",
+        "resource": "image",
+        "operation": "load",
+    }
+    assert converter.resource_function_descriptor("imageStore") == {
+        "name": "imageStore",
+        "function": "imageStore",
+        "resource": "image",
+        "operation": "store",
+    }
+    assert converter.resource_function_descriptor("imageAtomicAdd") == {
+        "name": "imageAtomicAdd",
+        "function": "imageAtomicAdd",
+        "resource": "image",
+        "operation": "atomic",
+    }
+    assert converter.resource_function_descriptor("imageSize") == {
+        "name": "imageSize",
+        "function": "imageSize",
+        "resource": "image",
+        "operation": "query_size",
+    }
+    assert converter.resource_function_descriptor("imageSamples") == {
+        "name": "imageSamples",
+        "function": "imageSamples",
+        "resource": "image",
+        "operation": "query_samples",
+    }
+    assert converter.resource_function_descriptor("mix") is None
+
+
 def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     code = textwrap.dedent("""
         #version 450 core
@@ -197,6 +271,70 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureLod(tex, uv, 1.0)" in glsl
     assert "textureGrad(tex, uv, vec2(1.0), vec2(1.0))" in glsl
     assert "textureGather(tex, uv)" in glsl
+
+
+def test_codegen_query_intrinsics_use_resource_descriptors():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) in vec2 uv;
+        layout(location = 0) out vec4 fragColor;
+        uniform sampler2D tex;
+        layout(binding = 0, rgba32f) uniform image2D img;
+
+        void main() {
+            ivec2 texSize = textureSize(tex, 0);
+            int levels = textureQueryLevels(tex);
+            vec2 lod = textureQueryLod(tex, uv);
+            int sampleCount = textureSamples(tex);
+            ivec2 imgSize = imageSize(img);
+            int imgSamples = imageSamples(img);
+            imageStore(img, ivec2(0), vec4(texSize, levels + sampleCount + imgSamples));
+            fragColor = vec4(imgSize, lod);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "textureSize(tex, 0)" in crossgl
+    assert "textureQueryLevels(tex)" in crossgl
+    assert "textureQueryLod(tex, input.uv)" in crossgl
+    assert "textureSamples(tex)" in crossgl
+    assert "imageSize(img)" in crossgl
+    assert "imageSamples(img)" in crossgl
+    assert (
+        "imageStore(img, ivec2(0), vec4(texSize, ((levels + sampleCount) + imgSamples)))"
+        in crossgl
+    )
+
+
+def test_codegen_resource_array_functions_keep_array_receivers():
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) out vec4 fragColor;
+        uniform sampler2D textures[2];
+        layout(binding = 0, rgba32f) uniform image2D images[2];
+
+        void main() {
+            int index = 1;
+            vec4 c = texture(textures[index], vec2(0.5));
+            vec4 r = imageLoad(images[index], ivec2(1, 2));
+            imageStore(images[index], ivec2(1, 2), c + r);
+            fragColor = c + r;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "sampler2D textures[2];" in crossgl
+    assert "image2D images[2] @binding(0) @rgba32f;" in crossgl
+    assert "@rgba32f[2]" not in crossgl
+    assert "texture(textures[index], vec2(0.5))" in crossgl
+    assert "imageLoad(images[index], ivec2(1, 2))" in crossgl
+    assert "imageStore(images[index], ivec2(1, 2), (c + r))" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "layout(binding = 0) uniform sampler2D textures[2];" in glsl
+    assert "layout(rgba32f, binding = 0) uniform image2D images[2];" in glsl
 
 
 def test_codegen_multisample_compare_roundtrip_uses_translator_diagnostics():

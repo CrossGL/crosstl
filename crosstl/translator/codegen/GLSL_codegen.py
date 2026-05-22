@@ -75,6 +75,25 @@ from .stage_utils import (
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    explicit_image_access,
+    explicit_image_format,
+    image_access_satisfies_requirement,
+    is_image_format_attribute,
+    is_glsl_float_image_resource,
+    is_glsl_integer_image_type,
+    is_glsl_storage_image_type,
+    is_resource_access_attribute,
+    is_scalar_image_format,
+    is_two_component_image_format,
+    storage_image_format_store_constructor,
+    storage_image_load_component_suffix,
+    storage_image_store_value_expression,
+    storage_image_two_component_store_expression,
+    supported_image_formats,
+)
 
 
 class GLSLCodeGen:
@@ -88,7 +107,11 @@ class GLSLCodeGen:
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.image_variable_accesses = {}
+        self.current_image_access_parameters = {}
         self.function_sampler_parameter_indices = {}
+        self.function_parameter_names = {}
+        self.function_image_access_requirements = {}
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
@@ -105,6 +128,8 @@ class GLSLCodeGen:
         self.current_expression_expected_type = None
         self.local_variable_types = {}
         self.struct_member_types = {}
+        self.structured_buffer_instance_members = {}
+        self.glsl_buffer_block_struct_names = set()
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
@@ -169,6 +194,7 @@ class GLSLCodeGen:
             "void": "void",
             "sampler": "sampler",
             "sampler1D": "sampler1D",
+            "sampler1DArray": "sampler1DArray",
             "sampler2D": "sampler2D",
             "sampler3D": "sampler3D",
             "samplerCube": "samplerCube",
@@ -180,12 +206,18 @@ class GLSLCodeGen:
             "sampler2DArrayShadow": "sampler2DArrayShadow",
             "samplerCubeShadow": "samplerCubeShadow",
             "samplerCubeArrayShadow": "samplerCubeArrayShadow",
+            "iimage1D": "iimage1D",
+            "iimage1DArray": "iimage1DArray",
             "iimage2D": "iimage2D",
             "iimage3D": "iimage3D",
             "iimage2DArray": "iimage2DArray",
+            "uimage1D": "uimage1D",
+            "uimage1DArray": "uimage1DArray",
             "uimage2D": "uimage2D",
             "uimage3D": "uimage3D",
             "uimage2DArray": "uimage2DArray",
+            "image1D": "image1D",
+            "image1DArray": "image1DArray",
             "image2D": "image2D",
             "image3D": "image3D",
             "imageCube": "imageCube",
@@ -286,8 +318,21 @@ class GLSLCodeGen:
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.image_variable_accesses = {}
+        self.current_image_access_parameters = {}
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
+        )
+        functions = self.collect_functions(ast)
+        self.function_parameter_names = collect_function_parameter_names(functions)
+        self.function_image_access_requirements = (
+            collect_function_image_access_requirements(
+                functions,
+                self.function_parameter_names,
+                self.walk_ast,
+                self.function_call_name,
+                self.expression_name,
+            )
         )
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
@@ -299,6 +344,8 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.structured_buffer_instance_members = {}
+        self.glsl_buffer_block_struct_names = set()
         self.struct_member_types = collect_struct_member_types(
             getattr(ast, "structs", []), self.type_name_string
         )
@@ -335,9 +382,13 @@ class GLSLCodeGen:
         code += self.generate_constants(ast)
 
         structs = getattr(ast, "structs", [])
+        global_vars = getattr(ast, "global_variables", [])
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
         }
+        self.glsl_buffer_block_struct_names = (
+            self.collect_glsl_buffer_block_struct_names(global_vars)
+        )
         self.vertex_input_struct_names = self.stage_parameter_struct_names(
             ast, "vertex"
         )
@@ -353,7 +404,9 @@ class GLSLCodeGen:
         emit_graphics_io = target_stage in {None, "vertex", "fragment"}
         for node in structs:
             if isinstance(node, StructNode):
-                if (
+                if node.name in self.glsl_buffer_block_struct_names:
+                    continue
+                elif (
                     node.name == "VSInput"
                     or node.name in self.vertex_input_struct_names
                 ):
@@ -414,11 +467,11 @@ class GLSLCodeGen:
                 else:
                     code += self.generate_struct(node)
 
-        global_vars = getattr(ast, "global_variables", [])
         binding = 0
         for index, node in enumerate(global_vars):
             # Handle both old and new AST variable structures
             resource_count = 1
+            array_size = None
             if hasattr(node, "var_type"):
                 if hasattr(node.var_type, "name") or hasattr(
                     node.var_type, "element_type"
@@ -466,15 +519,45 @@ class GLSLCodeGen:
             else:
                 var_name = f"var{index}"
 
+            if self.is_glsl_buffer_block_variable(node, vtype):
+                explicit_binding = self.explicit_resource_binding_index(node)
+                resource_binding = (
+                    explicit_binding if explicit_binding is not None else binding
+                )
+                declaration = self.glsl_buffer_block_declaration(
+                    node, vtype, var_name, resource_binding, array_suffix
+                )
+                if declaration is not None:
+                    code += declaration
+                    binding = max(binding, resource_binding + resource_count)
+                    continue
+
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if mapped_type == "sampler":
                 self.sampler_variables.add(var_name)
                 continue
+            if self.is_structured_buffer_type(vtype):
+                explicit_binding = self.explicit_resource_binding_index(node)
+                resource_binding = (
+                    explicit_binding if explicit_binding is not None else binding
+                )
+                code += self.structured_buffer_block_declaration(
+                    vtype, var_name, resource_binding, array_size
+                )
+                binding = max(binding, resource_binding + resource_count)
+                continue
             if self.is_opaque_resource_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
-                explicit_format = self.explicit_image_format_qualifier(node)
+                explicit_format = explicit_image_format(
+                    node, self.attribute_value_to_string
+                )
                 if explicit_format:
                     self.image_variable_formats[var_name] = explicit_format
+                explicit_access = explicit_image_access(
+                    node, self.attribute_value_to_string
+                )
+                if explicit_access:
+                    self.image_variable_accesses[var_name] = explicit_access
             declaration = format_c_style_array_declaration(
                 f"{mapped_type}{array_suffix}", var_name
             )
@@ -486,7 +569,9 @@ class GLSLCodeGen:
                 layout = self.opaque_resource_layout(
                     mapped_type, resource_binding, node
                 )
-                code += f"{layout} uniform {declaration};\n"
+                memory_qualifiers = self.resource_memory_qualifiers(node)
+                qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
+                code += f"{layout} {qualifier_prefix}uniform {declaration};\n"
             else:
                 code += f"layout(std140, binding = {resource_binding}) {declaration};\n"
             binding = max(
@@ -682,15 +767,17 @@ class GLSLCodeGen:
         sampler_parameters = set()
         texture_parameters = {}
         image_format_parameters = {}
+        image_access_parameters = {}
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
         self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
-                if hasattr(p.param_type, "name"):
-                    raw_param_type = p.param_type.name
-                else:
-                    raw_param_type = p.param_type
+                raw_param_type = (
+                    self.type_name_string(p.param_type)
+                    if getattr(p.param_type, "generic_args", None)
+                    else p.param_type
+                )
             elif hasattr(p, "vtype"):
                 raw_param_type = p.vtype
             else:
@@ -712,13 +799,24 @@ class GLSLCodeGen:
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
                 )
-                explicit_format = self.explicit_image_format_qualifier(p)
+                explicit_format = explicit_image_format(
+                    p, self.attribute_value_to_string
+                )
                 if explicit_format:
                     image_format_parameters[p.name] = explicit_format
+                explicit_access = explicit_image_access(
+                    p, self.attribute_value_to_string
+                )
+                if explicit_access:
+                    image_access_parameters[p.name] = explicit_access
 
             semantic = self.semantic_from_node(p)
 
             declaration = format_c_style_array_declaration(param_type, p.name)
+            if self.is_storage_image_type(param_type):
+                memory_qualifiers = self.resource_memory_qualifiers(p)
+                if memory_qualifiers:
+                    declaration = f"{memory_qualifiers} {declaration}"
             semantic_attr = self.map_semantic(semantic)
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
@@ -764,6 +862,7 @@ class GLSLCodeGen:
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
         previous_image_format_parameters = self.current_image_format_parameters
+        previous_image_access_parameters = self.current_image_access_parameters
         previous_stage_output = self.current_stage_output
         previous_stage_inputs = self.current_stage_inputs
         previous_stage_outputs = self.current_stage_outputs
@@ -771,6 +870,7 @@ class GLSLCodeGen:
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = texture_parameters
         self.current_image_format_parameters = image_format_parameters
+        self.current_image_access_parameters = image_access_parameters
         self.current_stage_output = stage_output
         self.current_stage_inputs = self.stage_input_member_maps(func, shader_type)
         self.current_stage_outputs = self.stage_output_member_maps(func, shader_type)
@@ -785,6 +885,7 @@ class GLSLCodeGen:
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_format_parameters = previous_image_format_parameters
+        self.current_image_access_parameters = previous_image_access_parameters
         self.current_stage_output = previous_stage_output
         self.current_stage_inputs = previous_stage_inputs
         self.current_stage_outputs = previous_stage_outputs
@@ -1540,6 +1641,10 @@ class GLSLCodeGen:
             if texture_call is not None:
                 return texture_call
 
+            buffer_call = self.generate_buffer_call(func_name, expr.args)
+            if buffer_call is not None:
+                return buffer_call
+
             if func_name in [
                 "vec2",
                 "vec3",
@@ -1561,6 +1666,7 @@ class GLSLCodeGen:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"
 
+            self.validate_function_image_access_arguments(func_name, expr.args)
             call_args = self.filter_sampler_arguments(original_func_name, expr.args)
             args = ", ".join(self.generate_expression(arg) for arg in call_args)
             return f"{func_name or callee}({args})"
@@ -1577,6 +1683,48 @@ class GLSLCodeGen:
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def generate_buffer_call(self, func_name, args):
+        if func_name == "buffer_load" and len(args) >= 2:
+            index = self.generate_expression(args[1])
+            return f"{self.structured_buffer_access_expression(args[0], index)}"
+        if func_name == "buffer_store" and len(args) >= 3:
+            index = self.generate_expression(args[1])
+            value = self.generate_expression(args[2])
+            return f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
+        if func_name == "buffer_append" and len(args) >= 2:
+            return (
+                "/* unsupported GLSL buffer append: requires explicit "
+                "counter buffer */"
+            )
+        if func_name == "buffer_consume" and args:
+            return (
+                "0 /* unsupported GLSL buffer consume: requires explicit "
+                "counter buffer */"
+            )
+        if func_name == "buffer_dimensions" and args:
+            length_expr = self.structured_buffer_length_expression(args[0])
+            if len(args) >= 2:
+                target = self.generate_expression(args[1])
+                return f"{target} = {length_expr}"
+            return length_expr
+        return None
+
+    def structured_buffer_access_expression(self, buffer_arg, element_index):
+        buffer = self.generate_expression(buffer_arg)
+        buffer_name = self.expression_name(buffer_arg)
+        instance_member = self.structured_buffer_instance_members.get(buffer_name)
+        if instance_member:
+            return f"{buffer}.{instance_member}[{element_index}]"
+        return f"{buffer}[{element_index}]"
+
+    def structured_buffer_length_expression(self, buffer_arg):
+        buffer = self.generate_expression(buffer_arg)
+        buffer_name = self.expression_name(buffer_arg)
+        instance_member = self.structured_buffer_instance_members.get(buffer_name)
+        if instance_member:
+            return f"{buffer}.{instance_member}.length()"
+        return f"{buffer}.length()"
 
     def flattened_stage_member_name(self, expr):
         object_name = self.expression_name(getattr(expr, "object", None))
@@ -1669,6 +1817,74 @@ class GLSLCodeGen:
             f"image resource argument: {texture_name}"
         )
 
+    def validate_image_access_argument(self, func_name, args):
+        if not args or func_name not in IMAGE_RESOURCE_INTRINSIC_NAMES:
+            return
+        access = self.image_resource_access(args[0])
+        if access is None or access == "read_write":
+            return
+        texture_name = expression_debug_name(args[0])
+        if func_name == "imageLoad" and access == "write":
+            raise ValueError(
+                f"OpenGL image operation '{func_name}' requires read-capable "
+                f"storage image access for {texture_name}: got writeonly"
+            )
+        if func_name == "imageStore" and access == "read":
+            raise ValueError(
+                f"OpenGL image operation '{func_name}' requires write-capable "
+                f"storage image access for {texture_name}: got readonly"
+            )
+        if func_name in {
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+        }:
+            access_name = "readonly" if access == "read" else "writeonly"
+            raise ValueError(
+                f"OpenGL image operation '{func_name}' requires read-write "
+                f"storage image access for {texture_name}: got {access_name}"
+            )
+
+    def image_access_requirement_label(self, required_access):
+        return {
+            "read": "read-capable",
+            "write": "write-capable",
+            "read_write": "read-write",
+        }.get(required_access, str(required_access))
+
+    def image_access_diagnostic_name(self, access):
+        return {
+            "read": "readonly",
+            "write": "writeonly",
+            "read_write": "readwrite",
+        }.get(access, str(access))
+
+    def validate_function_image_access_arguments(self, func_name, args):
+        callee_requirements = self.function_image_access_requirements.get(func_name)
+        if not callee_requirements:
+            return
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+            actual_access = self.image_resource_access(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+            actual_name = expression_debug_name(args[index])
+            required_label = self.image_access_requirement_label(required_access)
+            actual_label = self.image_access_diagnostic_name(actual_access)
+            raise ValueError(
+                f"OpenGL function call '{func_name}' requires {required_label} "
+                f"storage image access for argument {actual_name} passed to "
+                f"parameter {param_name}: got {actual_label}"
+            )
+
     def is_integer_coordinate_type(self, vtype):
         type_name = self.type_name_string(vtype)
         base_type = self.resource_base_type(type_name)
@@ -1699,161 +1915,185 @@ class GLSLCodeGen:
             "uvec4",
         }
 
-    def resource_coordinate_dimension(self, texture_type):
+    def texture_dimension_descriptor(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        if not texture_type or "Cube" in texture_type:
-            return None
-        for prefix in ("iimage", "uimage", "image"):
-            if texture_type.startswith(f"{prefix}2DArray"):
-                return 3
-            if texture_type.startswith(f"{prefix}3D"):
-                return 3
-            if texture_type.startswith(f"{prefix}2D"):
-                return 2
-            if texture_type.startswith(f"{prefix}1DArray"):
-                return 2
-            if texture_type.startswith(f"{prefix}1D"):
-                return 1
+        sampling = self.texture_sampling_capabilities(texture_type)
+        is_multisample = self.is_multisample_texture_resource_type(texture_type)
+        is_storage_image = self.is_storage_image_type(texture_type)
+
+        coordinate_dimension = None
+        if texture_type and "Cube" not in texture_type:
+            for prefix in ("iimage", "uimage", "image"):
+                if texture_type.startswith(f"{prefix}2DArray"):
+                    coordinate_dimension = 3
+                    break
+                if texture_type.startswith(f"{prefix}3D"):
+                    coordinate_dimension = 3
+                    break
+                if texture_type.startswith(f"{prefix}2D"):
+                    coordinate_dimension = 2
+                    break
+                if texture_type.startswith(f"{prefix}1DArray"):
+                    coordinate_dimension = 2
+                    break
+                if texture_type.startswith(f"{prefix}1D"):
+                    coordinate_dimension = 1
+                    break
+            if coordinate_dimension is None:
+                coordinate_dimension = {
+                    "sampler1D": 1,
+                    "sampler1DArray": 2,
+                    "sampler2D": 2,
+                    "sampler2DArray": 3,
+                    "sampler2DMS": 2,
+                    "sampler2DMSArray": 3,
+                    "sampler3D": 3,
+                    "isampler1D": 1,
+                    "isampler1DArray": 2,
+                    "isampler2D": 2,
+                    "isampler2DArray": 3,
+                    "isampler2DMS": 2,
+                    "isampler2DMSArray": 3,
+                    "isampler3D": 3,
+                    "usampler1D": 1,
+                    "usampler1DArray": 2,
+                    "usampler2D": 2,
+                    "usampler2DArray": 3,
+                    "usampler2DMS": 2,
+                    "usampler2DMSArray": 3,
+                    "usampler3D": 3,
+                }.get(texture_type)
+
+        offset_dimension = None
+        if texture_type and "Cube" not in texture_type:
+            offset_dimension = {
+                "sampler1D": 1,
+                "sampler1DArray": 1,
+                "sampler2D": 2,
+                "sampler2DArray": 2,
+                "sampler2DShadow": 2,
+                "sampler2DArrayShadow": 2,
+                "sampler3D": 3,
+                "isampler1D": 1,
+                "isampler1DArray": 1,
+                "isampler2D": 2,
+                "isampler2DArray": 2,
+                "isampler3D": 3,
+                "usampler1D": 1,
+                "usampler1DArray": 1,
+                "usampler2D": 2,
+                "usampler2DArray": 2,
+                "usampler3D": 3,
+            }.get(texture_type)
+
+        gradient_dimension = None
+        if texture_type and not is_multisample and not is_storage_image:
+            if "Cube" in texture_type:
+                gradient_dimension = 3
+            else:
+                gradient_dimension = {
+                    "sampler1D": 1,
+                    "sampler1DArray": 1,
+                    "sampler2D": 2,
+                    "sampler2DArray": 2,
+                    "sampler2DShadow": 2,
+                    "sampler2DArrayShadow": 2,
+                    "sampler3D": 3,
+                    "isampler1D": 1,
+                    "isampler1DArray": 1,
+                    "isampler2D": 2,
+                    "isampler2DArray": 2,
+                    "isampler3D": 3,
+                    "usampler1D": 1,
+                    "usampler1DArray": 1,
+                    "usampler2D": 2,
+                    "usampler2DArray": 2,
+                    "usampler3D": 3,
+                }.get(texture_type)
+
+        query_lod_coordinate_dimension = None
+        if texture_type and not is_multisample and not is_storage_image:
+            query_lod_coordinate_dimension = {
+                "sampler1D": 1,
+                "sampler1DArray": 2,
+                "sampler2D": 2,
+                "sampler2DArray": 3,
+                "sampler2DShadow": 2,
+                "sampler2DArrayShadow": 3,
+                "sampler3D": 3,
+                "samplerCube": 3,
+                "samplerCubeArray": 4,
+                "samplerCubeShadow": 3,
+                "samplerCubeArrayShadow": 4,
+                "isampler1D": 1,
+                "isampler1DArray": 2,
+                "isampler2D": 2,
+                "isampler2DArray": 3,
+                "isampler3D": 3,
+                "isamplerCube": 3,
+                "isamplerCubeArray": 4,
+                "usampler1D": 1,
+                "usampler1DArray": 2,
+                "usampler2D": 2,
+                "usampler2DArray": 3,
+                "usampler3D": 3,
+                "usamplerCube": 3,
+                "usamplerCubeArray": 4,
+            }.get(texture_type)
+
         return {
-            "sampler1D": 1,
-            "sampler1DArray": 2,
-            "sampler2D": 2,
-            "sampler2DArray": 3,
-            "sampler2DMS": 2,
-            "sampler2DMSArray": 3,
-            "sampler3D": 3,
-            "isampler1D": 1,
-            "isampler1DArray": 2,
-            "isampler2D": 2,
-            "isampler2DArray": 3,
-            "isampler2DMS": 2,
-            "isampler2DMSArray": 3,
-            "isampler3D": 3,
-            "usampler1D": 1,
-            "usampler1DArray": 2,
-            "usampler2D": 2,
-            "usampler2DArray": 3,
-            "usampler2DMS": 2,
-            "usampler2DMSArray": 3,
-            "usampler3D": 3,
-        }.get(texture_type)
+            "texture_type": texture_type,
+            "coordinate_dimension": coordinate_dimension,
+            "offset_dimension": offset_dimension,
+            "sample_offset_dimension": (
+                offset_dimension if sampling["sample_offset"] else None
+            ),
+            "texel_fetch_offset_dimension": (
+                None if is_multisample else offset_dimension
+            ),
+            "gather_offset_dimension": 2 if sampling["gather_offset"] else None,
+            "compare_offset_dimension": 2 if sampling["compare_offset"] else None,
+            "compare_lod_offset_dimension": (
+                2 if sampling["compare_lod_offset"] else None
+            ),
+            "compare_grad_offset_dimension": (
+                2 if sampling["compare_grad_offset"] else None
+            ),
+            "gather_compare_offset_dimension": (
+                2 if sampling["gather_compare_offset"] else None
+            ),
+            "gradient_dimension": gradient_dimension,
+            "query_lod_coordinate_dimension": query_lod_coordinate_dimension,
+        }
+
+    def resource_coordinate_dimension(self, texture_type):
+        return self.texture_dimension_descriptor(texture_type)["coordinate_dimension"]
 
     def resource_offset_dimension(self, func_name, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        if not texture_type or "Cube" in texture_type:
-            return None
-        if (
-            func_name == "texelFetchOffset"
-            and self.is_multisample_texture_resource_type(texture_type)
-        ):
-            return None
+        descriptor = self.texture_dimension_descriptor(texture_type)
         if func_name in {"textureGatherOffset", "textureGatherOffsets"}:
-            return 2 if self.texture_gather_offset_supported(texture_type) else None
+            return descriptor["gather_offset_dimension"]
         if func_name == "textureGatherCompareOffset":
-            return (
-                2
-                if self.texture_gather_compare_offset_supported(texture_type)
-                else None
-            )
+            return descriptor["gather_compare_offset_dimension"]
         if func_name in {"textureCompareOffset", "textureCompareProjOffset"}:
-            return 2 if self.texture_compare_offset_supported(texture_type) else None
+            return descriptor["compare_offset_dimension"]
         if func_name in {"textureCompareLodOffset", "textureCompareProjLodOffset"}:
-            return (
-                2 if self.texture_compare_lod_offset_supported(texture_type) else None
-            )
+            return descriptor["compare_lod_offset_dimension"]
         if func_name in {"textureCompareGradOffset", "textureCompareProjGradOffset"}:
-            return (
-                2 if self.texture_compare_grad_offset_supported(texture_type) else None
-            )
-        if (
-            func_name != "texelFetchOffset"
-            and func_name in OFFSET_DIMENSION_INTRINSIC_NAMES
-            and not self.texture_sample_offset_supported(texture_type)
-        ):
-            return None
-        return {
-            "sampler1D": 1,
-            "sampler1DArray": 1,
-            "sampler2D": 2,
-            "sampler2DArray": 2,
-            "sampler2DShadow": 2,
-            "sampler2DArrayShadow": 2,
-            "sampler3D": 3,
-            "isampler1D": 1,
-            "isampler1DArray": 1,
-            "isampler2D": 2,
-            "isampler2DArray": 2,
-            "isampler3D": 3,
-            "usampler1D": 1,
-            "usampler1DArray": 1,
-            "usampler2D": 2,
-            "usampler2DArray": 2,
-            "usampler3D": 3,
-        }.get(texture_type)
+            return descriptor["compare_grad_offset_dimension"]
+        if func_name == "texelFetchOffset":
+            return descriptor["texel_fetch_offset_dimension"]
+        if func_name in OFFSET_DIMENSION_INTRINSIC_NAMES:
+            return descriptor["sample_offset_dimension"]
+        return descriptor["offset_dimension"]
 
     def resource_gradient_dimension(self, func_name, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        if not texture_type or self.is_multisample_texture_resource_type(texture_type):
-            return None
-        for prefix in ("iimage", "uimage", "image"):
-            if texture_type.startswith(prefix):
-                return None
-        if "Cube" in texture_type:
-            return 3
-        return {
-            "sampler1D": 1,
-            "sampler1DArray": 1,
-            "sampler2D": 2,
-            "sampler2DArray": 2,
-            "sampler2DShadow": 2,
-            "sampler2DArrayShadow": 2,
-            "sampler3D": 3,
-            "isampler1D": 1,
-            "isampler1DArray": 1,
-            "isampler2D": 2,
-            "isampler2DArray": 2,
-            "isampler3D": 3,
-            "usampler1D": 1,
-            "usampler1DArray": 1,
-            "usampler2D": 2,
-            "usampler2DArray": 2,
-            "usampler3D": 3,
-        }.get(texture_type)
+        return self.texture_dimension_descriptor(texture_type)["gradient_dimension"]
 
     def resource_query_lod_coordinate_dimension(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        if not texture_type or self.is_multisample_texture_resource_type(texture_type):
-            return None
-        for prefix in ("iimage", "uimage", "image"):
-            if texture_type.startswith(prefix):
-                return None
-        return {
-            "sampler1D": 1,
-            "sampler1DArray": 2,
-            "sampler2D": 2,
-            "sampler2DArray": 3,
-            "sampler2DShadow": 2,
-            "sampler2DArrayShadow": 3,
-            "sampler3D": 3,
-            "samplerCube": 3,
-            "samplerCubeArray": 4,
-            "samplerCubeShadow": 3,
-            "samplerCubeArrayShadow": 4,
-            "isampler1D": 1,
-            "isampler1DArray": 2,
-            "isampler2D": 2,
-            "isampler2DArray": 3,
-            "isampler3D": 3,
-            "isamplerCube": 3,
-            "isamplerCubeArray": 4,
-            "usampler1D": 1,
-            "usampler1DArray": 2,
-            "usampler2D": 2,
-            "usampler2DArray": 3,
-            "usampler3D": 3,
-            "usamplerCube": 3,
-            "usamplerCubeArray": 4,
-        }.get(texture_type)
+        return self.texture_dimension_descriptor(texture_type)[
+            "query_lod_coordinate_dimension"
+        ]
 
     def validate_integer_coordinate_argument(self, func_name, args):
         if func_name not in INTEGER_COORDINATE_INTRINSIC_NAMES or len(args) < 2:
@@ -2295,19 +2535,49 @@ class GLSLCodeGen:
             f"/* unsupported GLSL texture gather: " f"{func_name} {reason} */ vec4(0.0)"
         )
 
-    def texture_gather_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
+    def texture_sampling_capabilities(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        gather_types = {
             "sampler2D",
             "sampler2DArray",
             "samplerCube",
             "samplerCubeArray",
         }
+        gather_offset_types = {"sampler2D", "sampler2DArray"}
+        sample_offset_types = {
+            "sampler1D",
+            "sampler1DArray",
+            "sampler2D",
+            "sampler3D",
+            "sampler2DArray",
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+        compare_offset_types = {"sampler2DShadow", "sampler2DArrayShadow"}
+        compare_lod_types = {"sampler2DShadow"}
+        compare_grad_types = {
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+            "samplerCubeShadow",
+        }
+        return {
+            "texture_type": texture_type,
+            "gather": texture_type in gather_types,
+            "gather_offset": texture_type in gather_offset_types,
+            "sample_offset": texture_type in sample_offset_types,
+            "compare_offset": texture_type in compare_offset_types,
+            "compare_lod": texture_type in compare_lod_types,
+            "compare_grad": texture_type in compare_grad_types,
+            "compare_lod_offset": texture_type in compare_lod_types,
+            "compare_grad_offset": texture_type in compare_offset_types,
+            "gather_compare_offset": texture_type in compare_offset_types,
+        }
+
+    def texture_gather_supported(self, texture_type):
+        return self.texture_sampling_capabilities(texture_type)["gather"]
 
     def texture_gather_offset_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
-            "sampler2D",
-            "sampler2DArray",
-        }
+        return self.texture_sampling_capabilities(texture_type)["gather_offset"]
 
     def unsupported_texture_projected_call(self, func_name, reason):
         return (
@@ -2315,14 +2585,7 @@ class GLSLCodeGen:
         )
 
     def texture_sample_offset_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
-            "sampler1D",
-            "sampler2D",
-            "sampler3D",
-            "sampler2DArray",
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-        }
+        return self.texture_sampling_capabilities(texture_type)["sample_offset"]
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         return f"/* unsupported GLSL texture offset: {func_name} {reason} */ vec4(0.0)"
@@ -2435,6 +2698,50 @@ class GLSLCodeGen:
     def image_size_expression(self, image_arg):
         image_name = self.generate_expression(image_arg)
         return f"imageSize({image_name})"
+
+    def texture_query_size_descriptor(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if not texture_type:
+            return None
+        return {
+            "function_name": (
+                "imageSize" if self.is_storage_image_type(texture_type) else "textureSize"
+            ),
+        }
+
+    def texture_query_resource_descriptor(self, texture_arg):
+        texture_type = self.texture_resource_type(texture_arg)
+        return {
+            "texture_type": texture_type,
+            "storage_image": self.is_storage_image_type(texture_type),
+            "multisample": self.is_multisample_texture_resource_type(texture_type),
+            "size_descriptor": self.texture_query_size_descriptor(texture_type),
+        }
+
+    def texture_query_levels_expression(self, texture_arg):
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        texture_type = descriptor["texture_type"]
+        if descriptor["storage_image"]:
+            return self.unsupported_texture_query_levels_call(texture_type)
+        if descriptor["multisample"]:
+            return "1"
+        return None
+
+    def texture_samples_expression(self, func_name, texture_arg):
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        if descriptor["texture_type"] and not descriptor["multisample"]:
+            return self.unsupported_texture_samples_query_call()
+        if func_name == "imageSamples" and descriptor["multisample"]:
+            texture_name = self.generate_expression(texture_arg)
+            return f"textureSamples({texture_name})"
+        return None
+
+    def texture_size_query_expression(self, texture_arg):
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        size_descriptor = descriptor["size_descriptor"]
+        if size_descriptor and size_descriptor["function_name"] == "imageSize":
+            return self.image_size_expression(texture_arg)
+        return None
 
     def unsupported_multisample_texel_fetch_offset_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
@@ -2586,29 +2893,19 @@ class GLSLCodeGen:
         return f"{constructor}({coord}, {compare})"
 
     def texture_compare_offset_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-        }
+        return self.texture_sampling_capabilities(texture_type)["compare_offset"]
 
     def texture_compare_lod_supported(self, texture_type):
-        return self.resource_base_type(texture_type) == "sampler2DShadow"
+        return self.texture_sampling_capabilities(texture_type)["compare_lod"]
 
     def texture_compare_grad_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-            "samplerCubeShadow",
-        }
+        return self.texture_sampling_capabilities(texture_type)["compare_grad"]
 
     def texture_compare_lod_offset_supported(self, texture_type):
-        return self.resource_base_type(texture_type) == "sampler2DShadow"
+        return self.texture_sampling_capabilities(texture_type)["compare_lod_offset"]
 
     def texture_compare_grad_offset_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-        }
+        return self.texture_sampling_capabilities(texture_type)["compare_grad_offset"]
 
     def texture_compare_projected_coordinate(
         self, texture_type, coord_arg, coord, compare
@@ -2874,10 +3171,7 @@ class GLSLCodeGen:
         )
 
     def texture_gather_compare_offset_supported(self, texture_type):
-        return self.resource_base_type(texture_type) in {
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-        }
+        return self.texture_sampling_capabilities(texture_type)["gather_compare_offset"]
 
     def generate_texture_gather_compare_call(self, func_name, args):
         parts = self.texture_call_parts(args)
@@ -2925,47 +3219,22 @@ class GLSLCodeGen:
             texture_name, self.image_variable_formats.get(texture_name)
         )
 
+    def image_resource_access(self, texture_arg):
+        texture_name = self.expression_name(texture_arg)
+        if not texture_name:
+            return None
+        return self.current_image_access_parameters.get(
+            texture_name, self.image_variable_accesses.get(texture_name)
+        )
+
     def is_integer_image_type(self, texture_type):
-        return texture_type in {
-            "iimage2D",
-            "iimage3D",
-            "iimage2DArray",
-            "uimage2D",
-            "uimage3D",
-            "uimage2DArray",
-        }
+        return is_glsl_integer_image_type(texture_type)
 
     def is_scalar_image_format(self, image_format):
-        return image_format in {
-            "r8",
-            "r8_snorm",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r32f",
-            "r8i",
-            "r16i",
-            "r32i",
-            "r8ui",
-            "r16ui",
-            "r32ui",
-        }
+        return is_scalar_image_format(image_format)
 
     def is_two_component_image_format(self, image_format):
-        return image_format in {
-            "rg8",
-            "rg8_snorm",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg8i",
-            "rg16i",
-            "rg8ui",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-        }
+        return is_two_component_image_format(image_format)
 
     def is_scalar_integer_image_resource(self, texture_type, image_format):
         if image_format is not None:
@@ -2973,90 +3242,85 @@ class GLSLCodeGen:
         return self.is_integer_image_type(texture_type)
 
     def is_float_image_resource(self, texture_type):
-        return texture_type in {"image2D", "image3D", "image2DArray"}
+        return is_glsl_float_image_resource(texture_type)
+
+    def image_store_constructors_by_kind(self):
+        return {
+            "float": "vec4",
+            "int": "ivec4",
+            "uint": "uvec4",
+        }
+
+    def image_store_zero_values_by_kind(self):
+        return {
+            "float": "0.0",
+            "int": "0",
+            "uint": "0u",
+        }
 
     def image_load_component_suffix(self, texture_type, image_format):
-        if self.is_scalar_integer_image_resource(texture_type, image_format):
-            return ".x"
-        if self.is_float_image_resource(texture_type) and self.is_scalar_value_type(
-            self.current_expression_expected_type
-        ):
-            return ".x"
-        if self.is_two_component_image_format(image_format):
-            if self.is_scalar_value_type(self.current_expression_expected_type):
-                return ".x"
-            return ".xy"
-        return ""
+        return storage_image_load_component_suffix(
+            image_format,
+            expected_scalar=self.is_scalar_value_type(
+                self.current_expression_expected_type
+            ),
+            scalar_integer_resource=self.is_scalar_integer_image_resource(
+                texture_type, image_format
+            ),
+            float_resource=self.is_float_image_resource(texture_type),
+        )
 
     def image_format_store_constructor(self, image_format):
-        return {
-            "r8": "vec4",
-            "r8_snorm": "vec4",
-            "r16": "vec4",
-            "r16_snorm": "vec4",
-            "r16f": "vec4",
-            "r32f": "vec4",
-            "r8i": "ivec4",
-            "r16i": "ivec4",
-            "r32i": "ivec4",
-            "r8ui": "uvec4",
-            "r16ui": "uvec4",
-            "r32ui": "uvec4",
-        }.get(image_format)
+        return storage_image_format_store_constructor(
+            image_format, self.image_store_constructors_by_kind()
+        )
 
     def integer_image_store_constructor(self, texture_type):
-        if texture_type in {"iimage2D", "iimage3D", "iimage2DArray"}:
+        if texture_type in {
+            "iimage1D",
+            "iimage1DArray",
+            "iimage2D",
+            "iimage3D",
+            "iimage2DArray",
+        }:
             return "ivec4"
-        if texture_type in {"uimage2D", "uimage3D", "uimage2DArray"}:
+        if texture_type in {
+            "uimage1D",
+            "uimage1DArray",
+            "uimage2D",
+            "uimage3D",
+            "uimage2DArray",
+        }:
             return "uvec4"
         return None
 
     def two_component_image_store_expression(
         self, image_format, value, value_type=None
     ):
-        constructors = {
-            "rg8": ("vec4", "0.0"),
-            "rg8_snorm": ("vec4", "0.0"),
-            "rg16": ("vec4", "0.0"),
-            "rg16_snorm": ("vec4", "0.0"),
-            "rg16f": ("vec4", "0.0"),
-            "rg8i": ("ivec4", "0"),
-            "rg16i": ("ivec4", "0"),
-            "rg8ui": ("uvec4", "0u"),
-            "rg16ui": ("uvec4", "0u"),
-            "rg32f": ("vec4", "0.0"),
-            "rg32i": ("ivec4", "0"),
-            "rg32ui": ("uvec4", "0u"),
-        }
-        constructor = constructors.get(image_format)
-        if constructor is None:
-            return None
-        type_name, zero_value = constructor
-        if self.is_scalar_value_type(value_type):
-            return f"{type_name}({value}, {zero_value}, {zero_value}, {zero_value})"
-        return f"{type_name}({value}, {zero_value}, {zero_value})"
+        return storage_image_two_component_store_expression(
+            image_format,
+            value,
+            self.is_scalar_value_type(value_type),
+            self.image_store_constructors_by_kind(),
+            self.image_store_zero_values_by_kind(),
+        )
 
     def image_store_value_expression(
         self, texture_type, image_format, value, value_type=None
     ):
-        two_component_value = self.two_component_image_store_expression(
-            image_format, value, value_type
+        return storage_image_store_value_expression(
+            image_format,
+            value,
+            self.is_scalar_value_type(value_type),
+            scalar_integer_resource=self.is_scalar_integer_image_resource(
+                texture_type, image_format
+            ),
+            float_resource=self.is_float_image_resource(texture_type),
+            integer_constructor=self.integer_image_store_constructor(texture_type),
+            float_constructor="vec4",
+            constructors_by_kind=self.image_store_constructors_by_kind(),
+            zero_values_by_kind=self.image_store_zero_values_by_kind(),
         )
-        if two_component_value is not None:
-            return two_component_value
-
-        constructor = None
-        if self.is_scalar_integer_image_resource(texture_type, image_format):
-            constructor = self.integer_image_store_constructor(texture_type)
-            if constructor is None:
-                constructor = self.image_format_store_constructor(image_format)
-        elif self.is_float_image_resource(texture_type) and self.is_scalar_value_type(
-            value_type
-        ):
-            constructor = "vec4"
-        if constructor:
-            return f"{constructor}({value})"
-        return value
 
     def generate_texture_call(self, func_name, args):
         if not func_name:
@@ -3064,6 +3328,7 @@ class GLSLCodeGen:
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)
+        self.validate_image_access_argument(func_name, args)
         self.validate_texture_resource_argument(func_name, args)
         self.validate_integer_coordinate_argument(func_name, args)
         self.validate_coordinate_dimension_argument(func_name, args)
@@ -3078,32 +3343,13 @@ class GLSLCodeGen:
         self.validate_gather_component_argument(func_name, args)
 
         if func_name == "textureQueryLevels" and args:
-            texture_type = self.texture_resource_type(args[0])
-            if self.is_storage_image_type(texture_type):
-                return self.unsupported_texture_query_levels_call(texture_type)
-            if self.is_multisample_texture_resource_type(texture_type):
-                return "1"
-            return None
+            return self.texture_query_levels_expression(args[0])
 
         if func_name in {"textureSamples", "imageSamples"} and args:
-            texture_type = self.texture_resource_type(args[0])
-            if texture_type and not self.is_multisample_texture_resource_type(
-                texture_type
-            ):
-                return self.unsupported_texture_samples_query_call()
-            if (
-                func_name == "imageSamples"
-                and self.is_multisample_texture_resource_type(texture_type)
-            ):
-                texture_name = self.generate_expression(args[0])
-                return f"textureSamples({texture_name})"
-            return None
+            return self.texture_samples_expression(func_name, args[0])
 
         if func_name in {"textureSize", "imageSize"} and args:
-            texture_type = self.texture_resource_type(args[0])
-            if self.is_storage_image_type(texture_type):
-                return self.image_size_expression(args[0])
-            return None
+            return self.texture_size_query_expression(args[0])
 
         if len(args) < 2:
             return None
@@ -3448,6 +3694,96 @@ class GLSLCodeGen:
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) == "sampler"
 
+    def structured_buffer_type_name(self, vtype):
+        return str(self.resource_base_type(vtype)).split("<", 1)[0]
+
+    def is_structured_buffer_type(self, vtype):
+        return self.structured_buffer_type_name(vtype) in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
+    def structured_buffer_element_type(self, vtype):
+        type_name = str(self.resource_base_type(vtype))
+        if "<" not in type_name or not type_name.endswith(">"):
+            return "uint"
+        element_type = type_name.split("<", 1)[1][:-1].strip()
+        return self.map_type(element_type)
+
+    def structured_buffer_block_declaration(self, vtype, name, binding, array_size=None):
+        element_type = self.structured_buffer_element_type(vtype)
+        readonly = (
+            "readonly "
+            if self.structured_buffer_type_name(vtype) == "StructuredBuffer"
+            else ""
+        )
+        if array_size is not None:
+            instance_member = "data"
+            self.structured_buffer_instance_members[name] = instance_member
+            array_suffix = f"[{array_size}]" if array_size else "[]"
+            return (
+                f"layout(std430, binding = {binding}) {readonly}buffer "
+                f"{name}Buffer {{ {element_type} {instance_member}[]; }} "
+                f"{name}{array_suffix};\n"
+            )
+        return (
+            f"layout(std430, binding = {binding}) {readonly}buffer "
+            f"{name}Buffer {{ {element_type} {name}[]; }};\n"
+        )
+
+    def glsl_buffer_block_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() == "glsl_buffer_block":
+                return attr
+        return None
+
+    def glsl_buffer_block_layout(self, node):
+        attr = self.glsl_buffer_block_attribute(node)
+        arguments = getattr(attr, "arguments", []) if attr is not None else []
+        if arguments:
+            layout = self.attribute_value_to_string(arguments[0])
+            if layout:
+                return layout
+        return "std430"
+
+    def is_glsl_buffer_block_variable(self, node, vtype=None):
+        if self.glsl_buffer_block_attribute(node) is None:
+            return False
+        type_name = self.resource_base_type(vtype or getattr(node, "var_type", None))
+        return str(type_name) in self.structs_by_name
+
+    def collect_glsl_buffer_block_struct_names(self, global_vars):
+        names = set()
+        for node in global_vars:
+            if not self.is_glsl_buffer_block_variable(node):
+                continue
+            type_name = self.resource_base_type(getattr(node, "var_type", None))
+            names.add(str(type_name))
+        return names
+
+    def glsl_buffer_block_declaration(
+        self, node, vtype, name, binding, array_suffix=""
+    ):
+        block_name = str(self.resource_base_type(vtype))
+        struct = self.structs_by_name.get(block_name)
+        if struct is None:
+            return None
+
+        layout = self.glsl_buffer_block_layout(node)
+        memory_qualifiers = self.resource_memory_qualifiers(node)
+        qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
+        code = (
+            f"layout({layout}, binding = {binding}) {qualifier_prefix}buffer "
+            f"{block_name} {{\n"
+        )
+        for member in getattr(struct, "members", []) or []:
+            code += self.generate_struct_member_declaration(member)
+        code += f"}} {name}{array_suffix};\n"
+        return code
+
     def is_sampled_texture_type(self, vtype):
         mapped_type = self.map_type(self.resource_base_type(vtype))
         return (
@@ -3458,16 +3794,18 @@ class GLSLCodeGen:
 
     def is_storage_image_type(self, vtype):
         mapped_type = self.map_type(self.resource_base_type(vtype))
-        return self.is_opaque_resource_type(mapped_type) and mapped_type.startswith(
-            ("image", "iimage", "uimage")
+        return self.is_opaque_resource_type(mapped_type) and is_glsl_storage_image_type(
+            mapped_type
         )
 
     def is_inferable_resource_array_type(self, vtype):
         return self.is_sampled_texture_type(vtype) or self.is_storage_image_type(vtype)
 
     def is_inferable_resource_type(self, vtype):
-        return self.is_sampler_type(vtype) or self.is_inferable_resource_array_type(
-            vtype
+        return (
+            self.is_sampler_type(vtype)
+            or self.is_structured_buffer_type(vtype)
+            or self.is_inferable_resource_array_type(vtype)
         )
 
     def resource_base_type(self, vtype):
@@ -3551,6 +3889,8 @@ class GLSLCodeGen:
     ):
         if vtype is None:
             return self.map_type(vtype)
+        if self.is_structured_buffer_type(vtype):
+            return f"{self.structured_buffer_element_type(vtype)}[]"
 
         function_hints = self.function_resource_array_size_hints.get(function_name, {})
         param_name = getattr(node, "name", None)
@@ -3604,7 +3944,9 @@ class GLSLCodeGen:
     def map_image_base_type_with_format(self, vtype, node=None):
         base_type = self.resource_base_type(vtype)
         explicit_format = (
-            self.explicit_image_format_qualifier(node) if node is not None else None
+            explicit_image_format(node, self.attribute_value_to_string)
+            if node is not None
+            else None
         )
         if explicit_format in {
             "r8",
@@ -3671,6 +4013,21 @@ class GLSLCodeGen:
             else:
                 format_class = explicit_format
             format_type_map = {
+                "image1D": {
+                    "r32f": "image1D",
+                    "r32i": "iimage1D",
+                    "r32ui": "uimage1D",
+                },
+                "iimage1D": {
+                    "r32f": "image1D",
+                    "r32i": "iimage1D",
+                    "r32ui": "uimage1D",
+                },
+                "uimage1D": {
+                    "r32f": "image1D",
+                    "r32i": "iimage1D",
+                    "r32ui": "uimage1D",
+                },
                 "image2D": {
                     "r32f": "image2D",
                     "r32i": "iimage2D",
@@ -3701,6 +4058,21 @@ class GLSLCodeGen:
                     "r32i": "iimage3D",
                     "r32ui": "uimage3D",
                 },
+                "image1DArray": {
+                    "r32f": "image1DArray",
+                    "r32i": "iimage1DArray",
+                    "r32ui": "uimage1DArray",
+                },
+                "iimage1DArray": {
+                    "r32f": "image1DArray",
+                    "r32i": "iimage1DArray",
+                    "r32ui": "uimage1DArray",
+                },
+                "uimage1DArray": {
+                    "r32f": "image1DArray",
+                    "r32i": "iimage1DArray",
+                    "r32ui": "uimage1DArray",
+                },
                 "image2DArray": {
                     "r32f": "image2DArray",
                     "r32i": "iimage2DArray",
@@ -3727,6 +4099,7 @@ class GLSLCodeGen:
     def is_opaque_resource_type(self, vtype):
         return vtype in {
             "sampler1D",
+            "sampler1DArray",
             "sampler2D",
             "sampler3D",
             "samplerCube",
@@ -3742,14 +4115,20 @@ class GLSLCodeGen:
             "sampler2DMSArray",
             "isampler2D",
             "usampler2D",
+            "image1D",
+            "image1DArray",
             "image2D",
             "image3D",
             "imageCube",
             "image2DArray",
             "imageBuffer",
+            "iimage1D",
+            "iimage1DArray",
             "iimage2D",
             "iimage3D",
             "iimage2DArray",
+            "uimage1D",
+            "uimage1DArray",
             "uimage2D",
             "uimage3D",
             "uimage2DArray",
@@ -3757,44 +4136,7 @@ class GLSLCodeGen:
         }
 
     def supported_image_formats(self):
-        return {
-            "r8",
-            "r8_snorm",
-            "r8i",
-            "r8ui",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r16i",
-            "r16ui",
-            "r32f",
-            "r32i",
-            "r32ui",
-            "rg8",
-            "rg8_snorm",
-            "rg8i",
-            "rg8ui",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg16i",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-            "rgba8",
-            "rgba8_snorm",
-            "rgba8i",
-            "rgba8ui",
-            "rgba16",
-            "rgba16_snorm",
-            "rgba16f",
-            "rgba16i",
-            "rgba16ui",
-            "rgba32f",
-            "rgba32i",
-            "rgba32ui",
-        }
+        return supported_image_formats()
 
     def attribute_value_to_string(self, value):
         if value is None:
@@ -3807,35 +4149,18 @@ class GLSLCodeGen:
             return str(value.value).strip('"')
         return str(value)
 
-    def explicit_image_format_qualifier(self, node):
-        if not hasattr(node, "attributes"):
-            return None
-        supported_formats = self.supported_image_formats()
-        for attr in node.attributes:
-            attr_name = getattr(attr, "name", None)
-            if not attr_name:
-                continue
-            attr_name = str(attr_name).lower()
-            if attr_name in supported_formats:
-                return attr_name
-            if attr_name == "format":
-                arguments = getattr(attr, "arguments", []) or []
-                if not arguments:
-                    continue
-                format_name = self.attribute_value_to_string(arguments[0])
-                if format_name is None:
-                    continue
-                format_name = str(format_name).lower()
-                if format_name in supported_formats:
-                    return format_name
-        return None
-
-    def is_image_format_attribute(self, attr):
+    def is_resource_memory_attribute(self, attr):
         attr_name = getattr(attr, "name", None)
         if not attr_name:
             return False
-        attr_name = str(attr_name).lower()
-        return attr_name == "format" or attr_name in self.supported_image_formats()
+        return str(attr_name).lower() in {
+            "coherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "writeonly",
+            "readwrite",
+        }
 
     def is_resource_binding_attribute(self, attr):
         attr_name = getattr(attr, "name", None)
@@ -3894,19 +4219,24 @@ class GLSLCodeGen:
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
-            if self.is_image_format_attribute(
-                attr
-            ) or self.is_resource_binding_attribute(attr):
+            if (
+                is_image_format_attribute(attr)
+                or self.is_resource_binding_attribute(attr)
+                or is_resource_access_attribute(attr)
+                or self.is_resource_memory_attribute(attr)
+            ):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
         return None
 
     def image_format_qualifier(self, vtype, node=None):
-        explicit_format = self.explicit_image_format_qualifier(node)
+        explicit_format = explicit_image_format(node, self.attribute_value_to_string)
         if explicit_format:
             return explicit_format
         if vtype in {
+            "image1D",
+            "image1DArray",
             "image2D",
             "image3D",
             "imageCube",
@@ -3914,12 +4244,16 @@ class GLSLCodeGen:
         }:
             return "rgba32f"
         if vtype in {
+            "iimage1D",
+            "iimage1DArray",
             "iimage2D",
             "iimage3D",
             "iimage2DArray",
         }:
             return "r32i"
         if vtype in {
+            "uimage1D",
+            "uimage1DArray",
             "uimage2D",
             "uimage3D",
             "uimage2DArray",
@@ -3932,6 +4266,26 @@ class GLSLCodeGen:
         if image_format:
             return f"layout({image_format}, binding = {binding})"
         return f"layout(binding = {binding})"
+
+    def resource_memory_qualifiers(self, node):
+        supported = {"coherent", "volatile", "restrict", "readonly", "writeonly"}
+        qualifiers = set()
+
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier = str(qualifier).lower()
+            if qualifier in supported:
+                qualifiers.add(qualifier)
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in supported:
+                qualifiers.add(attr_name)
+
+        order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
+        return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
 
     def map_operator(self, op):
         op_map = {
@@ -3979,6 +4333,12 @@ class GLSLCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        generic_args = getattr(type_node, "generic_args", [])
+        if hasattr(type_node, "name") and generic_args:
+            args = ", ".join(
+                self.convert_type_node_to_string(arg) for arg in generic_args
+            )
+            return f"{type_node.name}<{args}>"
         if hasattr(type_node, "name"):
             return type_node.name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
@@ -4060,46 +4420,40 @@ class GLSLCodeGen:
         else:
             return f"{indent_str}{element_type} {stmt.name}[{size}];\n"
 
+    def generate_struct_member_declaration(self, member, indent="    "):
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", "float")
+            )
+            if member.size:
+                return f"{indent}{self.map_type(element_type)} {member.name}[{member.size}];\n"
+            return f"{indent}{self.map_type(element_type)} {member.name}[];\n"
+
+        if hasattr(member, "member_type"):
+            if str(type(member.member_type)).find("ArrayType") != -1:
+                element_type = self.convert_type_node_to_string(
+                    member.member_type.element_type
+                )
+                element_type = self.map_type(element_type)
+                if member.member_type.size is not None:
+                    size_str = self.expression_to_string(member.member_type.size)
+                    return f"{indent}{element_type} {member.name}[{size_str}];\n"
+                return f"{indent}{element_type} {member.name}[];\n"
+
+            member_type_str = self.convert_type_node_to_string(member.member_type)
+            member_type = self.map_type(member_type_str)
+            return f"{indent}{member_type} {member.name};\n"
+
+        if hasattr(member, "vtype"):
+            member_type = self.map_type(member.vtype)
+            return f"{indent}{member_type} {member.name};\n"
+
+        return f"{indent}float {member.name};\n"
+
     def generate_struct(self, node):
         code = f"struct {node.name} {{\n"
-
-        members = getattr(node, "members", [])
-        for member in members:
-            if isinstance(member, ArrayNode):
-                element_type = getattr(
-                    member, "element_type", getattr(member, "vtype", "float")
-                )
-                if member.size:
-                    code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
-                else:
-                    code += f"    {self.map_type(element_type)} {member.name}[];\n"
-            else:
-                if hasattr(member, "member_type"):
-                    if str(type(member.member_type)).find("ArrayType") != -1:
-                        # Handle array types with C-style syntax for struct members
-                        element_type = self.convert_type_node_to_string(
-                            member.member_type.element_type
-                        )
-                        element_type = self.map_type(element_type)
-                        if member.member_type.size is not None:
-                            size_str = self.expression_to_string(
-                                member.member_type.size
-                            )
-                            code += f"    {element_type} {member.name}[{size_str}];\n"
-                        else:
-                            code += f"    {element_type} {member.name}[];\n"
-                    else:
-                        member_type_str = self.convert_type_node_to_string(
-                            member.member_type
-                        )
-                        member_type = self.map_type(member_type_str)
-                        code += f"    {member_type} {member.name};\n"
-                elif hasattr(member, "vtype"):
-                    member_type = self.map_type(member.vtype)
-                    code += f"    {member_type} {member.name};\n"
-                else:
-                    code += f"    float {member.name};\n"
-
+        for member in getattr(node, "members", []) or []:
+            code += self.generate_struct_member_declaration(member)
         code += "};\n"
         return code
 
