@@ -46,6 +46,7 @@ TOKENS = tuple(
         ("LOOP", r"\bloop\b"),
         ("BREAK", r"\bbreak\b"),
         ("CONTINUE", r"\bcontinue\b"),
+        ("TRY", r"\btry\b"),
         ("IN", r"\bin\b"),
         ("TRUE", r"\btrue\b"),
         ("FALSE", r"\bfalse\b"),
@@ -80,13 +81,27 @@ TOKENS = tuple(
         # Note: shader-specific words like vertex, fragment are not Rust keywords
         # They can be used as identifiers and only have meaning in attributes
         # Numeric literals must come before identifiers to handle type suffixes
-        ("NUMBER", r"\d+(\.\d+)?((i|u)(8|16|32|64|128|size)|f(32|64))?"),
+        (
+            "NUMBER",
+            r"(0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|"
+            r"0[bB][01](?:_?[01])*|"
+            r"0[oO][0-7](?:_?[0-7])*|"
+            r"\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?)"
+            r"((i|u)(8|16|32|64|128|size)|f(32|64))?",
+        ),
         # Underscore must come before identifier to match wildcard patterns
         ("UNDERSCORE", r"_"),
+        (
+            "BYTE_RAW_STRING",
+            r'br(?P<byte_raw_hashes>#*)"(?:.|\n)*?"(?P=byte_raw_hashes)',
+        ),
+        ("RAW_STRING", r'r(?P<raw_hashes>#*)"(?:.|\n)*?"(?P=raw_hashes)'),
+        ("BYTE_STRING", r'b"([^"\\]|\\.)*"'),
+        ("BYTE_CHAR", r"b'(\\x[0-9a-fA-F]{2}|[^'\\]|\\.)'"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         ("STRING", r'"([^"\\]|\\.)*"'),
         ("CHAR_LIT", r"'([^'\\]|\\.)'"),
-        ("RAW_STRING", r'r#*"[^"]*"#*'),
+        ("LIFETIME", r"'[a-zA-Z_][a-zA-Z0-9_]*"),
         # Punctuation
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
@@ -106,23 +121,9 @@ TOKENS = tuple(
         ("ARROW", r"->"),
         ("FAT_ARROW", r"=>"),
         ("POUND", r"#"),
-        ("EXCLAMATION", r"!"),
-        ("AT", r"@"),
-        ("CARET", r"\^"),
-        ("TILDE", r"~"),
         # Operators (multi-character operators MUST come before single-character ones)
-        ("SHIFT_LEFT", r"<<"),
-        ("SHIFT_RIGHT", r">>"),
-        ("LESS_EQUAL", r"<="),
-        ("GREATER_EQUAL", r">="),
-        ("EQUAL", r"=="),
-        ("NOT_EQUAL", r"!="),
-        ("LOGICAL_AND", r"&&"),
-        ("LOGICAL_OR", r"\|\|"),
-        ("LESS_THAN", r"<"),
-        ("GREATER_THAN", r">"),
-        ("AMPERSAND", r"&"),
-        ("PIPE", r"\|"),
+        ("SHIFT_LEFT_EQUALS", r"<<="),
+        ("SHIFT_RIGHT_EQUALS", r">>="),
         ("PLUS_EQUALS", r"\+="),
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),
@@ -131,8 +132,22 @@ TOKENS = tuple(
         ("BITWISE_AND_EQUALS", r"&="),
         ("BITWISE_OR_EQUALS", r"\|="),
         ("BITWISE_XOR_EQUALS", r"\^="),
-        ("SHIFT_LEFT_EQUALS", r"<<="),
-        ("SHIFT_RIGHT_EQUALS", r">>="),
+        ("SHIFT_LEFT", r"<<"),
+        ("SHIFT_RIGHT", r">>"),
+        ("LESS_EQUAL", r"<="),
+        ("GREATER_EQUAL", r">="),
+        ("EQUAL", r"=="),
+        ("NOT_EQUAL", r"!="),
+        ("LOGICAL_AND", r"&&"),
+        ("LOGICAL_OR", r"\|\|"),
+        ("EXCLAMATION", r"!"),
+        ("LESS_THAN", r"<"),
+        ("GREATER_THAN", r">"),
+        ("AMPERSAND", r"&"),
+        ("PIPE", r"\|"),
+        ("AT", r"@"),
+        ("CARET", r"\^"),
+        ("TILDE", r"~"),
         ("PLUS", r"\+"),
         ("MINUS", r"-"),
         ("MULTIPLY", r"\*"),
@@ -208,11 +223,14 @@ KEYWORDS = {
     "None": "NONE",
     "Ok": "OK",
     "Err": "ERR",
+    "try": "TRY",
     # Removed shader keywords - they should be identifiers, not reserved words
 }
 
 
 class TokenType(Enum):
+    """Token names emitted by the Rust source lexer."""
+
     COMMENT_SINGLE = auto()
     COMMENT_MULTI = auto()
     BITWISE_NOT = auto()
@@ -250,6 +268,7 @@ class TokenType(Enum):
     LOOP = auto()
     BREAK = auto()
     CONTINUE = auto()
+    TRY = auto()
     IN = auto()
     TRUE = auto()
     FALSE = auto()
@@ -285,6 +304,10 @@ class TokenType(Enum):
     NUMBER = auto()
     STRING = auto()
     CHAR_LIT = auto()
+    LIFETIME = auto()
+    BYTE_RAW_STRING = auto()
+    BYTE_STRING = auto()
+    BYTE_CHAR = auto()
     RAW_STRING = auto()
     LBRACE = auto()
     RBRACE = auto()
@@ -340,13 +363,19 @@ class TokenType(Enum):
 
 
 class Token:
+    """Simple typed token object used by Rust compatibility paths."""
+
     def __init__(self, token_type: TokenType, text: str):
+        """Store the token kind and original source text."""
         self.token_type = token_type
         self.text = text
 
 
 class RustLexer:
+    """Tokenize Rust source for the Rust backend parser."""
+
     def __init__(self, code: str):
+        """Initialize the lexer with raw Rust source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
@@ -359,9 +388,11 @@ class RustLexer:
         }
 
     def tokenize(self) -> List[Tuple[str, str]]:
+        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
+        """Yield Rust tokens while skipping whitespace and comments."""
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -382,6 +413,7 @@ class RustLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Tuple[int, str, str]:
+        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -390,6 +422,7 @@ class RustLexer:
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "RustLexer":
+        """Create a lexer instance from a Rust source file."""
         with open(filepath, "r") as f:
             return cls(f.read())
 
@@ -398,11 +431,13 @@ class Lexer:
     """Compatibility wrapper around RustLexer"""
 
     def __init__(self, input_str):
+        """Tokenize ``input_str`` and prepare cursor-based access."""
         self.lexer = RustLexer(input_str)
         self.tokens = self.lexer.tokenize()
         self.current_pos = 0
 
     def next(self):
+        """Return the next token and advance the cursor."""
         if self.current_pos < len(self.tokens):
             token = self.tokens[self.current_pos]
             self.current_pos += 1
@@ -410,6 +445,7 @@ class Lexer:
         return ("EOF", "")
 
     def peek(self):
+        """Return the next token without advancing the cursor."""
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
         return ("EOF", "")

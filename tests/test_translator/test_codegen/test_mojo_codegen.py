@@ -39,6 +39,45 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def find_mojo_compiler():
+    mojo = shutil.which("mojo")
+    if mojo is None:
+        pytest.skip("mojo compiler is not installed")
+
+    try:
+        result = subprocess.run(
+            [mojo, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"mojo compiler is not executable: {exc}")
+
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        pytest.skip(
+            f"mojo compiler is not installed or not executable ({mojo}): {output}"
+        )
+
+    return mojo
+
+
+def test_find_mojo_compiler_skips_non_compiler_on_path(monkeypatch):
+    class FailedProbe:
+        returncode = 29
+        stdout = ""
+        stderr = "Can't find C:\\Strawberry\\perl\\bin\\mojo.BAT on PATH"
+
+    monkeypatch.setattr(
+        shutil, "which", lambda name: r"C:\Strawberry\perl\bin\mojo.BAT"
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FailedProbe())
+
+    with pytest.raises(pytest.skip.Exception):
+        find_mojo_compiler()
+
+
 def test_struct():
     code = """
     struct VSInput {
@@ -96,6 +135,36 @@ def test_basic_shader():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Mojo basic shader codegen not implemented.")
+
+
+def test_compute_stage_local_helper_functions_emit_before_entry_point():
+    code = """
+    shader StageLocalMojo {
+        compute {
+            float helper(float value) {
+                return value + 1.0;
+            }
+
+            void main() {
+                float y = helper(1.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert len(next(iter(ast.stages.values())).local_functions) == 1
+    helper_signature = "fn helper(value: Float32) -> Float32:"
+    entry_signature = "fn main() -> None:"
+    assert helper_signature in generated_code
+    assert entry_signature in generated_code
+    assert generated_code.index(helper_signature) < generated_code.index(
+        entry_signature
+    )
+    assert "var y: Float32 = helper(1.0)" in generated_code
 
 
 def test_if_statement():
@@ -179,6 +248,198 @@ def test_for_statement():
         pytest.fail("For statement codegen not implemented.")
 
 
+def test_for_continue_emits_update_before_continue_in_mojo():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int total = 0;
+                for (int i = 0; i < 4; i++) {
+                    if (i == 1) {
+                        continue;
+                    }
+                    for (int j = 0; j < 2; j++) {
+                        if (j == 0) {
+                            continue;
+                        }
+                        total += j;
+                    }
+                    total += i;
+                }
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "if (i == 1):\n            i += 1\n            continue" in generated_code
+    assert (
+        "if (j == 0):\n                j += 1\n                continue"
+        in generated_code
+    )
+    assert (
+        "if (j == 0):\n                i += 1\n                continue"
+        not in generated_code
+    )
+    assert "DoWhileNode" not in generated_code
+
+
+def test_for_in_statement_lowers_to_mojo_ranges_and_scopes_loop_contexts():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int total = 0;
+                for i in 4 {
+                    if (i == 1) {
+                        continue;
+                    }
+                    total += i;
+                }
+                for j in 2..5 {
+                    total += j;
+                }
+                for k in 1..=4 {
+                    total += k;
+                }
+                for (int outer = 0; outer < 2; outer++) {
+                    for inner in 3 {
+                        if (inner == 1) {
+                            continue;
+                        }
+                        total += inner;
+                    }
+                }
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for i in range(4):" in generated_code
+    assert "for j in range(2, 5):" in generated_code
+    assert "for k in range(1, (4 + 1)):" in generated_code
+    assert "total += i" in generated_code
+    assert "total += j" in generated_code
+    assert "total += k" in generated_code
+    assert "total += inner" in generated_code
+    assert "if (inner == 1):\n                continue" in generated_code
+    assert "outer += 1\n                continue" not in generated_code
+    assert "ForInNode" not in generated_code
+    assert "RangeNode" not in generated_code
+
+
+def test_while_statement_lowers_to_mojo_while_and_scopes_loop_contexts():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int value = 0;
+                while (value < 4) {
+                    if (value == 2) {
+                        continue;
+                    }
+                    value += 1;
+                }
+                for (int i = 0; i < 3; i++) {
+                    int j = 0;
+                    while (j < 2) {
+                        if (j == 1) {
+                            continue;
+                        }
+                        j += 1;
+                    }
+                }
+                do {
+                    int k = 0;
+                    while (k < 2) {
+                        if (k == 1) {
+                            break;
+                        }
+                        k += 1;
+                    }
+                    value += 1;
+                } while (value < 8);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "while (value < 4):" in generated_code
+    assert "while (j < 2):" in generated_code
+    assert "if (value == 2):\n            continue" in generated_code
+    assert "if (j == 1):\n                continue" in generated_code
+    assert (
+        "if (j == 1):\n                i += 1\n                continue"
+        not in generated_code
+    )
+    assert "__cgl_do_break_0 = True" not in generated_code
+    assert "WhileNode" not in generated_code
+
+
+def test_loop_statement_lowers_to_mojo_while_true_and_scopes_loop_contexts():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int value = 0;
+                loop {
+                    value += 1;
+                    if (value == 2) {
+                        continue;
+                    }
+                    if (value > 3) {
+                        break;
+                    }
+                }
+                for (int i = 0; i < 3; i++) {
+                    loop {
+                        if (i == 1) {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                do {
+                    loop {
+                        if (value == 4) {
+                            break;
+                        }
+                        continue;
+                    }
+                    value += 1;
+                } while (value < 8);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "while True:" in generated_code
+    assert "value += 1" in generated_code
+    assert "if (value == 2):\n            continue" in generated_code
+    assert "if (i == 1):\n                continue" in generated_code
+    assert (
+        "if (i == 1):\n                i += 1\n                continue"
+        not in generated_code
+    )
+    assert "__cgl_do_break_0 = True" not in generated_code
+    assert "LoopNode" not in generated_code
+
+
 def test_increment_and_decrement_emit_mojo_assignment_updates():
     code = """
     shader main {
@@ -208,6 +469,44 @@ def test_increment_and_decrement_emit_mojo_assignment_updates():
     assert "--i" not in generated_code
     assert "i--" not in generated_code
     assert "++j" not in generated_code
+
+
+def test_do_while_statement_lowers_to_mojo_loop_with_condition_after_body():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int value = 0;
+                do {
+                    value += 1;
+                    if (value == 2) {
+                        continue;
+                    }
+                    if (value == 4) {
+                        break;
+                    }
+                    value += 2;
+                } while (value < 8);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var __cgl_do_break_0: Bool = False" in generated_code
+    assert "while True:\n        while True:" in generated_code
+    assert "value += 1" in generated_code
+    assert "if (value == 2):\n                break" in generated_code
+    assert (
+        "if (value == 4):\n"
+        "                __cgl_do_break_0 = True\n"
+        "                break"
+    ) in generated_code
+    assert "if not (value < 8):" in generated_code
+    assert "DoWhileNode" not in generated_code
 
 
 def test_bool_string_and_char_literals_emit_mojo_syntax():
@@ -242,6 +541,29 @@ def test_bool_string_and_char_literals_emit_mojo_syntax():
     assert 'var marker: String = "x"' in generated_code
     assert 'label = "active"' in generated_code
     assert 'marker = "y"' in generated_code
+
+
+def test_inferred_let_declarations_do_not_emit_none_type():
+    code = """
+    shader main {
+        fragment {
+            float4 main() {
+                let weight = 1;
+                let mask = true;
+                let tint = float4(1.0, 0.0, 0.0, 1.0);
+                return tint;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var weight = 1" in generated_code
+    assert "var mask = True" in generated_code
+    assert "var tint = float4(1.0, 0.0, 0.0, 1.0)" in generated_code
+    assert ": None" not in generated_code
 
 
 def test_direct_literal_nodes_emit_mojo_escaping():
@@ -332,6 +654,84 @@ def test_function_call(shader, expected_output):
     code_gen = MojoCodeGen()
     generated_code = code_gen.generate(ast)
     assert expected_output in generated_code
+
+
+def test_builtin_function_call_names_are_mapped():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float x = mix(0.0, 1.0, 0.25);
+                float y = dot(vec3(1.0), vec3(2.0));
+                float z = pow(2.0, 3.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "lerp(0.0, 1.0, 0.25)" in generated_code
+    assert "dot_product(" in generated_code
+    assert "power(2.0, 3.0)" in generated_code
+    assert "mix(0.0, 1.0, 0.25)" not in generated_code
+    assert "dot(" not in generated_code
+    assert "pow(2.0, 3.0)" not in generated_code
+
+
+def test_fract_scalar_builtin_lowers_to_helper():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float x = fract(1.25);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_fract_f32(x: Float32) -> Float32:" in generated_code
+    assert "return x - floor(x)" in generated_code
+    assert "var x: Float32 = _crossgl_fract_f32(1.25)" in generated_code
+    assert "fract(" not in generated_code
+
+
+def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                vec3 v = fract(vec3(1.25, 2.5, 3.75));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "fn _crossgl_fract_f32_3_4(v: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:"
+    ) in generated_code
+    assert (
+        "return SIMD[DType.float32, 4]("
+        "v[0] - floor(v[0]), v[1] - floor(v[1]), "
+        "v[2] - floor(v[2]), 0.0)"
+    ) in generated_code
+    assert (
+        "var v: SIMD[DType.float32, 4] = "
+        "_crossgl_fract_f32_3_4("
+        "SIMD[DType.float32, 4](1.25, 2.5, 3.75, 0.0))"
+    ) in generated_code
+    assert "fract(" not in generated_code
 
 
 @pytest.mark.parametrize(
@@ -678,9 +1078,7 @@ def test_double_vector_and_matrix_types_emit_mojo_names():
 
 
 def test_matrix_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     mat2 makeMat2() {
@@ -802,9 +1200,7 @@ def test_vector_fed_matrix_constructors_use_helpers_and_index_fields():
 
 
 def test_vector_fed_matrix_constructors_and_indexing_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec2 makeUv() {
@@ -892,9 +1288,7 @@ def test_dynamic_matrix_indexing_emits_getitem_and_vector_index_casts():
 
 
 def test_dynamic_matrix_indexing_and_assignment_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     mat2 mutateLocal(int column, int row) {
@@ -1008,9 +1402,7 @@ def test_three_component_vectors_emit_power_of_two_simd_storage():
 
 
 def test_three_component_vector_codegen_compiles_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec3 buildColor() {
@@ -1095,9 +1487,7 @@ def test_swizzles_and_composite_vector_constructors_emit_indexed_lanes():
 
 
 def test_swizzles_and_composite_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Input {
@@ -1247,9 +1637,7 @@ def test_duplicate_sensitive_splats_and_swizzles_use_helpers():
 
 
 def test_scalar_vec3_splats_and_later_function_swizzles_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float expensive() {
@@ -1345,9 +1733,7 @@ def test_duplicate_sensitive_composite_constructors_use_helpers():
 
 
 def test_duplicate_sensitive_composite_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec2 makeUv() {
@@ -1446,9 +1832,7 @@ def test_duplicate_sensitive_bool_vector_helpers_use_bool_dtype():
 
 
 def test_duplicate_sensitive_bool_vector_helpers_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     bool flag() {
@@ -1588,9 +1972,7 @@ def test_duplicate_sensitive_integer_vector_helpers_use_typed_dtypes():
 
 
 def test_duplicate_sensitive_integer_vector_helpers_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     int pickIndex() {
@@ -1780,9 +2162,7 @@ def test_mixed_dtype_vector_constructors_cast_and_preserve_single_eval():
 
 
 def test_mixed_dtype_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     int nextIndex() {
@@ -1986,9 +2366,7 @@ def test_scalar_vec2_vec4_constructors_emit_splat_form():
 
 
 def test_scalar_vec2_vec4_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float nextFloat() {
@@ -2232,9 +2610,7 @@ def test_nested_composite_vector_constructors_use_helpers_and_casts():
 
 
 def test_nested_composite_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float nextFloat() {
@@ -2449,9 +2825,7 @@ def test_truncating_vector_constructors_use_helpers_and_pad_hidden_lane():
 
 
 def test_truncating_vector_constructors_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec4 makeColor() {
@@ -2593,9 +2967,7 @@ def test_vec3_arithmetic_helpers_preserve_hidden_lane():
 
 
 def test_vec3_arithmetic_helpers_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec3 addScalar(vec3 color, float bloom) {
@@ -2745,9 +3117,7 @@ def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices():
 
 
 def test_fixed_size_arrays_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     vec4 scalarArray(int index) {
@@ -2801,9 +3171,7 @@ fn main():
 
 
 def test_struct_array_fields_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Packed {
@@ -2860,9 +3228,7 @@ fn main():
 
 
 def test_local_struct_array_fields_default_initialize_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Packed {
@@ -2917,9 +3283,7 @@ fn main():
 
 
 def test_nested_struct_arrays_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     struct Inner {
@@ -3042,9 +3406,7 @@ def test_array_literals_emit_inlinearray_and_zero_padding():
 
 
 def test_array_literals_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float globalWeights[4] = {1.0, 2.0};
@@ -3151,9 +3513,7 @@ def test_mutated_parameters_emit_owned_only_when_needed():
 
 
 def test_mutated_array_matrix_vector_parameters_compile_with_mojo(tmp_path):
-    mojo = shutil.which("mojo")
-    if mojo is None:
-        pytest.skip("mojo compiler is not installed")
+    mojo = find_mojo_compiler()
 
     code = """
     float writeArray(float values[4], int index) {
@@ -3238,6 +3598,101 @@ def test_array_access():
         assert "values[0]" in generated_code and "values[1]" in generated_code
     except SyntaxError:
         pytest.fail("Array access code generation not implemented.")
+
+
+def test_switch_statement_lowers_to_mojo_condition_chain():
+    code = """
+    shader TestShader {
+        compute {
+            void main() {
+                int x = 1;
+                switch (x) {
+                    case 1:
+                        x = 2;
+                        break;
+                    case 2:
+                        x = 4;
+                        break;
+                    default:
+                        x = 3;
+                }
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "if x == 1:" in generated_code
+    assert "elif x == 2:" in generated_code
+    assert "else:" in generated_code
+    assert "x = 2" in generated_code
+    assert "x = 4" in generated_code
+    assert "x = 3" in generated_code
+    assert "SwitchNode" not in generated_code
+    assert "CaseNode" not in generated_code
+    assert "break" not in generated_code
+
+
+def test_match_statement_lowers_to_mojo_condition_chain():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "if mode == 0:" in generated_code
+    assert "else:" in generated_code
+    assert "value = 1" in generated_code
+    assert "value = 2" in generated_code
+    assert "MatchNode" not in generated_code
+    assert "MatchArmNode" not in generated_code
+
+
+def test_match_guarded_arm_is_rejected_for_mojo_codegen():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 if mode > 0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="Unsupported match arm for Mojo"):
+        generate_code(ast)
 
 
 def test_mojo_imports():

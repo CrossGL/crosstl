@@ -261,6 +261,7 @@ class ASTUtils:
 
     @staticmethod
     def get_semantic_from_attributes(attributes: List[AttributeNode]) -> Optional[str]:
+        """Return the first recognized semantic attribute name."""
         semantic_attrs = [
             "position",
             "color",
@@ -294,6 +295,7 @@ class ASTUtils:
 
     @staticmethod
     def get_member_info(member: StructMemberNode, backend: str = "generic"):
+        """Return normalized metadata for a struct member."""
         return {
             "name": member.name,
             "type": ASTUtils.get_type_string(member.member_type, backend),
@@ -305,6 +307,7 @@ class ASTUtils:
 
     @staticmethod
     def get_variable_info(variable: VariableNode, backend: str = "generic"):
+        """Return normalized metadata for a variable declaration."""
         return {
             "name": variable.name,
             "type": ASTUtils.get_type_string(variable.var_type, backend),
@@ -318,6 +321,7 @@ class ASTUtils:
 
     @staticmethod
     def get_parameter_info(parameter: ParameterNode, backend: str = "generic"):
+        """Return normalized metadata for a function parameter."""
         return {
             "name": parameter.name,
             "type": ASTUtils.get_type_string(parameter.param_type, backend),
@@ -329,6 +333,7 @@ class ASTUtils:
 
     @staticmethod
     def get_function_info(function: FunctionNode, backend: str = "generic"):
+        """Return normalized metadata for a function declaration."""
         return {
             "name": function.name,
             "return_type": ASTUtils.get_type_string(function.return_type, backend),
@@ -345,6 +350,7 @@ class ASTUtils:
 
     @staticmethod
     def expression_to_string(expr: ExpressionNode) -> str:
+        """Render a simple expression node to a string for declarations."""
         # Simplified — a full implementation would use an expression visitor.
         if hasattr(expr, "value"):
             return str(expr.value)
@@ -355,10 +361,12 @@ class ASTUtils:
 
     @staticmethod
     def is_legacy_ast_node(node) -> bool:
+        """Return whether a node uses the older ``vtype`` string shape."""
         return hasattr(node, "vtype") and isinstance(getattr(node, "vtype", None), str)
 
     @staticmethod
     def get_legacy_compatible_type(node, backend: str = "generic") -> str:
+        """Return a type string for either legacy or current AST nodes."""
         if ASTUtils.is_legacy_ast_node(node):
             return getattr(node, "vtype", "float")
         else:
@@ -373,6 +381,7 @@ class ASTUtils:
 
     @staticmethod
     def get_legacy_compatible_semantic(node) -> Optional[str]:
+        """Return semantic metadata from either legacy or current AST nodes."""
         if ASTUtils.is_legacy_ast_node(node):
             return getattr(node, "semantic", None)
         else:

@@ -11,6 +11,14 @@ systems-language targets.
 
    quickstart
    architecture
+   translation-pipeline
+   lexer
+   ast
+   codegen-utilities
+   backend-support
+   backends/index
+   examples
+   extending
    doxygen
 
 .. toctree::

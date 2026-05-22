@@ -230,6 +230,8 @@ KEYWORDS = {
 
 
 class GLSLLexer:
+    """Tokenize GLSL source for the OpenGL parser."""
+
     def __init__(
         self,
         code: str,
@@ -240,6 +242,7 @@ class GLSLLexer:
         max_expansion_depth: int = 64,
         file_path: Optional[str] = None,
     ):
+        """Initialize the lexer and optionally run the GLSL preprocessor."""
         if preprocess:
             preprocessor = GLSLPreprocessor(
                 include_paths=include_paths,
@@ -253,9 +256,11 @@ class GLSLLexer:
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
+        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
+        """Yield GLSL tokens while skipping whitespace and comments."""
         pos = 0
         while pos < self._length:
             if self.code.startswith("/*", pos):
@@ -288,6 +293,7 @@ class GLSLLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
+        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -304,6 +310,7 @@ class GLSLLexer:
         strict_preprocessor: bool = True,
         max_expansion_depth: int = 64,
     ) -> "GLSLLexer":
+        """Create a lexer instance from a GLSL source file."""
         with open(filepath, "r", encoding="utf-8") as f:
             return cls(
                 f.read(),

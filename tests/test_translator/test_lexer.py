@@ -56,6 +56,19 @@ def test_for_statement_tokenization():
         pytest.fail("for tokenization not implemented.")
 
 
+def test_do_while_statement_tokenization():
+    code = """
+    do {
+        sum += 1;
+    } while (sum < 10);
+    """
+
+    tokens = tokenize_code(code)
+
+    assert any(t[0] == "DO" for t in tokens), "Missing 'DO' token"
+    assert any(t[0] == "WHILE" for t in tokens), "Missing 'WHILE' token"
+
+
 def test_range_tokenization():
     code = """
     for i in 0..4 {

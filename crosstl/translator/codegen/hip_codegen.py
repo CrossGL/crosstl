@@ -10,12 +10,20 @@ from ..ast import (
     ASTNode,
     ArrayAccessNode,
     ArrayLiteralNode,
+    BreakNode,
     CbufferNode,
+    ContinueNode,
+    ForInNode,
     FunctionNode,
     IdentifierNode,
+    LiteralPatternNode,
+    MatchNode,
+    RangeNode,
+    ReturnNode,
     ShaderNode,
     StructNode,
     VariableNode,
+    WildcardPatternNode,
 )
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
@@ -24,9 +32,12 @@ from .vector_arithmetic import VectorArithmeticMixin
 
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+    """Emit HIP source from the shared CrossGL translator AST."""
+
     resource_diagnostic_backend = "HIP"
 
     def __init__(self):
+        """Initialize HIP type maps and per-generation visitor state."""
         self.indent_level = 0
         self.code_lines = []
         self.current_function = None
@@ -285,6 +296,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         }
 
     def generate(self, node: ASTNode) -> str:
+        """Generate complete HIP source for a CrossGL AST."""
         self.code_lines = []
         self.indent_level = 0
         self.variable_types = {}
@@ -311,6 +323,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return "\n".join(self.code_lines)
 
     def add_includes(self):
+        """Emit the standard HIP runtime include block."""
         self.code_lines.extend(
             [
                 "#include <hip/hip_runtime.h>",
@@ -322,25 +335,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         )
 
     def indent(self) -> str:
+        """Return whitespace for the current indentation level."""
         return "    " * self.indent_level
 
     def add_line(self, line: str = ""):
+        """Append one HIP output line using the current indentation level."""
         if line:
             self.code_lines.append(self.indent() + line)
         else:
             self.code_lines.append("")
 
     def visit(self, node: ASTNode) -> str:
+        """Dispatch an AST node to its HIP visitor method."""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node: ASTNode) -> str:
+        """Raise a clear error for unsupported AST nodes."""
         raise NotImplementedError(
             f"Code generation not implemented for {type(node).__name__}"
         )
 
     def visit_ShaderNode(self, node: ShaderNode) -> str:
+        """Render a full shader/program AST as a HIP translation unit."""
         structs = getattr(node, "structs", [])
         for struct in structs:
             self.visit(struct)
@@ -359,6 +377,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         # Handle shader stages (new AST structure)
         if hasattr(node, "stages") and node.stages:
+            emitted_local_functions = set()
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
                     # Set the stage type context for proper qualifier handling
@@ -377,14 +396,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                         else:
                             stage.entry_point.qualifiers = ["compute"]
 
-                    self.visit(stage.entry_point)
-                if hasattr(stage, "local_functions"):
-                    for func in stage.local_functions:
+                    for func in getattr(stage, "local_functions", []):
+                        if id(func) in emitted_local_functions:
+                            continue
                         self.visit(func)
+                        emitted_local_functions.add(id(func))
+
+                    self.visit(stage.entry_point)
 
         return ""
 
     def visit_FunctionNode(self, node: FunctionNode) -> str:
+        """Render a CrossGL function or compute entry point as HIP code."""
         saved_variable_types = self.variable_types.copy()
         self.current_function = node.name
         saved_current_function_name = self.current_function_name
@@ -499,16 +522,20 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def format_variable_declaration(self, node: VariableNode) -> str:
-        if hasattr(node, "var_type"):
-            var_type = node.var_type
-        elif hasattr(node, "vtype"):
-            var_type = node.vtype
-        else:
-            var_type = "int"
-
-        self.register_variable_type(node.name, var_type)
-        declaration = self.format_typed_declarator(var_type, node.name)
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        var_type = self.get_variable_node_type(node)
+
+        if var_type is None and initial_value is not None:
+            inferred_type = self.expression_result_type(initial_value)
+            self.register_variable_type(node.name, inferred_type)
+            declaration = self.format_typed_declarator(
+                inferred_type or "auto", node.name
+            )
+        else:
+            var_type = var_type or "int"
+            self.register_variable_type(node.name, var_type)
+            declaration = self.format_typed_declarator(var_type, node.name)
+
         if initial_value is not None:
             declaration += f" = {self.visit(initial_value)}"
 
@@ -538,6 +565,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def emit_statement(self, node):
+        """Render and append one statement node when it produces code."""
         if node is None:
             return
 
@@ -546,6 +574,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.add_line(f"{result};")
 
     def emit_body(self, body):
+        """Render a list-like or block-like function body."""
         if isinstance(body, list):
             for stmt in body:
                 self.emit_statement(stmt)
@@ -554,6 +583,38 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 self.emit_statement(stmt)
         else:
             self.emit_statement(body)
+
+    def statement_list(self, body):
+        if body is None:
+            return []
+        if isinstance(body, list):
+            return body
+        if hasattr(body, "statements"):
+            return body.statements
+        return [body]
+
+    def statement_body_terminates(self, body):
+        statements = self.statement_list(body)
+        if not statements:
+            return False
+        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
+
+    def is_supported_match_arm(self, arm):
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
+    def validate_match_arms(self, arms):
+        wildcard_index = None
+        for index, arm in enumerate(arms):
+            if not self.is_supported_match_arm(arm):
+                return False
+            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
+                if wildcard_index is not None:
+                    return False
+                wildcard_index = index
+        return wildcard_index is None or wildcard_index == len(arms) - 1
 
     def visit_IfNode(self, node) -> str:
         condition = self.visit(node.if_condition)
@@ -593,6 +654,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return ""
 
+    def visit_ForInNode(self, node) -> str:
+        pattern = getattr(node, "pattern", "item")
+        iterable = getattr(node, "iterable", None)
+
+        if isinstance(iterable, RangeNode):
+            start = self.visit(iterable.start)
+            end = self.visit(iterable.end)
+            comparator = "<=" if iterable.inclusive else "<"
+        else:
+            start = "0"
+            end = self.visit(iterable)
+            comparator = "<"
+
+        self.add_line(
+            f"for (int {pattern} = {start}; {pattern} {comparator} {end}; ++{pattern})"
+        )
+        self.add_line("{")
+        self.indent_level += 1
+        self.emit_body(getattr(node, "body", []))
+        self.indent_level -= 1
+        self.add_line("}")
+
+        return ""
+
     def visit_WhileNode(self, node) -> str:
         condition = self.visit(node.condition) if node.condition else ""
 
@@ -605,6 +690,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return ""
 
+    def visit_DoWhileNode(self, node) -> str:
+        condition = self.visit(node.condition) if node.condition else ""
+
+        self.add_line("do")
+        self.add_line("{")
+        self.indent_level += 1
+        self.emit_body(node.body)
+        self.indent_level -= 1
+        self.add_line(f"}} while ({condition});")
+
+        return ""
+
     def visit_SwitchNode(self, node) -> str:
         expression = self.visit(node.expression)
 
@@ -613,6 +710,48 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.indent_level += 1
         for case in getattr(node, "cases", []):
             self.visit(case)
+        self.indent_level -= 1
+        self.add_line("}")
+
+        return ""
+
+    def visit_MatchNode(self, node) -> str:
+        expression = self.visit(getattr(node, "expression", None))
+
+        self.add_line(f"switch ({expression})")
+        self.add_line("{")
+        self.indent_level += 1
+
+        arms = getattr(node, "arms", []) or []
+        if not self.validate_match_arms(arms):
+            raise ValueError(
+                "Unsupported match arm for HIP codegen; only unguarded "
+                "literal patterns and a final wildcard can be lowered to switch"
+            )
+
+        wildcard_body = None
+        for arm in arms:
+            pattern = getattr(arm, "pattern", None)
+            if isinstance(pattern, WildcardPatternNode):
+                wildcard_body = getattr(arm, "body", [])
+                continue
+
+            self.add_line(f"case {self.visit(pattern.literal)}:")
+            self.indent_level += 1
+            body = getattr(arm, "body", [])
+            self.emit_body(body)
+            if not self.statement_body_terminates(body):
+                self.add_line("break;")
+            self.indent_level -= 1
+
+        if wildcard_body is not None:
+            self.add_line("default:")
+            self.indent_level += 1
+            self.emit_body(wildcard_body)
+            if not self.statement_body_terminates(wildcard_body):
+                self.add_line("break;")
+            self.indent_level -= 1
+
         self.indent_level -= 1
         self.add_line("}")
 
@@ -722,7 +861,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         # Handle special functions
         if func_name == "clamp":
             if len(args) == 3:
-                return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+                return self.generate_clamp_call(raw_args, args)
         elif func_name in ["texture", "tex2D"]:
             # Handle texture sampling
             if len(args) >= 2:
@@ -735,6 +874,79 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def generate_clamp_call(self, raw_args, args):
+        value_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        if not value_info:
+            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+
+        min_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+        max_info = self.vector_type_info(self.expression_result_type(raw_args[2]))
+        if min_info and len(min_info["components"]) != len(value_info["components"]):
+            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+        if max_info and len(max_info["components"]) != len(value_info["components"]):
+            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+
+        helper_name = self.require_vector_clamp_helper(
+            value_info,
+            min_is_vector=min_info is not None,
+            max_is_vector=max_info is not None,
+        )
+        if helper_name is None:
+            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+        return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
+
+    def require_vector_clamp_helper(self, vector_info, min_is_vector, max_is_vector):
+        if vector_info["component_type"] == "bool":
+            return None
+
+        vector_type = vector_info["type"]
+        scalar_type = self.vector_scalar_parameter_type(vector_info)
+        min_shape = "vector" if min_is_vector else "scalar"
+        max_shape = "vector" if max_is_vector else "scalar"
+        helper_name = f"cgl_{vector_type}_clamp"
+        if min_shape != "vector" or max_shape != "vector":
+            helper_name += f"_{min_shape}_min_{max_shape}_max"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        min_type = vector_type if min_is_vector else scalar_type
+        max_type = vector_type if max_is_vector else scalar_type
+        components = vector_info["components"]
+        constructor = vector_info["constructor"]
+        args = []
+        for component in components:
+            value_component = f"value.{component}"
+            min_component = f"min_value.{component}" if min_is_vector else "min_value"
+            max_component = f"max_value.{component}" if max_is_vector else "max_value"
+            args.append(
+                self.format_clamp_component(
+                    vector_info["component_type"],
+                    value_component,
+                    min_component,
+                    max_component,
+                )
+            )
+
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}"
+            f"({vector_type} value, {min_type} min_value, {max_type} max_value)\n"
+            "{\n"
+            f"    return {constructor}({', '.join(args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_clamp_component(self, component_type, value, min_value, max_value):
+        if component_type == "float":
+            return f"fmaxf({min_value}, fminf({max_value}, {value}))"
+        if component_type == "double":
+            return f"fmax({min_value}, fmin({max_value}, {value}))"
+        return (
+            f"(({value}) < ({min_value}) ? ({min_value}) : "
+            f"(({value}) > ({max_value}) ? ({max_value}) : ({value})))"
+        )
 
     def insert_helper_functions(self):
         if not self.helper_functions:
@@ -1232,6 +1444,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return str(type_node)
 
     def map_type(self, type_name) -> str:
+        """Map a CrossGL type name or type node to a HIP type string."""
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
             type_str = self.convert_type_node_to_string(type_name)
         else:
@@ -1275,6 +1488,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return self.visit(size)
 
     def generate_kernel_wrapper(self, kernel_node: FunctionNode) -> str:
+        """Generate a host-side HIP launch wrapper for a kernel node."""
         wrapper_lines = []
 
         # Generate wrapper function
@@ -1303,5 +1517,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
 
 def generate_hip_code(ast: ShaderNode) -> str:
+    """Generate HIP source from a CrossGL shader AST."""
     generator = HipCodeGen()
     return generator.generate(ast)

@@ -11,13 +11,17 @@ from ..ast import (
     CbufferNode,
     ContinueNode,
     ExpressionStatementNode,
+    ForInNode,
     ForNode,
     FunctionCallNode,
     IdentifierNode,
     FunctionNode,
     IfNode,
     LiteralNode,
+    LiteralPatternNode,
+    MatchNode,
     MemberAccessNode,
+    RangeNode,
     ReturnNode,
     ShaderNode,
     StructNode,
@@ -25,7 +29,9 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    DoWhileNode,
     WhileNode,
+    WildcardPatternNode,
 )
 from .array_utils import (
     format_c_style_array_declaration,
@@ -35,7 +41,10 @@ from .array_utils import (
 
 
 class SlangCodeGen:
+    """Emit Slang shader source from the shared CrossGL AST."""
+
     def __init__(self):
+        """Initialize Slang generation state and helper caches."""
         self.indent_level = 0
         self.indent_str = "    "
         self.variable_types = {}
@@ -46,9 +55,11 @@ class SlangCodeGen:
         self._generating = False
 
     def indent(self):
+        """Return whitespace for the current indentation level."""
         return self.indent_str * self.indent_level
 
     def generate(self, ast):
+        """Generate Slang source for a CrossGL AST or AST fragment."""
         outermost = not self._generating
         if outermost:
             self._generating = True
@@ -137,6 +148,7 @@ class SlangCodeGen:
         return "\n\n".join(self.helper_functions.values()) + "\n\n"
 
     def generate_shader(self, node):
+        """Render a full CrossGL shader AST as a Slang translation unit."""
         result = ""
 
         structs = getattr(node, "structs", [])
@@ -179,6 +191,7 @@ class SlangCodeGen:
         return None
 
     def generate_stage(self, stage_type, stage):
+        """Render one staged entry point and its local functions."""
         stage_name = self.get_stage_name(stage_type)
         result = f"// {stage_name.title()} Shader\n"
 
@@ -246,11 +259,26 @@ class SlangCodeGen:
         return format_c_style_array_declaration(mapped_type, name)
 
     def get_variable_type(self, node):
-        if hasattr(node, "var_type"):
-            return self.convert_type_node_to_string(node.var_type)
-        if hasattr(node, "vtype"):
-            return node.vtype
+        var_type = getattr(node, "var_type", None)
+        if var_type is not None:
+            return self.convert_type_node_to_string(var_type)
+
+        vtype = getattr(node, "vtype", None)
+        if vtype is not None and vtype != "":
+            return vtype
+
+        return None
+
+    def variable_declaration_type(self, node, initial_value=None):
+        var_type = self.get_variable_type(node)
+        if var_type is not None:
+            return var_type
+        if initial_value is not None:
+            return self.expression_result_type(initial_value) or "auto"
         return "float"
+
+    def initializer_expected_type(self, var_type):
+        return None if var_type == "auto" else var_type
 
     def register_variable_type(self, name, type_name, node=None):
         if not name or type_name is None:
@@ -272,12 +300,15 @@ class SlangCodeGen:
                 return f"{element_type} {node.name}[];\n"
             return f"{element_type} {node.name}[{size}];\n"
 
-        vtype = self.get_variable_type(node)
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        vtype = self.variable_declaration_type(node, initial_value)
         self.register_variable_type(node.name, vtype, node)
         declaration = self.format_declaration(vtype, node.name, node)
-        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
         if initial_value is not None:
-            initial_expr = self.generate_expression_with_expected(initial_value, vtype)
+            initial_expr = self.generate_expression_with_expected(
+                initial_value,
+                self.initializer_expected_type(vtype),
+            )
             return f"{declaration} = {initial_expr};\n"
         return f"{declaration};\n"
 
@@ -333,6 +364,7 @@ class SlangCodeGen:
         return result
 
     def generate_function(self, node, shader_type=None):
+        """Render one CrossGL function or shader entry point as Slang code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
         saved_function_return_type = self.current_function_return_type
@@ -420,6 +452,7 @@ class SlangCodeGen:
         )
 
     def generate_statement(self, node):
+        """Render a single CrossGL statement as Slang code."""
         if isinstance(node, ReturnNode):
             if node.value is None:
                 return "return;"
@@ -432,13 +465,14 @@ class SlangCodeGen:
         elif isinstance(node, ExpressionStatementNode):
             return self.generate_expression(node.expression) + ";"
         elif isinstance(node, VariableNode):
-            var_type = self.get_variable_type(node)
+            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+            var_type = self.variable_declaration_type(node, initial_value)
             self.register_variable_type(node.name, var_type, node)
             declaration = self.format_declaration(var_type, node.name, node)
-            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
             if initial_value is not None:
                 initial_expr = self.generate_expression_with_expected(
-                    initial_value, var_type
+                    initial_value,
+                    self.initializer_expected_type(var_type),
                 )
                 return f"{declaration} = {initial_expr};"
             return f"{declaration};"
@@ -446,8 +480,14 @@ class SlangCodeGen:
             return self.generate_if(node)
         elif isinstance(node, ForNode):
             return self.generate_for(node)
+        elif isinstance(node, ForInNode):
+            return self.generate_for_in(node)
         elif isinstance(node, WhileNode):
             return self.generate_while(node)
+        elif isinstance(node, DoWhileNode):
+            return self.generate_do_while(node)
+        elif isinstance(node, MatchNode):
+            return self.generate_match(node)
         elif isinstance(node, SwitchNode):
             return self.generate_switch(node)
         elif isinstance(node, BreakNode):
@@ -656,6 +696,7 @@ class SlangCodeGen:
         return "".join(escaped)
 
     def generate_expression(self, node):
+        """Render a CrossGL expression as Slang expression syntax."""
         if isinstance(node, VariableNode):
             return node.name
         elif isinstance(node, IdentifierNode):
@@ -747,11 +788,37 @@ class SlangCodeGen:
         return result
 
     def generate_for(self, node):
-        init = self.generate_statement(node.init).rstrip(";")
-        condition = self.generate_expression(node.condition)
-        update = self.generate_statement(node.update).rstrip(";")
+        init = self.generate_statement(node.init).rstrip(";") if node.init else ""
+        condition = self.generate_expression(node.condition) if node.condition else ""
+        update = self.generate_statement(node.update).rstrip(";") if node.update else ""
 
         result = f"for ({init}; {condition}; {update})\n{{\n"
+
+        self.indent_level += 1
+        for stmt in self.get_statements(node.body):
+            result += self.emit_statement(stmt) + "\n"
+        self.indent_level -= 1
+
+        result += self.indent() + "}"
+        return result
+
+    def generate_for_in(self, node):
+        pattern = getattr(node, "pattern", "item")
+        iterable = getattr(node, "iterable", None)
+
+        if isinstance(iterable, RangeNode):
+            start = self.generate_expression(iterable.start)
+            end = self.generate_expression(iterable.end)
+            comparator = "<=" if iterable.inclusive else "<"
+        else:
+            start = "0"
+            end = self.generate_expression(iterable)
+            comparator = "<"
+
+        result = (
+            f"for (int {pattern} = {start}; "
+            f"{pattern} {comparator} {end}; ++{pattern})\n{{\n"
+        )
 
         self.indent_level += 1
         for stmt in self.get_statements(node.body):
@@ -771,6 +838,18 @@ class SlangCodeGen:
         self.indent_level -= 1
 
         result += self.indent() + "}"
+        return result
+
+    def generate_do_while(self, node):
+        condition = self.generate_expression(node.condition)
+        result = "do\n{\n"
+
+        self.indent_level += 1
+        for stmt in self.get_statements(node.body):
+            result += self.emit_statement(stmt) + "\n"
+        self.indent_level -= 1
+
+        result += self.indent() + f"}} while ({condition});"
         return result
 
     def generate_switch(self, node):
@@ -797,6 +876,73 @@ class SlangCodeGen:
         result += self.indent() + "}"
         return result
 
+    def generate_match(self, node):
+        expression = self.generate_expression(getattr(node, "expression", None))
+        result = f"switch ({expression})\n{{\n"
+
+        arms = getattr(node, "arms", []) or []
+        if not self.validate_match_arms(arms):
+            raise ValueError(
+                "Unsupported match arm for Slang codegen; only unguarded "
+                "literal patterns and a final wildcard can be lowered to switch"
+            )
+
+        wildcard_body = None
+        self.indent_level += 1
+        for arm in arms:
+            pattern = getattr(arm, "pattern", None)
+            if isinstance(pattern, WildcardPatternNode):
+                wildcard_body = getattr(arm, "body", [])
+                continue
+
+            result += (
+                self.indent() + f"case {self.generate_expression(pattern.literal)}:\n"
+            )
+            self.indent_level += 1
+            body = getattr(arm, "body", [])
+            for stmt in self.get_statements(body):
+                result += self.emit_statement(stmt) + "\n"
+            if not self.statement_body_terminates(body):
+                result += self.indent() + "break;\n"
+            self.indent_level -= 1
+
+        if wildcard_body is not None:
+            result += self.indent() + "default:\n"
+            self.indent_level += 1
+            for stmt in self.get_statements(wildcard_body):
+                result += self.emit_statement(stmt) + "\n"
+            if not self.statement_body_terminates(wildcard_body):
+                result += self.indent() + "break;\n"
+            self.indent_level -= 1
+
+        self.indent_level -= 1
+
+        result += self.indent() + "}"
+        return result
+
+    def is_supported_match_arm(self, arm):
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
+    def validate_match_arms(self, arms):
+        wildcard_index = None
+        for index, arm in enumerate(arms):
+            if not self.is_supported_match_arm(arm):
+                return False
+            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
+                if wildcard_index is not None:
+                    return False
+                wildcard_index = index
+        return wildcard_index is None or wildcard_index == len(arms) - 1
+
+    def statement_body_terminates(self, body):
+        statements = self.get_statements(body)
+        if not statements:
+            return False
+        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
+
     def get_statements(self, body):
         if body is None:
             return []
@@ -807,6 +953,7 @@ class SlangCodeGen:
         return [body]
 
     def convert_type(self, type_name):
+        """Map a CrossGL type name or type node to a Slang type string."""
         # Map CrossGL types to Slang types
         type_map = {
             "vec2<f32>": "float2",

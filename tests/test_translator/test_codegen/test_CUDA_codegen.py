@@ -67,6 +67,37 @@ class TestCudaCodeGen:
         assert "int3 blockDim =" not in cuda_code
         assert "int3 gridDim =" not in cuda_code
 
+    def test_compute_stage_local_helper_functions_emit_before_kernel(self):
+        """Test compute-stage helper functions are emitted before kernel calls."""
+        source_code = """
+        shader TestShader {
+            compute {
+                float scale(float value) {
+                    return value * 2.0;
+                }
+
+                void main() {
+                    float y = scale(3.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        assert len(next(iter(ast.stages.values())).local_functions) == 1
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        helper_signature = "__device__ float scale(float value)"
+        kernel_signature = "__global__ void main()"
+        assert helper_signature in cuda_code
+        assert kernel_signature in cuda_code
+        assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
+        assert "float y = scale(3.0);" in cuda_code
+
     def test_type_conversion(self):
         """Test CrossGL to CUDA type conversion"""
         codegen = CudaCodeGen()
@@ -78,6 +109,15 @@ class TestCudaCodeGen:
         assert codegen.convert_crossgl_type_to_cuda("bool") == "bool"
         assert codegen.convert_crossgl_type_to_cuda("void") == "void"
         assert codegen.convert_crossgl_type_to_cuda("sampler2D") == "texture<float4, 2>"
+        assert codegen.convert_crossgl_type_to_cuda("Texture2D") == "texture<float4, 2>"
+        assert (
+            codegen.convert_crossgl_type_to_cuda("Texture2D<float4>")
+            == "texture<float4, 2>"
+        )
+        assert (
+            codegen.convert_crossgl_type_to_cuda("array<Texture2D, 2>")
+            == "texture<float4, 2>[2]"
+        )
 
         # Test vector types
         assert codegen.convert_crossgl_type_to_cuda("vec2<f32>") == "float2"
@@ -132,12 +172,42 @@ class TestCudaCodeGen:
         assert codegen.convert_builtin_function("atomicExchange") == "atomicExch"
 
         # Test synchronization
+        assert codegen.convert_builtin_function("barrier") == "__syncthreads"
+        assert codegen.convert_builtin_function("memoryBarrier") == "__threadfence"
         assert codegen.convert_builtin_function("workgroupBarrier") == "__syncthreads"
 
         # Test texture functions
         assert codegen.convert_builtin_function("texture") == "tex2D"
         assert codegen.convert_builtin_function("textureLod") == "tex2DLod"
         assert codegen.convert_builtin_function("textureGrad") == "tex2DGrad"
+
+    def test_synchronization_functions_emit_cuda_intrinsics(self):
+        """Test CrossGL synchronization functions lower to CUDA intrinsics."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    barrier();
+                    memoryBarrier();
+                    workgroupBarrier();
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__syncthreads();" in cuda_code
+        assert cuda_code.count("__syncthreads();") == 2
+        assert "__threadfence();" in cuda_code
+        assert "barrier();" not in cuda_code
+        assert "memoryBarrier();" not in cuda_code
+        assert "workgroupBarrier();" not in cuda_code
 
     def test_builtin_invocation_ids_emit_cuda_names(self):
         """Test CUDA maps CrossGL invocation built-ins in member access form."""
@@ -279,6 +349,43 @@ class TestCudaCodeGen:
         # For now, just check that basic variables are generated
         assert "float shared_data;" in cuda_code
         assert "float constants;" in cuda_code
+
+    def test_for_in_statement_lowers_to_counted_cuda_loops(self):
+        """Test CUDA lowers CrossGL for-in loops to counted integer loops."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int total = 0;
+                    for i in 4 {
+                        total = total + i;
+                    }
+                    for j in 2..5 {
+                        total = total + j;
+                    }
+                    for k in 1..=4 {
+                        total = total + k;
+                    }
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "for (int i = 0; i < 4; ++i)" in cuda_code
+        assert "for (int j = 2; j < 5; ++j)" in cuda_code
+        assert "for (int k = 1; k <= 4; ++k)" in cuda_code
+        assert "total = (total + i);" in cuda_code
+        assert "total = (total + j);" in cuda_code
+        assert "total = (total + k);" in cuda_code
+        assert "ForInNode" not in cuda_code
+        assert "RangeNode" not in cuda_code
 
     def test_vector_constructors_emit_cuda_make_functions(self):
         """Test CUDA maps parser-produced vector constructors."""
@@ -488,6 +595,29 @@ class TestCudaCodeGen:
         assert "mod(" not in cuda_code
         assert "atan2(" not in cuda_code
 
+    def test_scalar_clamp_lowers_to_cuda_min_max(self):
+        """Test CUDA lowers scalar clamp to CUDA scalar min/max intrinsics."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = -0.25;
+                    float y = clamp(x, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "float y = fmaxf(0.0, fminf(1.0, x));" in cuda_code
+        assert "clamp(" not in cuda_code
+
     def test_texture_calls_emit_cuda_texture_functions(self):
         """Test CUDA maps parser-produced texture calls."""
         source_code = """
@@ -520,6 +650,77 @@ class TestCudaCodeGen:
         assert " = texture(" not in cuda_code
         assert " = textureLod(" not in cuda_code
         assert " = textureGrad(" not in cuda_code
+
+    def test_hlsl_style_texture_resource_types_emit_cuda_sampler_types(self):
+        """Test CUDA treats HLSL-style Texture resource names like sampler types."""
+        source_code = """
+        shader Resources {
+            Texture2D tex;
+            Texture3D volumeMap;
+            TextureCube envMap;
+            Texture2DArray layers;
+            TextureCubeArray probes;
+
+            void sampleResources(
+                Texture2D paramTex,
+                Texture3D paramVolume,
+                TextureCube paramEnv,
+                Texture2DArray paramLayers,
+                TextureCubeArray paramProbes,
+                vec2 uv,
+                vec3 uvw,
+                vec4 cubeLayer
+            ) {
+                vec4 color = texture(paramTex, uv);
+                vec4 volumeColor = texture(paramVolume, uvw);
+                vec4 envColor = texture(paramEnv, uvw);
+                vec4 layerColor = texture(paramLayers, uvw);
+                vec4 probeColor = texture(paramProbes, cubeLayer);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "texture<float4, 2> tex;" in cuda_code
+        assert "texture<float4, 3> volumeMap;" in cuda_code
+        assert "textureCube<float4> envMap;" in cuda_code
+        assert "cudaTextureObject_t layers;" in cuda_code
+        assert "cudaTextureObject_t probes;" in cuda_code
+        assert (
+            "__device__ void sampleResources(texture<float4, 2> paramTex, "
+            "texture<float4, 3> paramVolume, textureCube<float4> paramEnv, "
+            "cudaTextureObject_t paramLayers, cudaTextureObject_t paramProbes"
+        ) in cuda_code
+        assert "float4 color = tex2D(paramTex, uv);" in cuda_code
+        assert (
+            "float4 volumeColor = tex3D(paramVolume, uvw.x, uvw.y, uvw.z);" in cuda_code
+        )
+        assert (
+            "float4 envColor = texCubemap(paramEnv, uvw.x, uvw.y, uvw.z);" in cuda_code
+        )
+        assert (
+            "float4 layerColor = tex2DLayered<float4>"
+            "(paramLayers, uvw.x, uvw.y, uvw.z);" in cuda_code
+        )
+        assert (
+            "float4 probeColor = texCubemapLayered<float4>"
+            "(paramProbes, cubeLayer.x, cubeLayer.y, cubeLayer.z, cubeLayer.w);"
+            in cuda_code
+        )
+        assert "Texture2D tex;" not in cuda_code
+        assert "Texture3D volumeMap;" not in cuda_code
+        assert "TextureCube envMap;" not in cuda_code
+        assert " = texture(" not in cuda_code
 
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
         """Test CUDA maps array and 3D sampled texture calls by resource type."""
@@ -4226,6 +4427,38 @@ class TestCudaCodeGen:
         assert "for (None;" not in cuda_code
         assert "++i++" not in cuda_code
 
+    def test_for_header_assignment_expressions_do_not_emit_stray_statements(self):
+        """Test CUDA formats assignment init/update expressions inside for headers."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int total = 0;
+                    for (int j = 0; j < 3; j += 1) {
+                        total += j;
+                    }
+                    int i;
+                    for (i = 0; i < 3; i = i + 1) {
+                        total += i;
+                    }
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "for (int j = 0; (j < 3); j += 1)" in cuda_code
+        assert "for (i = 0; (i < 3); i = (i + 1))" in cuda_code
+        assert "j += 1;\n    for" not in cuda_code
+        assert "i = 0;\n    i = (i + 1);\n    for" not in cuda_code
+        assert "None)" not in cuda_code
+
     def test_bool_string_and_char_literals_emit_cuda_syntax(self):
         """Test CUDA literal output uses target-language spelling."""
         source_code = """
@@ -4264,6 +4497,32 @@ class TestCudaCodeGen:
         assert "marker = 'y';" in cuda_code
         assert "True" not in cuda_code
         assert "False" not in cuda_code
+
+    def test_inferred_let_declarations_emit_cuda_auto(self):
+        """Test typeless let declarations emit CUDA declarations, not bare names."""
+        source_code = """
+        shader LetProbe {
+            compute {
+                void main() {
+                    let inferred = 1;
+                    let mut typed: int = inferred + 1;
+                    int sink = typed;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "auto inferred = 1;" in cuda_code
+        assert "int typed = (inferred + 1);" in cuda_code
+        assert "int sink = typed;" in cuda_code
+        assert "    inferred;" not in cuda_code
 
     def test_direct_literal_nodes_emit_cuda_escaping(self):
         """Test direct CUDA literal formatting escapes quotes."""
@@ -4305,6 +4564,33 @@ class TestCudaCodeGen:
         assert "while ((value < 8)) {" in cuda_code
         assert "value += 2;" in cuda_code
         assert "WhileNode" not in cuda_code
+
+    def test_do_while_loop_generation(self):
+        """Test CUDA emits do-while loops."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int value = 0;
+                    do {
+                        value += 1;
+                    } while (value < 4);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "do {" in cuda_code
+        assert "value += 1;" in cuda_code
+        assert "} while ((value < 4));" in cuda_code
+        assert "DoWhileNode" not in cuda_code
 
     def test_break_and_continue_generation(self):
         """Test CUDA emits break and continue statements in loop bodies."""
@@ -4379,6 +4665,71 @@ class TestCudaCodeGen:
         assert "value = -1;" in cuda_code
         assert cuda_code.count("break;") == 2
         assert "SwitchNode" not in cuda_code
+
+    def test_match_literal_and_wildcard_arms_lower_to_switch(self):
+        """Test CUDA lowers simple match arms to switch cases."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 => {
+                            value = 1;
+                        }
+                        _ => {
+                            value = 2;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (mode) {" in cuda_code
+        assert "case 0:" in cuda_code
+        assert "value = 1;" in cuda_code
+        assert "default:" in cuda_code
+        assert "value = 2;" in cuda_code
+        assert cuda_code.count("break;") == 2
+        assert "MatchNode" not in cuda_code
+
+    def test_match_guarded_arm_rejected_for_cuda_switch_lowering(self):
+        """Test CUDA rejects match forms that cannot be lowered to switch."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 if mode > 0 => {
+                            value = 1;
+                        }
+                        _ => {
+                            value = 2;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        with pytest.raises(ValueError, match="Unsupported match arm for CUDA"):
+            codegen.generate(ast)
 
     def test_direct_ast_expression_statements_are_emitted(self):
         """Test direct CUDA AST function bodies emit expression-returning nodes."""

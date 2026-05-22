@@ -35,6 +35,8 @@ from ..common_ast import (
 
 
 class CbufferNode(StructNode):
+    """HLSL constant-buffer declaration with named member variables."""
+
     def __init__(self, name, members):
         super().__init__(name, members)
 
@@ -43,6 +45,8 @@ class CbufferNode(StructNode):
 
 
 class PragmaNode(ASTNode):
+    """Preprocessor pragma directive preserved in the HLSL AST."""
+
     def __init__(self, directive, value=None):
         self.directive = directive
         self.value = value
@@ -52,6 +56,8 @@ class PragmaNode(ASTNode):
 
 
 class IncludeNode(ASTNode):
+    """HLSL include directive with system/local include metadata."""
+
     def __init__(self, path, is_system=False):
         self.path = path
         self.is_system = is_system
@@ -61,6 +67,8 @@ class IncludeNode(ASTNode):
 
 
 class SwitchStatementNode(ASTNode):
+    """Legacy switch statement node used by older HLSL parser paths."""
+
     def __init__(self, expression, cases):
         self.expression = expression
         self.cases = cases
@@ -70,6 +78,8 @@ class SwitchStatementNode(ASTNode):
 
 
 class SwitchCaseNode(ASTNode):
+    """Legacy switch case node with default-case tracking."""
+
     def __init__(self, case_value, statements, is_default=False):
         self.case_value = case_value
         self.statements = statements

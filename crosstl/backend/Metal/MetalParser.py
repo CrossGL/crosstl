@@ -98,7 +98,10 @@ UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
 
 
 class MetalParser:
+    """Parse Metal tokens into the Metal backend shader AST."""
+
     def __init__(self, tokens):
+        """Initialize the parser with a token stream from ``MetalLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = (
@@ -187,6 +190,7 @@ class MetalParser:
         }
 
     def skip_comments(self):
+        """Advance past comment tokens before parsing syntax."""
         while self.pos < len(self.tokens) and self.current_token[0] in [
             "COMMENT_SINGLE",
             "COMMENT_MULTI",
@@ -197,6 +201,7 @@ class MetalParser:
             )
 
     def eat(self, token_type):
+        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -207,17 +212,20 @@ class MetalParser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def peek(self, offset=1):
+        """Return a lookahead token without advancing the parser."""
         idx = self.pos + offset
         if idx < len(self.tokens):
             return self.tokens[idx]
         return ("EOF", None)
 
     def parse(self):
+        """Parse the complete token stream into a shader node."""
         shader = self.parse_shader()
         self.eat("EOF")
         return shader
 
     def parse_shader(self):
+        """Parse top-level Metal declarations, functions, and preprocessor nodes."""
         functions = []
         preprocessors = []
         structs = []

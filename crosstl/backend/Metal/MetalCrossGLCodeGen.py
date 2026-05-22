@@ -6,7 +6,10 @@ from .MetalLexer import *
 
 
 class MetalToCrossGLConverter:
+    """Serialize Metal backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize Metal-to-CrossGL type, function, and semantic mappings."""
         self.rt_qualifiers = {
             "intersection",
             "anyhit",
@@ -204,6 +207,41 @@ class MetalToCrossGLConverter:
             # Sampler type
             "sampler": "sampler",
         }
+        self.global_variable_types = {}
+        self.current_variable_types = {}
+        self.sampled_texture_names = set()
+        self.storage_texture_declaration_ids = set()
+        self.global_storage_texture_names = set()
+        self.current_storage_texture_names = set()
+        self.global_structured_buffer_names = set()
+        self.current_structured_buffer_names = set()
+        self.suppress_structured_buffer_index_lowering = False
+        self.texture_method_functions = {
+            "read": "textureLoad",
+            "write": "textureStore",
+            "sample_compare": "textureCompare",
+            "sample_compare_level": "textureCompareLod",
+            "gather": "textureGather",
+            "gather_compare": "textureGatherCompare",
+        }
+        self.texture_method_storage_operations = {
+            "read": "read",
+            "write": "write",
+        }
+        self.sampled_texture_methods = {
+            "sample_compare",
+            "sample_compare_level",
+            "gather",
+            "gather_compare",
+        }
+        self.texture_method_operations = {
+            "read": "load",
+            "write": "store",
+            "sample_compare": "sample_compare",
+            "sample_compare_level": "sample_compare_lod",
+            "gather": "gather",
+            "gather_compare": "gather_compare",
+        }
 
         self.map_semantics = {
             # Vertex attributes
@@ -246,7 +284,31 @@ class MetalToCrossGLConverter:
             "stage_in": "",
         }
 
+    def texture_method_descriptor(self, method):
+        function = self.texture_method_functions.get(method)
+        if function is None:
+            return None
+        return {
+            "method": method,
+            "function": function,
+            "storage_operation": self.texture_method_storage_operations.get(method),
+            "sampled_texture": method in self.sampled_texture_methods,
+        }
+
+    def resource_method_descriptor(self, method):
+        descriptor = self.texture_method_descriptor(method)
+        if descriptor is None:
+            return None
+        descriptor = dict(descriptor)
+        descriptor["resource"] = (
+            "texture_or_image" if descriptor["storage_operation"] else "texture"
+        )
+        descriptor["operation"] = self.texture_method_operations.get(method)
+        return descriptor
+
     def generate(self, ast):
+        """Generate a complete CrossGL shader from a parsed Metal AST."""
+        self.prepare_texture_usage(ast)
         code = ""
         includes = getattr(ast, "includes", []) or []
         for inc in includes:
@@ -341,6 +403,11 @@ class MetalToCrossGLConverter:
                     right = self.generate_expression(glob.right, False)
                     code += f"    {left} {glob.operator} {right};\n"
                 elif isinstance(glob, VariableNode):
+                    self.global_variable_types[glob.name] = glob.vtype
+                    if id(glob) in self.storage_texture_declaration_ids:
+                        self.global_storage_texture_names.add(glob.name)
+                    if self.structured_buffer_pointer_type(glob):
+                        self.global_structured_buffer_names.add(glob.name)
                     decl = self.format_decl(glob, include_semantic=True)
                     code += f"    {decl};\n"
             code += "\n"
@@ -383,16 +450,103 @@ class MetalToCrossGLConverter:
                     struct.name for struct in structs if struct.name == constant.name
                 )
 
+    def iter_ast_children(self, node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                yield value
+            return
+        if isinstance(node, (list, tuple, set)):
+            for value in node:
+                yield value
+            return
+        for value in getattr(node, "__dict__", {}).values():
+            yield value
+
+    def collect_sampled_texture_names(self, root):
+        sampled_names = set()
+        direct_sample_methods = {"sample"}
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, TextureSampleNode):
+                name = self.expression_base_name(node.texture)
+                if name:
+                    sampled_names.add(name)
+            elif isinstance(node, MethodCallNode):
+                descriptor = self.resource_method_descriptor(node.method)
+                if node.method in direct_sample_methods or (
+                    descriptor and descriptor["sampled_texture"]
+                ):
+                    name = self.expression_base_name(node.object)
+                    if name:
+                        sampled_names.add(name)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return sampled_names
+
+    def collect_storage_texture_declaration_ids(self, root):
+        storage_ids = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if (
+                isinstance(node, VariableNode)
+                and self.is_access_qualified_storage_texture_type(node.vtype)
+                and node.name not in self.sampled_texture_names
+            ):
+                storage_ids.add(id(node))
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return storage_ids
+
+    def prepare_texture_usage(self, ast):
+        self.global_variable_types = {}
+        self.current_variable_types = {}
+        self.global_storage_texture_names = set()
+        self.current_storage_texture_names = set()
+        self.global_structured_buffer_names = set()
+        self.current_structured_buffer_names = set()
+        self.sampled_texture_names = self.collect_sampled_texture_names(ast)
+        self.storage_texture_declaration_ids = (
+            self.collect_storage_texture_declaration_ids(ast)
+        )
+
     def format_array_suffix(self, var):
+        array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
+        suffix = f"[{array_type[1]}]" if array_type else ""
         if not hasattr(var, "array_sizes") or not var.array_sizes:
-            return ""
-        suffix = ""
+            return suffix
         for size in var.array_sizes:
             if size is None:
                 suffix += "[]"
             else:
                 suffix += f"[{self.generate_expression(size, False)}]"
         return suffix
+
+    def map_variable_type(self, var):
+        raw_type = getattr(var, "vtype", None)
+        structured_buffer_type = self.structured_buffer_pointer_type(var)
+        if structured_buffer_type:
+            return structured_buffer_type
+        array_type = self.metal_array_type_parts(raw_type)
+        type_to_map = array_type[0] if array_type else raw_type
+        if (
+            id(var) in self.storage_texture_declaration_ids
+            or getattr(var, "name", None) in self.current_storage_texture_names
+            or getattr(var, "name", None) in self.global_storage_texture_names
+        ):
+            storage_type = self.map_storage_texture_type(type_to_map)
+            if storage_type:
+                return storage_type
+        return self.map_type(type_to_map)
 
     def format_decl(self, var, include_semantic=False):
         alignas_prefix = ""
@@ -404,21 +558,37 @@ class MetalToCrossGLConverter:
                 else:
                     parts.append(f"alignas({self.generate_expression(item, False)})")
             alignas_prefix = " ".join(parts) + " "
-        type_str = f"{self.map_type(var.vtype)}{self.format_array_suffix(var)}"
+        type_str = f"{self.map_variable_type(var)}{self.format_array_suffix(var)}"
         const_str = "const " if hasattr(var, "is_const") and var.is_const else ""
         semantic = (
             self.map_semantic(getattr(var, "attributes", None))
             if include_semantic
             else ""
         )
+        access = self.storage_texture_access_attribute(var)
         parts = [alignas_prefix + const_str + type_str, var.name]
         if semantic:
             parts.append(semantic)
+        if access:
+            parts.append(access)
         return " ".join(part for part in parts if part)
 
     def generate_function(self, func, indent=2):
+        """Render one Metal function node as a CrossGL function block."""
         code = ""
         code += "    " * indent
+        previous_variable_types = self.current_variable_types
+        self.current_variable_types = dict(self.global_variable_types)
+        previous_storage_texture_names = self.current_storage_texture_names
+        self.current_storage_texture_names = set(self.global_storage_texture_names)
+        previous_structured_buffer_names = self.current_structured_buffer_names
+        self.current_structured_buffer_names = set(self.global_structured_buffer_names)
+        for param in func.params:
+            self.current_variable_types[param.name] = param.vtype
+            if id(param) in self.storage_texture_declaration_ids:
+                self.current_storage_texture_names.add(param.name)
+            if self.structured_buffer_pointer_type(param):
+                self.current_structured_buffer_names.add(param.name)
         params = ", ".join(
             self.format_decl(p, include_semantic=True) for p in func.params
         )
@@ -427,6 +597,9 @@ class MetalToCrossGLConverter:
         code += f"{self.map_type(func.return_type)} {func.name}({params}){suffix} {{\n"
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
+        self.current_variable_types = previous_variable_types
+        self.current_storage_texture_names = previous_storage_texture_names
+        self.current_structured_buffer_names = previous_structured_buffer_names
         return code
 
     def generate_function_body(self, body, indent=0, is_main=False):
@@ -434,6 +607,11 @@ class MetalToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
+                self.current_variable_types[stmt.name] = stmt.vtype
+                if id(stmt) in self.storage_texture_declaration_ids:
+                    self.current_storage_texture_names.add(stmt.name)
+                if self.structured_buffer_pointer_type(stmt):
+                    self.current_structured_buffer_names.add(stmt.name)
                 decl = self.format_decl(stmt, include_semantic=False)
                 code += f"{decl};\n"
             elif isinstance(stmt, AssignmentNode):
@@ -541,12 +719,19 @@ class MetalToCrossGLConverter:
         return code
 
     def generate_assignment(self, node, is_main):
+        if self.is_structured_buffer_element_access(node.left):
+            structured_store = self.generate_structured_buffer_store(
+                node.left, node.right, node.operator, is_main
+            )
+            if structured_store is not None:
+                return structured_store
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
+        """Render a Metal backend expression node as CrossGL syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
@@ -556,7 +741,7 @@ class MetalToCrossGLConverter:
                 const_str = (
                     "const " if hasattr(expr, "is_const") and expr.is_const else ""
                 )
-                return f"{const_str}{self.map_type(expr.vtype)}{self.format_array_suffix(expr)} {expr.name}"
+                return f"{const_str}{self.map_variable_type(expr)}{self.format_array_suffix(expr)} {expr.name}"
             else:
                 return expr.name
         elif isinstance(expr, AssignmentNode):
@@ -582,23 +767,48 @@ class MetalToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             method = expr.method
-            if method == "read":
-                return f"textureLoad({obj}, {args})" if args else f"{obj}.read()"
-            if method == "write":
-                return f"textureStore({obj}, {args})" if args else f"{obj}.write()"
-            if method == "sample_compare":
-                return f"textureCompare({obj}, {args})"
-            if method == "sample_compare_level":
-                return f"textureCompareLod({obj}, {args})"
-            if method == "gather":
-                return f"textureGather({obj}, {args})"
-            if method == "gather_compare":
-                return f"textureGatherCompare({obj}, {args})"
+            descriptor = self.resource_method_descriptor(method)
+            if descriptor and descriptor["storage_operation"] == "read":
+                if self.is_storage_image_expression(expr.object):
+                    coord = self.storage_image_coordinate_expression(
+                        expr.object, expr.args
+                    )
+                    return f"imageLoad({obj}, {coord})" if coord else f"{obj}.read()"
+                return (
+                    f"{descriptor['function']}({obj}, {args})"
+                    if args
+                    else f"{obj}.read()"
+                )
+            if descriptor and descriptor["storage_operation"] == "write":
+                if self.is_storage_image_expression(expr.object):
+                    coord = self.storage_image_coordinate_expression(
+                        expr.object, expr.args[1:]
+                    )
+                    value = (
+                        self.generate_expression(expr.args[0], is_main)
+                        if expr.args
+                        else ""
+                    )
+                    if coord and value:
+                        return f"imageStore({obj}, {coord}, {value})"
+                    return f"{obj}.write({args})"
+                return (
+                    f"{descriptor['function']}({obj}, {args})"
+                    if args
+                    else f"{obj}.write()"
+                )
+            if descriptor:
+                return f"{descriptor['function']}({obj}, {args})"
             return f"{obj}.{method}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
+            if (
+                not self.suppress_structured_buffer_index_lowering
+                and self.is_structured_buffer_element_access(expr)
+            ):
+                return self.generate_structured_buffer_load(expr, is_main)
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_expression(expr.index, is_main)
             return f"{array}[{index}]"
@@ -619,24 +829,33 @@ class MetalToCrossGLConverter:
             return f"{self.map_type(expr.type_name)}({args})"
         elif isinstance(expr, TextureSampleNode):
             texture = self.generate_expression(expr.texture, is_main)
+            sampler = self.generate_expression(expr.sampler, is_main)
             coords = self.generate_expression(expr.coordinates, is_main)
+            sample_args = [texture]
+            if sampler:
+                sample_args.append(sampler)
+            sample_args.append(coords)
 
             # Handle LOD parameter if present
             if hasattr(expr, "lod") and expr.lod is not None:
                 lod = self.generate_expression(expr.lod, is_main)
-                # In CrossGL, texture sampling with LOD is done with textureLod(sampler, coordinates, lod)
-                return f"textureLod({texture}, {coords}, {lod})"
+                return f"textureLod({', '.join(sample_args + [lod])})"
 
-            # In CrossGL, texture sampling is done with texture(sampler, coordinates)
-            return f"texture({texture}, {coords})"
+            return f"texture({', '.join(sample_args)})"
         elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
             return str(expr)
         else:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def map_type(self, metal_type):
+        """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
             return metal_type
+
+        array_type = self.metal_array_type_parts(metal_type)
+        if array_type:
+            element_type, size = array_type
+            return f"{self.map_type(element_type)}[{size}]"
 
         base = metal_type.strip()
         if base.startswith("metal::"):
@@ -652,14 +871,293 @@ class MetalToCrossGLConverter:
         if "<" in base and ">" in base:
             base_name, inner = base.split("<", 1)
             inner = inner.rstrip(">")
-            if "," in inner:
-                inner = inner.split(",", 1)[0].strip()
-            base = f"{base_name}<{inner.strip()}>"
+            generic_args = self.split_generic_arguments(inner)
+            if generic_args:
+                base = f"{base_name}<{generic_args[0].strip()}>"
 
         mapped = self.type_map.get(base, base)
         return f"{mapped}{suffix}"
 
+    def generic_type_parts(self, metal_type):
+        base = self.normalized_metal_type(metal_type)
+        if "<" not in base or not base.endswith(">"):
+            return None, []
+        base_name, inner = base.split("<", 1)
+        return base_name.strip(), self.split_generic_arguments(inner[:-1])
+
+    def metal_array_type_parts(self, metal_type):
+        base_name, generic_args = self.generic_type_parts(metal_type)
+        if base_name != "array" or len(generic_args) < 2:
+            return None
+        return generic_args[0].strip(), generic_args[1].strip()
+
+    def normalized_metal_type(self, metal_type):
+        if not metal_type:
+            return ""
+        base = str(metal_type).strip()
+        if base.startswith("metal::"):
+            base = base.split("metal::", 1)[1]
+        while base.endswith("*") or base.endswith("&"):
+            base = base[:-1].strip()
+        return base
+
+    def access_qualified_texture_parts(self, metal_type):
+        array_type = self.metal_array_type_parts(metal_type)
+        type_to_check = array_type[0] if array_type else metal_type
+        base_name, generic_args = self.generic_type_parts(type_to_check)
+        if len(generic_args) < 2:
+            return None, generic_args
+        access = generic_args[1].replace(" ", "")
+        if access not in {"access::read", "access::write", "access::read_write"}:
+            return None, generic_args
+        return base_name, generic_args
+
+    def is_access_qualified_storage_texture_type(self, metal_type):
+        base_name, generic_args = self.access_qualified_texture_parts(metal_type)
+        return bool(
+            generic_args
+            and base_name
+            in {
+                "texture1d",
+                "texture1d_array",
+                "texture2d",
+                "texture2d_array",
+                "texture3d",
+            }
+        )
+
+    def map_storage_texture_type(self, metal_type):
+        base_name, generic_args = self.access_qualified_texture_parts(metal_type)
+        if not generic_args:
+            return None
+        return self.map_access_qualified_texture_type(base_name, generic_args)
+
+    def storage_texture_access_attribute(self, var):
+        if not (
+            id(var) in self.storage_texture_declaration_ids
+            or getattr(var, "name", None) in self.current_storage_texture_names
+            or getattr(var, "name", None) in self.global_storage_texture_names
+        ):
+            return ""
+
+        _, generic_args = self.access_qualified_texture_parts(
+            getattr(var, "vtype", None)
+        )
+        if len(generic_args) < 2:
+            return ""
+
+        access = generic_args[1].replace(" ", "")
+        access_attributes = {
+            "access::read": "@readonly",
+            "access::write": "@writeonly",
+            "access::read_write": "@readwrite",
+        }
+        return access_attributes.get(access, "")
+
+    def split_generic_arguments(self, inner):
+        args = []
+        current = []
+        depth = 0
+        for char in inner:
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            if char == "," and depth == 0:
+                args.append("".join(current).strip())
+                current = []
+                continue
+            current.append(char)
+        if current:
+            args.append("".join(current).strip())
+        return args
+
+    def map_access_qualified_texture_type(self, base_name, generic_args):
+        if len(generic_args) < 2:
+            return None
+
+        access = generic_args[1].replace(" ", "")
+        if access not in {"access::read", "access::write", "access::read_write"}:
+            return None
+
+        image_type = {
+            "texture1d": "image1D",
+            "texture1d_array": "image1DArray",
+            "texture2d": "image2D",
+            "texture2d_array": "image2DArray",
+            "texture3d": "image3D",
+        }.get(base_name)
+        if image_type is None:
+            return None
+
+        element_type = generic_args[0].strip()
+        if element_type.startswith("uint"):
+            return f"u{image_type}"
+        if element_type.startswith("int"):
+            return f"i{image_type}"
+        return image_type
+
+    def expression_base_name(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_base_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            return self.expression_base_name(expr.object)
+        return None
+
+    def expression_mapped_type(self, expr):
+        name = self.expression_base_name(expr)
+        if not name:
+            return None
+        metal_type = self.current_variable_types.get(name)
+        if metal_type is None:
+            metal_type = self.global_variable_types.get(name)
+        for _ in range(self.array_access_depth(expr)):
+            array_type = self.metal_array_type_parts(metal_type)
+            if not array_type:
+                break
+            metal_type = array_type[0]
+        if (
+            name in self.current_storage_texture_names
+            or name in self.global_storage_texture_names
+        ):
+            storage_type = self.map_storage_texture_type(metal_type)
+            if storage_type:
+                return storage_type
+        return self.map_type(metal_type) if metal_type else None
+
+    def has_attribute(self, node, name):
+        return any(
+            getattr(attr, "name", None) == name
+            for attr in getattr(node, "attributes", []) or []
+        )
+
+    def pointer_element_type(self, metal_type):
+        if not metal_type:
+            return None
+        base = str(metal_type).strip()
+        if base.startswith("metal::"):
+            base = base.split("metal::", 1)[1]
+
+        pointer_depth = 0
+        while base.endswith("*") or base.endswith("&"):
+            if base.endswith("*"):
+                pointer_depth += 1
+            base = base[:-1].strip()
+        return base if pointer_depth else None
+
+    def structured_buffer_pointer_type(self, var):
+        if not self.has_attribute(var, "buffer"):
+            return None
+
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"device", "constant"}):
+            return None
+
+        element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        if not element_type:
+            return None
+
+        buffer_type = (
+            "StructuredBuffer"
+            if qualifiers.intersection({"constant", "const"})
+            else "RWStructuredBuffer"
+        )
+        return f"{buffer_type}<{self.map_type(element_type)}>"
+
+    def is_structured_buffer_expression(self, expr):
+        name = self.expression_base_name(expr)
+        return bool(
+            name
+            and (
+                name in self.current_structured_buffer_names
+                or name in self.global_structured_buffer_names
+            )
+        )
+
+    def is_structured_buffer_element_access(self, expr):
+        return isinstance(
+            expr, ArrayAccessNode
+        ) and self.is_structured_buffer_expression(expr.array)
+
+    def generate_without_structured_buffer_index_lowering(self, expr, is_main=False):
+        previous = self.suppress_structured_buffer_index_lowering
+        self.suppress_structured_buffer_index_lowering = True
+        try:
+            return self.generate_expression(expr, is_main)
+        finally:
+            self.suppress_structured_buffer_index_lowering = previous
+
+    def generate_structured_buffer_load(self, access, is_main=False):
+        buffer = self.generate_without_structured_buffer_index_lowering(
+            access.array, is_main
+        )
+        index = self.generate_expression(access.index, is_main)
+        return f"buffer_load({buffer}, {index})"
+
+    def generate_structured_buffer_store(self, access, value, operator, is_main=False):
+        buffer = self.generate_without_structured_buffer_index_lowering(
+            access.array, is_main
+        )
+        index = self.generate_expression(access.index, is_main)
+        rendered_value = self.generate_expression(value, is_main)
+        if operator != "=":
+            compound_ops = {
+                "+=": "+",
+                "-=": "-",
+                "*=": "*",
+                "/=": "/",
+                "%=": "%",
+                "&=": "&",
+                "|=": "|",
+                "^=": "^",
+                "<<=": "<<",
+                ">>=": ">>",
+            }
+            binary_op = compound_ops.get(operator)
+            if binary_op is None:
+                return None
+            current_value = f"buffer_load({buffer}, {index})"
+            rendered_value = f"{current_value} {binary_op} {rendered_value}"
+        return f"buffer_store({buffer}, {index}, {rendered_value})"
+
+    def array_access_depth(self, expr):
+        depth = 0
+        while isinstance(expr, ArrayAccessNode):
+            depth += 1
+            expr = expr.array
+        return depth
+
+    def is_storage_image_expression(self, expr):
+        mapped_type = self.expression_mapped_type(expr)
+        return bool(
+            mapped_type and str(mapped_type).startswith(("image", "iimage", "uimage"))
+        )
+
+    def storage_image_coordinate_expression(self, image_expr, args):
+        if not args:
+            return ""
+        rendered_args = [self.generate_expression(arg) for arg in args]
+        image_type = self.expression_mapped_type(image_expr)
+        if (
+            image_type in {"image1DArray", "iimage1DArray", "uimage1DArray"}
+            and len(rendered_args) >= 2
+        ):
+            return f"uvec2({rendered_args[0]}, {rendered_args[1]})"
+        if (
+            image_type in {"image2DArray", "iimage2DArray", "uimage2DArray"}
+            and len(rendered_args) >= 2
+        ):
+            return f"uvec3({rendered_args[0]}, {rendered_args[1]})"
+        return rendered_args[0]
+
     def map_semantic(self, semantic):
+        """Map Metal attributes to CrossGL semantic annotation syntax."""
         if not semantic:
             return ""
 

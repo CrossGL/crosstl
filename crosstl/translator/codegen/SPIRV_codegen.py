@@ -12,19 +12,27 @@ from ..ast import (
     BinaryOpNode,
     BreakNode,
     ContinueNode,
+    DoWhileNode,
+    ForInNode,
     ForNode,
     FunctionCallNode,
     IdentifierNode,
     IfNode,
     LiteralNode,
+    LiteralPatternNode,
+    LoopNode,
+    MatchNode,
     MemberAccessNode,
+    RangeNode,
     ReturnNode,
     ShaderNode,
     StructNode,
+    SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     WhileNode,
+    WildcardPatternNode,
 )
 
 
@@ -32,10 +40,12 @@ class SpirvType:
     """Represents a SPIR-V type with storage class information."""
 
     def __init__(self, base_type: str, storage_class: Optional[str] = None):
+        """Store the base type name and optional storage class."""
         self.base_type = base_type
         self.storage_class = storage_class
 
     def __str__(self) -> str:
+        """Return a readable type label for debug output."""
         if self.storage_class:
             return f"{self.base_type} ({self.storage_class})"
         return self.base_type
@@ -47,11 +57,13 @@ class SpirvId:
     def __init__(
         self, id_value: int, spirv_type: SpirvType, name: Optional[str] = None
     ):
+        """Store the numeric result id, type metadata, and optional name."""
         self.id = id_value
         self.type = spirv_type
         self.name = name
 
     def __str__(self) -> str:
+        """Return a readable SPIR-V id label for debug output."""
         if self.name:
             return f"%{self.id} ({self.name}: {self.type})"
         return f"%{self.id} ({self.type})"
@@ -61,6 +73,7 @@ class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     def __init__(self):
+        """Initialize an empty SPIR-V module-generation state."""
         self.reset_generation_state()
 
     def reset_generation_state(self):
@@ -96,6 +109,7 @@ class VulkanSPIRVCodeGen:
         self.function_resource_array_type_hints = {}
         self.function_execution_models = {}
         self.current_execution_model = None
+        self.current_stage = None
         self.current_return_type = None
 
         self.glsl_std450_id = None
@@ -539,6 +553,32 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, member_type.type)
         self.value_types[id_value] = member_type
         return spirv_id
+
+    def vector_member_info(self, vector_type: str, member_name: str):
+        vector_info = self.vector_component_type_and_count(vector_type)
+        if vector_info is None:
+            return None
+
+        component_type, component_count = vector_info
+        component_indices = {
+            "x": 0,
+            "r": 0,
+            "s": 0,
+            "y": 1,
+            "g": 1,
+            "t": 1,
+            "z": 2,
+            "b": 2,
+            "p": 2,
+            "w": 3,
+            "a": 3,
+            "q": 3,
+        }
+        member_index = component_indices.get(member_name)
+        if member_index is None or member_index >= component_count:
+            return None
+
+        return member_index, self.register_primitive_type(component_type)
 
     def struct_member_info(self, struct_type: str, member_name: str):
         members = self.current_struct_members.get(struct_type)
@@ -1820,6 +1860,8 @@ class VulkanSPIRVCodeGen:
                     "floor",
                     "ceil",
                     "fract",
+                    "fmod",
+                    "mod",
                     "trunc",
                     "round",
                     "roundEven",
@@ -1862,6 +1904,8 @@ class VulkanSPIRVCodeGen:
                 "floor": "Floor",
                 "ceil": "Ceil",
                 "fract": "Fract",
+                "fmod": "FMod",
+                "mod": "FMod",
                 "trunc": "Trunc",
                 "round": "Round",
                 "roundEven": "RoundEven",
@@ -2468,11 +2512,14 @@ class VulkanSPIRVCodeGen:
 
         return self.register_struct_type(struct_node.name, members)
 
-    def process_function_node(self, function_node: "FunctionNode"):
+    def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
         previous_return_type = self.current_return_type
+        previous_stage = self.current_stage
         self.current_return_type = return_type
+        if stage is not None:
+            self.current_stage = stage
 
         param_types = []
         param_value_types = []
@@ -2541,6 +2588,7 @@ class VulkanSPIRVCodeGen:
         self.end_function()
 
         self.current_execution_model = previous_execution_model
+        self.current_stage = previous_stage
         self.current_return_type = previous_return_type
         self.local_variables.clear()
         return function_id
@@ -2571,8 +2619,18 @@ class VulkanSPIRVCodeGen:
             self.process_if(stmt)
         elif isinstance(stmt, ForNode):
             self.process_for(stmt)
+        elif isinstance(stmt, ForInNode):
+            self.process_for_in(stmt)
         elif isinstance(stmt, WhileNode):
             self.process_while(stmt)
+        elif isinstance(stmt, DoWhileNode):
+            self.process_do_while(stmt)
+        elif isinstance(stmt, LoopNode):
+            self.process_loop(stmt)
+        elif isinstance(stmt, SwitchNode):
+            self.process_switch(stmt)
+        elif isinstance(stmt, MatchNode):
+            self.process_match(stmt)
         elif isinstance(stmt, BreakNode):
             self.process_break(stmt)
         elif isinstance(stmt, ContinueNode):
@@ -3023,7 +3081,11 @@ class VulkanSPIRVCodeGen:
         else:
             return None
 
-        return self.local_variables.get(name) or self.global_variables.get(name)
+        return (
+            self.local_variables.get(name)
+            or self.global_variables.get(name)
+            or self.ensure_compute_builtin(name)
+        )
 
     def array_element_type_from_type(self, array_type: Optional[SpirvId]):
         if array_type is None:
@@ -3493,6 +3555,259 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
 
+    def process_for_in(self, node: ForInNode):
+        """Process numeric CrossGL for-in loops as structured counted loops."""
+        pattern = getattr(node, "pattern", "item")
+        iterable = getattr(node, "iterable", None)
+        int_type = self.register_primitive_type("int")
+
+        if isinstance(iterable, RangeNode):
+            start = self.process_expression(iterable.start)
+            end_expr = iterable.end
+            comparator = "<=" if iterable.inclusive else "<"
+        else:
+            start = self.register_constant(0, int_type)
+            end_expr = iterable
+            comparator = "<"
+
+        if start is None:
+            start = self.register_constant(0, int_type)
+
+        previous_variable = self.local_variables.get(pattern)
+        loop_variable = self.create_variable(int_type, "Function", pattern)
+        self.local_variables[pattern] = loop_variable
+        self.store_to_variable(loop_variable, start)
+
+        header_label = SpirvId(self.get_id(), SpirvType("label"))
+        body_label = SpirvId(self.get_id(), SpirvType("label"))
+        continue_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_branch(header_label)
+
+        self.emit(f"%{header_label.id} = OpLabel")
+        self.current_label = header_label.id
+
+        loop_value = self.get_variable_value(loop_variable)
+        end_value = self.process_expression(end_expr)
+        if end_value is None:
+            end_value = self.register_constant(0, int_type)
+        condition = self.binary_operation(comparator, int_type, loop_value, end_value)
+
+        self.create_loop_merge(merge_label, continue_label)
+        self.create_conditional_branch(condition, body_label, merge_label)
+
+        self.emit(f"%{body_label.id} = OpLabel")
+        self.current_label = body_label.id
+        self.loop_merge_labels.append(merge_label)
+        self.loop_continue_labels.append(continue_label)
+        try:
+            if node.body:
+                self.process_statements(node.body)
+            if not self.current_block_has_terminator():
+                self.create_branch(continue_label)
+        finally:
+            self.loop_continue_labels.pop()
+            self.loop_merge_labels.pop()
+
+        self.emit(f"%{continue_label.id} = OpLabel")
+        self.current_label = continue_label.id
+        current_value = self.get_variable_value(loop_variable)
+        one = self.register_constant(1, int_type)
+        next_value = self.binary_operation("+", int_type, current_value, one)
+        self.store_to_variable(loop_variable, next_value)
+        if not self.current_block_has_terminator():
+            self.create_branch(header_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+
+        if previous_variable is None:
+            self.local_variables.pop(pattern, None)
+        else:
+            self.local_variables[pattern] = previous_variable
+
+    def process_match(self, node: MatchNode):
+        """Process simple literal/wildcard matches as a structured if-chain."""
+        arms = getattr(node, "arms", []) or []
+        if not self.validate_match_arms(arms):
+            raise ValueError(
+                "Unsupported match arm for SPIR-V codegen; only unguarded "
+                "literal patterns and a final wildcard are supported"
+            )
+
+        expression = self.process_expression(getattr(node, "expression", None))
+        if expression is None:
+            expression = self.register_constant(0, self.register_primitive_type("int"))
+
+        literal_arms = [
+            arm
+            for arm in arms
+            if isinstance(getattr(arm, "pattern", None), LiteralPatternNode)
+        ]
+        wildcard_body = None
+        for arm in arms:
+            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
+                wildcard_body = getattr(arm, "body", [])
+                break
+
+        if not literal_arms:
+            if wildcard_body is not None:
+                self.process_statements(wildcard_body)
+            return
+
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        for arm in literal_arms:
+            body_label = SpirvId(self.get_id(), SpirvType("label"))
+            next_label = SpirvId(self.get_id(), SpirvType("label"))
+            pattern_value = self.process_expression(arm.pattern.literal)
+            if pattern_value is None:
+                pattern_value = self.register_constant(
+                    0, self.register_primitive_type("int")
+                )
+            condition = self.binary_operation(
+                "==",
+                self.ensure_registered_type(expression.type),
+                expression,
+                pattern_value,
+            )
+
+            self.create_selection_merge(merge_label)
+            self.create_conditional_branch(condition, body_label, next_label)
+
+            self.emit(f"%{body_label.id} = OpLabel")
+            self.current_label = body_label.id
+            self.process_statements(getattr(arm, "body", []))
+            if not self.current_block_has_terminator():
+                self.create_branch(merge_label)
+
+            self.emit(f"%{next_label.id} = OpLabel")
+            self.current_label = next_label.id
+
+        if wildcard_body is not None:
+            self.process_statements(wildcard_body)
+
+        if not self.current_block_has_terminator():
+            self.create_branch(merge_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+
+    def is_supported_match_arm(self, arm):
+        if getattr(arm, "guard", None) is not None:
+            return False
+        pattern = getattr(arm, "pattern", None)
+        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+
+    def validate_match_arms(self, arms):
+        wildcard_index = None
+        for index, arm in enumerate(arms):
+            if not self.is_supported_match_arm(arm):
+                return False
+            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
+                if wildcard_index is not None:
+                    return False
+                wildcard_index = index
+        return wildcard_index is None or wildcard_index == len(arms) - 1
+
+    def switch_case_statements(self, case):
+        """Return the body statements for a switch case/default node."""
+        if case is None:
+            return []
+        if hasattr(case, "statements"):
+            return getattr(case, "statements") or []
+        if hasattr(case, "body"):
+            return getattr(case, "body") or []
+        if isinstance(case, list):
+            return case
+        return [case]
+
+    def process_switch(self, node: SwitchNode):
+        """Process CrossGL switch statements as a structured selection chain."""
+        cases = getattr(node, "cases", []) or []
+        expression = self.process_expression(getattr(node, "expression", None))
+        if expression is None:
+            expression = self.register_constant(0, self.register_primitive_type("int"))
+
+        explicit_cases = [
+            case
+            for case in cases
+            if hasattr(case, "value") and getattr(case, "value", None) is not None
+        ]
+        default_case = next(
+            (
+                case
+                for case in cases
+                if hasattr(case, "value") and getattr(case, "value", None) is None
+            ),
+            None,
+        )
+        if default_case is None:
+            default_case = getattr(node, "default_case", None)
+
+        if not explicit_cases and default_case is None:
+            return
+
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        if not explicit_cases:
+            self.loop_merge_labels.append(merge_label)
+            try:
+                self.process_statements(self.switch_case_statements(default_case))
+                if not self.current_block_has_terminator():
+                    self.create_branch(merge_label)
+            finally:
+                self.loop_merge_labels.pop()
+
+            self.emit(f"%{merge_label.id} = OpLabel")
+            self.current_label = merge_label.id
+            return
+
+        for case in explicit_cases:
+            body_label = SpirvId(self.get_id(), SpirvType("label"))
+            next_label = SpirvId(self.get_id(), SpirvType("label"))
+            case_value = self.process_expression(getattr(case, "value", None))
+            if case_value is None:
+                case_value = self.register_constant(
+                    0, self.register_primitive_type("int")
+                )
+            condition = self.binary_operation(
+                "==",
+                self.ensure_registered_type(expression.type),
+                expression,
+                case_value,
+            )
+
+            self.create_selection_merge(merge_label)
+            self.create_conditional_branch(condition, body_label, next_label)
+
+            self.emit(f"%{body_label.id} = OpLabel")
+            self.current_label = body_label.id
+            self.loop_merge_labels.append(merge_label)
+            try:
+                self.process_statements(self.switch_case_statements(case))
+                if not self.current_block_has_terminator():
+                    self.create_branch(merge_label)
+            finally:
+                self.loop_merge_labels.pop()
+
+            self.emit(f"%{next_label.id} = OpLabel")
+            self.current_label = next_label.id
+
+        if default_case is not None:
+            self.loop_merge_labels.append(merge_label)
+            try:
+                self.process_statements(self.switch_case_statements(default_case))
+            finally:
+                self.loop_merge_labels.pop()
+
+        if not self.current_block_has_terminator():
+            self.create_branch(merge_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+
     def process_while(self, node: WhileNode):
         """Process a CrossGL while loop."""
         header_label = SpirvId(self.get_id(), SpirvType("label"))
@@ -3532,12 +3847,85 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
 
+    def process_do_while(self, node: DoWhileNode):
+        """Process a CrossGL do-while loop."""
+        header_label = SpirvId(self.get_id(), SpirvType("label"))
+        body_label = SpirvId(self.get_id(), SpirvType("label"))
+        continue_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_branch(header_label)
+
+        self.emit(f"%{header_label.id} = OpLabel")
+        self.current_label = header_label.id
+        self.create_loop_merge(merge_label, continue_label)
+        self.create_branch(body_label)
+
+        self.emit(f"%{body_label.id} = OpLabel")
+        self.current_label = body_label.id
+        self.loop_merge_labels.append(merge_label)
+        self.loop_continue_labels.append(continue_label)
+        try:
+            if node.body:
+                self.process_statements(node.body)
+            if not self.current_block_has_terminator():
+                self.create_branch(continue_label)
+        finally:
+            self.loop_continue_labels.pop()
+            self.loop_merge_labels.pop()
+
+        self.emit(f"%{continue_label.id} = OpLabel")
+        self.current_label = continue_label.id
+
+        condition = self.process_expression(node.condition)
+        if condition is None:
+            condition = self.register_constant(True, self.primitive_types["bool"])
+
+        self.create_conditional_branch(condition, header_label, merge_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+
+    def process_loop(self, node: LoopNode):
+        """Process a CrossGL unconditional loop."""
+        header_label = SpirvId(self.get_id(), SpirvType("label"))
+        body_label = SpirvId(self.get_id(), SpirvType("label"))
+        continue_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_branch(header_label)
+
+        self.emit(f"%{header_label.id} = OpLabel")
+        self.current_label = header_label.id
+        self.create_loop_merge(merge_label, continue_label)
+        self.create_branch(body_label)
+
+        self.emit(f"%{body_label.id} = OpLabel")
+        self.current_label = body_label.id
+        self.loop_merge_labels.append(merge_label)
+        self.loop_continue_labels.append(continue_label)
+        try:
+            if node.body:
+                self.process_statements(node.body)
+            if not self.current_block_has_terminator():
+                self.create_branch(continue_label)
+        finally:
+            self.loop_continue_labels.pop()
+            self.loop_merge_labels.pop()
+
+        self.emit(f"%{continue_label.id} = OpLabel")
+        self.current_label = continue_label.id
+        self.create_branch(header_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+
     def process_break(self, node: BreakNode):
         """Process a CrossGL break statement."""
-        if not self.loop_merge_labels:
-            self.emit("; WARNING: break used outside a loop")
+        if self.loop_merge_labels:
+            self.create_branch(self.loop_merge_labels[-1])
             return
-        self.create_branch(self.loop_merge_labels[-1])
+        self.emit("; WARNING: break used outside a loop or switch")
 
     def process_continue(self, node: ContinueNode):
         """Process a CrossGL continue statement."""
@@ -3598,6 +3986,14 @@ class VulkanSPIRVCodeGen:
             elif expr in self.global_variables:
                 return self.get_variable_value(self.global_variables[expr])
             else:
+                builtin_component = self.process_dotted_compute_builtin(expr)
+                if builtin_component is not None:
+                    return builtin_component
+
+                builtin = self.ensure_compute_builtin(expr)
+                if builtin is not None:
+                    return self.get_variable_value(builtin)
+
                 # Create a default float constant for missing variables in examples
                 # This is to make the SPIR-V code valid even if we can't find the variable
                 if expr.replace(".", "", 1).isdigit():  # Check if it's a numeric string
@@ -3641,6 +4037,10 @@ class VulkanSPIRVCodeGen:
             elif expr.name in self.global_variables:
                 return self.get_variable_value(self.global_variables[expr.name])
             else:
+                builtin = self.ensure_compute_builtin(expr.name)
+                if builtin is not None:
+                    return self.get_variable_value(builtin)
+
                 self.emit(f"; WARNING: Unknown variable {expr.name}")
                 # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
@@ -3786,6 +4186,11 @@ class VulkanSPIRVCodeGen:
                 member_index, member_type = member_info
                 return self.composite_extract(base, member_type, member_index)
 
+            member_info = self.vector_member_info(struct_type, member_name)
+            if member_info is not None:
+                member_index, member_type = member_info
+                return self.composite_extract(base, member_type, member_index)
+
             # Default handling if member not found
             self.emit(
                 f"; WARNING: Could not find member {member_name} in {struct_type}"
@@ -3833,6 +4238,85 @@ class VulkanSPIRVCodeGen:
         self.variable_value_types[id_value] = type_id
         self.outputs.append(spirv_id)
         return spirv_id
+
+    def compute_builtin_info(self, name: str):
+        builtins = {
+            "gl_GlobalInvocationID": ("uvec3", "GlobalInvocationId", "Input"),
+            "gl_LocalInvocationID": ("uvec3", "LocalInvocationId", "Input"),
+            "gl_WorkGroupID": ("uvec3", "WorkgroupId", "Input"),
+            "gl_NumWorkGroups": ("uvec3", "NumWorkgroups", "Input"),
+            "gl_LocalInvocationIndex": ("uint", "LocalInvocationIndex", "Input"),
+            "gl_WorkGroupSize": ("uvec3", "WorkgroupSize", "Constant"),
+        }
+        return builtins.get(name)
+
+    def ensure_compute_builtin(self, name: str) -> Optional[SpirvId]:
+        if name in self.global_variables:
+            return self.global_variables[name]
+
+        info = self.compute_builtin_info(name)
+        if info is None:
+            return None
+
+        type_name, builtin_name, storage_class = info
+        type_id = self.map_crossgl_type(type_name)
+        if storage_class == "Constant":
+            builtin_id = self.register_workgroup_size_builtin(
+                name, type_id, builtin_name
+            )
+        else:
+            builtin_id = self.register_builtin_input(name, type_id, builtin_name)
+
+        self.global_variables[name] = builtin_id
+        return builtin_id
+
+    def register_builtin_input(
+        self, name: str, type_id: SpirvId, builtin_name: str
+    ) -> SpirvId:
+        ptr_type = self.register_pointer_type(type_id, "Input")
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpVariable %{ptr_type.id} Input")
+        self.emit(f'OpName %{id_value} "{name}"')
+        self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
+
+        spirv_id = SpirvId(id_value, ptr_type.type, name)
+        self.variable_value_types[id_value] = type_id
+        self.inputs.append(spirv_id)
+        return spirv_id
+
+    def register_workgroup_size_builtin(
+        self, name: str, type_id: SpirvId, builtin_name: str
+    ) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        x, y, z = self.compute_local_size(self.current_stage)
+        components = [self.register_constant(value, uint_type) for value in (x, y, z)]
+
+        id_value = self.get_id()
+        component_list = " ".join(f"%{component.id}" for component in components)
+        self.emit(f"%{id_value} = OpConstantComposite %{type_id.id} {component_list}")
+        self.emit(f'OpName %{id_value} "{name}"')
+        self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
+
+        spirv_id = SpirvId(id_value, type_id.type, name)
+        self.value_types[id_value] = type_id
+        return spirv_id
+
+    def process_dotted_compute_builtin(self, name: str) -> Optional[SpirvId]:
+        if "." not in name:
+            return None
+
+        base_name, member_name = name.rsplit(".", 1)
+        builtin = self.ensure_compute_builtin(base_name)
+        if builtin is None:
+            return None
+
+        base_value = self.get_variable_value(builtin)
+        member_info = self.vector_member_info(base_value.type.base_type, member_name)
+        if member_info is None:
+            return None
+
+        member_index, member_type = member_info
+        return self.composite_extract(base_value, member_type, member_index)
 
     def register_array_type(
         self, element_type: SpirvId, size: Optional[int] = None
@@ -3926,11 +4410,13 @@ class VulkanSPIRVCodeGen:
         return None
 
     def stage_key(self, stage_type) -> str:
+        """Normalize a stage enum or string to a registry key."""
         if hasattr(stage_type, "value"):
             return stage_type.value
         return str(stage_type).split(".")[-1].lower()
 
     def spirv_execution_model(self, stage_name: Optional[str]) -> str:
+        """Map a CrossGL stage name to a SPIR-V execution model."""
         stage_map = {
             "vertex": "Vertex",
             "fragment": "Fragment",
@@ -3942,6 +4428,7 @@ class VulkanSPIRVCodeGen:
         return stage_map.get(stage_name or "fragment", "Fragment")
 
     def compute_local_size(self, stage) -> Tuple[int, int, int]:
+        """Return compute workgroup dimensions from a stage execution config."""
         config = getattr(stage, "execution_config", {}) or {}
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
@@ -3957,6 +4444,7 @@ class VulkanSPIRVCodeGen:
     def emit_entry_point(
         self, execution_model: str, function_id: SpirvId, name: str, stage=None
     ):
+        """Emit SPIR-V entry-point and execution-mode declarations."""
         interface_ids = " ".join(
             f"%{variable.id}" for variable in self.inputs + self.outputs
         )
@@ -4183,12 +4671,12 @@ class VulkanSPIRVCodeGen:
             for stage in ast.stages.values():
                 for func in getattr(stage, "local_functions", []):
                     if id(func) not in processed_local_functions:
-                        self.process_function_node(func)
+                        self.process_function_node(func, stage=stage)
                         processed_local_functions.add(id(func))
 
             for stage_type, stage in ast.stages.items():
                 entry_function = stage.entry_point
-                function_id = self.process_function_node(entry_function)
+                function_id = self.process_function_node(entry_function, stage=stage)
                 stage_name = self.stage_key(stage_type)
                 execution_model = self.spirv_execution_model(stage_name)
                 entry_points.append(

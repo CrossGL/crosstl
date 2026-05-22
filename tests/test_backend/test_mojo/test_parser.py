@@ -1,5 +1,27 @@
 import pytest
 from typing import List
+from crosstl.backend.Mojo.MojoAst import (
+    ArrayAccessNode,
+    AssignmentNode,
+    BinaryOpNode,
+    BreakNode,
+    ClassNode,
+    ConstantBufferNode,
+    ContinueNode,
+    ForNode,
+    FunctionNode,
+    IfNode,
+    MemberAccessNode,
+    MethodCallNode,
+    RangeForNode,
+    ReturnNode,
+    SwitchNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+    WhileNode,
+)
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
 
@@ -22,6 +44,27 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
+def find_function(ast, name: str):
+    for node in ast.functions:
+        if isinstance(node, FunctionNode) and node.name == name:
+            return node
+    raise AssertionError(f"Function {name} not found")
+
+
+def find_class(ast, name: str):
+    for node in ast.classes:
+        if isinstance(node, ClassNode) and node.name == name:
+            return node
+    raise AssertionError(f"Class {name} not found")
+
+
+def find_constant_buffer(ast, name: str):
+    for node in ast.constants:
+        if isinstance(node, ConstantBufferNode) and node.name == name:
+            return node
+    raise AssertionError(f"Constant buffer {name} not found")
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:
@@ -36,6 +79,49 @@ def test_struct_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_struct_generic_member_parsing():
+    code = """
+    struct Resources:
+        @position
+        var transform: Matrix[DType.float32, 4, 4]
+        SIMD[DType.float32, 4] tint @color
+        samples: InlineArray[SIMD[DType.float32, 4], 2]
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = ast.structs[0]
+
+    assert [(member.vtype, member.name) for member in struct_node.members] == [
+        ("Matrix[DType.float32, 4, 4]", "transform"),
+        ("SIMD[DType.float32, 4]", "tint"),
+        ("InlineArray[SIMD[DType.float32, 4], 2]", "samples"),
+    ]
+    assert [attr.name for attr in struct_node.members[0].attributes] == ["position"]
+    assert [attr.name for attr in struct_node.members[1].attributes] == ["color"]
+
+
+def test_brace_struct_parsing_preserves_generic_members_and_attributes():
+    code = """
+    @value
+    struct Resources {
+        @position
+        var transform: Matrix[DType.float32, 4, 4]
+        SIMD[DType.float32, 4] tint @color;
+        samples: InlineArray[SIMD[DType.float32, 4], 2];
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = ast.structs[0]
+
+    assert [attr.name for attr in struct_node.attributes] == ["value"]
+    assert [(member.vtype, member.name) for member in struct_node.members] == [
+        ("Matrix[DType.float32, 4, 4]", "transform"),
+        ("SIMD[DType.float32, 4]", "tint"),
+        ("InlineArray[SIMD[DType.float32, 4], 2]", "samples"),
+    ]
+    assert [attr.name for attr in struct_node.members[0].attributes] == ["position"]
+    assert [attr.name for attr in struct_node.members[1].attributes] == ["color"]
 
 
 def test_if_parsing():
@@ -54,6 +140,40 @@ def test_if_parsing():
         pytest.fail("If parsing not implemented.")
 
 
+def test_bare_identifier_block_condition_parsing():
+    code = """
+    fn main():
+        if ready:
+            sink()
+        while running:
+            tick()
+        switch state:
+            case active:
+                sink()
+            default:
+                tick()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+
+    if_stmt = function.body[0]
+    while_stmt = function.body[1]
+    switch_stmt = function.body[2]
+
+    assert isinstance(if_stmt, IfNode)
+    assert isinstance(if_stmt.condition, VariableNode)
+    assert if_stmt.condition.name == "ready"
+    assert isinstance(while_stmt, WhileNode)
+    assert isinstance(while_stmt.condition, VariableNode)
+    assert while_stmt.condition.name == "running"
+    assert isinstance(switch_stmt, SwitchNode)
+    assert isinstance(switch_stmt.expression, VariableNode)
+    assert switch_stmt.expression.name == "state"
+    assert isinstance(switch_stmt.cases[0].condition, VariableNode)
+    assert switch_stmt.cases[0].condition.name == "active"
+    assert switch_stmt.cases[1].condition is None
+
+
 def test_for_parsing():
     code = """
     fn main():
@@ -65,6 +185,70 @@ def test_for_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("For parsing not implemented.")
+
+
+def test_c_style_for_update_parses_array_and_member_assignment_targets():
+    code = """
+    fn main():
+        var value = 1
+        for var i: Int = 0; i < 4; items[i] += value:
+            pass
+        for var i: Int = 0; i < 4; object.field = value:
+            pass
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    array_loop = function.body[1]
+    member_loop = function.body[2]
+
+    assert isinstance(array_loop, ForNode)
+    assert isinstance(array_loop.update, AssignmentNode)
+    assert array_loop.update.operator == "+="
+    assert isinstance(array_loop.update.left, ArrayAccessNode)
+    assert array_loop.update.left.array.name == "items"
+    assert array_loop.update.left.index.name == "i"
+    assert array_loop.update.right.name == "value"
+
+    assert isinstance(member_loop, ForNode)
+    assert isinstance(member_loop.update, AssignmentNode)
+    assert member_loop.update.operator == "="
+    assert isinstance(member_loop.update.left, MemberAccessNode)
+    assert member_loop.update.left.object.name == "object"
+    assert member_loop.update.left.member == "field"
+    assert member_loop.update.right.name == "value"
+
+
+def test_for_in_iterable_parsing_preserves_loop_iterable():
+    code = """
+    fn main():
+        for value in values:
+            sink(value)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, RangeForNode)
+    assert loop.name == "value"
+    assert loop.iterable.name == "values"
+
+
+def test_for_in_range_parsing_preserves_range_call():
+    code = """
+    fn main():
+        for i in range(4):
+            sink(i)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, RangeForNode)
+    assert loop.name == "i"
+    assert loop.iterable.name == "range"
+    assert loop.iterable.args == ["4"]
 
 
 def test_while_parsing():
@@ -110,6 +294,74 @@ def test_function_call_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Function call parsing not implemented.")
+
+
+def test_method_call_chain_preserves_receiver():
+    code = """
+    fn main():
+        let channel = texture.sample(coord).x
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    expression = function.body[0].initial_value
+
+    assert isinstance(expression, MemberAccessNode)
+    assert expression.member == "x"
+    assert isinstance(expression.object, MethodCallNode)
+    assert expression.object.method == "sample"
+    assert expression.object.object.name == "texture"
+    assert expression.object.args[0].name == "coord"
+
+
+def test_parenthesized_method_call_chain_parsing():
+    code = """
+    fn main():
+        let channel = (texture.sample(coord)).x
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    expression = function.body[0].initial_value
+
+    assert isinstance(expression, MemberAccessNode)
+    assert expression.member == "x"
+    assert isinstance(expression.object, MethodCallNode)
+    assert expression.object.method == "sample"
+    assert expression.object.object.name == "texture"
+
+
+def test_def_function_parsing():
+    code = """
+    def helper(x: Float32) -> Float32:
+        return x
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "helper")
+
+    assert function.return_type == "Float32"
+    assert [(param.vtype, param.name) for param in function.params] == [
+        ("Float32", "x")
+    ]
+    assert isinstance(function.body[0], ReturnNode)
+
+
+def test_generic_function_signature_parsing():
+    code = """
+    fn build(
+        value: SIMD[DType.float32, 4],
+        Matrix[DType.float32, 4, 4] transform @binding(0)
+    ) -> Matrix[DType.float32, 4, 4]:
+        return transform
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "build")
+
+    assert function.return_type == "Matrix[DType.float32, 4, 4]"
+    assert [(param.vtype, param.name) for param in function.params] == [
+        ("SIMD[DType.float32, 4]", "value"),
+        ("Matrix[DType.float32, 4, 4]", "transform"),
+    ]
+    assert [attr.name for attr in function.params[1].attributes] == ["binding"]
+    assert function.params[1].attributes[0].args == ["0"]
 
 
 def test_else_if_parsing():
@@ -181,7 +433,20 @@ def test_logical_ops_parsing():
     """
     try:
         tokens = tokenize_code(code)
-        parse_code(tokens)
+        ast = parse_code(tokens)
+        function = find_function(ast, "main")
+        and_expr = function.body[1].initial_value
+        or_expr = function.body[2].initial_value
+        not_expr = function.body[3].initial_value
+
+        assert isinstance(and_expr, BinaryOpNode)
+        assert and_expr.op == "&&"
+        assert and_expr.right == "false"
+        assert isinstance(or_expr, BinaryOpNode)
+        assert or_expr.op == "||"
+        assert or_expr.right == "false"
+        assert isinstance(not_expr, UnaryOpNode)
+        assert not_expr.op == "!"
     except SyntaxError:
         pytest.fail("Logical operators parsing not implemented.")
 
@@ -213,13 +478,28 @@ def test_import_parsing():
     code = """
     import math
     import simd as s
+    from tensor import Tensor
+    from package.module import A, B as C
     
     fn main():
         let result = math.sin(0.5)
     """
     try:
         tokens = tokenize_code(code)
-        parse_code(tokens)
+        ast = parse_code(tokens)
+        imports = ast.includes
+
+        assert imports[0].module_name == "math"
+        assert imports[0].items == []
+        assert imports[0].alias is None
+        assert imports[1].module_name == "simd"
+        assert imports[1].items == []
+        assert imports[1].alias == "s"
+        assert imports[2].module_name == "tensor"
+        assert imports[2].items == ["Tensor"]
+        assert imports[2].alias is None
+        assert imports[3].module_name == "package.module"
+        assert imports[3].items == ["A", "B as C"]
     except SyntaxError:
         pytest.fail("Import parsing not implemented.")
 
@@ -264,17 +544,223 @@ def test_vector_types_parsing():
         pytest.fail("Vector types parsing not implemented.")
 
 
+def test_generic_constructor_expression_parsing():
+    code = """
+    fn main():
+        let color = SIMD[DType.float32, 4](1.0, 2.0, 3.0, 4.0)
+        let values = InlineArray[Float32, 4](1.0, 2.0, 3.0, 4.0)
+        let matrix = Matrix[DType.float64, 2, 2](1.0, 0.0, 0.0, 1.0)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    color = function.body[0].initial_value
+    values = function.body[1].initial_value
+    matrix = function.body[2].initial_value
+
+    assert isinstance(color, VectorConstructorNode)
+    assert color.type_name == "SIMD[DType.float32, 4]"
+    assert color.args == ["1.0", "2.0", "3.0", "4.0"]
+    assert isinstance(values, VectorConstructorNode)
+    assert values.type_name == "InlineArray[Float32, 4]"
+    assert values.args == ["1.0", "2.0", "3.0", "4.0"]
+    assert isinstance(matrix, VectorConstructorNode)
+    assert matrix.type_name == "Matrix[DType.float64, 2, 2]"
+    assert matrix.args == ["1.0", "0.0", "0.0", "1.0"]
+
+
+def test_nested_generic_type_annotation_parsing():
+    code = """
+    fn main():
+        var values: InlineArray[SIMD[DType.float32, 4], 2]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+
+    assert function.body[0].vtype == "InlineArray[SIMD[DType.float32, 4], 2]"
+
+
 def test_ternary_operator_parsing():
     code = """
     fn main():
         let x: Float32 = 0.5
         let result = x > 0.0 ? 1.0 : 0.0
+        let variable_result = flag ? yes : no
     """
     try:
         tokens = tokenize_code(code)
-        parse_code(tokens)
+        ast = parse_code(tokens)
+        function = find_function(ast, "main")
+        ternary = function.body[2].initial_value
+
+        assert isinstance(ternary, TernaryOpNode)
+        assert ternary.condition.name == "flag"
+        assert ternary.true_expr.name == "yes"
+        assert ternary.false_expr.name == "no"
     except SyntaxError:
         pytest.fail("Ternary operator parsing not implemented.")
+
+
+def test_at_attributes_attach_to_declarations():
+    code = """
+    @value
+    struct MyStruct:
+        @position
+        var data: Int32
+
+    @position
+    var global_data: Float32
+    var bound_texture: Texture2D @binding(0)
+    @group(0)
+    @binding(1)
+    var sampler: SamplerState
+    @group(2)
+    var combined_texture: Texture2D @binding(3)
+
+    @compute_shader
+    fn kernel():
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = ast.functions[0]
+    function = find_function(ast, "kernel")
+    global_data, bound_texture, sampler, combined_texture = ast.global_variables
+
+    assert [attr.name for attr in struct_node.attributes] == ["value"]
+    assert [attr.name for attr in struct_node.members[0].attributes] == ["position"]
+    assert [attr.name for attr in global_data.attributes] == ["position"]
+    assert [attr.name for attr in bound_texture.attributes] == ["binding"]
+    assert bound_texture.attributes[0].args == ["0"]
+    assert [attr.name for attr in sampler.attributes] == ["group", "binding"]
+    assert sampler.attributes[0].args == ["0"]
+    assert sampler.attributes[1].args == ["1"]
+    assert [attr.name for attr in combined_texture.attributes] == [
+        "group",
+        "binding",
+    ]
+    assert combined_texture.attributes[0].args == ["2"]
+    assert combined_texture.attributes[1].args == ["3"]
+    assert [attr.name for attr in function.attributes] == ["compute_shader"]
+
+
+def test_bracket_attributes_attach_to_function_declarations():
+    code = """
+    [[compute_shader]]
+    fn run():
+        pass
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "run")
+
+    assert [attr.name for attr in function.attributes] == ["compute_shader"]
+
+
+def test_colon_class_parsing_preserves_members_methods_and_attributes():
+    code = """
+    @storage
+    class Accumulator(Base):
+        @position
+        var value: Int
+        Matrix[DType.float32, 4, 4] transform @binding(0)
+        samples: InlineArray[SIMD[DType.float32, 4], 2]
+        def reset():
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    class_node = find_class(ast, "Accumulator")
+
+    assert class_node.base_classes == ["Base"]
+    assert [attr.name for attr in class_node.attributes] == ["storage"]
+    assert len(class_node.members) == 3
+    assert class_node.members[0].name == "value"
+    assert [attr.name for attr in class_node.members[0].attributes] == ["position"]
+    assert [(member.vtype, member.name) for member in class_node.members[1:]] == [
+        ("Matrix[DType.float32, 4, 4]", "transform"),
+        ("InlineArray[SIMD[DType.float32, 4], 2]", "samples"),
+    ]
+    assert [attr.name for attr in class_node.members[1].attributes] == ["binding"]
+    assert class_node.members[1].attributes[0].args == ["0"]
+    assert len(class_node.methods) == 1
+    assert class_node.methods[0].name == "reset"
+
+
+def test_brace_class_parsing_preserves_members_and_methods():
+    code = """
+    class Accumulator {
+        var value: Int
+        SIMD[DType.float32, 4] tint @color;
+        weights: InlineArray[Float32, 4];
+        fn reset():
+            pass
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+    class_node = find_class(ast, "Accumulator")
+
+    assert len(class_node.members) == 3
+    assert class_node.members[0].name == "value"
+    assert [(member.vtype, member.name) for member in class_node.members[1:]] == [
+        ("SIMD[DType.float32, 4]", "tint"),
+        ("InlineArray[Float32, 4]", "weights"),
+    ]
+    assert [attr.name for attr in class_node.members[1].attributes] == ["color"]
+    assert len(class_node.methods) == 1
+    assert class_node.methods[0].name == "reset"
+
+
+def test_constant_buffer_colon_parsing():
+    code = """
+    @group(0)
+    constant Params:
+        @binding(0)
+        var exposure: Float32 @offset(0)
+        count: Int @binding(1)
+    """
+    ast = parse_code(tokenize_code(code))
+    cbuffer = find_constant_buffer(ast, "Params")
+
+    assert [attr.name for attr in cbuffer.attributes] == ["group"]
+    assert cbuffer.attributes[0].args == ["0"]
+    assert [(member.vtype, member.name) for member in cbuffer.members] == [
+        ("Float32", "exposure"),
+        ("Int", "count"),
+    ]
+    assert [attr.name for attr in cbuffer.members[0].attributes] == [
+        "binding",
+        "offset",
+    ]
+    assert cbuffer.members[0].attributes[0].args == ["0"]
+    assert cbuffer.members[0].attributes[1].args == ["0"]
+    assert [attr.name for attr in cbuffer.members[1].attributes] == ["binding"]
+    assert cbuffer.members[1].attributes[0].args == ["1"]
+
+
+def test_constant_buffer_brace_parsing_with_layout_tokens():
+    code = """
+    constant Params {
+        @binding(0)
+        Float32 exposure @offset(0);
+        Int count @binding(1);
+        Matrix[DType.float32, 4, 4] transform @binding(2);
+        InlineArray[SIMD[DType.float32, 4], 2] samples;
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+    cbuffer = find_constant_buffer(ast, "Params")
+
+    assert [(member.vtype, member.name) for member in cbuffer.members] == [
+        ("Float32", "exposure"),
+        ("Int", "count"),
+        ("Matrix[DType.float32, 4, 4]", "transform"),
+        ("InlineArray[SIMD[DType.float32, 4], 2]", "samples"),
+    ]
+    assert [attr.name for attr in cbuffer.members[0].attributes] == [
+        "binding",
+        "offset",
+    ]
+    assert [attr.name for attr in cbuffer.members[1].attributes] == ["binding"]
+    assert [attr.name for attr in cbuffer.members[2].attributes] == ["binding"]
+    assert cbuffer.members[2].attributes[0].args == ["2"]
 
 
 def test_array_access_parsing():
@@ -290,6 +776,36 @@ def test_array_access_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Array access parsing not implemented.")
+
+
+def test_array_member_access_chain_parsing():
+    code = """
+    fn main():
+        let channel = values[0].x
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    expression = function.body[0].initial_value
+
+    assert isinstance(expression, MemberAccessNode)
+    assert expression.member == "x"
+    assert isinstance(expression.object, ArrayAccessNode)
+    assert expression.object.array.name == "values"
+    assert expression.object.index == "0"
+
+
+def test_parenthesized_call_indexing_parsing():
+    code = """
+    fn main():
+        let value = (factory())[i]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    expression = function.body[0].initial_value
+
+    assert isinstance(expression, ArrayAccessNode)
+    assert expression.array.name == "factory"
+    assert expression.index.name == "i"
 
 
 def test_member_access_parsing():
@@ -417,6 +933,91 @@ def test_numeric_literals_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Numeric literals parsing not implemented.")
+
+
+def test_if_block_stops_at_dedent():
+    code = """
+    fn fragment_main(input: PSInput) -> PSOutput:
+        var output: PSOutput
+        if input.value > 0:
+            pass
+        return output
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "fragment_main")
+
+    assert len(function.body) == 3
+    assert isinstance(function.body[1], IfNode)
+    assert isinstance(function.body[2], ReturnNode)
+
+
+def test_nested_if_siblings_stop_at_dedent():
+    code = """
+    fn main():
+        var i: Int = 0
+        while i < 10:
+            if i == 3:
+                continue
+            if i == 7:
+                break
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    loop = function.body[1]
+
+    assert isinstance(loop, WhileNode)
+    assert len(loop.body) == 2
+    assert isinstance(loop.body[0], IfNode)
+    assert isinstance(loop.body[0].if_body[0], ContinueNode)
+    assert isinstance(loop.body[1], IfNode)
+    assert isinstance(loop.body[1].if_body[0], BreakNode)
+
+
+def test_switch_block_stops_at_dedent():
+    code = """
+    fn fragment_main(input: PSInput) -> PSOutput:
+        var output: PSOutput
+        switch input.value:
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0)
+                break
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0)
+                break
+        return output
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "fragment_main")
+
+    assert len(function.body) == 3
+    assert isinstance(function.body[1], SwitchNode)
+    assert isinstance(function.body[2], ReturnNode)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        """
+        fn main():
+            let x = a b
+        """,
+        """
+        fn main():
+            return a b
+        """,
+        """
+        fn main():
+            a b
+        """,
+        """
+        struct Bad:
+            var value: Float32 extra
+        """,
+    ],
+)
+def test_rejects_trailing_tokens_after_simple_statement(code):
+    with pytest.raises(SyntaxError, match="Expected end of statement"):
+        parse_code(tokenize_code(code))
 
 
 if __name__ == "__main__":

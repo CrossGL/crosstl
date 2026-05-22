@@ -4,19 +4,20 @@ import re
 from typing import Iterator, Tuple, List
 
 # using sets for faster lookup
-SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
+SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI", "PREPROCESSOR"}
 
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"//.*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
+        ("PREPROCESSOR", r"#[^\r\n]*"),
         ("BITWISE_NOT", r"~"),
         ("WHITESPACE", r"\s+"),
         ("SEMANTIC", r":\w+"),
         ("PRE_INCREMENT", r"\+\+(?=\w)"),
         ("PRE_DECREMENT", r"--(?=\w)"),
-        ("POST_INCREMENT", r"(?<=\w)\+\+"),
-        ("POST_DECREMENT", r"(?<=\w)--"),
+        ("POST_INCREMENT", r"(?<=[\w\]])\+\+"),
+        ("POST_DECREMENT", r"(?<=[\w\]])--"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         ("NUMBER", r"\d+(\.\d*)?u?|\.\d+u?"),
         ("SEMICOLON", r";"),
@@ -24,6 +25,8 @@ TOKENS = tuple(
         ("RBRACE", r"\}"),
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
+        ("LBRACKET", r"\["),
+        ("RBRACKET", r"\]"),
         ("COMMA", r","),
         ("DOT", r"\."),
         ("EQUAL", r"=="),
@@ -111,6 +114,8 @@ KEYWORDS = {
     "lowp": "LOWP",
     "subpassInput": "SUBPASSINPUT",
     "subpassInputMS": "SUBPASSINPUTMS",
+    "sampler1D": "SAMPLER1D",
+    "sampler1DArray": "SAMPLER1DARRAY",
     "sampler2DArray": "SAMPLER2DARRAY",
     "sampler2DMS": "SAMPLER2DMS",
     "sampler2DMSArray": "SAMPLER2DMSARRAY",
@@ -131,6 +136,31 @@ KEYWORDS = {
     "mat3": "MAT3",
     "mat4": "MAT4",
 }
+
+RESOURCE_DATA_TYPES = [
+    "subpassInput",
+    "subpassInputMS",
+    "sampler1D",
+    "sampler1DArray",
+    "sampler2D",
+    "samplerCube",
+    "sampler2DArray",
+    "sampler2DMS",
+    "sampler2DMSArray",
+    "sampler3D",
+    "samplerCubeArray",
+    "image1D",
+    "image1DArray",
+    "image2D",
+    "image2DArray",
+    "image2DMS",
+    "image2DMSArray",
+    "image3D",
+    "imageBuffer",
+    "imageCube",
+    "imageCubeArray",
+    "atomic_uint",
+]
 
 VALID_DATA_TYPES = [
     "int",
@@ -154,19 +184,25 @@ VALID_DATA_TYPES = [
     "uint",
     "bool",
     "void",
+    *RESOURCE_DATA_TYPES,
 ]
 
 
 class VulkanLexer:
+    """Tokenize Vulkan/SPIR-V style source for the Vulkan backend parser."""
+
     def __init__(self, code: str):
+        """Initialize the lexer with raw Vulkan/SPIR-V style source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
+        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
+        """Yield Vulkan/SPIR-V tokens while skipping whitespace and comments."""
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -187,6 +223,7 @@ class VulkanLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Tuple[int, str, str]:
+        """Match the next token at ``pos`` and return its end offset."""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -195,5 +232,6 @@ class VulkanLexer:
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "VulkanLexer":
+        """Create a lexer instance from a Vulkan/SPIR-V source file."""
         with open(filepath, "r") as f:
             return cls(f.read())

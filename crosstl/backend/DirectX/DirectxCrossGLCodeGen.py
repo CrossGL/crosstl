@@ -13,7 +13,16 @@ from ..common_ast import (
 
 
 class HLSLToCrossGLConverter:
+    """Serialize DirectX backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize HLSL-to-CrossGL type, function, and semantic mappings."""
+        self.structured_buffer_types = {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -125,7 +134,13 @@ class HLSLToCrossGLConverter:
             "TriangleStream": "triangleStream",
             # Sampler Types
             "SamplerState": "sampler",
-            "SamplerComparisonState": "samplerShadow",
+            "SamplerComparisonState": "sampler",
+        }
+        self.shadow_texture_type_map = {
+            "Texture2D": "sampler2DShadow",
+            "Texture2DArray": "sampler2DArrayShadow",
+            "TextureCube": "samplerCubeShadow",
+            "TextureCubeArray": "samplerCubeArrayShadow",
         }
         self.function_map = {
             "lerp": "mix",
@@ -142,19 +157,21 @@ class HLSLToCrossGLConverter:
             "InterlockedCompareExchange": "atomicCompareExchange",
         }
         self.texture_method_map = {
-            "Sample": "texture_sample",
-            "SampleLevel": "texture_sample_level",
-            "SampleGrad": "texture_sample_grad",
-            "SampleBias": "texture_sample_bias",
-            "SampleCmp": "texture_sample_cmp",
-            "SampleCmpLevelZero": "texture_sample_cmp_level_zero",
-            "Load": "texture_load",
-            "Gather": "texture_gather",
-            "GatherRed": "texture_gather_red",
-            "GatherGreen": "texture_gather_green",
-            "GatherBlue": "texture_gather_blue",
-            "GatherAlpha": "texture_gather_alpha",
+            "Sample": "texture",
+            "SampleLevel": "textureLod",
+            "SampleGrad": "textureGrad",
+            "SampleBias": "texture",
+            "SampleCmp": "textureCompare",
+            "SampleCmpLevelZero": "textureCompare",
+            "Load": "texelFetch",
+            "Gather": "textureGather",
             "GetDimensions": "texture_dimensions",
+        }
+        self.texture_gather_component_map = {
+            "GatherRed": "0",
+            "GatherGreen": "1",
+            "GatherBlue": "2",
+            "GatherAlpha": "3",
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
@@ -273,6 +290,102 @@ class HLSLToCrossGLConverter:
         }
         self.indentation = 0
         self.code = []
+        self.shadow_texture_names = set()
+        self.shadow_texture_declaration_ids = set()
+        self.global_variable_types = {}
+        self.global_resource_array_dims = {}
+        self.current_variable_types = {}
+        self.current_resource_array_dims = {}
+        self.suppress_storage_image_index_lowering = False
+
+    def texture_method_descriptor(self, member, arg_count=None):
+        if member in {"Load", "GetDimensions"}:
+            texture_function = self.texture_method_map[member]
+            buffer_function = self.buffer_method_map[member]
+            use_buffer = arg_count is not None and arg_count <= 1
+            return {
+                "member": member,
+                "function": buffer_function if use_buffer else texture_function,
+                "texture_function": texture_function,
+                "buffer_function": buffer_function,
+                "component": None,
+                "usage": "regular" if member == "Load" else None,
+                "buffer_when_max_args": 1,
+            }
+        if member in self.texture_gather_component_map:
+            return {
+                "member": member,
+                "function": self.texture_method_map["Gather"],
+                "texture_function": self.texture_method_map["Gather"],
+                "buffer_function": None,
+                "component": self.texture_gather_component_map[member],
+                "usage": "regular",
+                "buffer_when_max_args": None,
+            }
+        if member in self.texture_method_map:
+            usage = (
+                "comparison"
+                if member in {"SampleCmp", "SampleCmpLevelZero"}
+                else "regular"
+            )
+            return {
+                "member": member,
+                "function": self.texture_method_map[member],
+                "texture_function": self.texture_method_map[member],
+                "buffer_function": None,
+                "component": None,
+                "usage": usage,
+                "buffer_when_max_args": None,
+            }
+        return None
+
+    def resource_method_descriptor(self, member, arg_count=None):
+        texture_descriptor = self.texture_method_descriptor(member, arg_count)
+        if texture_descriptor:
+            descriptor = dict(texture_descriptor)
+            uses_buffer = (
+                descriptor["buffer_function"] is not None
+                and descriptor["function"] == descriptor["buffer_function"]
+            )
+            descriptor["resource"] = "buffer" if uses_buffer else "texture"
+            descriptor["operation"] = {
+                "Load": "load",
+                "GetDimensions": "dimensions",
+                "Sample": "sample",
+                "SampleLevel": "sample_lod",
+                "SampleGrad": "sample_grad",
+                "SampleBias": "sample_bias",
+                "SampleCmp": "sample_compare",
+                "SampleCmpLevelZero": "sample_compare",
+                "Gather": "gather",
+                "GatherRed": "gather",
+                "GatherGreen": "gather",
+                "GatherBlue": "gather",
+                "GatherAlpha": "gather",
+            }.get(member)
+            return descriptor
+
+        if member in self.buffer_method_map:
+            return {
+                "member": member,
+                "function": self.buffer_method_map[member],
+                "texture_function": None,
+                "buffer_function": self.buffer_method_map[member],
+                "component": None,
+                "usage": None,
+                "buffer_when_max_args": None,
+                "resource": "buffer",
+                "operation": (
+                    {
+                        "Store": "store",
+                        "Append": "append",
+                        "Consume": "consume",
+                        "Load": "load",
+                        "GetDimensions": "dimensions",
+                    }.get(member)
+                ),
+            }
+        return None
 
     def get_indent(self):
         return "    " * self.indentation
@@ -314,6 +427,323 @@ class HLSLToCrossGLConverter:
             lines += "    " * indent + f"@ packoffset({packoffset})\n"
         return lines
 
+    def is_uav_resource_type(self, hlsl_type):
+        if not hlsl_type:
+            return False
+        type_name = str(hlsl_type)
+        if "<" in type_name:
+            type_name = type_name.split("<", 1)[0]
+        return type_name.startswith(("RWTexture", "RWBuffer")) or type_name in {
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
+    def format_resource_qualifier_attributes(self, node, indent):
+        if not self.is_uav_resource_type(getattr(node, "vtype", None)):
+            return ""
+
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "globallycoherent" in qualifiers:
+            return "    " * indent + "@ globallycoherent\n"
+        return ""
+
+    def record_variable_type(self, node, type_map=None, array_dim_map=None):
+        name = getattr(node, "name", None)
+        if not name:
+            return
+        if type_map is None:
+            type_map = self.current_variable_types
+        if array_dim_map is None:
+            array_dim_map = self.current_resource_array_dims
+        type_map[name] = getattr(node, "vtype", None)
+        array_dim_map[name] = len(getattr(node, "array_sizes", None) or [])
+
+    def expression_base_name(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_base_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            return self.expression_base_name(expr.object)
+        return None
+
+    def expression_raw_type(self, expr):
+        name = self.expression_base_name(expr)
+        if not name:
+            return None
+        raw_type = self.current_variable_types.get(name)
+        if raw_type is None:
+            raw_type = self.global_variable_types.get(name)
+        return raw_type
+
+    def expression_resource_array_dims(self, expr):
+        name = self.expression_base_name(expr)
+        if not name:
+            return 0
+        if name in self.current_resource_array_dims:
+            return self.current_resource_array_dims[name]
+        return self.global_resource_array_dims.get(name, 0)
+
+    def raw_type_base(self, type_name):
+        if not type_name:
+            return ""
+        base = str(type_name).strip()
+        if "<" in base and base.endswith(">"):
+            base = base.split("<", 1)[0]
+        return base
+
+    def is_rw_texture_type(self, type_name):
+        return self.raw_type_base(type_name).startswith("RWTexture")
+
+    def array_access_depth(self, expr):
+        depth = 0
+        while isinstance(expr, ArrayAccessNode):
+            depth += 1
+            expr = expr.array
+        return depth
+
+    def is_storage_image_texel_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return False
+        if not self.is_rw_texture_type(self.expression_raw_type(expr)):
+            return False
+        return self.array_access_depth(expr) > self.expression_resource_array_dims(expr)
+
+    def generate_without_storage_index_lowering(self, expr, is_main=False):
+        previous = self.suppress_storage_image_index_lowering
+        self.suppress_storage_image_index_lowering = True
+        try:
+            return self.generate_expression(expr, is_main)
+        finally:
+            self.suppress_storage_image_index_lowering = previous
+
+    def generate_storage_image_access_parts(self, expr, is_main=False):
+        image = self.generate_without_storage_index_lowering(expr.array, is_main)
+        coord = self.generate_expression(expr.index, is_main)
+        return image, coord
+
+    def generate_storage_image_load(self, expr, is_main=False):
+        image, coord = self.generate_storage_image_access_parts(expr, is_main)
+        return f"imageLoad({image}, {coord})"
+
+    def generate_storage_image_store(self, access, value, operator, is_main=False):
+        image, coord = self.generate_storage_image_access_parts(access, is_main)
+        rendered_value = self.generate_expression(value, is_main)
+        if operator != "=":
+            compound_ops = {
+                "+=": "+",
+                "-=": "-",
+                "*=": "*",
+                "/=": "/",
+                "%=": "%",
+                "&=": "&",
+                "|=": "|",
+                "^=": "^",
+                "<<=": "<<",
+                ">>=": ">>",
+            }
+            binary_op = compound_ops.get(operator)
+            if binary_op is None:
+                return None
+            current_value = self.generate_storage_image_load(access, is_main)
+            rendered_value = f"{current_value} {binary_op} {rendered_value}"
+        return f"imageStore({image}, {coord}, {rendered_value})"
+
+    def iter_ast_children(self, node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                yield value
+            return
+        if isinstance(node, (list, tuple, set)):
+            for value in node:
+                yield value
+            return
+        for value in getattr(node, "__dict__", {}).values():
+            yield value
+
+    def collect_direct_texture_method_usage_names(self, root):
+        comparison_names = set()
+        regular_names = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, TextureSampleNode):
+                texture_name = self.expression_base_name(node.texture)
+                if texture_name:
+                    regular_names.add(texture_name)
+            if isinstance(node, FunctionCallNode) and isinstance(
+                node.name, MemberAccessNode
+            ):
+                texture_name = self.expression_base_name(node.name.object)
+                descriptor = self.resource_method_descriptor(
+                    node.name.member, len(getattr(node, "args", []) or [])
+                )
+                usage = (
+                    descriptor["usage"]
+                    if descriptor and descriptor["resource"] == "texture"
+                    else None
+                )
+                if usage == "comparison":
+                    if texture_name:
+                        comparison_names.add(texture_name)
+                elif usage == "regular":
+                    if texture_name:
+                        regular_names.add(texture_name)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return comparison_names, regular_names
+
+    def collect_function_texture_parameter_usage(self, root):
+        function_usage = {}
+        for func in getattr(root, "functions", []) or []:
+            param_by_name = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(getattr(func, "params", []) or [])
+            }
+            param_by_name.pop(None, None)
+            comparison_names, regular_names = (
+                self.collect_direct_texture_method_usage_names(
+                    getattr(func, "body", [])
+                )
+            )
+            function_usage[getattr(func, "name", None)] = {
+                "comparison": {
+                    param_by_name[name]
+                    for name in comparison_names
+                    if name in param_by_name
+                },
+                "regular": {
+                    param_by_name[name]
+                    for name in regular_names
+                    if name in param_by_name
+                },
+            }
+        function_usage.pop(None, None)
+        return function_usage
+
+    def collect_nonparameter_texture_usage_names(self, root):
+        comparison_names = set()
+        regular_names = set()
+
+        for node in getattr(root, "global_variables", []) or []:
+            direct_comparison, direct_regular = (
+                self.collect_direct_texture_method_usage_names(node)
+            )
+            comparison_names.update(direct_comparison)
+            regular_names.update(direct_regular)
+
+        for func in getattr(root, "functions", []) or []:
+            param_names = {
+                getattr(param, "name", None)
+                for param in getattr(func, "params", []) or []
+            }
+            param_names.discard(None)
+            direct_comparison, direct_regular = (
+                self.collect_direct_texture_method_usage_names(
+                    getattr(func, "body", [])
+                )
+            )
+            comparison_names.update(direct_comparison - param_names)
+            regular_names.update(direct_regular - param_names)
+
+        return comparison_names, regular_names
+
+    def propagate_function_texture_usage(
+        self, root, function_usage, comparison_names, regular_names
+    ):
+        changed = False
+
+        def apply_call_usage(node, caller_function_name, caller_param_by_name):
+            nonlocal changed
+            if not isinstance(node, FunctionCallNode) or not isinstance(node.name, str):
+                return
+            callee_usage = function_usage.get(node.name)
+            if not callee_usage:
+                return
+            for usage_kind, usage_names in (
+                ("comparison", comparison_names),
+                ("regular", regular_names),
+            ):
+                for param_index in callee_usage[usage_kind]:
+                    if param_index >= len(node.args):
+                        continue
+                    arg_name = self.expression_base_name(node.args[param_index])
+                    if not arg_name:
+                        continue
+                    caller_param_index = caller_param_by_name.get(arg_name)
+                    if caller_param_index is not None:
+                        caller_usage = function_usage.get(caller_function_name)
+                        if (
+                            caller_usage is not None
+                            and caller_param_index not in caller_usage[usage_kind]
+                        ):
+                            caller_usage[usage_kind].add(caller_param_index)
+                            changed = True
+                    elif arg_name not in usage_names:
+                        usage_names.add(arg_name)
+                        changed = True
+
+        def visit(node, caller_function_name, caller_param_by_name):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            apply_call_usage(node, caller_function_name, caller_param_by_name)
+            for child in self.iter_ast_children(node):
+                visit(child, caller_function_name, caller_param_by_name)
+
+        for func in getattr(root, "functions", []) or []:
+            param_by_name = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(getattr(func, "params", []) or [])
+            }
+            param_by_name.pop(None, None)
+            visit(getattr(func, "body", []), getattr(func, "name", None), param_by_name)
+
+        return changed
+
+    def collect_shadow_texture_names(self, root):
+        comparison_names, regular_names = self.collect_nonparameter_texture_usage_names(
+            root
+        )
+        function_usage = self.collect_function_texture_parameter_usage(root)
+        while self.propagate_function_texture_usage(
+            root, function_usage, comparison_names, regular_names
+        ):
+            pass
+
+        shadow_names = comparison_names - regular_names
+        self.shadow_texture_declaration_ids = set()
+        for node in getattr(root, "global_variables", []) or []:
+            if getattr(node, "name", None) in shadow_names:
+                self.shadow_texture_declaration_ids.add(id(node))
+
+        for func in getattr(root, "functions", []) or []:
+            usage = function_usage.get(getattr(func, "name", None), {})
+            shadow_indices = usage.get("comparison", set()) - usage.get(
+                "regular", set()
+            )
+            for index, param in enumerate(getattr(func, "params", []) or []):
+                if index in shadow_indices:
+                    self.shadow_texture_declaration_ids.add(id(param))
+
+        return shadow_names
+
+    def map_variable_type(self, node):
+        hlsl_type = getattr(node, "vtype", None)
+        if id(node) not in self.shadow_texture_declaration_ids:
+            return self.map_type(hlsl_type)
+        type_name = hlsl_type
+        if type_name and "<" in type_name and type_name.endswith(">"):
+            type_name = type_name.split("<", 1)[0]
+        return self.shadow_texture_type_map.get(type_name, self.map_type(hlsl_type))
+
     def visit(self, node):
         if isinstance(node, SwitchStatementNode):
             return self.visit_SwitchStatementNode(node)
@@ -332,6 +762,12 @@ class HLSLToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
+        """Generate a complete CrossGL shader from a parsed HLSL AST."""
+        self.shadow_texture_names = self.collect_shadow_texture_names(ast)
+        self.global_variable_types = {}
+        self.global_resource_array_dims = {}
+        self.current_variable_types = {}
+        self.current_resource_array_dims = {}
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -364,7 +800,7 @@ class HLSLToCrossGLConverter:
                     semantic = self.map_semantic(member.semantic)
                     semantic = f" {semantic}" if semantic else ""
                     code += (
-                        f"        {self.map_type(member.vtype)} "
+                        f"        {self.map_variable_type(member)} "
                         f"{member.name}{array_suffix}{semantic};\n"
                     )
                 code += "    }\n"
@@ -373,10 +809,14 @@ class HLSLToCrossGLConverter:
             elif isinstance(node, IncludeNode):
                 code += f"    #include {node.path}\n"
         for node in ast.global_variables:
+            self.record_variable_type(
+                node, self.global_variable_types, self.global_resource_array_dims
+            )
             code += self.format_attributes(getattr(node, "attributes", []), 1)
+            code += self.format_resource_qualifier_attributes(node, 1)
             code += self.format_binding_attributes(node, 1)
             array_suffix = self.format_array_suffixes(node)
-            code += f"    {self.map_type(node.vtype)} {node.name}{array_suffix};\n"
+            code += f"    {self.map_variable_type(node)} {node.name}{array_suffix};\n"
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -419,17 +859,24 @@ class HLSLToCrossGLConverter:
                 for member in node.members:
                     array_suffix = self.format_array_suffixes(member)
                     code += (
-                        f"        {self.map_type(member.vtype)} "
+                        f"        {self.map_variable_type(member)} "
                         f"{member.name}{array_suffix};\n"
                     )
                 code += "    }\n"
         return code
 
     def generate_function(self, func, indent=1):
+        """Render one HLSL function node as a CrossGL function block."""
         code = self.format_attributes(getattr(func, "attributes", []), indent)
         code += "    " * indent
+        previous_variable_types = self.current_variable_types
+        previous_resource_array_dims = self.current_resource_array_dims
+        self.current_variable_types = dict(self.global_variable_types)
+        self.current_resource_array_dims = dict(self.global_resource_array_dims)
+        for param in func.params:
+            self.record_variable_type(param)
         params = ", ".join(
-            f"{self.map_type(p.vtype)} {p.name}{self.format_array_suffixes(p)}"
+            f"{self.map_variable_type(p)} {p.name}{self.format_array_suffixes(p)}"
             f"{(' ' + self.map_semantic(p.semantic)) if self.map_semantic(p.semantic) else ''}"
             for p in func.params
         )
@@ -440,6 +887,8 @@ class HLSLToCrossGLConverter:
         )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    " * indent + "}\n\n"
+        self.current_variable_types = previous_variable_types
+        self.current_resource_array_dims = previous_resource_array_dims
         return code
 
     def generate_function_body(self, body, indent=0, is_main=False):
@@ -450,12 +899,17 @@ class HLSLToCrossGLConverter:
                 array_suffix = self.format_array_suffixes(stmt, is_main)
                 if stmt.value is not None:
                     value = self.generate_expression(stmt.value, is_main)
+                    self.record_variable_type(stmt)
                     code += (
-                        f"{self.map_type(stmt.vtype)} {stmt.name}{array_suffix} = "
+                        f"{self.map_variable_type(stmt)} {stmt.name}{array_suffix} = "
                         f"{value};\n"
                     )
                 else:
-                    code += f"{self.map_type(stmt.vtype)} {stmt.name}{array_suffix};\n"
+                    self.record_variable_type(stmt)
+                    code += (
+                        f"{self.map_variable_type(stmt)} "
+                        f"{stmt.name}{array_suffix};\n"
+                    )
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt, is_main) + ";\n"
 
@@ -507,9 +961,13 @@ class HLSLToCrossGLConverter:
     def generate_for_loop(self, node, indent, is_main):
         if isinstance(node.init, VariableNode):
             array_suffix = self.format_array_suffixes(node.init, is_main)
-            init = f"{self.map_type(node.init.vtype)} {node.init.name}{array_suffix}"
+            init = (
+                f"{self.map_variable_type(node.init)} "
+                f"{node.init.name}{array_suffix}"
+            )
             if node.init.value is not None:
                 init += f" = {self.generate_expression(node.init.value, is_main)}"
+            self.record_variable_type(node.init)
         elif node.init is None:
             init = ""
         else:
@@ -570,12 +1028,19 @@ class HLSLToCrossGLConverter:
         return code
 
     def generate_assignment(self, node, is_main):
+        if self.is_storage_image_texel_access(node.left):
+            storage_store = self.generate_storage_image_store(
+                node.left, node.right, node.operator, is_main
+            )
+            if storage_store is not None:
+                return storage_store
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False):
+        """Render a DirectX backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             return expr
         elif isinstance(expr, VariableNode):
@@ -600,26 +1065,19 @@ class HLSLToCrossGLConverter:
                 return f"{operand}{expr.op}"
             return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
-            args = ", ".join(
-                self.generate_expression(arg, is_main) for arg in expr.args
-            )
             if isinstance(expr.name, MemberAccessNode):
                 obj = self.generate_expression(expr.name.object, is_main)
                 member = expr.name.member
-                if member == "Load":
-                    if len(expr.args) <= 1:
-                        return f"{self.buffer_method_map['Load']}({obj}, {args})"
-                    return f"{self.texture_method_map['Load']}({obj}, {args})"
-                if member == "GetDimensions":
-                    if len(expr.args) <= 1:
-                        return (
-                            f"{self.buffer_method_map['GetDimensions']}({obj}, {args})"
-                        )
-                    return f"{self.texture_method_map['GetDimensions']}({obj}, {args})"
-                if member in self.texture_method_map:
-                    return f"{self.texture_method_map[member]}({obj}, {args})"
-                if member in self.buffer_method_map:
-                    return f"{self.buffer_method_map[member]}({obj}, {args})"
+                rendered_args = [
+                    self.generate_expression(arg, is_main) for arg in expr.args
+                ]
+                args = ", ".join(rendered_args)
+                descriptor = self.resource_method_descriptor(member, len(expr.args))
+                if descriptor:
+                    method_args = [obj, *rendered_args]
+                    if descriptor["component"] is not None:
+                        method_args.append(descriptor["component"])
+                    return f"{descriptor['function']}({', '.join(method_args)})"
                 return f"{obj}.{member}({args})"
 
             func_name = (
@@ -627,6 +1085,16 @@ class HLSLToCrossGLConverter:
                 if isinstance(expr.name, str)
                 else self.generate_expression(expr.name, is_main)
             )
+            if func_name in self.interlocked_map:
+                rendered_args = [
+                    self.generate_without_storage_index_lowering(arg, is_main)
+                    for arg in expr.args
+                ]
+            else:
+                rendered_args = [
+                    self.generate_expression(arg, is_main) for arg in expr.args
+                ]
+            args = ", ".join(rendered_args)
             if func_name == "saturate":
                 if expr.args:
                     return f"clamp({self.generate_expression(expr.args[0], is_main)}, 0.0, 1.0)"
@@ -638,6 +1106,11 @@ class HLSLToCrossGLConverter:
             obj = self.generate_expression(expr.object, is_main)
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
+            if (
+                not self.suppress_storage_image_index_lowering
+                and self.is_storage_image_texel_access(expr)
+            ):
+                return self.generate_storage_image_load(expr, is_main)
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_expression(expr.index, is_main)
             return f"{array}[{index}]"
@@ -651,8 +1124,8 @@ class HLSLToCrossGLConverter:
             coords = self.generate_expression(expr.coordinates, is_main)
             if getattr(expr, "lod", None) is not None:
                 lod = self.generate_expression(expr.lod, is_main)
-                return f"texture_sample_level({texture}, {sampler}, {coords}, {lod})"
-            return f"texture_sample({texture}, {sampler}, {coords})"
+                return f"textureLod({texture}, {sampler}, {coords}, {lod})"
+            return f"texture({texture}, {sampler}, {coords})"
 
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
@@ -672,15 +1145,46 @@ class HLSLToCrossGLConverter:
             return str(expr)
 
     def map_type(self, hlsl_type):
+        """Map an HLSL type name to the closest CrossGL type name."""
         if not hlsl_type:
             return hlsl_type
-        type_name = hlsl_type
+        type_name = str(hlsl_type)
         if "<" in type_name and type_name.endswith(">"):
-            base, _ = type_name.split("<", 1)
+            base, generic_args = type_name.split("<", 1)
+            if base in self.structured_buffer_types:
+                return type_name
+            storage_image_type = self.map_rw_texture_type(
+                base, generic_args[:-1].strip()
+            )
+            if storage_image_type:
+                return storage_image_type
             type_name = base
         return self.type_map.get(type_name, type_name)
 
+    def map_rw_texture_type(self, base_type, element_type):
+        image_type = {
+            "RWTexture1D": "image1D",
+            "RWTexture1DArray": "image1DArray",
+            "RWTexture2D": "image2D",
+            "RWTexture2DArray": "image2DArray",
+            "RWTexture2DMS": "image2DMS",
+            "RWTexture2DMSArray": "image2DMSArray",
+            "RWTexture3D": "image3D",
+            "RWTextureCube": "imageCube",
+            "RWTextureCubeArray": "imageCubeArray",
+        }.get(base_type)
+        if image_type is None:
+            return None
+
+        element = element_type.strip()
+        if element.startswith("uint"):
+            return f"u{image_type}"
+        if element.startswith("int"):
+            return f"i{image_type}"
+        return image_type
+
     def map_semantic(self, semantic):
+        """Map an HLSL semantic to CrossGL semantic annotation syntax."""
         if not semantic:
             return ""
         mapped = self.semantic_map.get(semantic)
@@ -802,8 +1306,8 @@ class HLSLToCrossGLConverter:
 
             array_suffix = self.format_array_suffixes(member)
             code += (
-                self.get_indent()
-                + f"{self.map_type(member.vtype)} {member.name}{array_suffix}{semantic};\n"
+                self.get_indent() + f"{self.map_variable_type(member)} "
+                f"{member.name}{array_suffix}{semantic};\n"
             )
 
         self.indentation -= 1
@@ -839,6 +1343,7 @@ class HLSLToCrossGLConverter:
         return code
 
     def generate_statement(self, node):
+        """Render one DirectX backend statement node as CrossGL source."""
         if isinstance(node, str):
             return node
         if isinstance(node, BreakNode):

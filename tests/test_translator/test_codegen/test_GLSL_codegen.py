@@ -2,7 +2,12 @@ import pytest
 import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
-from crosstl.translator.ast import ShaderStage
+from crosstl.translator.ast import (
+    PrimitiveType,
+    ShaderStage,
+    StructMemberNode,
+    StructNode,
+)
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from typing import List
 
@@ -36,6 +41,130 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_structured_buffer_operations_lower_to_ssbo():
+    code = """
+    shader StructuredBufferGLSL {
+        RWStructuredBuffer<int> values @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint len;
+                int v = buffer_load(values, tid.x);
+                buffer_dimensions(values, len);
+                buffer_store(values, tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 3) buffer valuesBuffer { int values[]; };"
+        in generated
+    )
+    assert "int v = values[tid.x];" in generated
+    assert "len = values.length();" in generated
+    assert "values[tid.x] = (v + 1);" in generated
+    assert "RWStructuredBuffer" not in generated
+    assert "buffer_load" not in generated
+    assert "buffer_store" not in generated
+    assert "buffer_dimensions" not in generated
+
+
+def test_readonly_structured_buffer_uses_readonly_ssbo():
+    code = """
+    shader StructuredBufferGLSL {
+        StructuredBuffer<int> values @ binding(1);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int v = buffer_load(values, tid.x);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) readonly buffer valuesBuffer { int values[]; };"
+        in generated
+    )
+    assert "int v = values[tid.x];" in generated
+
+
+def test_append_consume_structured_buffers_emit_diagnostics():
+    code = """
+    shader StructuredBufferAppendConsumeGLSL {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        compute {
+            void main(uint value) {
+                buffer_append(appendValues, int(value));
+                int consumed = buffer_consume(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) buffer appendValuesBuffer { int appendValues[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 2) buffer consumeValuesBuffer { int consumeValues[]; };"
+        in generated
+    )
+    assert (
+        "/* unsupported GLSL buffer append: requires explicit counter buffer */;"
+        in generated
+    )
+    assert (
+        "int consumed = 0 /* unsupported GLSL buffer consume: requires explicit counter buffer */;"
+        in generated
+    )
+    assert "appendValues[0]" not in generated
+    assert "consumeValues[0]" not in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_structured_buffer_arrays_lower_to_ssbo_instance_arrays():
+    code = """
+    shader StructuredBufferArrayGLSL {
+        RWStructuredBuffer<int> buffers[2] @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID, uint index) {
+                uint len;
+                int v = buffer_load(buffers[index], tid.x);
+                buffer_dimensions(buffers[index], len);
+                buffer_store(buffers[index], tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 3) buffer buffersBuffer { int data[]; } buffers[2];"
+        in generated
+    )
+    assert "int v = buffers[index].data[tid.x];" in generated
+    assert "len = buffers[index].data.length();" in generated
+    assert "buffers[index].data[tid.x] = (v + 1);" in generated
+    assert "buffers[index][tid.x]" not in generated
+
+
 def test_glsl_unsigned_integer_literal_suffix_codegen():
     code = """
     shader UIntLiteralCodegen {
@@ -55,6 +184,82 @@ def test_glsl_unsigned_integer_literal_suffix_codegen():
     assert "uint b = 15u;" in generated_code
     assert "uint c = 5u;" in generated_code
     assert "7, u" not in generated_code
+
+
+def test_glsl_resource_binding_attributes_are_not_parameter_semantics():
+    code = """
+    shader BindingAttributes {
+        vec4 sampleBound(sampler2D tex @texture(1), sampler samp @sampler(2), vec2 uv) {
+            return texture(tex, samp, uv);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vec4 sampleBound(sampler2D tex, vec2 uv)" in generated_code
+    assert "return texture(tex, uv);" in generated_code
+    assert "tex texture" not in generated_code
+    assert "samp sampler" not in generated_code
+
+
+def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
+    code = """
+    shader ExplicitGlobalBindings {
+        sampler samp @sampler(5);
+        sampler2D explicitTex @texture(3);
+        image2D storageImage @binding(7);
+        sampler2D registerTex @register(t8);
+        sampler2D autoTex;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(storageImage, ivec2(0, 0));
+                return texture(explicitTex, samp, uv) + texture(registerTex, samp, uv) + texture(autoTex, samp, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(binding = 3) uniform sampler2D explicitTex;" in generated_code
+    assert (
+        "layout(rgba32f, binding = 7) uniform image2D storageImage;" in generated_code
+    )
+    assert "layout(binding = 8) uniform sampler2D registerTex;" in generated_code
+    assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
+
+
+def test_glsl_cbuffer_binding_attributes_drive_layout_bindings():
+    code = """
+    shader CBufferBindings {
+        cbuffer Camera @register(b2) {
+            mat4 viewProj;
+            mat4 bones[2];
+            vec4 viewRow;
+        };
+
+        uniform Material @binding(4) {
+            vec4 tint;
+        };
+
+        cbuffer AutoBlock {
+            vec4 color;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "layout(std140, binding = 2) uniform Camera" in generated_code
+    assert "mat4 viewProj;" in generated_code
+    assert "mat4 bones[2];" in generated_code
+    assert "layout(std140, binding = 4) uniform Material" in generated_code
+    assert "layout(std140, binding = 5) uniform AutoBlock" in generated_code
+    assert "MatrixType(" not in generated_code
 
 
 def test_glsl_default_float_image_scalar_and_vector_load_store():
@@ -1260,6 +1465,129 @@ def test_opengl_array_handling(array_test_data):
         pytest.fail(f"OpenGL array codegen failed: {e}")
 
 
+def test_opengl_cbuffer_members_are_not_global_variables():
+    code = """
+    shader CBufferScope {
+        cbuffer Constants {
+            float weights[8];
+            vec3 colors[2];
+        };
+
+        compute {
+            void main() {
+                float value = weights[2];
+                vec3 color = colors[1];
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = GLSLCodeGen().generate_stage(ast, "compute")
+
+    assert [buffer.name for buffer in getattr(ast, "cbuffers", [])] == ["Constants"]
+    assert [var.name for var in ast.global_variables] == []
+    assert "layout(std140, binding = 0) uniform Constants" in generated_code
+    assert "float weights[8];" in generated_code
+    assert "vec3 colors[2];" in generated_code
+    assert "float value = weights[2];" in generated_code
+    assert "vec3 color = colors[1];" in generated_code
+    assert "layout(std140, binding = 0) float weights[8];" not in generated_code
+
+
+def test_opengl_duplicate_cbuffer_members_error():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float value;
+        };
+
+        compute {
+            void main() {
+                float x = value;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers.append(
+        StructNode(
+            name="Lighting",
+            members=[
+                StructMemberNode(name="value", member_type=PrimitiveType("float"))
+            ],
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Ambiguous cbuffer member name\\(s\\) in OpenGL output: value",
+    ):
+        GLSLCodeGen().generate_stage(ast, "compute")
+
+
+def test_opengl_duplicate_cbuffer_names_error():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float exposure;
+        };
+
+        compute {
+            void main() {
+                float x = exposure;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers.append(
+        StructNode(
+            name="Camera",
+            members=[
+                StructMemberNode(name="gamma", member_type=PrimitiveType("float"))
+            ],
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate cbuffer name\\(s\\) in OpenGL output: Camera",
+    ):
+        GLSLCodeGen().generate_stage(ast, "compute")
+
+
+def test_opengl_cbuffer_name_conflicts_with_struct_error():
+    code = """
+    shader CBufferScope {
+        struct Camera {
+            float exposure;
+        };
+
+        cbuffer Lighting {
+            float gamma;
+        };
+
+        compute {
+            void main() {
+                float x = gamma;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers[0].name = "Camera"
+
+    with pytest.raises(
+        ValueError,
+        match="Cbuffer name\\(s\\) conflict with existing OpenGL declaration\\(s\\): Camera",
+    ):
+        GLSLCodeGen().generate_stage(ast, "compute")
+
+
 @pytest.mark.parametrize(
     "array_shader, expected_outputs",
     [
@@ -1269,11 +1597,11 @@ def test_opengl_array_handling(array_test_data):
                 struct DataArray {
                     float values[4];
                 };
-                
+
                 void main() {
                     DataArray data;
                     data.values[2] = 1.0;
-                    
+
                     float arr[5];
                     arr[0] = 1.0;
                 }
@@ -1392,6 +1720,1243 @@ def test_opengl_sampler_globals_are_uniform_resources():
     assert "in vec2 uv;" in generated_code
     assert "in vec3 normal;" in generated_code
     assert "VectorType(" not in generated_code
+
+
+def test_opengl_rejects_non_resource_shadow_of_global_resource():
+    shader = """
+    shader ResourceShadow {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv;
+        };
+
+        vec4 shade(float colorMap, FSInput input) {
+            float linearSampler = 1.0;
+            return vec4(colorMap + linearSampler);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return shade(1.0, input);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Non-resource local declaration\\(s\\) shadow OpenGL global "
+            "resource\\(s\\): colorMap, linearSampler"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_opengl_rejects_texture_call_with_non_resource_argument():
+    shader = """
+    shader InvalidTextureArgument {
+        struct FSInput {
+            vec2 uv;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float value = 1.0;
+                return texture(value, input.uv);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL texture operation 'texture' requires a declared texture "
+            "or image resource argument: value"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "texture(colorMap)",
+            "OpenGL texture operation 'texture' requires at least 2 "
+            "argument\\(s\\), got 1",
+        ),
+        (
+            "textureLod(colorMap, input.uv)",
+            "OpenGL texture operation 'textureLod' requires at least 3 "
+            "argument\\(s\\), got 2",
+        ),
+        (
+            "textureGrad(colorMap, input.uv, input.uv)",
+            "OpenGL texture operation 'textureGrad' requires at least 4 "
+            "argument\\(s\\), got 3",
+        ),
+        (
+            "texture(colorMap, linearSampler)",
+            "OpenGL texture operation 'texture' requires at least 3 "
+            "argument\\(s\\), got 2",
+        ),
+    ],
+)
+def test_opengl_rejects_texture_call_with_too_few_arguments(call, match):
+    shader = f"""
+    shader InvalidTextureArity {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expression", "operation", "max_count", "arg_count"),
+    [
+        (
+            "vec4(float(textureSamples(msTex, input.layer)))",
+            "textureSamples",
+            1,
+            2,
+        ),
+        (
+            "vec4(float(imageSamples(msTex, input.layer)))",
+            "imageSamples",
+            1,
+            2,
+        ),
+        (
+            "vec4(float(textureQueryLevels(colorMap, input.layer)))",
+            "textureQueryLevels",
+            1,
+            2,
+        ),
+        (
+            "vec4(vec2(imageSize(colorImage, input.layer)), 0.0, 1.0)",
+            "imageSize",
+            1,
+            2,
+        ),
+        (
+            "vec4(textureSize(colorMap, input.layer, input.layer), 0.0, 1.0)",
+            "textureSize",
+            2,
+            3,
+        ),
+    ],
+)
+def test_opengl_rejects_resource_query_call_with_too_many_arguments(
+    return_expression, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidTextureQueryArity {{
+        sampler2D colorMap;
+        sampler2DMS msTex;
+        image2D colorImage;
+
+        struct FSInput {{
+            ivec2 pixel;
+            int layer;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expression};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("statement", "operation", "max_count", "arg_count"),
+    [
+        (
+            "vec4 fetched = texelFetch(colorMap, input.pixel, input.layer, input.layer);",
+            "texelFetch",
+            3,
+            4,
+        ),
+        (
+            "vec4 fetched = texelFetchOffset(colorMap, input.pixel, input.layer, input.offset, input.layer);",
+            "texelFetchOffset",
+            4,
+            5,
+        ),
+        (
+            "vec4 color = imageLoad(colorImage, input.pixel, input.layer);",
+            "imageLoad",
+            2,
+            3,
+        ),
+        (
+            "imageStore(colorImage, input.pixel, vec4(1.0), input.layer);",
+            "imageStore",
+            3,
+            4,
+        ),
+        (
+            "uint oldValue = imageAtomicAdd(counterImage, input.pixel, input.amount, input.amount);",
+            "imageAtomicAdd",
+            3,
+            4,
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap(counterImage, input.pixel, input.amount, input.amount, input.amount);",
+            "imageAtomicCompSwap",
+            4,
+            5,
+        ),
+    ],
+)
+def test_opengl_rejects_fixed_resource_call_with_too_many_arguments(
+    statement, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidFixedResourceArity {{
+        sampler2D colorMap;
+        image2D colorImage;
+        uimage2D counterImage;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec2 offset;
+            int layer;
+            uint amount;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                {statement}
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expression", "operation", "max_count", "arg_count"),
+    [
+        (
+            "texture(colorMap, input.uv, input.bias, input.bias)",
+            "texture",
+            3,
+            4,
+        ),
+        (
+            "textureLod(colorMap, input.uv, input.bias, input.bias)",
+            "textureLod",
+            3,
+            4,
+        ),
+        (
+            "textureGrad(colorMap, input.uv, input.ddx, input.ddy, input.bias)",
+            "textureGrad",
+            4,
+            5,
+        ),
+        (
+            "textureOffset(colorMap, input.uv, input.offset, input.bias, input.bias)",
+            "textureOffset",
+            4,
+            5,
+        ),
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "textureCompare",
+            4,
+            5,
+        ),
+        (
+            "textureGather(colorMap, input.uv, input.component, input.component)",
+            "textureGather",
+            3,
+            4,
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset",
+            5,
+            6,
+        ),
+    ],
+)
+def test_opengl_rejects_texture_sampling_call_with_too_many_arguments(
+    return_expression, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidTextureSamplingArity {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec2 ddx;
+            vec2 ddy;
+            ivec2 offset;
+            float bias;
+            float depth;
+            int component;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expression};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_opengl_rejects_texture_gather_offsets_with_ambiguous_argument_count():
+    shader = """
+    shader InvalidTextureGatherOffsetsArity {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 offset;
+            int component;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureGatherOffsets(
+                    colorMap,
+                    input.uv,
+                    input.offset,
+                    input.offset,
+                    input.component
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL texture operation 'textureGatherOffsets' accepts "
+            "3, 4, 6, 7 argument\\(s\\), got 5"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("statement", "operation"),
+    [
+        ("vec4 color = imageLoad(colorMap, input.pixel);", "imageLoad"),
+        ("imageStore(colorMap, input.pixel, vec4(1.0));", "imageStore"),
+        ("ivec2 size = imageSize(colorMap);", "imageSize"),
+        (
+            "uint oldValue = imageAtomicAdd(colorMap, input.pixel, input.amount);",
+            "imageAtomicAdd",
+        ),
+    ],
+)
+def test_opengl_rejects_image_call_with_sampled_texture_argument(statement, operation):
+    shader = f"""
+    shader InvalidImageResource {{
+        sampler2D colorMap;
+
+        struct FSInput {{
+            ivec2 pixel;
+            uint amount;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                {statement}
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL image operation '{operation}' requires a storage "
+            "image resource argument: colorMap"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("helper", "helper_call", "match"),
+    [
+        (
+            "vec4 misuse(sampler sampleState, vec2 uv) { return texture(sampleState, uv); }",
+            "misuse(linearSampler, input.uv)",
+            "OpenGL texture operation 'texture' requires a declared texture "
+            "or image resource argument: sampleState",
+        ),
+        (
+            "vec4 misuse(sampler sampleState, ivec2 pixel) { return imageLoad(sampleState, pixel); }",
+            "misuse(linearSampler, input.pixel)",
+            "OpenGL image operation 'imageLoad' requires a storage image "
+            "resource argument: sampleState",
+        ),
+    ],
+)
+def test_opengl_rejects_sampler_parameter_as_texture_or_image_operand(
+    helper, helper_call, match
+):
+    shader = f"""
+    shader InvalidSamplerOperand {{
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            ivec2 pixel;
+        }};
+
+        {helper}
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {helper_call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        ("texelFetch(colorMap, input.uv, 0)", "texelFetch"),
+        ("imageLoad(colorImage, input.uv)", "imageLoad"),
+    ],
+)
+def test_opengl_rejects_float_coordinate_for_integer_resource_operation(
+    call, operation
+):
+    shader = f"""
+    shader InvalidResourceCoordinate {{
+        sampler2D colorMap;
+        image2D colorImage;
+
+        struct FSInput {{
+            vec2 uv;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL resource operation '{operation}' requires an integer "
+            "coordinate argument: input.uv has type vec2"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "dimension"),
+    [
+        ("texelFetch(arrayMap, input.pixel2, 0)", "texelFetch", 3),
+        ("imageLoad(volumeImage, input.pixel2)", "imageLoad", 3),
+        ("imageLoad(colorImage, input.pixel3)", "imageLoad", 2),
+    ],
+)
+def test_opengl_rejects_wrong_coordinate_dimension_for_resource_operation(
+    call, operation, dimension
+):
+    shader = f"""
+    shader InvalidResourceCoordinateDimension {{
+        sampler2DArray arrayMap;
+        image2D colorImage;
+        image3D volumeImage;
+
+        struct FSInput {{
+            ivec2 pixel2;
+            ivec3 pixel3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL resource operation '{operation}' requires a "
+            f"{dimension}D integer coordinate"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        ("textureOffset(arrayMap, input.uvLayer, input.offset3)", "textureOffset"),
+        (
+            "texelFetchOffset(arrayMap, input.pixelLayer, 0, input.offset3)",
+            "texelFetchOffset",
+        ),
+    ],
+)
+def test_opengl_rejects_wrong_offset_dimension_for_resource_operation(call, operation):
+    shader = f"""
+    shader InvalidResourceOffsetDimension {{
+        sampler2DArray arrayMap;
+
+        struct FSInput {{
+            vec3 uvLayer;
+            ivec3 pixelLayer;
+            ivec3 offset3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL resource operation '{operation}' requires a " "2D integer offset"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        (
+            "textureProjOffset(arrayMap, input.projLayer, input.offset3)",
+            "textureProjOffset",
+        ),
+        (
+            "textureGatherOffset(arrayMap, input.uvLayer, input.offset3)",
+            "textureGatherOffset",
+        ),
+        (
+            "textureGatherOffsets(arrayMap, input.uvLayer, input.offset3, input.offset3, input.offset3, input.offset3)",
+            "textureGatherOffsets",
+        ),
+        (
+            "vec4(textureCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3))",
+            "textureCompareOffset",
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.ddx, input.ddy, input.offset3))",
+            "textureCompareProjGradOffset",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3)",
+            "textureGatherCompareOffset",
+        ),
+    ],
+)
+def test_opengl_rejects_wrong_offset_dimension_for_extended_resource_operation(
+    call, operation
+):
+    shader = f"""
+    shader InvalidExtendedResourceOffsetDimension {{
+        sampler2DArray arrayMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 uvLayer;
+            vec3 projCoord;
+            vec4 projLayer;
+            vec2 ddx;
+            vec2 ddy;
+            float depth;
+            ivec3 offset3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL resource operation '{operation}' requires a " "2D integer offset"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_opengl_rejects_float_offset_for_resource_operation():
+    shader = """
+    shader InvalidResourceOffsetType {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            vec2 offset;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureOffset(colorMap, input.uv, input.offset);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL resource operation 'textureOffset' requires an integer "
+            "offset argument"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        (
+            "textureGatherOffset(colorMap, input.uv, input.offset)",
+            "textureGatherOffset",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset)",
+            "textureGatherCompareOffset",
+        ),
+    ],
+)
+def test_opengl_rejects_float_offset_for_extended_resource_operation(call, operation):
+    shader = f"""
+    shader InvalidExtendedResourceOffsetType {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec2 offset;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL resource operation '{operation}' requires an integer "
+            "offset argument"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "dimension"),
+    [
+        ("textureGrad(colorMap, input.uv, input.ddx3, input.ddy3)", "textureGrad", 2),
+        (
+            "textureGrad(cubeMap, input.direction, input.ddx2, input.ddy2)",
+            "textureGrad",
+            3,
+        ),
+        (
+            "textureGradOffset(colorMap, input.uv, input.ddx3, input.ddy3, input.offset2)",
+            "textureGradOffset",
+            2,
+        ),
+        (
+            "textureProjGrad(colorMap, input.projCoord, input.ddx3, input.ddy3)",
+            "textureProjGrad",
+            2,
+        ),
+        (
+            "vec4(textureCompareGrad(shadowMap, compareSampler, input.uv, input.depth, input.ddx3, input.ddy3))",
+            "textureCompareGrad",
+            2,
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.ddx3, input.ddy3, input.offset2))",
+            "textureCompareProjGradOffset",
+            2,
+        ),
+    ],
+)
+def test_opengl_rejects_wrong_gradient_dimension_for_resource_operation(
+    call, operation, dimension
+):
+    shader = f"""
+    shader InvalidResourceGradientDimension {{
+        sampler2D colorMap;
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 direction;
+            vec3 projCoord;
+            vec2 ddx2;
+            vec2 ddy2;
+            vec3 ddx3;
+            vec3 ddy3;
+            ivec2 offset2;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL resource operation '{operation}' requires a "
+            f"{dimension}D floating gradient"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_opengl_rejects_integer_gradient_for_resource_operation():
+    shader = """
+    shader InvalidResourceGradientType {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 pixel;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureGrad(colorMap, input.uv, input.pixel, input.pixel);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL resource operation 'textureGrad' requires a floating "
+            "gradient argument"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "type_name"),
+    [
+        (
+            "textureLod(colorMap, linearSampler, input.uv, input.lodVec)",
+            "textureLod",
+            "vec2",
+        ),
+        (
+            "textureLodOffset(colorMap, linearSampler, input.uv, input.lodVec, input.offset)",
+            "textureLodOffset",
+            "vec2",
+        ),
+        (
+            "textureProjLod(colorMap, linearSampler, input.projCoord, input.lodVec)",
+            "textureProjLod",
+            "vec2",
+        ),
+        (
+            "vec4(textureCompareLod(shadowMap, compareSampler, input.uv, input.depth, input.lodVec))",
+            "textureCompareLod",
+            "vec2",
+        ),
+        (
+            "vec4(textureCompareProjLodOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.lodVec, input.offset))",
+            "textureCompareProjLodOffset",
+            "vec2",
+        ),
+        (
+            "textureLod(colorMap, linearSampler, input.uv, colorMap)",
+            "textureLod",
+            "sampler2D",
+        ),
+    ],
+)
+def test_opengl_rejects_non_scalar_numeric_lod_argument(call, operation, type_name):
+    shader = f"""
+    shader InvalidTextureLodArgument {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler linearSampler;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 lodVec;
+            ivec2 offset;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL texture LOD operation '{operation}' requires a scalar "
+            f"numeric lod argument: .* has type {type_name}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "operation", "type_name"),
+    [
+        (
+            "texelFetch(colorMap, input.pixel, input.floatLevel)",
+            "texelFetch",
+            "float",
+        ),
+        (
+            "texelFetchOffset(colorMap, input.pixel, input.levelVec, input.offset)",
+            "texelFetchOffset",
+            "ivec2",
+        ),
+        (
+            "vec4(textureSize(colorMap, input.floatLevel), 0.0, 1.0)",
+            "textureSize",
+            "float",
+        ),
+        (
+            "texelFetch(colorMap, input.pixel, colorMap)",
+            "texelFetch",
+            "sampler2D",
+        ),
+    ],
+)
+def test_opengl_rejects_non_scalar_integer_mip_level_argument(
+    return_expr, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureMipLevelArgument {{
+        sampler2D colorMap;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec2 offset;
+            ivec2 levelVec;
+            float floatLevel;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL resource operation '{operation}' requires a scalar integer "
+            f"mip/sample level argument: .* has type {type_name}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "type_name"),
+    [
+        ("texelFetch(msTex, input.pixel, input.floatSample)", "float"),
+        ("texelFetch(msArray, input.pixelLayer, input.sampleVec)", "ivec2"),
+        ("texelFetch(msTex, input.pixel, msTex)", "sampler2DMS"),
+    ],
+)
+def test_opengl_rejects_non_scalar_integer_multisample_sample_index(
+    return_expr, type_name
+):
+    shader = f"""
+    shader InvalidMultisampleTexelFetchSampleIndex {{
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec3 pixelLayer;
+            ivec2 sampleVec;
+            float floatSample;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL multisample texel fetch operation 'texelFetch' requires a "
+            f"scalar integer sample index argument: .* has type {type_name}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "helper", "operation", "type_name"),
+    [
+        (
+            "textureGather(colorMap, linearSampler, input.uv, input.floatComponent)",
+            "",
+            "textureGather",
+            "float",
+        ),
+        (
+            "textureGatherOffset(colorMap, linearSampler, input.uv, input.offset, input.componentVec)",
+            "",
+            "textureGatherOffset",
+            "ivec2",
+        ),
+        (
+            "textureGatherOffsets(colorMap, linearSampler, input.uv, input.offset, input.offset, input.offset, input.offset, colorMap)",
+            "",
+            "textureGatherOffsets",
+            "sampler2D",
+        ),
+        (
+            "vec4(1.0)",
+            "vec4 invalidArrayGather(sampler2D tex, sampler s, vec2 uv, ivec2 offsets[4], float component) { return textureGatherOffsets(tex, s, uv, offsets, component); }",
+            "textureGatherOffsets",
+            "float",
+        ),
+    ],
+)
+def test_opengl_rejects_non_scalar_integer_gather_component_argument(
+    return_expr, helper, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureGatherComponentArgument {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            ivec2 offset;
+            ivec2 componentVec;
+            float floatComponent;
+        }};
+
+        {helper}
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL texture gather operation '{operation}' requires a scalar "
+            f"integer component argument: .* has type {type_name}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "operation", "type_name"),
+    [
+        (
+            "texture(colorMap, linearSampler, input.uv, input.biasVec)",
+            "texture",
+            "vec2",
+        ),
+        (
+            "textureOffset(colorMap, linearSampler, input.uv, input.offset, input.biasVec)",
+            "textureOffset",
+            "vec2",
+        ),
+        (
+            "textureProj(colorMap, linearSampler, input.projCoord, input.biasVec)",
+            "textureProj",
+            "vec2",
+        ),
+        (
+            "textureProjOffset(colorMap, linearSampler, input.projCoord, input.offset, colorMap)",
+            "textureProjOffset",
+            "sampler2D",
+        ),
+    ],
+)
+def test_opengl_rejects_non_scalar_numeric_bias_argument(
+    return_expr, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureBiasArgument {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 biasVec;
+            ivec2 offset;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL texture bias operation '{operation}' requires a scalar "
+            f"numeric bias argument: .* has type {type_name}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_opengl_rejects_non_floating_query_lod_coordinate():
+    shader = """
+    shader InvalidTextureQueryLodCoordinate {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            ivec2 pixel;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(textureQueryLod(colorMap, linearSampler, input.pixel), 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL texture query operation 'textureQueryLod' requires a "
+            "floating coordinate argument: .* has type ivec2"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("query_call", "dimension", "resource_type", "type_name"),
+    [
+        (
+            "textureQueryLod(layerMap, linearSampler, input.uv)",
+            3,
+            "sampler2DArray",
+            "vec2",
+        ),
+        (
+            "textureQueryLod(cubeMap, linearSampler, input.uv)",
+            3,
+            "samplerCube",
+            "vec2",
+        ),
+        (
+            "textureQueryLod(cubeArray, linearSampler, input.direction)",
+            4,
+            "samplerCubeArray",
+            "vec3",
+        ),
+    ],
+)
+def test_opengl_rejects_wrong_query_lod_coordinate_dimension(
+    query_call, dimension, resource_type, type_name
+):
+    shader = f"""
+    shader InvalidTextureQueryLodCoordinateDimension {{
+        sampler2DArray layerMap;
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 direction;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return vec4({query_call}, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL texture query operation 'textureQueryLod' requires a "
+            f"{dimension}D floating coordinate for {resource_type}: "
+            f".* has type {type_name}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "type_name"),
+    [
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depthVec))",
+            "textureCompare",
+            "vec2",
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depthVec, input.ddx, input.ddy, input.offset))",
+            "textureCompareProjGradOffset",
+            "vec2",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depthVec, input.offset)",
+            "textureGatherCompareOffset",
+            "vec2",
+        ),
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.layer))",
+            "textureCompare",
+            "int",
+        ),
+    ],
+)
+def test_opengl_rejects_non_scalar_float_compare_argument(call, operation, type_name):
+    shader = f"""
+    shader InvalidTextureCompareArgument {{
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 depthVec;
+            vec2 ddx;
+            vec2 ddy;
+            ivec2 offset;
+            int layer;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"OpenGL texture compare operation '{operation}' requires a scalar "
+            f"floating compare argument: .* has type {type_name}"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_opengl_texture_array_resources_and_indexed_sampling():
@@ -2486,6 +4051,121 @@ def test_opengl_cube_array_texture_grad_gather_filter_sampler_arguments():
     assert "sampleCubeArrayElements(cubeArrays, cubeLayer, ddx, ddy)" in generated_code
     assert "cubeSampler" not in generated_code
     assert "cubeSamplers" not in generated_code
+
+
+def test_opengl_texture_sampling_capability_descriptors():
+    codegen = GLSLCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "gather": False,
+            "gather_offset": False,
+            "sample_offset": False,
+            "compare_offset": False,
+            "compare_lod": False,
+            "compare_grad": False,
+            "compare_lod_offset": False,
+            "compare_grad_offset": False,
+            "gather_compare_offset": False,
+        }
+        expected.update(overrides)
+        assert codegen.texture_sampling_capabilities(texture_type) == expected
+
+    expect(
+        "sampler2D",
+        gather=True,
+        gather_offset=True,
+        sample_offset=True,
+    )
+    expect("samplerCube", gather=True)
+    expect(
+        "sampler2DArray[4]",
+        gather=True,
+        gather_offset=True,
+        sample_offset=True,
+    )
+    expect(
+        "sampler2DShadow",
+        sample_offset=True,
+        compare_offset=True,
+        compare_lod=True,
+        compare_grad=True,
+        compare_lod_offset=True,
+        compare_grad_offset=True,
+        gather_compare_offset=True,
+    )
+    expect(
+        "sampler2DArrayShadow",
+        sample_offset=True,
+        compare_offset=True,
+        compare_grad=True,
+        compare_grad_offset=True,
+        gather_compare_offset=True,
+    )
+    expect("samplerCubeShadow", compare_grad=True)
+    expect("sampler2DMS")
+
+
+def test_opengl_texture_dimension_descriptors():
+    codegen = GLSLCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "coordinate_dimension": None,
+            "offset_dimension": None,
+            "sample_offset_dimension": None,
+            "texel_fetch_offset_dimension": None,
+            "gather_offset_dimension": None,
+            "compare_offset_dimension": None,
+            "compare_lod_offset_dimension": None,
+            "compare_grad_offset_dimension": None,
+            "gather_compare_offset_dimension": None,
+            "gradient_dimension": None,
+            "query_lod_coordinate_dimension": None,
+        }
+        expected.update(overrides)
+        assert codegen.texture_dimension_descriptor(texture_type) == expected
+
+    expect(
+        "sampler2DArray[4]",
+        coordinate_dimension=3,
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        gather_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=3,
+    )
+    expect(
+        "sampler1DArray",
+        coordinate_dimension=2,
+        offset_dimension=1,
+        sample_offset_dimension=1,
+        texel_fetch_offset_dimension=1,
+        gradient_dimension=1,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "sampler2DShadow",
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        compare_offset_dimension=2,
+        compare_lod_offset_dimension=2,
+        compare_grad_offset_dimension=2,
+        gather_compare_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "samplerCubeArray",
+        gradient_dimension=3,
+        query_lod_coordinate_dimension=4,
+    )
+    expect("sampler2DMSArray", coordinate_dimension=3)
+    expect("image3D", coordinate_dimension=3)
 
 
 def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
@@ -8795,6 +10475,58 @@ def test_opengl_storage_image_size_queries_use_image_size():
     assert "textureSize(" not in generated_code
 
 
+def test_opengl_texture_query_resource_descriptors():
+    codegen = GLSLCodeGen()
+    codegen.texture_variable_types = {
+        "colorImage": "image2D",
+        "colorMap": "sampler2D",
+        "msTex": "sampler2DMS",
+        "msArray": "sampler2DMSArray",
+    }
+
+    assert codegen.texture_query_resource_descriptor("colorImage") == {
+        "texture_type": "image2D",
+        "storage_image": True,
+        "multisample": False,
+        "size_descriptor": {"function_name": "imageSize"},
+    }
+    assert codegen.texture_query_resource_descriptor("msArray") == {
+        "texture_type": "sampler2DMSArray",
+        "storage_image": False,
+        "multisample": True,
+        "size_descriptor": {"function_name": "textureSize"},
+    }
+    assert codegen.texture_query_resource_descriptor("colorMap") == {
+        "texture_type": "sampler2D",
+        "storage_image": False,
+        "multisample": False,
+        "size_descriptor": {"function_name": "textureSize"},
+    }
+    assert codegen.texture_query_size_descriptor("sampler2D") == {
+        "function_name": "textureSize"
+    }
+    assert codegen.texture_query_size_descriptor(None) is None
+    assert (
+        codegen.texture_query_levels_expression("colorImage")
+        == "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
+    )
+    assert codegen.texture_query_levels_expression("msTex") == "1"
+    assert codegen.texture_query_levels_expression("colorMap") is None
+    assert (
+        codegen.texture_samples_expression("textureSamples", "colorMap")
+        == "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
+    )
+    assert (
+        codegen.texture_samples_expression("imageSamples", "msTex")
+        == "textureSamples(msTex)"
+    )
+    assert codegen.texture_samples_expression("textureSamples", "msTex") is None
+    assert (
+        codegen.texture_size_query_expression("colorImage") == "imageSize(colorImage)"
+    )
+    assert codegen.texture_size_query_expression("colorMap") is None
+
+
 def test_opengl_storage_image_levels_and_lod_queries_emit_diagnostics():
     shader = """
     shader StorageImageInvalidQueries {
@@ -9495,6 +11227,125 @@ def test_opengl_multisample_sampling_operations_emit_diagnostics():
         assert invalid_call not in generated_code
 
 
+def test_opengl_multisample_compare_operations_emit_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleCompare {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec4 proj @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        float invalidCompare2D(sampler2DMS tex, sampler s, vec2 uv, vec4 proj, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(tex, s, uv, depth)
+                + textureCompareOffset(tex, s, uv, depth, offset)
+                + textureCompareLod(tex, s, uv, depth, lod)
+                + textureCompareLodOffset(tex, s, uv, depth, lod, offset)
+                + textureCompareGrad(tex, s, uv, depth, ddx, ddy)
+                + textureCompareGradOffset(tex, s, uv, depth, ddx, ddy, offset)
+                + textureCompareProj(tex, s, proj, depth)
+                + textureCompareProjLod(tex, s, proj, depth, lod)
+                + textureCompareProjGradOffset(tex, s, proj, depth, ddx, ddy, offset);
+        }
+
+        float invalidCompareArray(sampler2DMSArray tex, sampler s, vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(tex, s, uvLayer, depth)
+                + textureCompareOffset(tex, s, uvLayer, depth, offset)
+                + textureCompareLod(tex, s, uvLayer, depth, lod)
+                + textureCompareLodOffset(tex, s, uvLayer, depth, lod, offset)
+                + textureCompareGrad(tex, s, uvLayer, depth, ddx, ddy)
+                + textureCompareGradOffset(tex, s, uvLayer, depth, ddx, ddy, offset);
+        }
+
+        vec4 invalidGather2D(sampler2DMS tex, sampler s, vec2 uv, float depth, ivec2 offset) {
+            return textureGatherCompare(tex, s, uv, depth)
+                + textureGatherCompareOffset(tex, s, uv, depth, offset);
+        }
+
+        vec4 invalidGatherArray(sampler2DMSArray tex, sampler s, vec3 uvLayer, float depth, ivec2 offset) {
+            return textureGatherCompare(tex, s, uvLayer, depth)
+                + textureGatherCompareOffset(tex, s, uvLayer, depth, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float cmp = invalidCompare2D(msTex, linearSampler, input.uv, input.proj, input.depth, input.lod, input.ddx, input.ddy, input.offset)
+                    + invalidCompareArray(msArray, linearSampler, input.uvLayer, input.depth, input.lod, input.ddx, input.ddy, input.offset);
+                return vec4(cmp)
+                    + invalidGather2D(msTex, linearSampler, input.uv, input.depth, input.offset)
+                    + invalidGatherArray(msArray, linearSampler, input.uvLayer, input.depth, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2DMS msTex;" in generated_code
+    assert "layout(binding = 1) uniform sampler2DMSArray msArray;" in generated_code
+    assert "linearSampler" not in generated_code
+
+    for func_name in {
+        "textureCompare",
+        "textureCompareOffset",
+        "textureCompareLod",
+        "textureCompareLodOffset",
+        "textureCompareGrad",
+        "textureCompareGradOffset",
+    }:
+        assert (
+            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMS"
+            in generated_code
+        )
+        assert (
+            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMSArray"
+            in generated_code
+        )
+
+    for func_name in {
+        "textureCompareProj",
+        "textureCompareProjLod",
+        "textureCompareProjGradOffset",
+    }:
+        assert (
+            f"unsupported GLSL multisample texture comparison: {func_name} on sampler2DMS"
+            in generated_code
+        )
+
+    for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
+        assert (
+            f"unsupported GLSL multisample texture gather comparison: {func_name} on sampler2DMS"
+            in generated_code
+        )
+        assert (
+            f"unsupported GLSL multisample texture gather comparison: {func_name} on sampler2DMSArray"
+            in generated_code
+        )
+
+    for invalid_call in {
+        "texture(tex,",
+        "textureOffset(tex,",
+        "textureLod(tex,",
+        "textureLodOffset(tex,",
+        "textureGrad(tex,",
+        "textureGradOffset(tex,",
+        "textureGather(tex,",
+        "textureGatherOffset(tex,",
+    }:
+        assert invalid_call not in generated_code
+
+
 def test_opengl_multisample_texture_query_lod_emits_diagnostics():
     shader = """
     shader UnsupportedMultisampleQueryLod {
@@ -9919,6 +11770,69 @@ def test_opengl_array_texture_query_lod_uses_non_layer_coordinates():
     assert "linearSamplers" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
     assert "textureQueryLod(tex, cubeLayer);" not in generated_code
+
+
+def test_opengl_nested_array_texture_query_lod_keeps_combined_samplers():
+    shader = """
+    shader NestedArrayTextureQueryLod {
+        sampler2DArray layerMaps[4];
+        samplerCubeArray cubeArrays[4];
+        sampler linearSamplers[4];
+        sampler cubeArraysSampler;
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+        };
+
+        vec2 explicitLeaf(vec3 uvLayer) {
+            return textureQueryLod(layerMaps[2], linearSamplers[2], uvLayer);
+        }
+
+        vec2 explicitMid(vec3 uvLayer) {
+            return explicitLeaf(uvLayer);
+        }
+
+        vec2 implicitLeaf(vec4 cubeLayer) {
+            return textureQueryLod(cubeArrays[3], cubeLayer);
+        }
+
+        vec2 implicitMid(vec4 cubeLayer) {
+            return implicitLeaf(cubeLayer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 a = explicitMid(input.uvLayer);
+                vec2 b = implicitMid(input.cubeLayer);
+                return vec4(a.x + b.y, a.y + b.x, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform sampler2DArray layerMaps[4];" in generated_code
+    assert (
+        "layout(binding = 4) uniform samplerCubeArray cubeArrays[4];" in generated_code
+    )
+    assert "vec2 explicitLeaf(vec3 uvLayer)" in generated_code
+    assert "vec2 explicitMid(vec3 uvLayer)" in generated_code
+    assert "return explicitLeaf(uvLayer);" in generated_code
+    assert "return textureQueryLod(layerMaps[2], uvLayer.xy);" in generated_code
+    assert "vec2 implicitLeaf(vec4 cubeLayer)" in generated_code
+    assert "vec2 implicitMid(vec4 cubeLayer)" in generated_code
+    assert "return implicitLeaf(cubeLayer);" in generated_code
+    assert "return textureQueryLod(cubeArrays[3], cubeLayer.xyz);" in generated_code
+    assert "explicitMid(uvLayer)" in generated_code
+    assert "implicitMid(cubeLayer)" in generated_code
+    assert "linearSamplers" not in generated_code
+    assert "cubeArraysSampler" not in generated_code
+    assert "textureQueryLod(layerMaps[2], uvLayer);" not in generated_code
+    assert "textureQueryLod(cubeArrays[3], cubeLayer);" not in generated_code
 
 
 def test_opengl_shadow_array_texture_query_lod_uses_non_layer_coordinates():
@@ -10377,6 +12291,40 @@ def test_opengl_texture_parameter_keeps_combined_sampler():
     assert "sampleColor(colorMap, uv)" in generated_code
     assert "linearSampler" not in generated_code
     assert "sampleState" not in generated_code
+
+
+def test_opengl_struct_member_sampler_expression_is_dropped():
+    shader = """
+    shader StructSamplerExpression {
+        sampler2D colorMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        vec4 samplePacked(sampler2D tex, SamplerPack pack, int index, vec2 uv) {
+            return texture(tex, pack.samplers[index], uv);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                SamplerPack pack;
+                return samplePacked(colorMap, pack, 0, vec2(0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct SamplerPack" in generated_code
+    assert "sampler samplers[2];" in generated_code
+    assert (
+        "vec4 samplePacked(sampler2D tex, SamplerPack pack, int index, vec2 uv)"
+        in generated_code
+    )
+    assert "return texture(tex, uv);" in generated_code
+    assert "texture(tex, pack.samplers[index], uv)" not in generated_code
 
 
 def test_opengl_implicit_sampler_for_texture_parameter():
@@ -11380,6 +13328,329 @@ def test_shift_operators(shader, expected_outputs):
 
     for expected in expected_outputs:
         assert expected in generated_code
+
+
+def test_glsl_sampler_1d_array_sampling_and_queries():
+    shader = """
+    shader OneDArrayTexture {
+        sampler1DArray lineArray;
+        sampler linearSampler;
+
+        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+            ivec2 dims = textureSize(tex, lod);
+            int levels = textureQueryLevels(tex);
+            return texture(tex, samp, uvLayer)
+                + textureLod(tex, samp, uvLayer, lod)
+                + vec4(dims.x, dims.y, levels, 0.0);
+        }
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(binding = 0) uniform sampler1DArray lineArray;" in generated_code
+    assert "sampler linearSampler" not in generated_code
+    assert (
+        "vec4 sampleLineArray(sampler1DArray tex, vec2 uvLayer, int lod)"
+        in generated_code
+    )
+    assert "ivec2 dims = textureSize(tex, lod);" in generated_code
+    assert "int levels = textureQueryLevels(tex);" in generated_code
+    assert "texture(tex, uvLayer)" in generated_code
+    assert "textureLod(tex, uvLayer, lod)" in generated_code
+    assert "sampleLineArray(lineArray, vec2(0.5, 0.0), 0)" in generated_code
+
+
+def test_glsl_image_1d_and_1d_array_storage_operations():
+    shader = """
+    shader OneDStorageImages {
+        image1D line;
+        image1DArray layers;
+        uimage1D counters @r32ui;
+        uimage1DArray layerCounters @r32ui;
+
+        float touchLine(image1D image, int x, float value) {
+            float oldValue = imageLoad(image, x);
+            imageStore(image, x, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchLayer(image1DArray image, ivec2 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        uint addCounter(uimage1D image @r32ui, int x, uint value) {
+            return imageAtomicAdd(image, x, value);
+        }
+
+        uint exchangeLayer(uimage1DArray image @r32ui, ivec2 coord, uint value) {
+            return imageAtomicExchange(image, coord, value);
+        }
+
+        compute {
+            void main() {
+                int sizeLine = imageSize(line);
+                ivec2 sizeLayer = imageSize(layers);
+                float a = touchLine(line, 1, 0.25);
+                vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
+                uint c = addCounter(counters, 4, 7u);
+                uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(rgba32f, binding = 0) uniform image1D line;" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image1DArray layers;" in generated_code
+    assert "layout(r32ui, binding = 2) uniform uimage1D counters;" in generated_code
+    assert (
+        "layout(r32ui, binding = 3) uniform uimage1DArray layerCounters;"
+        in generated_code
+    )
+    assert "float oldValue = imageLoad(image, x).x;" in generated_code
+    assert "imageStore(image, x, vec4((oldValue + value)));" in generated_code
+    assert "vec4 oldValue = imageLoad(image, coord);" in generated_code
+    assert "imageStore(image, coord, (oldValue + value));" in generated_code
+    assert "return imageAtomicAdd(image, x, value);" in generated_code
+    assert "return imageAtomicExchange(image, coord, value);" in generated_code
+
+
+def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():
+    shader = """
+    shader StorageImageAccess {
+        image2D outImage @writeonly;
+
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                imageStore(outImage, ivec2(0, 0), vec4(1.0));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert (
+        "layout(rgba32f, binding = 0) writeonly uniform image2D outImage;"
+        in generated_code
+    )
+    assert "float readPixel(readonly image2D image, ivec2 pixel)" in generated_code
+    assert (
+        "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)"
+        in generated_code
+    )
+    assert "image2D image readonly" not in generated_code
+    assert "image2D image writeonly" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessInvalidLoad {
+                float readPixel(image2D image @writeonly, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidStore {
+                void writePixel(image2D image @readonly, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidAtomic {
+                uint addCounter(uimage2D image @r32ui @readonly, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidGlobal {
+                image2D outImage @writeonly;
+
+                compute {
+                    void main() {
+                        float value = imageLoad(outImage, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+def test_glsl_storage_image_access_allows_compatible_helper_calls():
+    shader = """
+    shader StorageImageAccessHelperValid {
+        image2D source @readonly;
+        image2D target @writeonly;
+
+        float readPixel(image2D image, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "float value = readPixel(source, ivec2(0, 0));" in generated_code
+    assert "writePixel(target, ivec2(0, 0), vec4(value));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessHelperInvalidRead {
+                image2D target @writeonly;
+
+                float readPixel(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = readPixel(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'readPixel' requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidWrite {
+                image2D source @readonly;
+
+                void writePixel(image2D image, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        writePixel(source, ivec2(0, 0), vec4(1.0));
+                    }
+                }
+            }
+            """,
+            "function call 'writePixel' requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidAtomic {
+                uimage2D source @r32ui @readonly;
+
+                uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        uint value = addCounter(source, ivec2(0, 0), 1u);
+                    }
+                }
+            }
+            """,
+            "function call 'addCounter' requires read-write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidTransitive {
+                image2D target @writeonly;
+
+                float leaf(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                float mid(image2D image, ivec2 pixel) {
+                    return leaf(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = mid(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'mid' requires read-capable storage image access",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_incompatible_helper_calls(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
 
 
 if __name__ == "__main__":

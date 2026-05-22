@@ -2,6 +2,7 @@ import pytest
 import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
+from crosstl.translator.ast import PrimitiveType, StructMemberNode, StructNode
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from typing import List
 
@@ -35,6 +36,120 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_structured_buffer_operations_lower_to_device_buffer():
+    code = """
+    shader StructuredBufferMetal {
+        RWStructuredBuffer<int> values @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint len;
+                int v = buffer_load(values, tid.x);
+                buffer_dimensions(values, len);
+                buffer_store(values, tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "device int* values [[buffer(3)]]" in generated
+    assert "int v = values[tid.x];" in generated
+    assert (
+        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
+        in generated
+    )
+    assert "values[tid.x] = v + 1;" in generated
+    assert "RWStructuredBuffer" not in generated
+    assert "buffer_load" not in generated
+    assert "buffer_store" not in generated
+    assert "buffer_dimensions" not in generated
+
+
+def test_readonly_structured_buffer_uses_const_device_pointer():
+    code = """
+    shader StructuredBufferMetal {
+        StructuredBuffer<int> values @ binding(1);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int v = buffer_load(values, tid.x);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "const device int* values [[buffer(1)]]" in generated
+    assert "int v = values[tid.x];" in generated
+
+
+def test_append_consume_structured_buffers_emit_diagnostics():
+    code = """
+    shader StructuredBufferAppendConsumeMetal {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        compute {
+            void main(uint value) {
+                buffer_append(appendValues, int(value));
+                int consumed = buffer_consume(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "device int* appendValues [[buffer(1)]]" in generated
+    assert "device int* consumeValues [[buffer(2)]]" in generated
+    assert (
+        "/* unsupported Metal buffer append: requires explicit counter buffer */;"
+        in generated
+    )
+    assert (
+        "int consumed = 0 /* unsupported Metal buffer consume: requires explicit counter buffer */;"
+        in generated
+    )
+    assert "appendValues[0]" not in generated
+    assert "consumeValues[0]" not in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
+    code = """
+    shader StructuredBufferArrayMetal {
+        RWStructuredBuffer<int> buffers[2] @ binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID, uint index) {
+                uint len;
+                int v = buffer_load(buffers[index], tid.x);
+                buffer_dimensions(buffers[index], len);
+                buffer_store(buffers[index], tid.x, v + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "array<device int*, 2> buffers [[buffer(3)]]" in generated
+    assert "int v = buffers[index][tid.x];" in generated
+    assert (
+        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
+        in generated
+    )
+    assert "buffers[index][tid.x] = v + 1;" in generated
+
+
 def test_metal_unsigned_integer_literal_suffix_codegen():
     code = """
     shader UIntLiteralCodegen {
@@ -54,6 +169,114 @@ def test_metal_unsigned_integer_literal_suffix_codegen():
     assert "uint b = 15u;" in generated_code
     assert "uint c = 5u;" in generated_code
     assert "7, u" not in generated_code
+
+
+def test_metal_resource_binding_attributes_are_not_parameter_semantics():
+    code = """
+    shader BindingAttributes {
+        vec4 sampleBound(sampler2D tex @texture(1), sampler samp @sampler(2), sampler2D registered @register(t3), vec2 uv) {
+            return texture(tex, samp, uv) + texture(registered, uv);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 sampleBound(texture2d<float> tex, sampler samp, texture2d<float> registered, float2 uv)"
+        in generated_code
+    )
+    assert "tex.sample(samp, uv)" in generated_code
+    assert (
+        "registered.sample(sampler(mag_filter::linear, min_filter::linear), uv)"
+        in generated_code
+    )
+    assert "[[texture]]" not in generated_code
+    assert "[[sampler]]" not in generated_code
+    assert "[[register]]" not in generated_code
+
+
+def test_metal_global_resource_binding_attributes_drive_indices():
+    code = """
+    shader ExplicitGlobalBindings {
+        sampler samp @sampler(5);
+        sampler2D explicitTex @texture(3);
+        image2D storageImage @binding(7);
+        sampler2D registerTex @register(t8);
+        sampler2D autoTex;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(storageImage, ivec2(0, 0));
+                return texture(explicitTex, samp, uv) + texture(registerTex, samp, uv) + texture(autoTex, samp, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "texture2d<float> explicitTex [[texture(3)]]" in generated_code
+    assert (
+        "texture2d<float, access::read_write> storageImage [[texture(7)]]"
+        in generated_code
+    )
+    assert "texture2d<float> registerTex [[texture(8)]]" in generated_code
+    assert "texture2d<float> autoTex [[texture(9)]]" in generated_code
+    assert "sampler samp [[sampler(5)]]" in generated_code
+
+
+def test_metal_stage_resource_binding_attributes_drive_indices():
+    code = """
+    shader ExplicitStageBindings {
+        fragment {
+            vec4 main(sampler2D tex @texture(4), sampler samp @sampler(6), vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(tex, samp, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "texture2d<float> tex [[texture(4)]]" in generated_code
+    assert "sampler samp [[sampler(6)]]" in generated_code
+
+
+def test_metal_cbuffer_binding_attributes_drive_buffer_indices():
+    code = """
+    shader CBufferBindings {
+        cbuffer Camera @register(b2) {
+            vec4 viewRow;
+        };
+
+        uniform Material @buffer(4) {
+            vec4 tint;
+        };
+
+        cbuffer AutoBlock {
+            vec4 color;
+        };
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "constant Camera& camera [[buffer(2)]]" in generated_code
+    assert "constant Material& material [[buffer(4)]]" in generated_code
+    assert "constant AutoBlock& autoBlock [[buffer(5)]]" in generated_code
 
 
 def test_struct():
@@ -1163,6 +1386,410 @@ def test_metal_array_handling(array_test_data):
         pytest.fail(f"Metal array codegen failed: {e}")
 
 
+def test_metal_cbuffer_members_are_bound_as_constant_buffer_parameters():
+    code = """
+    shader CBufferScope {
+        cbuffer Constants {
+            float weights[8];
+            vec3 colors[2];
+        };
+
+        compute {
+            void main() {
+                float value = weights[2];
+                vec3 color = colors[1];
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert [buffer.name for buffer in getattr(ast, "cbuffers", [])] == ["Constants"]
+    assert [var.name for var in ast.global_variables] == []
+    assert "struct Constants" in generated_code
+    assert "float weights[8];" in generated_code
+    assert "float3 colors[2];" in generated_code
+    assert "constant Constants& constants [[buffer(0)]]" in generated_code
+    assert "float value = constants.weights[2];" in generated_code
+    assert "float3 color = constants.colors[1];" in generated_code
+
+
+def test_metal_cbuffer_parameter_names_are_unique():
+    code = """
+    shader CBufferScope {
+        cbuffer Constants {
+            float exposure;
+        };
+
+        cbuffer constants {
+            float gamma;
+        };
+
+        compute {
+            void main() {
+                float value = exposure + gamma;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "constant Constants& constants [[buffer(0)]]" in generated_code
+    assert "constant constants& constants1 [[buffer(1)]]" in generated_code
+    assert "float value = constants.exposure + constants1.gamma;" in generated_code
+
+
+def test_metal_cbuffer_parameter_avoids_stage_input_name():
+    code = """
+    shader CBufferScope {
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct VSOutput {
+            vec4 position @ SV_POSITION;
+        };
+
+        cbuffer Input {
+            float scale;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position * scale, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "vertex")
+
+    assert "VSInput input [[stage_in]]" in generated_code
+    assert "constant Input& input1 [[buffer(0)]]" in generated_code
+    assert "input.position * input1.scale" in generated_code
+
+
+def test_metal_cbuffer_parameter_avoids_texture_resource_name():
+    code = """
+    shader CBufferScope {
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        cbuffer DiffuseMap {
+            float exposure;
+        };
+
+        sampler2D diffuseMap;
+
+        fragment {
+            vec4 main(FSInput input) {
+                return texture(diffuseMap, input.uv) * exposure;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert "constant DiffuseMap& diffuseMap1 [[buffer(0)]]" in generated_code
+    assert "texture2d<float> diffuseMap [[texture(0)]]" in generated_code
+    assert "diffuseMap1.exposure" in generated_code
+
+
+def test_metal_helper_threads_cbuffer_parameter():
+    code = """
+    shader CBufferScope {
+        cbuffer Constants {
+            float scale;
+        };
+
+        float applyScale(float value) {
+            return value * scale;
+        }
+
+        compute {
+            void main() {
+                float value = applyScale(2.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert (
+        "float applyScale(float value, constant Constants& constants)" in generated_code
+    )
+    assert "return value * constants.scale;" in generated_code
+    assert "float value = applyScale(2.0, constants);" in generated_code
+
+
+def test_metal_transitively_threads_cbuffer_parameter():
+    code = """
+    shader CBufferScope {
+        cbuffer Constants {
+            float scale;
+        };
+
+        float readScale(float value) {
+            return value * scale;
+        }
+
+        float applyScale(float value) {
+            return readScale(value);
+        }
+
+        compute {
+            void main() {
+                float value = applyScale(2.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert (
+        "float readScale(float value, constant Constants& constants)" in generated_code
+    )
+    assert (
+        "float applyScale(float value, constant Constants& constants)" in generated_code
+    )
+    assert "return readScale(value, constants);" in generated_code
+    assert "float value = applyScale(2.0, constants);" in generated_code
+
+
+def test_metal_helper_local_cbuffer_member_name_does_not_thread_parameter():
+    code = """
+    shader CBufferScope {
+        cbuffer Constants {
+            float scale;
+        };
+
+        float applyScale(float value) {
+            float scale = 2.0;
+            return value * scale;
+        }
+
+        compute {
+            void main() {
+                float value = applyScale(2.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float applyScale(float value)" in generated_code
+    assert "return value * scale;" in generated_code
+    assert "float value = applyScale(2.0);" in generated_code
+
+
+def test_metal_helper_threads_global_texture_parameter():
+    code = """
+    shader TextureHelperScope {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vec4 sampleColor(vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            vec4 main(FSInput input) {
+                return sampleColor(input.uv);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert "float4 sampleColor(float2 uv, texture2d<float> colorMap)" in generated_code
+    assert (
+        "return colorMap.sample(sampler(mag_filter::linear, min_filter::linear), uv);"
+        in generated_code
+    )
+    assert "return sampleColor(input.uv, colorMap);" in generated_code
+
+
+def test_metal_helper_threads_global_texture_and_implicit_sampler_parameters():
+    code = """
+    shader TextureHelperScope {
+        sampler2D colorMap;
+        sampler colorMapSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vec4 sampleColor(vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        fragment {
+            vec4 main(FSInput input) {
+                return sampleColor(input.uv);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert (
+        "float4 sampleColor(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert "return colorMap.sample(colorMapSampler, uv);" in generated_code
+    assert "return sampleColor(input.uv, colorMap, colorMapSampler);" in generated_code
+
+
+def test_metal_transitively_threads_global_texture_parameter():
+    code = """
+    shader TextureHelperScope {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vec4 sampleColor(vec2 uv) {
+            return texture(colorMap, uv);
+        }
+
+        vec4 shade(vec2 uv) {
+            return sampleColor(uv);
+        }
+
+        fragment {
+            vec4 main(FSInput input) {
+                return shade(input.uv);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert "float4 sampleColor(float2 uv, texture2d<float> colorMap)" in generated_code
+    assert "float4 shade(float2 uv, texture2d<float> colorMap)" in generated_code
+    assert "return sampleColor(uv, colorMap);" in generated_code
+    assert "return shade(input.uv, colorMap);" in generated_code
+
+
+def test_metal_ambiguous_cbuffer_member_reference_errors():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float value;
+        };
+
+        compute {
+            void main() {
+                float x = value;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers.append(
+        StructNode(
+            name="Lighting",
+            members=[
+                StructMemberNode(name="value", member_type=PrimitiveType("float"))
+            ],
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Ambiguous cbuffer member reference 'value' appears in multiple cbuffers",
+    ):
+        MetalCodeGen().generate_stage(ast, "compute")
+
+
+def test_metal_duplicate_cbuffer_names_error():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float exposure;
+        };
+
+        compute {
+            void main() {
+                float x = exposure;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers.append(
+        StructNode(
+            name="Camera",
+            members=[
+                StructMemberNode(name="gamma", member_type=PrimitiveType("float"))
+            ],
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate cbuffer name\\(s\\) in Metal output: Camera",
+    ):
+        MetalCodeGen().generate_stage(ast, "compute")
+
+
+def test_metal_cbuffer_name_conflicts_with_struct_error():
+    code = """
+    shader CBufferScope {
+        struct Camera {
+            float exposure;
+        };
+
+        cbuffer Lighting {
+            float gamma;
+        };
+
+        compute {
+            void main() {
+                float x = gamma;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers[0].name = "Camera"
+
+    with pytest.raises(
+        ValueError,
+        match="Cbuffer name\\(s\\) conflict with existing Metal declaration\\(s\\): Camera",
+    ):
+        MetalCodeGen().generate_stage(ast, "compute")
+
+
 def test_metal_array_member_semantics():
     code = """
     struct VertexData {
@@ -1278,6 +1905,1280 @@ def test_metal_sampler_cube_uses_cube_texture_type():
     assert "texture2d<float> envMap" not in generated_code
     assert "colorMap.sample" in generated_code
     assert "envMap.sample" in generated_code
+
+
+def test_metal_rejects_non_resource_shadow_of_global_resource():
+    shader = """
+    shader ResourceShadow {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv;
+        };
+
+        vec4 shade(float colorMap, FSInput input) {
+            float linearSampler = 1.0;
+            return vec4(colorMap + linearSampler);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return shade(1.0, input);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Non-resource local declaration\\(s\\) shadow Metal global "
+            "resource\\(s\\): colorMap, linearSampler"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_metal_rejects_texture_call_with_non_resource_argument():
+    shader = """
+    shader InvalidTextureArgument {
+        struct FSInput {
+            vec2 uv;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float value = 1.0;
+                return texture(value, input.uv);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal texture operation 'texture' requires a declared texture "
+            "or image resource argument: value"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "texture(colorMap)",
+            "Metal texture operation 'texture' requires at least 2 "
+            "argument\\(s\\), got 1",
+        ),
+        (
+            "textureLod(colorMap, input.uv)",
+            "Metal texture operation 'textureLod' requires at least 3 "
+            "argument\\(s\\), got 2",
+        ),
+        (
+            "textureGrad(colorMap, input.uv, input.uv)",
+            "Metal texture operation 'textureGrad' requires at least 4 "
+            "argument\\(s\\), got 3",
+        ),
+        (
+            "texture(colorMap, linearSampler)",
+            "Metal texture operation 'texture' requires at least 3 "
+            "argument\\(s\\), got 2",
+        ),
+    ],
+)
+def test_metal_rejects_texture_call_with_too_few_arguments(call, match):
+    shader = f"""
+    shader InvalidTextureArity {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expression", "operation", "max_count", "arg_count"),
+    [
+        (
+            "vec4(float(textureSamples(msTex, input.layer)))",
+            "textureSamples",
+            1,
+            2,
+        ),
+        (
+            "vec4(float(imageSamples(msTex, input.layer)))",
+            "imageSamples",
+            1,
+            2,
+        ),
+        (
+            "vec4(float(textureQueryLevels(colorMap, input.layer)))",
+            "textureQueryLevels",
+            1,
+            2,
+        ),
+        (
+            "vec4(vec2(imageSize(colorImage, input.layer)), 0.0, 1.0)",
+            "imageSize",
+            1,
+            2,
+        ),
+        (
+            "vec4(textureSize(colorMap, input.layer, input.layer), 0.0, 1.0)",
+            "textureSize",
+            2,
+            3,
+        ),
+    ],
+)
+def test_metal_rejects_resource_query_call_with_too_many_arguments(
+    return_expression, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidTextureQueryArity {{
+        sampler2D colorMap;
+        sampler2DMS msTex;
+        image2D colorImage;
+
+        struct FSInput {{
+            ivec2 pixel;
+            int layer;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expression};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("statement", "operation", "max_count", "arg_count"),
+    [
+        (
+            "vec4 fetched = texelFetch(colorMap, input.pixel, input.layer, input.layer);",
+            "texelFetch",
+            3,
+            4,
+        ),
+        (
+            "vec4 fetched = texelFetchOffset(colorMap, input.pixel, input.layer, input.offset, input.layer);",
+            "texelFetchOffset",
+            4,
+            5,
+        ),
+        (
+            "vec4 color = imageLoad(colorImage, input.pixel, input.layer);",
+            "imageLoad",
+            2,
+            3,
+        ),
+        (
+            "imageStore(colorImage, input.pixel, vec4(1.0), input.layer);",
+            "imageStore",
+            3,
+            4,
+        ),
+        (
+            "uint oldValue = imageAtomicAdd(counterImage, input.pixel, input.amount, input.amount);",
+            "imageAtomicAdd",
+            3,
+            4,
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap(counterImage, input.pixel, input.amount, input.amount, input.amount);",
+            "imageAtomicCompSwap",
+            4,
+            5,
+        ),
+    ],
+)
+def test_metal_rejects_fixed_resource_call_with_too_many_arguments(
+    statement, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidFixedResourceArity {{
+        sampler2D colorMap;
+        image2D colorImage;
+        uimage2D counterImage;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec2 offset;
+            int layer;
+            uint amount;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                {statement}
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expression", "operation", "max_count", "arg_count"),
+    [
+        (
+            "texture(colorMap, input.uv, input.bias, input.bias)",
+            "texture",
+            3,
+            4,
+        ),
+        (
+            "textureLod(colorMap, input.uv, input.bias, input.bias)",
+            "textureLod",
+            3,
+            4,
+        ),
+        (
+            "textureGrad(colorMap, input.uv, input.ddx, input.ddy, input.bias)",
+            "textureGrad",
+            4,
+            5,
+        ),
+        (
+            "textureOffset(colorMap, input.uv, input.offset, input.bias, input.bias)",
+            "textureOffset",
+            4,
+            5,
+        ),
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "textureCompare",
+            4,
+            5,
+        ),
+        (
+            "textureGather(colorMap, input.uv, input.component, input.component)",
+            "textureGather",
+            3,
+            4,
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset",
+            5,
+            6,
+        ),
+    ],
+)
+def test_metal_rejects_texture_sampling_call_with_too_many_arguments(
+    return_expression, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidTextureSamplingArity {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec2 ddx;
+            vec2 ddy;
+            ivec2 offset;
+            float bias;
+            float depth;
+            int component;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expression};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_metal_rejects_texture_gather_offsets_with_ambiguous_argument_count():
+    shader = """
+    shader InvalidTextureGatherOffsetsArity {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 offset;
+            int component;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureGatherOffsets(
+                    colorMap,
+                    input.uv,
+                    input.offset,
+                    input.offset,
+                    input.component
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal texture operation 'textureGatherOffsets' accepts "
+            "3, 4, 6, 7 argument\\(s\\), got 5"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("statement", "operation"),
+    [
+        ("vec4 color = imageLoad(colorMap, input.pixel);", "imageLoad"),
+        ("imageStore(colorMap, input.pixel, vec4(1.0));", "imageStore"),
+        ("ivec2 size = imageSize(colorMap);", "imageSize"),
+        (
+            "uint oldValue = imageAtomicAdd(colorMap, input.pixel, input.amount);",
+            "imageAtomicAdd",
+        ),
+    ],
+)
+def test_metal_rejects_image_call_with_sampled_texture_argument(statement, operation):
+    shader = f"""
+    shader InvalidImageResource {{
+        sampler2D colorMap;
+
+        struct FSInput {{
+            ivec2 pixel;
+            uint amount;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                {statement}
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal image operation '{operation}' requires a storage "
+            "image resource argument: colorMap"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("helper", "helper_call", "match"),
+    [
+        (
+            "vec4 misuse(sampler sampleState, vec2 uv) { return texture(sampleState, uv); }",
+            "misuse(linearSampler, input.uv)",
+            "Metal texture operation 'texture' requires a declared texture "
+            "or image resource argument: sampleState",
+        ),
+        (
+            "vec4 misuse(sampler sampleState, ivec2 pixel) { return imageLoad(sampleState, pixel); }",
+            "misuse(linearSampler, input.pixel)",
+            "Metal image operation 'imageLoad' requires a storage image "
+            "resource argument: sampleState",
+        ),
+    ],
+)
+def test_metal_rejects_sampler_parameter_as_texture_or_image_operand(
+    helper, helper_call, match
+):
+    shader = f"""
+    shader InvalidSamplerOperand {{
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            ivec2 pixel;
+        }};
+
+        {helper}
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {helper_call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        ("texelFetch(colorMap, input.uv, 0)", "texelFetch"),
+        ("imageLoad(colorImage, input.uv)", "imageLoad"),
+    ],
+)
+def test_metal_rejects_float_coordinate_for_integer_resource_operation(call, operation):
+    shader = f"""
+    shader InvalidResourceCoordinate {{
+        sampler2D colorMap;
+        image2D colorImage;
+
+        struct FSInput {{
+            vec2 uv;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal resource operation '{operation}' requires an integer "
+            "coordinate argument: input.uv has type float2"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "dimension"),
+    [
+        ("texelFetch(arrayMap, input.pixel2, 0)", "texelFetch", 3),
+        ("imageLoad(volumeImage, input.pixel2)", "imageLoad", 3),
+        ("imageLoad(colorImage, input.pixel3)", "imageLoad", 2),
+    ],
+)
+def test_metal_rejects_wrong_coordinate_dimension_for_resource_operation(
+    call, operation, dimension
+):
+    shader = f"""
+    shader InvalidResourceCoordinateDimension {{
+        sampler2DArray arrayMap;
+        image2D colorImage;
+        image3D volumeImage;
+
+        struct FSInput {{
+            ivec2 pixel2;
+            ivec3 pixel3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal resource operation '{operation}' requires a "
+            f"{dimension}D integer coordinate"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        ("textureOffset(arrayMap, input.uvLayer, input.offset3)", "textureOffset"),
+        (
+            "texelFetchOffset(arrayMap, input.pixelLayer, 0, input.offset3)",
+            "texelFetchOffset",
+        ),
+    ],
+)
+def test_metal_rejects_wrong_offset_dimension_for_resource_operation(call, operation):
+    shader = f"""
+    shader InvalidResourceOffsetDimension {{
+        sampler2DArray arrayMap;
+
+        struct FSInput {{
+            vec3 uvLayer;
+            ivec3 pixelLayer;
+            ivec3 offset3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal resource operation '{operation}' requires a " "2D integer offset"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        (
+            "textureProjOffset(arrayMap, input.projLayer, input.offset3)",
+            "textureProjOffset",
+        ),
+        (
+            "textureGatherOffset(arrayMap, input.uvLayer, input.offset3)",
+            "textureGatherOffset",
+        ),
+        (
+            "textureGatherOffsets(arrayMap, input.uvLayer, input.offset3, input.offset3, input.offset3, input.offset3)",
+            "textureGatherOffsets",
+        ),
+        (
+            "vec4(textureCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3))",
+            "textureCompareOffset",
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.ddx, input.ddy, input.offset3))",
+            "textureCompareProjGradOffset",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3)",
+            "textureGatherCompareOffset",
+        ),
+    ],
+)
+def test_metal_rejects_wrong_offset_dimension_for_extended_resource_operation(
+    call, operation
+):
+    shader = f"""
+    shader InvalidExtendedResourceOffsetDimension {{
+        sampler2DArray arrayMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 uvLayer;
+            vec3 projCoord;
+            vec4 projLayer;
+            vec2 ddx;
+            vec2 ddy;
+            float depth;
+            ivec3 offset3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal resource operation '{operation}' requires a " "2D integer offset"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_metal_rejects_float_offset_for_resource_operation():
+    shader = """
+    shader InvalidResourceOffsetType {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            vec2 offset;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureOffset(colorMap, input.uv, input.offset);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal resource operation 'textureOffset' requires an integer "
+            "offset argument"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        (
+            "textureGatherOffset(colorMap, input.uv, input.offset)",
+            "textureGatherOffset",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset)",
+            "textureGatherCompareOffset",
+        ),
+    ],
+)
+def test_metal_rejects_float_offset_for_extended_resource_operation(call, operation):
+    shader = f"""
+    shader InvalidExtendedResourceOffsetType {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec2 offset;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal resource operation '{operation}' requires an integer "
+            "offset argument"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "dimension"),
+    [
+        ("textureGrad(colorMap, input.uv, input.ddx3, input.ddy3)", "textureGrad", 2),
+        (
+            "textureGrad(cubeMap, input.direction, input.ddx2, input.ddy2)",
+            "textureGrad",
+            3,
+        ),
+        (
+            "textureGradOffset(colorMap, input.uv, input.ddx3, input.ddy3, input.offset2)",
+            "textureGradOffset",
+            2,
+        ),
+        (
+            "textureProjGrad(colorMap, input.projCoord, input.ddx3, input.ddy3)",
+            "textureProjGrad",
+            2,
+        ),
+        (
+            "vec4(textureCompareGrad(shadowMap, compareSampler, input.uv, input.depth, input.ddx3, input.ddy3))",
+            "textureCompareGrad",
+            2,
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.ddx3, input.ddy3, input.offset2))",
+            "textureCompareProjGradOffset",
+            2,
+        ),
+    ],
+)
+def test_metal_rejects_wrong_gradient_dimension_for_resource_operation(
+    call, operation, dimension
+):
+    shader = f"""
+    shader InvalidResourceGradientDimension {{
+        sampler2D colorMap;
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 direction;
+            vec3 projCoord;
+            vec2 ddx2;
+            vec2 ddy2;
+            vec3 ddx3;
+            vec3 ddy3;
+            ivec2 offset2;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal resource operation '{operation}' requires a "
+            f"{dimension}D floating gradient"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_metal_rejects_integer_gradient_for_resource_operation():
+    shader = """
+    shader InvalidResourceGradientType {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 pixel;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureGrad(colorMap, input.uv, input.pixel, input.pixel);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal resource operation 'textureGrad' requires a floating "
+            "gradient argument"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "type_name"),
+    [
+        (
+            "textureLod(colorMap, linearSampler, input.uv, input.lodVec)",
+            "textureLod",
+            "float2",
+        ),
+        (
+            "textureLodOffset(colorMap, linearSampler, input.uv, input.lodVec, input.offset)",
+            "textureLodOffset",
+            "float2",
+        ),
+        (
+            "textureProjLod(colorMap, linearSampler, input.projCoord, input.lodVec)",
+            "textureProjLod",
+            "float2",
+        ),
+        (
+            "vec4(textureCompareLod(shadowMap, compareSampler, input.uv, input.depth, input.lodVec))",
+            "textureCompareLod",
+            "float2",
+        ),
+        (
+            "vec4(textureCompareProjLodOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.lodVec, input.offset))",
+            "textureCompareProjLodOffset",
+            "float2",
+        ),
+        (
+            "textureLod(colorMap, linearSampler, input.uv, colorMap)",
+            "textureLod",
+            "texture2d<float>",
+        ),
+    ],
+)
+def test_metal_rejects_non_scalar_numeric_lod_argument(call, operation, type_name):
+    shader = f"""
+    shader InvalidTextureLodArgument {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler linearSampler;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 lodVec;
+            ivec2 offset;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal texture LOD operation '{operation}' requires a scalar "
+            f"numeric lod argument: .* has type {type_name}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "operation", "type_name"),
+    [
+        (
+            "texelFetch(colorMap, input.pixel, input.floatLevel)",
+            "texelFetch",
+            "float",
+        ),
+        (
+            "texelFetchOffset(colorMap, input.pixel, input.levelVec, input.offset)",
+            "texelFetchOffset",
+            "int2",
+        ),
+        (
+            "vec4(textureSize(colorMap, input.floatLevel), 0.0, 1.0)",
+            "textureSize",
+            "float",
+        ),
+        (
+            "texelFetch(colorMap, input.pixel, colorMap)",
+            "texelFetch",
+            "texture2d<float>",
+        ),
+    ],
+)
+def test_metal_rejects_non_scalar_integer_mip_level_argument(
+    return_expr, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureMipLevelArgument {{
+        sampler2D colorMap;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec2 offset;
+            ivec2 levelVec;
+            float floatLevel;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal resource operation '{operation}' requires a scalar integer "
+            f"mip/sample level argument: .* has type {type_name}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "type_name"),
+    [
+        ("texelFetch(msTex, input.pixel, input.floatSample)", "float"),
+        ("texelFetch(msArray, input.pixelLayer, input.sampleVec)", "int2"),
+        ("texelFetch(msTex, input.pixel, msTex)", "texture2d_ms<float>"),
+    ],
+)
+def test_metal_rejects_non_scalar_integer_multisample_sample_index(
+    return_expr, type_name
+):
+    shader = f"""
+    shader InvalidMultisampleTexelFetchSampleIndex {{
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec3 pixelLayer;
+            ivec2 sampleVec;
+            float floatSample;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal multisample texel fetch operation 'texelFetch' requires a "
+            f"scalar integer sample index argument: .* has type {type_name}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "helper", "operation", "type_name"),
+    [
+        (
+            "textureGather(colorMap, linearSampler, input.uv, input.floatComponent)",
+            "",
+            "textureGather",
+            "float",
+        ),
+        (
+            "textureGatherOffset(colorMap, linearSampler, input.uv, input.offset, input.componentVec)",
+            "",
+            "textureGatherOffset",
+            "int2",
+        ),
+        (
+            "textureGatherOffsets(colorMap, linearSampler, input.uv, input.offset, input.offset, input.offset, input.offset, colorMap)",
+            "",
+            "textureGatherOffsets",
+            "texture2d<float>",
+        ),
+        (
+            "vec4(1.0)",
+            "vec4 invalidArrayGather(sampler2D tex, sampler s, vec2 uv, ivec2 offsets[4], float component) { return textureGatherOffsets(tex, s, uv, offsets, component); }",
+            "textureGatherOffsets",
+            "float",
+        ),
+    ],
+)
+def test_metal_rejects_non_scalar_integer_gather_component_argument(
+    return_expr, helper, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureGatherComponentArgument {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            ivec2 offset;
+            ivec2 componentVec;
+            float floatComponent;
+        }};
+
+        {helper}
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal texture gather operation '{operation}' requires a scalar "
+            f"integer component argument: .* has type {type_name}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "operation", "type_name"),
+    [
+        (
+            "texture(colorMap, linearSampler, input.uv, input.biasVec)",
+            "texture",
+            "float2",
+        ),
+        (
+            "textureOffset(colorMap, linearSampler, input.uv, input.offset, input.biasVec)",
+            "textureOffset",
+            "float2",
+        ),
+        (
+            "textureProj(colorMap, linearSampler, input.projCoord, input.biasVec)",
+            "textureProj",
+            "float2",
+        ),
+        (
+            "textureProjOffset(colorMap, linearSampler, input.projCoord, input.offset, colorMap)",
+            "textureProjOffset",
+            "texture2d<float>",
+        ),
+    ],
+)
+def test_metal_rejects_non_scalar_numeric_bias_argument(
+    return_expr, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureBiasArgument {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 biasVec;
+            ivec2 offset;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal texture bias operation '{operation}' requires a scalar "
+            f"numeric bias argument: .* has type {type_name}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_metal_texture_bias_variants_use_bias_options():
+    shader = """
+    shader TextureBiasVariants {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 offset;
+            float bias;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 biased = texture(colorMap, linearSampler, input.uv, input.bias);
+                vec4 offsetBiased = textureOffset(
+                    colorMap,
+                    linearSampler,
+                    input.uv,
+                    input.offset,
+                    input.bias
+                );
+                return biased + offsetBiased;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "colorMap.sample(linearSampler, input.uv, bias(input.bias))" in generated_code
+    )
+    assert (
+        "colorMap.sample(linearSampler, input.uv, bias(input.bias), input.offset)"
+        in generated_code
+    )
+
+
+def test_metal_rejects_non_floating_query_lod_coordinate():
+    shader = """
+    shader InvalidTextureQueryLodCoordinate {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            ivec2 pixel;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(textureQueryLod(colorMap, linearSampler, input.pixel), 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal texture query operation 'textureQueryLod' requires a "
+            "floating coordinate argument: .* has type int2"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("query_call", "dimension", "resource_type", "type_name"),
+    [
+        (
+            "textureQueryLod(layerMap, linearSampler, input.uv)",
+            3,
+            "texture2d_array<float>",
+            "float2",
+        ),
+        (
+            "textureQueryLod(cubeMap, linearSampler, input.uv)",
+            3,
+            "texturecube<float>",
+            "float2",
+        ),
+        (
+            "textureQueryLod(cubeArray, linearSampler, input.direction)",
+            4,
+            "texturecube_array<float>",
+            "float3",
+        ),
+    ],
+)
+def test_metal_rejects_wrong_query_lod_coordinate_dimension(
+    query_call, dimension, resource_type, type_name
+):
+    shader = f"""
+    shader InvalidTextureQueryLodCoordinateDimension {{
+        sampler2DArray layerMap;
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 direction;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return vec4({query_call}, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal texture query operation 'textureQueryLod' requires a "
+            f"{dimension}D floating coordinate for {resource_type}: "
+            f".* has type {type_name}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "type_name"),
+    [
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depthVec))",
+            "textureCompare",
+            "float2",
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depthVec, input.ddx, input.ddy, input.offset))",
+            "textureCompareProjGradOffset",
+            "float2",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depthVec, input.offset)",
+            "textureGatherCompareOffset",
+            "float2",
+        ),
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.layer))",
+            "textureCompare",
+            "int",
+        ),
+    ],
+)
+def test_metal_rejects_non_scalar_float_compare_argument(call, operation, type_name):
+    shader = f"""
+    shader InvalidTextureCompareArgument {{
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 depthVec;
+            vec2 ddx;
+            vec2 ddy;
+            ivec2 offset;
+            int layer;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Metal texture compare operation '{operation}' requires a scalar "
+            f"floating compare argument: .* has type {type_name}"
+        ),
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_metal_texture_array_resources_and_indexed_sampling():
@@ -1532,6 +3433,33 @@ def test_metal_storage_image_load_store():
     assert "imageStore(" not in generated_code
 
 
+def test_metal_unsigned_constructor_image_coordinates_are_not_rewrapped():
+    shader = """
+    shader UnsignedConstructorImageCoordinates {
+        image2D outputImage;
+        image3D volumeImage;
+
+        compute {
+            void main() {
+                vec4 color = imageLoad(outputImage, uvec2(1u, 2u));
+                vec4 volumeColor = imageLoad(volumeImage, uvec3(1u, 2u, 3u));
+                imageStore(outputImage, uvec2(1u, 2u), color);
+                imageStore(volumeImage, uvec3(1u, 2u, 3u), volumeColor);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float4 color = outputImage.read(uint2(1u, 2u));" in generated_code
+    assert "float4 volumeColor = volumeImage.read(uint3(1u, 2u, 3u));" in generated_code
+    assert "outputImage.write(color, uint2(1u, 2u));" in generated_code
+    assert "volumeImage.write(volumeColor, uint3(1u, 2u, 3u));" in generated_code
+    assert "uint2(uint2" not in generated_code
+    assert "uint3(uint3" not in generated_code
+
+
 def test_metal_direct_stage_image_load_store_and_atomics_use_input_members():
     shader = """
     shader DirectStageImageOps {
@@ -1678,6 +3606,40 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_metal_image_atomic_compare_descriptor_for_integer_storage_textures():
+    codegen = MetalCodeGen()
+
+    uint_array_descriptor = codegen.image_atomic_compare_descriptor(
+        "texture1d_array<uint, access::read>"
+    )
+    assert uint_array_descriptor == {
+        "helper_name": "imageAtomicCompSwap_uimage1DArray",
+        "return_type": "uint",
+        "vector_type": "uint4",
+        "coord_type": "int2",
+        "exchange_expr": (
+            "image.atomic_compare_exchange_weak(uint(coord.x), uint(coord.y), &original, value)"
+        ),
+    }
+
+    int_layer_descriptor = codegen.image_atomic_compare_descriptor(
+        "texture2d_array<int, access::write>"
+    )
+    assert int_layer_descriptor["helper_name"] == "imageAtomicCompSwap_iimage2DArray"
+    assert int_layer_descriptor["return_type"] == "int"
+    assert int_layer_descriptor["vector_type"] == "int4"
+    assert int_layer_descriptor["coord_type"] == "int3"
+    assert (
+        int_layer_descriptor["exchange_expr"]
+        == "image.atomic_compare_exchange_weak(uint2(coord.xy), uint(coord.z), &original, value)"
+    )
+
+    assert (
+        codegen.image_atomic_compare_descriptor("texture2d<float, access::read_write>")
+        is None
+    )
 
 
 def test_metal_direct_stage_image_compare_swap_use_input_members():
@@ -5625,6 +7587,116 @@ def test_metal_texture_grad_uses_dimension_specific_gradient_options():
     assert "gradient2d(ddx3, ddy3)" not in generated_code
 
 
+def test_metal_texture_sampling_capability_descriptors():
+    codegen = MetalCodeGen()
+
+    assert codegen.texture_sampling_capabilities("texture2d<float>") == {
+        "texture_type": "texture2d<float>",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "projected_offset": True,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("texturecube<float>") == {
+        "texture_type": "texturecube<float>",
+        "gather": True,
+        "gather_offset": False,
+        "sample_offset": False,
+        "projected_offset": False,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("texture2d_array<float>[4]") == {
+        "texture_type": "texture2d_array<float>",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "projected_offset": True,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("depth2d<float>") == {
+        "texture_type": "depth2d<float>",
+        "gather": False,
+        "gather_offset": False,
+        "sample_offset": False,
+        "projected_offset": False,
+        "compare_offset": True,
+        "gather_compare_offset": True,
+    }
+    assert codegen.texture_sampling_capabilities("texture3d<float>") == {
+        "texture_type": "texture3d<float>",
+        "gather": False,
+        "gather_offset": False,
+        "sample_offset": False,
+        "projected_offset": False,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+
+
+def test_metal_texture_dimension_descriptors():
+    codegen = MetalCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "coordinate_dimension": None,
+            "offset_dimension": None,
+            "sample_offset_dimension": None,
+            "texel_fetch_offset_dimension": None,
+            "gather_offset_dimension": None,
+            "compare_offset_dimension": None,
+            "compare_lod_offset_dimension": None,
+            "compare_grad_offset_dimension": None,
+            "gather_compare_offset_dimension": None,
+            "gradient_dimension": None,
+            "query_lod_coordinate_dimension": None,
+        }
+        expected.update(overrides)
+        assert codegen.texture_dimension_descriptor(texture_type) == expected
+
+    expect(
+        "texture2d_array<float>[4]",
+        coordinate_dimension=3,
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        gather_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=3,
+    )
+    expect(
+        "texture1d_array<float>",
+        coordinate_dimension=2,
+        texel_fetch_offset_dimension=1,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "depth2d<float>",
+        coordinate_dimension=2,
+        compare_offset_dimension=2,
+        compare_lod_offset_dimension=2,
+        compare_grad_offset_dimension=2,
+        gather_compare_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "texturecube_array<float>",
+        gradient_dimension=3,
+        query_lod_coordinate_dimension=4,
+    )
+    expect("texture2d_ms_array<float>", coordinate_dimension=3)
+    expect(
+        "texture3d<float, access::read_write>",
+        coordinate_dimension=3,
+        texel_fetch_offset_dimension=3,
+    )
+
+
 def test_metal_texture_gather_offset_variants_use_metal_overloads():
     shader = """
     shader GatherOffsetVariants {
@@ -6379,6 +8451,87 @@ def test_metal_cube_texture_sample_offsets_emit_diagnostics():
     assert "textureCompareOffset(" not in generated_code
     assert "textureCompareLodOffset(" not in generated_code
     assert "textureCompareGradOffset(" not in generated_code
+
+
+def test_metal_unsupported_implicit_cube_offsets_do_not_thread_sampler_helpers():
+    shader = """
+    shader UnsupportedImplicitCubeOffsetSamplerHelper {
+        samplerCube cubeMap;
+        sampler cubeMapSampler;
+
+        struct FSInput {
+            vec3 direction @ TEXCOORD0;
+            vec4 cubeProj @ TEXCOORD1;
+            float lod;
+            vec3 ddx @ TEXCOORD2;
+            vec3 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        vec4 helper(vec3 direction, float lod, vec3 ddx, vec3 ddy, ivec2 offset) {
+            return textureOffset(cubeMap, direction, offset)
+                + textureLodOffset(cubeMap, direction, lod, offset)
+                + textureGradOffset(cubeMap, direction, ddx, ddy, offset);
+        }
+
+        vec4 projectedHelper(vec4 cubeProj, float lod, vec3 ddx, vec3 ddy, ivec2 offset) {
+            return textureProj(cubeMap, cubeProj)
+                + textureProjLod(cubeMap, cubeProj, lod)
+                + textureProjGradOffset(cubeMap, cubeProj, ddx, ddy, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return helper(
+                    input.direction,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                ) + projectedHelper(
+                    input.cubeProj,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "float4 helper(float3 direction, float lod, float3 ddx, float3 ddy, int2 offset, texturecube<float> cubeMap)"
+        in generated_code
+    )
+    assert (
+        "float4 projectedHelper(float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset, texturecube<float> cubeMap)"
+        in generated_code
+    )
+    assert "sampler cubeMapSampler" not in generated_code
+    assert (
+        "helper(input.direction, input.lod, input.ddx, input.ddy, input.offset, cubeMap)"
+        in generated_code
+    )
+    assert (
+        "projectedHelper(input.cubeProj, input.lod, input.ddx, input.ddy, input.offset, cubeMap)"
+        in generated_code
+    )
+    assert (
+        "helper(input.direction, input.lod, input.ddx, input.ddy, input.offset, cubeMap, cubeMapSampler)"
+        not in generated_code
+    )
+    assert (
+        "projectedHelper(input.cubeProj, input.lod, input.ddx, input.ddy, input.offset, cubeMap, cubeMapSampler)"
+        not in generated_code
+    )
+    assert generated_code.count("unsupported Metal texture offset") == 3
+    assert generated_code.count("unsupported Metal projected texture") == 3
+    assert ".sample(" not in generated_code
 
 
 def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members():
@@ -9337,6 +11490,91 @@ def test_metal_array_shadow_texture_resource_arrays_reject_mismatched_fixed_help
         MetalCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_metal_texture_query_size_descriptors():
+    codegen = MetalCodeGen()
+
+    assert codegen.texture_query_size_descriptor("texture1d_array<float>") == {
+        "return_type": "int2",
+        "dimensions": (("get_width", True), ("get_array_size", False)),
+    }
+    assert codegen.texture_query_size_descriptor("texture2d_ms_array<float>") == {
+        "return_type": "int3",
+        "dimensions": (
+            ("get_width", False),
+            ("get_height", False),
+            ("get_array_size", False),
+        ),
+    }
+    assert codegen.texture_query_size_descriptor(
+        "texture2d_array<uint, access::write>"
+    ) == {
+        "return_type": "int3",
+        "dimensions": (
+            ("get_width", False),
+            ("get_height", False),
+            ("get_array_size", False),
+        ),
+    }
+    descriptor = codegen.texture_query_size_descriptor("texture3d<float>")
+    assert (
+        codegen.texture_query_size_descriptor_expression("tex", descriptor, "uint(lod)")
+        == "int3(tex.get_width(uint(lod)), tex.get_height(uint(lod)), tex.get_depth(uint(lod)))"
+    )
+    assert codegen.texture_query_size_descriptor("samplerBuffer") is None
+
+
+def test_metal_texture_query_resource_descriptors():
+    codegen = MetalCodeGen()
+    codegen.texture_variable_types = {
+        "colorImage": "texture2d<float, access::read_write>",
+        "colorMap": "texture2d<float>",
+        "msTex": "texture2d_ms<float>",
+        "msArray": "texture2d_ms_array<float>",
+    }
+
+    assert codegen.texture_query_resource_descriptor("colorImage") == {
+        "texture_type": "texture2d<float, access::read_write>",
+        "storage_image": True,
+        "multisample": False,
+        "size_descriptor": {
+            "return_type": "int2",
+            "dimensions": (("get_width", False), ("get_height", False)),
+        },
+    }
+    assert codegen.texture_query_resource_descriptor("msArray") == {
+        "texture_type": "texture2d_ms_array<float>",
+        "storage_image": False,
+        "multisample": True,
+        "size_descriptor": {
+            "return_type": "int3",
+            "dimensions": (
+                ("get_width", False),
+                ("get_height", False),
+                ("get_array_size", False),
+            ),
+        },
+    }
+    assert (
+        codegen.texture_query_levels_expression("colorImage")
+        == "/* unsupported Metal texture query: textureQueryLevels on texture2d<float, access::read_write> */ 0"
+    )
+    assert codegen.texture_query_levels_expression("msTex") == "1"
+    assert (
+        codegen.texture_query_levels_expression("colorMap")
+        == "int(colorMap.get_num_mip_levels())"
+    )
+    assert (
+        codegen.texture_samples_expression("colorMap")
+        == "/* unsupported Metal texture samples query: requires multisample texture */ 0"
+    )
+    assert codegen.texture_samples_expression("msArray") == (
+        "int(msArray.get_num_samples())"
+    )
+    assert codegen.texture_query_size_expression("colorImage") == (
+        "int2(colorImage.get_width(), colorImage.get_height())"
+    )
+
+
 def test_metal_storage_image_size_queries_use_texture_dimensions():
     shader = """
     shader StorageImageSizeQueries {
@@ -9591,6 +11829,47 @@ def test_metal_texture_query_functions():
         in generated_code
     )
     assert "return int2(tex.get_width(), tex.get_height());" in generated_code
+
+
+def test_metal_implicit_texture_query_lod_helper_threads_declared_sampler():
+    shader = """
+    shader ImplicitQueryLodDeclaredSampler {
+        sampler2D colorMap;
+        sampler colorMapSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vec2 query(vec2 uv) {
+            return textureQueryLod(colorMap, uv);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(query(input.uv), 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "float2 query(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert "colorMap.calculate_unclamped_lod(colorMapSampler, uv)" in generated_code
+    assert (
+        "fragment float4 fragment_main(FSInput input [[stage_in]], texture2d<float> colorMap [[texture(0)]], sampler colorMapSampler [[sampler(0)]])"
+        in generated_code
+    )
+    assert (
+        "return float4(query(input.uv, colorMap, colorMapSampler), 0.0, 1.0);"
+        in generated_code
+    )
 
 
 def test_metal_multisample_texture_samples_queries_use_get_num_samples():
@@ -10186,6 +12465,163 @@ def test_metal_multisample_sampling_operations_emit_diagnostics():
     assert ".gather(" not in generated_code
 
 
+def test_metal_multisample_compare_operations_emit_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleCompare {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec4 proj @ TEXCOORD2;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        float invalidCompare2D(sampler2DMS tex, sampler s, vec2 uv, vec4 proj, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(tex, s, uv, depth)
+                + textureCompareOffset(tex, s, uv, depth, offset)
+                + textureCompareLod(tex, s, uv, depth, lod)
+                + textureCompareLodOffset(tex, s, uv, depth, lod, offset)
+                + textureCompareGrad(tex, s, uv, depth, ddx, ddy)
+                + textureCompareGradOffset(tex, s, uv, depth, ddx, ddy, offset)
+                + textureCompareProj(tex, s, proj, depth)
+                + textureCompareProjLod(tex, s, proj, depth, lod)
+                + textureCompareProjGradOffset(tex, s, proj, depth, ddx, ddy, offset);
+        }
+
+        float invalidCompareArray(sampler2DMSArray tex, sampler s, vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy, ivec2 offset) {
+            return textureCompare(tex, s, uvLayer, depth)
+                + textureCompareOffset(tex, s, uvLayer, depth, offset)
+                + textureCompareLod(tex, s, uvLayer, depth, lod)
+                + textureCompareLodOffset(tex, s, uvLayer, depth, lod, offset)
+                + textureCompareGrad(tex, s, uvLayer, depth, ddx, ddy)
+                + textureCompareGradOffset(tex, s, uvLayer, depth, ddx, ddy, offset);
+        }
+
+        vec4 invalidGather2D(sampler2DMS tex, sampler s, vec2 uv, float depth, ivec2 offset) {
+            return textureGatherCompare(tex, s, uv, depth)
+                + textureGatherCompareOffset(tex, s, uv, depth, offset);
+        }
+
+        vec4 invalidGatherArray(sampler2DMSArray tex, sampler s, vec3 uvLayer, float depth, ivec2 offset) {
+            return textureGatherCompare(tex, s, uvLayer, depth)
+                + textureGatherCompareOffset(tex, s, uvLayer, depth, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float cmp = invalidCompare2D(msTex, linearSampler, input.uv, input.proj, input.depth, input.lod, input.ddx, input.ddy, input.offset)
+                    + invalidCompareArray(msArray, linearSampler, input.uvLayer, input.depth, input.lod, input.ddx, input.ddy, input.offset);
+                return vec4(cmp)
+                    + invalidGather2D(msTex, linearSampler, input.uv, input.depth, input.offset)
+                    + invalidGatherArray(msArray, linearSampler, input.uvLayer, input.depth, input.offset);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+
+    for func_name in {
+        "textureCompare",
+        "textureCompareOffset",
+        "textureCompareLod",
+        "textureCompareLodOffset",
+        "textureCompareGrad",
+        "textureCompareGradOffset",
+    }:
+        assert (
+            f"unsupported Metal multisample texture comparison: {func_name} on texture2d_ms<float>"
+            in generated_code
+        )
+        assert (
+            f"unsupported Metal multisample texture comparison: {func_name} on texture2d_ms_array<float>"
+            in generated_code
+        )
+
+    for func_name in {
+        "textureCompareProj",
+        "textureCompareProjLod",
+        "textureCompareProjGradOffset",
+    }:
+        assert (
+            f"unsupported Metal multisample texture comparison: {func_name} on texture2d_ms<float>"
+            in generated_code
+        )
+
+    for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
+        assert (
+            f"unsupported Metal multisample texture gather comparison: {func_name} on texture2d_ms<float>"
+            in generated_code
+        )
+        assert (
+            f"unsupported Metal multisample texture gather comparison: {func_name} on texture2d_ms_array<float>"
+            in generated_code
+        )
+
+    assert ".sample_compare(" not in generated_code
+    assert ".gather_compare(" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+
+
+def test_metal_multisample_compare_diagnostics_do_not_create_implicit_samplers():
+    shader = """
+    shader UnsupportedMultisampleCompareImplicitSampler {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler msTexSampler;
+        sampler msArraySampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float cmp = textureCompare(msTex, input.uv, input.depth);
+                vec4 gathered = textureGatherCompare(msArray, input.uvLayer, input.depth);
+                return vec4(cmp) + gathered;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture2d_ms<float> msTex [[texture(0)]]" in generated_code
+    assert "texture2d_ms_array<float> msArray [[texture(1)]]" in generated_code
+    assert "msTexSampler [[sampler" not in generated_code
+    assert "msArraySampler [[sampler" not in generated_code
+    assert "sampler(mag_filter" not in generated_code
+    assert (
+        "unsupported Metal multisample texture comparison: textureCompare on texture2d_ms<float>"
+        in generated_code
+    )
+    assert (
+        "unsupported Metal multisample texture gather comparison: textureGatherCompare on texture2d_ms_array<float>"
+        in generated_code
+    )
+    assert ".sample_compare(" not in generated_code
+    assert ".gather_compare(" not in generated_code
+
+
 def test_metal_multisample_texture_query_lod_emits_diagnostics():
     shader = """
     shader UnsupportedMultisampleQueryLod {
@@ -10658,6 +13094,91 @@ def test_metal_array_texture_query_lod_uses_non_layer_coordinates():
     assert "calculate_unclamped_lod(s, cubeLayer)" not in generated_code
 
 
+def test_metal_nested_array_texture_query_lod_threads_resource_arrays():
+    shader = """
+    shader NestedArrayTextureQueryLod {
+        sampler2DArray layerMaps[4];
+        samplerCubeArray cubeArrays[4];
+        sampler linearSamplers[4];
+        sampler cubeArraysSampler;
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+        };
+
+        vec2 explicitLeaf(vec3 uvLayer) {
+            return textureQueryLod(layerMaps[2], linearSamplers[2], uvLayer);
+        }
+
+        vec2 explicitMid(vec3 uvLayer) {
+            return explicitLeaf(uvLayer);
+        }
+
+        vec2 implicitLeaf(vec4 cubeLayer) {
+            return textureQueryLod(cubeArrays[3], cubeLayer);
+        }
+
+        vec2 implicitMid(vec4 cubeLayer) {
+            return implicitLeaf(cubeLayer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 a = explicitMid(input.uvLayer);
+                vec2 b = implicitMid(input.cubeLayer);
+                return vec4(a.x + b.y, a.y + b.x, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
+    assert (
+        "array<texturecube_array<float>, 4> cubeArrays [[texture(4)]]" in generated_code
+    )
+    assert "array<sampler, 4> linearSamplers [[sampler(0)]]" in generated_code
+    assert "sampler cubeArraysSampler [[sampler(4)]]" in generated_code
+    assert (
+        "float2 explicitLeaf(float3 uvLayer, array<texture2d_array<float>, 4> layerMaps, array<sampler, 4> linearSamplers)"
+        in generated_code
+    )
+    assert (
+        "float2 explicitMid(float3 uvLayer, array<texture2d_array<float>, 4> layerMaps, array<sampler, 4> linearSamplers)"
+        in generated_code
+    )
+    assert "return explicitLeaf(uvLayer, layerMaps, linearSamplers);" in generated_code
+    assert (
+        "layerMaps[2].calculate_unclamped_lod(linearSamplers[2], uvLayer.xy)"
+        in generated_code
+    )
+    assert (
+        "float2 implicitLeaf(float4 cubeLayer, array<texturecube_array<float>, 4> cubeArrays, sampler cubeArraysSampler)"
+        in generated_code
+    )
+    assert (
+        "float2 implicitMid(float4 cubeLayer, array<texturecube_array<float>, 4> cubeArrays, sampler cubeArraysSampler)"
+        in generated_code
+    )
+    assert (
+        "return implicitLeaf(cubeLayer, cubeArrays, cubeArraysSampler);"
+        in generated_code
+    )
+    assert (
+        "cubeArrays[3].calculate_unclamped_lod(cubeArraysSampler, cubeLayer.xyz)"
+        in generated_code
+    )
+    assert "explicitMid(input.uvLayer, layerMaps, linearSamplers)" in generated_code
+    assert (
+        "implicitMid(input.cubeLayer, cubeArrays, cubeArraysSampler)" in generated_code
+    )
+    assert "textureQueryLod(" not in generated_code
+
+
 def test_metal_shadow_array_texture_query_lod_uses_non_layer_coordinates():
     shader = """
     shader ShadowArrayTextureQueryLod {
@@ -11086,9 +13607,12 @@ def test_metal_sampler_parameter_texture_call():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
-    assert "float4 sampleColor(sampler sampleState, float2 uv)" in generated_code
+    assert (
+        "float4 sampleColor(sampler sampleState, float2 uv, texture2d<float> colorMap)"
+        in generated_code
+    )
     assert "colorMap.sample(sampleState, uv)" in generated_code
-    assert "sampleColor(linearSampler, input.uv)" in generated_code
+    assert "sampleColor(linearSampler, input.uv, colorMap)" in generated_code
     assert "sampleState [[stage_in]]" not in generated_code
 
 
@@ -11126,6 +13650,42 @@ def test_metal_texture_and_sampler_parameters():
     assert "tex.sample(sampleState, uv)" in generated_code
     assert "sampleColor(colorMap, linearSampler, input.uv)" in generated_code
     assert "tex [[stage_in]]" not in generated_code
+
+
+def test_metal_struct_member_sampler_expression_is_explicit_sampler():
+    shader = """
+    shader StructSamplerExpression {
+        sampler2D colorMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        vec4 samplePacked(sampler2D tex, SamplerPack pack, int index, vec2 uv) {
+            return texture(tex, pack.samplers[index], uv);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                SamplerPack pack;
+                return samplePacked(colorMap, pack, 0, vec2(0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct SamplerPack" in generated_code
+    assert "sampler samplers[2];" in generated_code
+    assert (
+        "float4 samplePacked(texture2d<float> tex, SamplerPack pack, int index, float2 uv)"
+        in generated_code
+    )
+    assert "return tex.sample(pack.samplers[index], uv);" in generated_code
+    assert "return samplePacked(colorMap, pack, 0, float2(0.5));" in generated_code
+    assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
+    assert "bias(uv)" not in generated_code
 
 
 def test_metal_implicit_sampler_for_texture_parameter():
@@ -11993,11 +14553,14 @@ def test_metal_shadow_compare_sampler_parameter():
     assert "depth2d<float> shadowMap [[texture(0)]]" in generated_code
     assert "sampler shadowSampler [[sampler(0)]]" in generated_code
     assert (
-        "float sampleShadow(sampler compareSampler, float2 uv, float depth)"
+        "float sampleShadow(sampler compareSampler, float2 uv, float depth, depth2d<float> shadowMap)"
         in generated_code
     )
     assert "shadowMap.sample_compare(compareSampler, uv, depth)" in generated_code
-    assert "sampleShadow(shadowSampler, input.uv, input.depth)" in generated_code
+    assert (
+        "sampleShadow(shadowSampler, input.uv, input.depth, shadowMap)"
+        in generated_code
+    )
     assert "compareSampler [[stage_in]]" not in generated_code
 
 
@@ -12103,6 +14666,442 @@ def test_shift_operators(shader, expected_outputs):
 
     for expected in expected_outputs:
         assert expected in generated_code
+
+
+def test_metal_sampler_1d_array_sampling_and_queries():
+    shader = """
+    shader OneDArrayTexture {
+        sampler1DArray lineArray;
+        sampler linearSampler;
+
+        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+            ivec2 dims = textureSize(tex, lod);
+            int levels = textureQueryLevels(tex);
+            return texture(tex, samp, uvLayer)
+                + textureLod(tex, samp, uvLayer, lod)
+                + vec4(dims.x, dims.y, levels, 0.0);
+        }
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "texture1d_array<float> lineArray [[texture(0)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float4 sampleLineArray(texture1d_array<float> tex, sampler samp, float2 uvLayer, int lod)"
+        in generated_code
+    )
+    assert "int2(tex.get_width(uint(lod)), tex.get_array_size())" in generated_code
+    assert "int(tex.get_num_mip_levels())" in generated_code
+    assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y))" in generated_code
+    assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y), level(lod))" in generated_code
+
+
+def test_metal_image_1d_and_1d_array_storage_operations():
+    shader = """
+    shader OneDStorageImages {
+        image1D line;
+        image1DArray layers;
+        uimage1D counters @r32ui;
+        uimage1DArray layerCounters @r32ui;
+
+        float touchLine(image1D image, int x, float value) {
+            float oldValue = imageLoad(image, x);
+            imageStore(image, x, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchLayer(image1DArray image, ivec2 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        uint addCounter(uimage1D image @r32ui, int x, uint value) {
+            return imageAtomicAdd(image, x, value);
+        }
+
+        uint exchangeLayer(uimage1DArray image @r32ui, ivec2 coord, uint value) {
+            return imageAtomicExchange(image, coord, value);
+        }
+
+        compute {
+            void main() {
+                int sizeLine = imageSize(line);
+                ivec2 sizeLayer = imageSize(layers);
+                float a = touchLine(line, 1, 0.25);
+                vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
+                uint c = addCounter(counters, 4, 7u);
+                uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "texture1d<float, access::read_write> line [[texture(0)]]" in generated_code
+    assert (
+        "texture1d_array<float, access::read_write> layers [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture1d<uint, access::read_write> counters [[texture(2)]]" in generated_code
+    )
+    assert (
+        "texture1d_array<uint, access::read_write> layerCounters [[texture(3)]]"
+        in generated_code
+    )
+    assert "int sizeLine = int(line.get_width());" in generated_code
+    assert (
+        "int2 sizeLayer = int2(layers.get_width(), layers.get_array_size());"
+        in generated_code
+    )
+    assert "float oldValue = image.read(uint(x)).x;" in generated_code
+    assert "image.write(float4(oldValue + value), uint(x));" in generated_code
+    assert (
+        "float4 oldValue = image.read(uint(coord.x), uint(coord.y));" in generated_code
+    )
+    assert (
+        "image.write(oldValue + value, uint(coord.x), uint(coord.y));" in generated_code
+    )
+    assert "image.atomic_fetch_add(uint(x), value).x" in generated_code
+    assert (
+        "image.atomic_exchange(uint(coord.x), uint(coord.y), value).x" in generated_code
+    )
+
+
+def test_metal_storage_image_access_attributes_select_texture_access():
+    shader = """
+    shader StorageImageAccess {
+        image2D readOnlyImage @readonly;
+        image2D writeOnlyImage @writeonly;
+        uimage2D readWriteImage @r32ui @readwrite;
+
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel).x;
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "texture2d<float, access::read> readOnlyImage [[texture(0)]]" in generated_code
+    )
+    assert (
+        "texture2d<float, access::write> writeOnlyImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> readWriteImage [[texture(2)]]"
+        in generated_code
+    )
+    assert (
+        "float readPixel(texture2d<float, access::read> image, int2 pixel)"
+        in generated_code
+    )
+    assert (
+        "void writePixel(texture2d<float, access::write> image, int2 pixel, float4 value)"
+        in generated_code
+    )
+
+
+def test_metal_storage_image_access_attributes_keep_default_image_helpers():
+    shader = """
+    shader StorageImageAccessDefaults {
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        float readLine(image1D image @readonly, int x) {
+            return imageLoad(image, x);
+        }
+
+        float readLayer(image2DArray image @readonly, ivec3 pixelLayer) {
+            return imageLoad(image, pixelLayer);
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, float value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "float readPixel(texture2d<float, access::read> image, int2 pixel)"
+        in generated_code
+    )
+    assert "return image.read(uint2(pixel)).x;" in generated_code
+    assert (
+        "float readLine(texture1d<float, access::read> image, int x)" in generated_code
+    )
+    assert "return image.read(uint(x)).x;" in generated_code
+    assert (
+        "float readLayer(texture2d_array<float, access::read> image, int3 pixelLayer)"
+        in generated_code
+    )
+    assert (
+        "return image.read(uint2(pixelLayer.xy), uint(pixelLayer.z)).x;"
+        in generated_code
+    )
+    assert (
+        "void writePixel(texture2d<float, access::write> image, int2 pixel, float value)"
+        in generated_code
+    )
+    assert "image.write(float4(value), uint2(pixel));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessInvalidLoad {
+                float readPixel(image2D image @writeonly, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidStore {
+                void writePixel(image2D image @readonly, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidAtomic {
+                uint addCounter(uimage2D image @r32ui @readonly, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read_write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessInvalidGlobal {
+                image2D outImage @writeonly;
+
+                compute {
+                    void main() {
+                        float value = imageLoad(outImage, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+    ],
+)
+def test_metal_storage_image_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_storage_image_access_allows_compatible_helper_calls():
+    shader = """
+    shader StorageImageAccessHelperValid {
+        image2D source @readonly;
+        image2D target @writeonly;
+
+        float readPixel(image2D image, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "float value = readPixel(source, int2(0, 0));" in generated_code
+    assert "writePixel(target, int2(0, 0), float4(value));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessHelperInvalidRead {
+                image2D target @writeonly;
+
+                float readPixel(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = readPixel(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'readPixel' requires read-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidWrite {
+                image2D source @readonly;
+
+                void writePixel(image2D image, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        writePixel(source, ivec2(0, 0), vec4(1.0));
+                    }
+                }
+            }
+            """,
+            "function call 'writePixel' requires write-capable storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidAtomic {
+                uimage2D source @r32ui @readonly;
+
+                uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        uint value = addCounter(source, ivec2(0, 0), 1u);
+                    }
+                }
+            }
+            """,
+            "function call 'addCounter' requires read_write storage image access",
+        ),
+        (
+            """
+            shader StorageImageAccessHelperInvalidTransitive {
+                image2D target @writeonly;
+
+                float leaf(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                float mid(image2D image, ivec2 pixel) {
+                    return leaf(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = mid(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'mid' requires read-capable storage image access",
+        ),
+    ],
+)
+def test_metal_storage_image_access_rejects_incompatible_helper_calls(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_generic_image_memory_attributes_do_not_become_semantics():
+    shader = """
+    shader StorageImageMemoryAttrs {
+        image2D coherentImage @coherent;
+        uimage2D globalImage @r32ui @globallycoherent;
+
+        float readPixel(image2D image @coherent, ivec2 pixel) {
+            return imageLoad(image, pixel).x;
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "texture2d<float, access::read_write> coherentImage [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> globalImage [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "float readPixel(texture2d<float, access::read_write> image, int2 pixel)"
+        in generated_code
+    )
+    assert "[[coherent]]" not in generated_code
+    assert "[[globallycoherent]]" not in generated_code
 
 
 if __name__ == "__main__":

@@ -1,9 +1,6 @@
 Code Generation API
 ===================
 
-.. automodule:: crosstl.translator.codegen
-   :members:
-
 .. automodule:: crosstl.translator.codegen.registry
    :members:
 

@@ -30,6 +30,7 @@ class CodeFormatter:
     """Formats shader code using appropriate external tools"""
 
     def __init__(self, clang_format_path=None, spirv_tools_path=None):
+        """Discover external formatter tools or use explicit tool paths."""
         self.clang_format_path = clang_format_path or shutil.which("clang-format")
         self.spirv_as_path = spirv_tools_path or shutil.which("spirv-as")
         self.spirv_dis_path = spirv_tools_path or shutil.which("spirv-dis")
@@ -71,6 +72,7 @@ class CodeFormatter:
             return ShaderLanguage.UNKNOWN
 
     def format_code(self, code, language=None, file_path=None):
+        """Format source text for a shader language, falling back to input text."""
         if language is None and file_path:
             language = self.detect_language(file_path)
 

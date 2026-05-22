@@ -8,19 +8,23 @@ class ASTNode:
     """Base class for all AST nodes with common functionality."""
 
     def __init__(self, source_location=None, annotations=None):
+        """Initialize source metadata shared by all AST nodes."""
         self.source_location = source_location
         self.annotations = annotations or {}
         self.parent = None
 
     def accept(self, visitor):
+        """Dispatch this node to a visitor method named for its class."""
         method_name = f"visit_{self.__class__.__name__}"
         method = getattr(visitor, method_name, visitor.generic_visit)
         return method(self)
 
     def add_annotation(self, key: str, value: Any):
+        """Attach backend or analysis metadata to this node."""
         self.annotations[key] = value
 
     def get_annotation(self, key: str, default=None):
+        """Return an annotation value, or a default when it is absent."""
         return self.annotations.get(key, default)
 
 
@@ -194,6 +198,7 @@ class ShaderNode(ASTNode):
         functions: List["FunctionNode"] = None,
         global_variables: List["VariableNode"] = None,
         constants: List["ConstantNode"] = None,
+        cbuffers: List["StructNode"] = None,
         imports: List["ImportNode"] = None,
         preprocessors: List["PreprocessorNode"] = None,
         **kwargs,
@@ -206,6 +211,8 @@ class ShaderNode(ASTNode):
         self.functions = functions or []
         self.global_variables = global_variables or []
         self.constants = constants or []
+        if cbuffers is not None:
+            self.cbuffers = cbuffers
         self.imports = imports or []
         self.preprocessors = preprocessors or []
 
@@ -440,6 +447,7 @@ class VariableNode(ASTNode):
         self.semantic = self.get_semantic_from_attributes()
 
     def get_semantic_from_attributes(self):
+        """Return the legacy semantic name derived from variable attributes."""
         for attr in self.attributes:
             if attr.name in ["position", "color", "texcoord", "normal"]:
                 return attr.name
@@ -627,6 +635,18 @@ class WhileNode(StatementNode):
 
     def __repr__(self):
         return f"WhileNode(condition={self.condition})"
+
+
+class DoWhileNode(StatementNode):
+    """Do-while loop statements."""
+
+    def __init__(self, body: StatementNode, condition: "ExpressionNode", **kwargs):
+        super().__init__(**kwargs)
+        self.body = body
+        self.condition = condition
+
+    def __repr__(self):
+        return f"DoWhileNode(condition={self.condition})"
 
 
 class LoopNode(StatementNode):
@@ -1297,6 +1317,7 @@ VectorConstructorNode = ConstructorNode
 
 
 def create_legacy_shader_node(structs, functions, global_variables, cbuffers):
+    """Create a root shader node for legacy tests and backend adapters."""
     return ShaderNode(
         name="LegacyShader",
         execution_model=ExecutionModel.GRAPHICS_PIPELINE,
@@ -1311,6 +1332,7 @@ class ArrayNode(VariableNode):
     """Legacy array node for backward compatibility."""
 
     def __init__(self, element_type, name, size=None, semantic=None, **kwargs):
+        """Initialize an array variable using the older ArrayNode shape."""
         array_type = ArrayType(element_type, size)
         super().__init__(name, array_type, **kwargs)
         self.element_type = element_type

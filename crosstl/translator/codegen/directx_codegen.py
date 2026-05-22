@@ -40,6 +40,34 @@ from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
 )
+from ..validation import (
+    collect_cbuffer_declaration_name_conflicts,
+    collect_cbuffer_member_global_conflicts,
+    collect_duplicate_cbuffer_member_names,
+    collect_duplicate_cbuffer_names,
+    collect_non_resource_global_resource_shadows,
+    expression_debug_name,
+    floating_coordinate_dimension,
+    integer_coordinate_dimension,
+    is_floating_scalar_type,
+    is_integer_scalar_type,
+    is_numeric_scalar_type,
+    IMAGE_RESOURCE_INTRINSIC_NAMES,
+    INTEGER_COORDINATE_INTRINSIC_NAMES,
+    OFFSET_DIMENSION_INTRINSIC_NAMES,
+    texture_bias_argument_index,
+    texture_compare_argument_index,
+    texture_gather_component_argument_index,
+    texture_gradient_argument_indices,
+    texture_intrinsic_allowed_argument_counts,
+    texture_intrinsic_max_argument_count,
+    texture_intrinsic_min_argument_count,
+    texture_lod_argument_index,
+    texture_mip_level_argument_index,
+    texture_offset_argument_indices,
+    texture_query_lod_coordinate_argument_index,
+    texture_sample_index_argument_index,
+)
 from .stage_utils import (
     compute_local_size,
     normalize_stage_name,
@@ -47,23 +75,51 @@ from .stage_utils import (
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .glsl_buffer_layout import (
+    byte_offset_expression,
+    collect_lowered_glsl_buffer_blocks,
+    glsl_buffer_compound_binary_operator,
+    matrix_column_offsets,
+)
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    explicit_image_access,
+    explicit_image_format,
+    image_format_channel_count,
+    image_format_component_type,
+    image_format_vector_type,
+    image_access_satisfies_requirement,
+    is_image_format_attribute,
+    is_resource_access_attribute,
+    supported_image_formats,
+)
 
 
 class HLSLCodeGen:
+    """Emit HLSL source from the shared CrossGL translator AST."""
+
     def __init__(self):
+        """Initialize DirectX type maps and per-generation resource state."""
         self.texture_variables = set()
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.image_variable_accesses = {}
+        self.current_image_access_parameters = {}
         self.current_implicit_texture_samplers = {}
+        self.current_implicit_texture_regular_samplers = {}
         self.current_implicit_texture_query_lod_samplers = {}
+        self.global_implicit_texture_regular_samplers = {}
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.comparison_sampler_parameters = {}
+        self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_names = {}
+        self.function_image_access_requirements = {}
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
@@ -71,6 +127,15 @@ class HLSLCodeGen:
         self.current_expression_expected_type = None
         self.local_variable_types = {}
         self.struct_member_types = {}
+        self.structs_by_name = {}
+        self.hlsl_temp_variable_index = 0
+        self.glsl_buffer_block_struct_names = set()
+        self.lowered_glsl_buffer_blocks = {}
+        self.lowered_glsl_buffer_block_struct_names = set()
+        self.glsl_buffer_block_lowering_failures = {}
+        self.glsl_buffer_block_struct_lowering_failures = {}
+        self.comparison_sampler_struct_members = set()
+        self.regular_sampler_struct_members = set()
         self.type_mapping = {
             "void": "void",
             "vec2": "float2",
@@ -79,6 +144,15 @@ class HLSLCodeGen:
             "mat2": "float2x2",
             "mat3": "float3x3",
             "mat4": "float4x4",
+            "mat2x2": "float2x2",
+            "mat2x3": "float3x2",
+            "mat2x4": "float4x2",
+            "mat3x2": "float2x3",
+            "mat3x3": "float3x3",
+            "mat3x4": "float4x3",
+            "mat4x2": "float2x4",
+            "mat4x3": "float3x4",
+            "mat4x4": "float4x4",
             "int": "int",
             "ivec2": "int2",
             "ivec3": "int3",
@@ -94,6 +168,7 @@ class HLSLCodeGen:
             "float": "float",
             "double": "double",
             "sampler1D": "Texture1D",
+            "sampler1DArray": "Texture1DArray",
             "sampler2D": "Texture2D",
             "sampler3D": "Texture3D",
             "samplerCube": "TextureCube",
@@ -105,12 +180,18 @@ class HLSLCodeGen:
             "sampler2DArrayShadow": "Texture2DArray",
             "samplerCubeShadow": "TextureCube",
             "samplerCubeArrayShadow": "TextureCubeArray",
+            "iimage1D": "RWTexture1D<int>",
+            "iimage1DArray": "RWTexture1DArray<int>",
             "iimage2D": "RWTexture2D<int>",
             "iimage3D": "RWTexture3D<int>",
             "iimage2DArray": "RWTexture2DArray<int>",
+            "uimage1D": "RWTexture1D<uint>",
+            "uimage1DArray": "RWTexture1DArray<uint>",
             "uimage2D": "RWTexture2D<uint>",
             "uimage3D": "RWTexture3D<uint>",
             "uimage2DArray": "RWTexture2DArray<uint>",
+            "image1D": "RWTexture1D<float4>",
+            "image1DArray": "RWTexture1DArray<float4>",
             "image2D": "RWTexture2D<float4>",
             "image3D": "RWTexture3D<float4>",
             "imageCube": "RWTextureCube<float4>",
@@ -149,12 +230,15 @@ class HLSLCodeGen:
         }
 
     def generate(self, ast):
+        """Generate complete HLSL source for a CrossGL AST."""
         return self.generate_program(ast)
 
     def generate_stage(self, ast, shader_type):
+        """Generate HLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
     def generate_program(self, ast, target_stage=None):
+        """Render an AST to HLSL, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
 
         self.texture_variables = set()
@@ -162,20 +246,83 @@ class HLSLCodeGen:
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.image_variable_accesses = {}
+        self.current_image_access_parameters = {}
         self.current_implicit_texture_samplers = {}
+        self.current_implicit_texture_regular_samplers = {}
         self.current_implicit_texture_query_lod_samplers = {}
+        self.global_implicit_texture_regular_samplers = {}
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.comparison_sampler_parameters = {}
+        self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
+        self.function_image_access_requirements = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.hlsl_temp_variable_index = 0
+        self.structs_by_name = {
+            node.name: node
+            for node in getattr(ast, "structs", [])
+            if isinstance(node, StructNode)
+        }
+        global_vars = getattr(ast, "global_variables", [])
+        self.glsl_buffer_block_struct_names = (
+            self.collect_glsl_buffer_block_struct_names(global_vars)
+        )
+        (
+            self.lowered_glsl_buffer_blocks,
+            self.glsl_buffer_block_lowering_failures,
+            self.glsl_buffer_block_struct_lowering_failures,
+        ) = collect_lowered_glsl_buffer_blocks(
+            global_vars,
+            structs_by_name=self.structs_by_name,
+            is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
+            resource_base_type=self.resource_base_type,
+            glsl_buffer_block_layout=self.glsl_buffer_block_layout,
+            convert_type_node_to_string=self.convert_type_node_to_string,
+            literal_int_value=lambda expr: self.literal_int_value(
+                expr, self.literal_int_constants
+            ),
+            map_type=self.map_type,
+            target_type_key="hlsl_type",
+            unsupported_type_message=(
+                "type is not supported by ByteAddressBuffer lowering"
+            ),
+        )
+        self.lowered_glsl_buffer_block_struct_names = {
+            block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
+        }
         self.struct_member_types = collect_struct_member_types(
             getattr(ast, "structs", []), self.type_name_string
         )
-        self.function_parameter_names = self.collect_function_parameter_names(ast)
+        self.comparison_sampler_parameters = self.collect_comparison_sampler_parameters(
+            ast
+        )
+        self.regular_sampler_parameters = self.collect_regular_sampler_parameters(ast)
+        self.comparison_sampler_struct_members = self.collect_sampler_struct_members(
+            ast,
+            self.comparison_sampler_parameters,
+            self.comparison_texture_function_names(),
+        )
+        self.regular_sampler_struct_members = self.collect_sampler_struct_members(
+            ast,
+            self.regular_sampler_parameters,
+            self.regular_texture_function_names(),
+        )
+        functions = self.collect_functions(ast)
+        self.function_parameter_names = collect_function_parameter_names(functions)
+        self.function_image_access_requirements = (
+            collect_function_image_access_requirements(
+                functions,
+                self.function_parameter_names,
+                self.walk_ast,
+                self.function_call_name,
+                self.expression_name,
+            )
+        )
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
@@ -183,6 +330,8 @@ class HLSLCodeGen:
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
         ) = self.collect_resource_array_size_hints(ast)
+        self.validate_global_resource_shadows(ast)
+        self.validate_explicit_sampler_role_conflicts(ast)
         code = "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
         for directive in preprocessors:
@@ -198,6 +347,12 @@ class HLSLCodeGen:
         structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
+                if node.name in self.lowered_glsl_buffer_block_struct_names:
+                    continue
+                if node.name in self.glsl_buffer_block_struct_names:
+                    code += self.glsl_buffer_block_diagnostic(
+                        "HLSL", node.name, None, None
+                    )
                 code += f"struct {node.name} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
@@ -205,13 +360,16 @@ class HLSLCodeGen:
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
+                        member_type = self.map_struct_member_type(
+                            node.name, member.name, element_type
+                        )
                         if member.size:
-                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
+                            code += (
+                                f"    {member_type} {member.name}" f"[{member.size}];\n"
+                            )
                         else:
                             # Dynamic arrays in HLSL
-                            code += (
-                                f"    {self.map_type(element_type)}[] {member.name};\n"
-                            )
+                            code += f"    {member_type}[] {member.name};\n"
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
@@ -221,7 +379,9 @@ class HLSLCodeGen:
                                 element_type = self.convert_type_node_to_string(
                                     member.member_type.element_type
                                 )
-                                element_type = self.map_type(element_type)
+                                element_type = self.map_struct_member_type(
+                                    node.name, member.name, element_type
+                                )
                                 if member.member_type.size is not None:
                                     size_str = self.expression_to_string(
                                         member.member_type.size
@@ -232,11 +392,15 @@ class HLSLCodeGen:
                                 member_type = element_type
                             else:
                                 # Regular type - pass TypeNode directly to map_type
-                                member_type = self.map_type(member.member_type)
+                                member_type = self.map_struct_member_type(
+                                    node.name, member.name, member.member_type
+                                )
                                 array_syntax = ""
                         elif hasattr(member, "vtype"):
                             # Old AST structure
-                            member_type = self.map_type(member.vtype)
+                            member_type = self.map_struct_member_type(
+                                node.name, member.name, member.vtype
+                            )
                             array_syntax = ""
                         else:
                             member_type = "float"
@@ -259,12 +423,8 @@ class HLSLCodeGen:
                         code += f"    {member_type} {member.name}{array_syntax}{self.map_semantic(semantic)};\n"
                 code += "};\n"
 
-        global_vars = getattr(ast, "global_variables", [])
         comparison_texture_names, comparison_sampler_names = (
             self.collect_comparison_resources(ast)
-        )
-        self.comparison_sampler_parameters = self.collect_comparison_sampler_parameters(
-            ast
         )
         self.implicit_texture_sampler_parameters = (
             self.collect_implicit_texture_sampler_parameters(ast)
@@ -284,8 +444,21 @@ class HLSLCodeGen:
             if var_name and self.is_sampler_type(var_type):
                 declared_sampler_names.add(var_name)
                 explicit_sampler_names.add(var_name)
+        comparison_sampler_names |= {
+            f"{texture_name}Sampler"
+            for texture_name in comparison_texture_names
+            if f"{texture_name}Sampler" in declared_sampler_names
+        }
         global_implicit_sampler_texture_names = (
             self.collect_global_implicit_sampler_texture_names(
+                ast,
+                self.collect_global_texture_names(ast),
+                declared_sampler_names | sampler_parameter_names,
+                self.implicit_texture_sampler_parameters,
+            )
+        )
+        global_implicit_regular_sampler_texture_names = (
+            self.collect_global_implicit_regular_sampler_texture_names(
                 ast,
                 self.collect_global_texture_names(ast),
                 declared_sampler_names | sampler_parameter_names,
@@ -350,6 +523,35 @@ class HLSLCodeGen:
             else:
                 var_name = f"var{i}"
 
+            lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
+            if lowered_block is not None:
+                mapped_type = (
+                    "ByteAddressBuffer"
+                    if lowered_block["readonly"]
+                    else "RWByteAddressBuffer"
+                )
+                if lowered_block["readonly"]:
+                    binding = self.explicit_resource_binding_index(
+                        node, {"binding", "texture"}, ("t",)
+                    )
+                    if binding is None:
+                        binding = texture_register
+                    register = self.resource_register_suffix("t", binding, node)
+                    texture_register = max(texture_register, binding + resource_count)
+                else:
+                    binding = self.explicit_resource_binding_index(
+                        node, {"binding", "texture", "uav"}, ("u",)
+                    )
+                    if binding is None:
+                        binding = uav_register
+                    register = self.resource_register_suffix("u", binding, node)
+                    uav_register = max(uav_register, binding + resource_count)
+                code += f"{mapped_type} {var_name}{register};\n"
+                continue
+
+            if self.is_glsl_buffer_block_variable(node, vtype):
+                code += self.glsl_buffer_block_diagnostic("HLSL", vtype, var_name, node)
+
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if var_name in comparison_sampler_names and mapped_type == "SamplerState":
                 mapped_type = "SamplerComparisonState"
@@ -360,18 +562,55 @@ class HLSLCodeGen:
             if mapped_type.startswith("Texture"):
                 self.texture_variables.add(var_name)
                 self.texture_variable_types[var_name] = mapped_type
-                register = f" : register(t{texture_register})"
-                texture_register += resource_count
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture"}, ("t",)
+                )
+                if binding is None:
+                    binding = texture_register
+                register = self.resource_register_suffix("t", binding, node)
+                texture_register = max(texture_register, binding + resource_count)
             elif mapped_type.startswith("RWTexture"):
                 self.texture_variable_types[var_name] = mapped_type
-                register = f" : register(u{uav_register})"
-                uav_register += resource_count
+                explicit_access = explicit_image_access(
+                    node, self.attribute_value_to_string
+                )
+                if explicit_access:
+                    self.image_variable_accesses[var_name] = explicit_access
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture", "uav"}, ("u",)
+                )
+                if binding is None:
+                    binding = uav_register
+                register = self.resource_register_suffix("u", binding, node)
+                uav_register = max(uav_register, binding + resource_count)
+            elif self.is_hlsl_uav_buffer_type(mapped_type):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture", "uav"}, ("u",)
+                )
+                if binding is None:
+                    binding = uav_register
+                register = self.resource_register_suffix("u", binding, node)
+                uav_register = max(uav_register, binding + resource_count)
+            elif self.is_hlsl_readonly_buffer_type(mapped_type):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture"}, ("t",)
+                )
+                if binding is None:
+                    binding = texture_register
+                register = self.resource_register_suffix("t", binding, node)
+                texture_register = max(texture_register, binding + resource_count)
             elif mapped_type in ["SamplerState", "SamplerComparisonState"]:
                 self.sampler_variables.add(var_name)
-                register = f" : register(s{sampler_register})"
-                sampler_register += resource_count
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "sampler"}, ("s",)
+                )
+                if binding is None:
+                    binding = sampler_register
+                register = self.resource_register_suffix("s", binding, node)
+                sampler_register = max(sampler_register, binding + resource_count)
 
-            code += f"{declaration}{register};\n"
+            qualifier = self.resource_memory_qualifier(mapped_type, node)
+            code += f"{qualifier}{declaration}{register};\n"
 
             if mapped_type.startswith("Texture"):
                 sampler_name = f"{var_name}Sampler"
@@ -381,11 +620,10 @@ class HLSLCodeGen:
                 needs_query_lod_sampler = (
                     var_name in global_implicit_query_lod_texture_names
                 )
-                needs_comparison_sampler = var_name in comparison_texture_names or (
-                    self.is_shadow_sampler_type(vtype)
-                    and needs_implicit_sampler
-                    and not needs_query_lod_sampler
+                needs_regular_sampler = (
+                    var_name in global_implicit_regular_sampler_texture_names
                 )
+                needs_comparison_sampler = var_name in comparison_texture_names
                 if (
                     needs_implicit_sampler
                     and sampler_name not in explicit_sampler_names
@@ -399,6 +637,25 @@ class HLSLCodeGen:
                     self.sampler_variables.add(sampler_name)
                     code += f"{sampler_type} {sampler_name} : register(s{sampler_register});\n"
                     sampler_register += 1
+                if needs_regular_sampler and needs_comparison_sampler:
+                    regular_sampler_name = self.implicit_regular_sampler_name(
+                        var_name,
+                        {
+                            "comparison": needs_comparison_sampler,
+                            "regular": needs_regular_sampler,
+                            "sampler_name": sampler_name,
+                        },
+                    )
+                    self.global_implicit_texture_regular_samplers[var_name] = (
+                        regular_sampler_name
+                    )
+                    if (
+                        regular_sampler_name not in explicit_sampler_names
+                        and not self.is_multisample_sampler_type(vtype)
+                    ):
+                        self.sampler_variables.add(regular_sampler_name)
+                        code += f"SamplerState {regular_sampler_name} : register(s{sampler_register});\n"
+                        sampler_register += 1
                 if needs_query_lod_sampler:
                     query_sampler_name = (
                         f"{var_name}QuerySampler"
@@ -494,9 +751,43 @@ class HLSLCodeGen:
     def generate_cbuffers(self, ast):
         code = ""
         cbuffers = getattr(ast, "cbuffers", [])
-        for i, node in enumerate(cbuffers):
+        duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
+        if duplicate_names:
+            names = ", ".join(sorted(duplicate_names))
+            raise ValueError(f"Duplicate cbuffer name(s) in DirectX output: {names}")
+
+        declaration_conflicts = collect_cbuffer_declaration_name_conflicts(ast)
+        if declaration_conflicts:
+            names = ", ".join(sorted(declaration_conflicts))
+            raise ValueError(
+                "Cbuffer name(s) conflict with existing DirectX declaration(s): "
+                f"{names}"
+            )
+
+        duplicate_members = collect_duplicate_cbuffer_member_names(cbuffers)
+        if duplicate_members:
+            names = ", ".join(sorted(duplicate_members))
+            raise ValueError(
+                f"Ambiguous cbuffer member name(s) in DirectX output: {names}"
+            )
+
+        global_member_conflicts = collect_cbuffer_member_global_conflicts(ast)
+        if global_member_conflicts:
+            names = ", ".join(sorted(global_member_conflicts))
+            raise ValueError(
+                "Cbuffer member name(s) conflict with DirectX global declaration(s): "
+                f"{names}"
+            )
+        buffer_register = 0
+        for node in cbuffers:
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b",)
+            )
+            if binding is None:
+                binding = buffer_register
+            buffer_register = max(buffer_register, binding + 1)
             if isinstance(node, StructNode):
-                code += f"cbuffer {node.name} : register(b{i}) {{\n"
+                code += f"cbuffer {node.name} : register(b{binding}) {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -518,12 +809,15 @@ class HLSLCodeGen:
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
-                        code += f"    {member_type} {member.name};\n"
+                        declaration = format_c_style_array_declaration(
+                            member_type, member.name
+                        )
+                        code += f"    {declaration};\n"
                 code += "};\n"
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # Generic cbuffer handling
-                code += f"cbuffer {node.name} : register(b{i}) {{\n"
+                code += f"cbuffer {node.name} : register(b{binding}) {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -544,7 +838,10 @@ class HLSLCodeGen:
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
-                        code += f"    {member_type} {member.name};\n"
+                        declaration = format_c_style_array_declaration(
+                            member_type, member.name
+                        )
+                        code += f"    {declaration};\n"
                 code += "};\n"
         return code
 
@@ -555,6 +852,7 @@ class HLSLCodeGen:
     def generate_function(
         self, func, indent=0, shader_type=None, execution_config=None
     ):
+        """Render a function or stage entry point with HLSL semantics."""
         code = ""
         code += "  " * indent
 
@@ -562,6 +860,7 @@ class HLSLCodeGen:
         params = []
         sampler_parameters = set()
         texture_parameters = {}
+        image_access_parameters = {}
         comparison_sampler_parameters = self.comparison_sampler_parameters.get(
             getattr(func, "name", None), set()
         )
@@ -579,10 +878,11 @@ class HLSLCodeGen:
         self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
-                if hasattr(p.param_type, "name"):
-                    raw_param_type = p.param_type.name
-                else:
-                    raw_param_type = p.param_type
+                raw_param_type = (
+                    self.type_name_string(p.param_type)
+                    if getattr(p.param_type, "generic_args", None)
+                    else p.param_type
+                )
             elif hasattr(p, "vtype"):
                 raw_param_type = p.vtype
             else:
@@ -598,6 +898,12 @@ class HLSLCodeGen:
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
                 )
+                if self.is_image_type(raw_param_type):
+                    explicit_access = explicit_image_access(
+                        p, self.attribute_value_to_string
+                    )
+                    if explicit_access:
+                        image_access_parameters[p.name] = explicit_access
             if self.is_sampler_type(raw_param_type):
                 sampler_parameters.add(p.name)
                 if (
@@ -626,6 +932,17 @@ class HLSLCodeGen:
                     sampler_name = sampler_info["sampler_name"]
                     params.append(f"{sampler_type} {sampler_name}")
                     sampler_parameters.add(sampler_name)
+                regular_sampler_name = self.implicit_regular_sampler_name(
+                    p.name, sampler_info
+                )
+                if (
+                    sampler_info.get("regular")
+                    and sampler_info.get("comparison")
+                    and regular_sampler_name != sampler_info["sampler_name"]
+                    and regular_sampler_name not in param_names
+                ):
+                    params.append(f"SamplerState {regular_sampler_name}")
+                    sampler_parameters.add(regular_sampler_name)
                 query_sampler_name = self.implicit_query_lod_sampler_name(
                     p.name, sampler_info
                 )
@@ -684,15 +1001,25 @@ class HLSLCodeGen:
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
+        previous_image_access_parameters = self.current_image_access_parameters
         previous_implicit_texture_samplers = self.current_implicit_texture_samplers
+        previous_implicit_texture_regular_samplers = (
+            self.current_implicit_texture_regular_samplers
+        )
         previous_implicit_texture_query_lod_samplers = (
             self.current_implicit_texture_query_lod_samplers
         )
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = texture_parameters
+        self.current_image_access_parameters = image_access_parameters
         self.current_implicit_texture_samplers = {
             texture_name: sampler_info["sampler_name"]
             for texture_name, sampler_info in implicit_texture_samplers.items()
+        }
+        self.current_implicit_texture_regular_samplers = {
+            texture_name: self.implicit_regular_sampler_name(texture_name, sampler_info)
+            for texture_name, sampler_info in implicit_texture_samplers.items()
+            if sampler_info.get("regular") and sampler_info.get("comparison")
         }
         self.current_implicit_texture_query_lod_samplers = {
             texture_name: self.implicit_query_lod_sampler_name(
@@ -710,7 +1037,11 @@ class HLSLCodeGen:
                 code += self.generate_statement(stmt, indent + 1)
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
+        self.current_image_access_parameters = previous_image_access_parameters
         self.current_implicit_texture_samplers = previous_implicit_texture_samplers
+        self.current_implicit_texture_regular_samplers = (
+            previous_implicit_texture_regular_samplers
+        )
         self.current_implicit_texture_query_lod_samplers = (
             previous_implicit_texture_query_lod_samplers
         )
@@ -721,6 +1052,7 @@ class HLSLCodeGen:
         return code
 
     def generate_statement(self, stmt, indent=0):
+        """Render a single CrossGL AST statement as HLSL source."""
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
@@ -757,7 +1089,7 @@ class HLSLCodeGen:
                 return f"{indent_str}{element_type}[{size}] {stmt.name};\n"
 
         elif isinstance(stmt, AssignmentNode):
-            return f"{indent_str}{self.generate_assignment(stmt)};\n"
+            return self.generate_statement_code(self.generate_assignment(stmt), indent)
 
         elif isinstance(stmt, BreakNode):
             return f"{indent_str}break;\n"
@@ -812,7 +1144,10 @@ class HLSLCodeGen:
         ):
             # Handle ExpressionStatementNode
             if hasattr(stmt, "expression"):
-                return f"{indent_str}{self.generate_expression(stmt.expression)};\n"
+                expression = self.generate_expression(stmt.expression)
+                if isinstance(getattr(stmt, "expression", None), AssignmentNode):
+                    return self.generate_statement_code(expression, indent)
+                return f"{indent_str}{expression};\n"
             else:
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
 
@@ -822,6 +1157,18 @@ class HLSLCodeGen:
 
     def local_variable_qualifier(self, node):
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
+
+    def generate_statement_code(self, code, indent=0):
+        indent_str = "    " * indent
+        lines = [line.rstrip() for line in str(code).splitlines() if line.strip()]
+        if not lines:
+            return ""
+
+        result = ""
+        for line in lines:
+            terminator = "" if line.endswith((";", "}")) else ";"
+            result += f"{indent_str}{line}{terminator}\n"
+        return result
 
     def type_name_string(self, vtype):
         if vtype is None:
@@ -909,12 +1256,18 @@ class HLSLCodeGen:
             target = getattr(expr, "target", getattr(expr, "left", None))
             return self.expression_result_type(target)
         if isinstance(expr, ArrayAccessNode):
+            block_access = self.glsl_buffer_block_array_access(expr)
+            if block_access is not None:
+                return block_access["type"]
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if array_type and "[" in array_type and "]" in array_type:
                 base_type, _ = split_array_type_suffix(array_type)
                 return base_type
             return array_type
         if isinstance(expr, MemberAccessNode):
+            block_access = self.glsl_buffer_block_member_access(expr)
+            if block_access is not None:
+                return block_access["type"]
             object_type = self.expression_result_type(expr.object)
             member = str(expr.member)
             if object_type and all(ch in "xyzwrgba" for ch in member):
@@ -929,6 +1282,13 @@ class HLSLCodeGen:
                 ).get(member)
                 if member_type:
                     return member_type
+            member_types = {
+                self.type_name_string(members[member])
+                for members in self.struct_member_types.values()
+                if member in members
+            }
+            if len(member_types) == 1:
+                return next(iter(member_types))
             return None
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
@@ -977,18 +1337,23 @@ class HLSLCodeGen:
         # Handle both old and new AST assignment structures
         if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
-            lhs = self.generate_expression(node.target)
-            rhs = self.generate_expression_with_expected(
-                node.value, self.expression_result_type(node.target)
-            )
+            target = node.target
+            value = node.value
             op = getattr(node, "operator", "=")
         else:
             # Old AST structure
-            lhs = self.generate_expression(node.left)
-            rhs = self.generate_expression_with_expected(
-                node.right, self.expression_result_type(node.left)
-            )
+            target = node.left
+            value = node.right
             op = getattr(node, "operator", "=")
+
+        block_store = self.generate_glsl_buffer_block_store(target, value, op)
+        if block_store is not None:
+            return block_store
+
+        lhs = self.generate_expression(target)
+        rhs = self.generate_expression_with_expected(
+            value, self.expression_result_type(target)
+        )
         return f"{lhs} {op} {rhs}"
 
     def generate_if(self, node, indent):
@@ -1212,6 +1577,7 @@ class HLSLCodeGen:
         return self.generate_expression(init).strip().rstrip(";")
 
     def generate_expression(self, expr):
+        """Render a CrossGL AST expression into HLSL expression syntax."""
         if expr is None:
             return ""
         elif isinstance(expr, str):
@@ -1274,6 +1640,9 @@ class HLSLCodeGen:
             )
             return f"{query}.{expr.operation}({args_str})"
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
+            block_load = self.generate_glsl_buffer_block_array_load(expr)
+            if block_load is not None:
+                return block_load
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
             array = self.generate_expression(array_expr)
@@ -1296,6 +1665,10 @@ class HLSLCodeGen:
             if texture_call is not None:
                 return texture_call
 
+            buffer_call = self.generate_buffer_call(func_name, args)
+            if buffer_call is not None:
+                return buffer_call
+
             if func_name in [
                 "vec2",
                 "vec3",
@@ -1313,9 +1686,13 @@ class HLSLCodeGen:
                 mapped_type = self.map_type(func_name)
                 args_str = ", ".join(self.generate_expression(arg) for arg in args)
                 return f"{mapped_type}({args_str})"
+            self.validate_function_image_access_arguments(func_name, args)
             args_str = ", ".join(self.generate_call_arguments(func_name, args))
             return f"{callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
+            block_load = self.generate_glsl_buffer_block_member_load(expr)
+            if block_load is not None:
+                return block_load
             obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
             member = getattr(expr, "member", "")
             obj = self.generate_expression(obj_expr)
@@ -1328,27 +1705,36 @@ class HLSLCodeGen:
         else:
             return str(expr)
 
+    def generate_buffer_call(self, func_name, args):
+        """Render canonical CrossGL buffer operations as HLSL resource methods."""
+        if func_name == "buffer_load" and len(args) >= 2:
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            return f"{buffer}.Load({index})"
+        if func_name == "buffer_store" and len(args) >= 3:
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            value = self.generate_expression(args[2])
+            return f"{buffer}.Store({index}, {value})"
+        if func_name == "buffer_append" and len(args) >= 2:
+            buffer = self.generate_expression(args[0])
+            value = self.generate_expression(args[1])
+            return f"{buffer}.Append({value})"
+        if func_name == "buffer_consume" and args:
+            buffer = self.generate_expression(args[0])
+            return f"{buffer}.Consume()"
+        if func_name == "buffer_dimensions" and len(args) >= 2:
+            buffer = self.generate_expression(args[0])
+            dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
+            return f"{buffer}.GetDimensions({dimensions})"
+        return None
+
     def collect_comparison_resources(self, root):
         texture_names = set()
         sampler_names = set()
         visited = set()
         global_resource_types = self.collect_global_texture_types(root)
-        comparison_funcs = {
-            "textureCompare",
-            "textureCompareOffset",
-            "textureCompareLod",
-            "textureCompareLodOffset",
-            "textureCompareGrad",
-            "textureCompareGradOffset",
-            "textureCompareProj",
-            "textureCompareProjOffset",
-            "textureCompareProjLod",
-            "textureCompareProjLodOffset",
-            "textureCompareProjGrad",
-            "textureCompareProjGradOffset",
-            "textureGatherCompare",
-            "textureGatherCompareOffset",
-        }
+        comparison_funcs = self.comparison_texture_function_names()
 
         def visit(value):
             if value is None or isinstance(value, (str, int, float, bool)):
@@ -1373,12 +1759,7 @@ class HLSLCodeGen:
                 if func_name in comparison_funcs and len(args) >= 3:
                     texture_name = self.expression_name(args[0])
                     texture_type = global_resource_types.get(texture_name)
-                    if (
-                        self.storage_image_texture_operation_expression(
-                            func_name, texture_type
-                        )
-                        is not None
-                    ):
+                    if self.texture_call_is_diagnostic_only(func_name, texture_type):
                         return
                     if texture_name:
                         texture_names.add(texture_name)
@@ -1393,6 +1774,286 @@ class HLSLCodeGen:
 
         visit(root)
         return texture_names, sampler_names
+
+    def comparison_texture_function_names(self):
+        return {
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+        }
+
+    def regular_texture_function_names(self):
+        return {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureQueryLod",
+        }
+
+    def collect_regular_sampler_parameters(self, root):
+        regular_params = {}
+        functions = self.collect_functions(root)
+        global_resource_types = self.collect_global_texture_types(root)
+
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            sampler_params = {
+                param.name
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+                if self.is_sampler_type(
+                    getattr(param, "param_type", getattr(param, "vtype", None))
+                )
+            }
+            if not sampler_params:
+                continue
+
+            previous_local_variable_types = self.local_variable_types
+            self.local_variable_types = self.function_scope_variable_types(func)
+            try:
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    func_name_expr = self.expression_name(func_expr)
+                    if func_name_expr not in self.regular_texture_function_names():
+                        continue
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    if not self.has_explicit_sampler_argument(
+                        func_name_expr, args, sampler_params
+                    ):
+                        continue
+                    texture_type = self.texture_argument_analysis_type(
+                        args[0], global_resource_types
+                    )
+                    if self.texture_call_is_diagnostic_only(
+                        func_name_expr, texture_type
+                    ):
+                        continue
+                    sampler_name = self.expression_name(args[1])
+                    if sampler_name in sampler_params:
+                        regular_params.setdefault(func_name, set()).add(sampler_name)
+            finally:
+                self.local_variable_types = previous_local_variable_types
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+
+                sampler_param_names = {
+                    param.name
+                    for param in getattr(
+                        func, "parameters", getattr(func, "params", [])
+                    )
+                    if self.is_sampler_type(
+                        getattr(param, "param_type", getattr(param, "vtype", None))
+                    )
+                }
+                if not sampler_param_names:
+                    continue
+
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    callee_name = self.expression_name(func_expr)
+                    required_indices = self.comparison_sampler_parameter_indices(
+                        functions, regular_params, callee_name
+                    )
+                    if not required_indices:
+                        continue
+
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    for index in required_indices:
+                        if index >= len(args):
+                            continue
+                        arg_name = self.expression_name(args[index])
+                        if arg_name in sampler_param_names:
+                            current = regular_params.setdefault(func_name, set())
+                            if arg_name not in current:
+                                current.add(arg_name)
+                                changed = True
+
+        return regular_params
+
+    def collect_regular_sampler_arguments(self, root, regular_params):
+        return self.collect_sampler_arguments(root, regular_params)
+
+    def collect_sampler_arguments(self, root, sampler_params_by_function):
+        sampler_names = set()
+        functions = self.collect_functions(root)
+
+        for func in functions:
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_expr = getattr(node, "function", getattr(node, "name", None))
+                callee_name = self.expression_name(func_expr)
+                required_indices = self.comparison_sampler_parameter_indices(
+                    functions, sampler_params_by_function, callee_name
+                )
+                if not required_indices:
+                    continue
+
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                for index in required_indices:
+                    if index >= len(args):
+                        continue
+                    arg_name = self.expression_name(args[index])
+                    if arg_name:
+                        sampler_names.add(arg_name)
+
+        return sampler_names
+
+    def collect_explicit_sampler_resource_names(self, root, texture_funcs):
+        sampler_names = set()
+        global_sampler_names = self.collect_global_sampler_names(root)
+        global_resource_types = self.collect_global_texture_types(root)
+        previous_local_variable_types = self.local_variable_types
+        try:
+            for func in self.collect_functions(root):
+                self.local_variable_types = self.function_scope_variable_types(func)
+                sampler_scope = global_sampler_names | {
+                    param.name
+                    for param in getattr(
+                        func, "parameters", getattr(func, "params", [])
+                    )
+                    if self.is_sampler_type(
+                        getattr(param, "param_type", getattr(param, "vtype", None))
+                    )
+                }
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    func_name = self.expression_name(func_expr)
+                    if func_name not in texture_funcs:
+                        continue
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    if not self.has_explicit_sampler_argument(
+                        func_name, args, sampler_scope
+                    ):
+                        continue
+                    texture_type = self.texture_argument_analysis_type(
+                        args[0], global_resource_types
+                    )
+                    if self.texture_call_is_diagnostic_only(func_name, texture_type):
+                        continue
+                    sampler_name = self.expression_name(args[1])
+                    if sampler_name:
+                        sampler_names.add(sampler_name)
+        finally:
+            self.local_variable_types = previous_local_variable_types
+        return sampler_names
+
+    def collect_sampler_struct_members(self, root, sampler_params, texture_funcs):
+        members = set()
+        previous_local_variable_types = self.local_variable_types
+        functions = self.collect_functions(root)
+        global_resource_types = self.collect_global_texture_types(root)
+        try:
+            for func in functions:
+                self.local_variable_types = self.function_scope_variable_types(func)
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    func_name = self.expression_name(func_expr)
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    if (
+                        func_name in texture_funcs
+                        and self.has_explicit_sampler_argument(func_name, args, set())
+                    ):
+                        texture_type = self.texture_argument_analysis_type(
+                            args[0], global_resource_types
+                        )
+                        if self.texture_call_is_diagnostic_only(
+                            func_name, texture_type
+                        ):
+                            continue
+                        member_ref = self.sampler_struct_member_reference(args[1])
+                        if member_ref is not None:
+                            members.add(member_ref)
+
+                    required_indices = self.comparison_sampler_parameter_indices(
+                        functions, sampler_params, func_name
+                    )
+                    for index in required_indices:
+                        if index >= len(args):
+                            continue
+                        member_ref = self.sampler_struct_member_reference(args[index])
+                        if member_ref is not None:
+                            members.add(member_ref)
+        finally:
+            self.local_variable_types = previous_local_variable_types
+        return members
+
+    def function_scope_variable_types(self, func):
+        variable_types = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])):
+            param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+            variable_types[param.name] = self.type_name_string(param_type)
+
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            variable_types[name] = self.type_name_string(vtype)
+
+        return variable_types
+
+    def sampler_struct_member_reference(self, expr):
+        while isinstance(expr, ArrayAccessNode):
+            expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+        if not isinstance(expr, MemberAccessNode):
+            return None
+
+        member_name = str(expr.member)
+        object_type = self.type_name_string(self.expression_result_type(expr.object))
+        if object_type:
+            member_type = self.struct_member_types.get(object_type, {}).get(member_name)
+            if member_type is not None and self.is_sampler_type(member_type):
+                return object_type, member_name
+
+        matching_structs = [
+            struct_name
+            for struct_name, members in self.struct_member_types.items()
+            if member_name in members and self.is_sampler_type(members[member_name])
+        ]
+        if len(matching_structs) == 1:
+            return matching_structs[0], member_name
+        return None
 
     def collect_global_texture_names(self, root):
         texture_names = set()
@@ -1413,6 +2074,80 @@ class HLSLCodeGen:
             if var_name and mapped_type.startswith(("Texture", "RWTexture")):
                 texture_types[var_name] = mapped_type
         return texture_types
+
+    def collect_global_sampler_names(self, root):
+        sampler_names = set()
+        for node in getattr(root, "global_variables", []) or []:
+            var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if var_name and self.is_sampler_type(var_type):
+                sampler_names.add(var_name)
+        return sampler_names
+
+    def collect_global_resource_names(self, root):
+        resource_names = set()
+        for node in getattr(root, "global_variables", []) or []:
+            var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if var_name and self.is_resource_parameter_type(var_type):
+                resource_names.add(var_name)
+        return resource_names
+
+    def validate_global_resource_shadows(self, ast):
+        conflicts = collect_non_resource_global_resource_shadows(
+            ast,
+            self.collect_global_resource_names(ast),
+            self.is_resource_parameter_type,
+        )
+        if conflicts:
+            names = ", ".join(sorted(conflicts))
+            raise ValueError(
+                "Non-resource local declaration(s) shadow DirectX global resource(s): "
+                f"{names}"
+            )
+
+    def validate_explicit_sampler_role_conflicts(self, ast):
+        global_sampler_names = self.collect_global_sampler_names(ast)
+        comparison_sampler_names = self.collect_explicit_sampler_resource_names(
+            ast, self.comparison_texture_function_names()
+        ) | self.collect_comparison_sampler_arguments(
+            ast, self.comparison_sampler_parameters
+        )
+        regular_sampler_names = self.collect_explicit_sampler_resource_names(
+            ast, self.regular_texture_function_names()
+        ) | self.collect_regular_sampler_arguments(ast, self.regular_sampler_parameters)
+
+        conflicts = [
+            name
+            for name in sorted(
+                (comparison_sampler_names & regular_sampler_names)
+                & global_sampler_names
+            )
+        ]
+
+        function_names = set(self.comparison_sampler_parameters) | set(
+            self.regular_sampler_parameters
+        )
+        for func_name in sorted(function_names):
+            for param_name in sorted(
+                self.comparison_sampler_parameters.get(func_name, set())
+                & self.regular_sampler_parameters.get(func_name, set())
+            ):
+                conflicts.append(f"{func_name}.{param_name}")
+
+        for struct_name, member_name in sorted(
+            self.comparison_sampler_struct_members & self.regular_sampler_struct_members
+        ):
+            conflicts.append(f"{struct_name}.{member_name}")
+
+        if not conflicts:
+            return
+
+        names = ", ".join(conflicts)
+        raise ValueError(
+            "DirectX sampler(s) used for both regular sampling and shadow "
+            f"comparison: {names}"
+        )
 
     def is_projected_texture_function(self, func_name):
         return func_name in {
@@ -1526,9 +2261,64 @@ class HLSLCodeGen:
             "textureGatherOffset",
             "textureGatherOffsets",
             "textureQueryLod",
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
         }:
             return False
         return self.is_multisample_texture_resource_type(texture_type)
+
+    def texture_call_is_diagnostic_only(self, func_name, texture_type):
+        if texture_type is None:
+            return False
+        if self.storage_image_texture_operation_expression(func_name, texture_type):
+            return True
+        if func_name == "textureQueryLod" and self.is_storage_image_resource_type(
+            texture_type
+        ):
+            return True
+        if self.projected_texture_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.projected_texture_compare_call_is_diagnostic_only(
+            func_name, texture_type
+        ):
+            return True
+        if self.texture_gather_compare_offset_call_is_diagnostic_only(
+            func_name, texture_type
+        ):
+            return True
+        if self.texture_gather_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.texture_gather_offset_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.texture_sample_offset_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        if self.texture_compare_offset_call_is_diagnostic_only(func_name, texture_type):
+            return True
+        return self.multisample_texture_call_is_diagnostic_only(func_name, texture_type)
+
+    def texture_argument_analysis_type(self, texture_arg, global_resource_types=None):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name and global_resource_types:
+            texture_type = global_resource_types.get(texture_name)
+            if texture_type is not None:
+                return texture_type
+
+        arg_type = self.expression_result_type(texture_arg)
+        if arg_type is not None and self.is_texture_or_image_type(arg_type):
+            return self.map_resource_type_with_format(self.resource_base_type(arg_type))
+        return None
 
     def collect_global_implicit_sampler_texture_names(
         self, root, global_texture_names, sampler_names, implicit_params
@@ -1644,6 +2434,79 @@ class HLSLCodeGen:
 
         return texture_names
 
+    def collect_global_implicit_regular_sampler_texture_names(
+        self, root, global_texture_names, sampler_names, implicit_params
+    ):
+        texture_names = set()
+        global_texture_types = self.collect_global_texture_types(root)
+        functions = self.collect_functions(root)
+        texture_funcs = self.regular_texture_function_names() - {"textureQueryLod"}
+
+        for func in functions:
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_expr = getattr(node, "function", getattr(node, "name", None))
+                func_name = self.expression_name(func_expr)
+                if func_name not in texture_funcs:
+                    continue
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                if len(args) < 2:
+                    continue
+                texture_name = self.expression_name(args[0])
+                if texture_name not in global_texture_names:
+                    continue
+                if self.has_explicit_sampler_argument(func_name, args, sampler_names):
+                    continue
+                if self.projected_texture_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_gather_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_gather_offset_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.texture_sample_offset_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                if self.multisample_texture_call_is_diagnostic_only(
+                    func_name, global_texture_types.get(texture_name)
+                ):
+                    continue
+                texture_names.add(texture_name)
+
+        for func in functions:
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_expr = getattr(node, "function", getattr(node, "name", None))
+                callee_name = self.expression_name(func_expr)
+                callee_implicit = implicit_params.get(callee_name, {})
+                if not callee_implicit:
+                    continue
+
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                callee_params = self.function_parameter_names.get(callee_name, [])
+                for texture_param, sampler_info in callee_implicit.items():
+                    if not sampler_info.get("regular"):
+                        continue
+                    try:
+                        texture_index = callee_params.index(texture_param)
+                    except ValueError:
+                        continue
+                    if texture_index >= len(args):
+                        continue
+                    texture_name = self.expression_name(args[texture_index])
+                    if texture_name in global_texture_names:
+                        texture_names.add(texture_name)
+
+        return texture_names
+
     def collect_global_implicit_query_lod_texture_names(
         self, root, global_texture_names, sampler_names, implicit_params
     ):
@@ -1735,6 +2598,7 @@ class HLSLCodeGen:
     def collect_comparison_sampler_parameters(self, root):
         comparison_params = {}
         functions = self.collect_functions(root)
+        global_resource_types = self.collect_global_texture_types(root)
 
         for func in functions:
             func_name = getattr(func, "name", None)
@@ -1788,11 +2652,12 @@ class HLSLCodeGen:
                 texture_type = resource_param_types.get(texture_name)
                 if texture_type is not None:
                     texture_type = self.map_resource_type_with_format(texture_type)
-                if (
-                    self.storage_image_texture_operation_expression(
-                        self.expression_name(func_expr), texture_type
+                else:
+                    texture_type = self.texture_argument_analysis_type(
+                        args[0], global_resource_types
                     )
-                    is not None
+                if self.texture_call_is_diagnostic_only(
+                    self.expression_name(func_expr), texture_type
                 ):
                     continue
                 sampler_name = self.expression_name(args[1])
@@ -1998,25 +2863,13 @@ class HLSLCodeGen:
                     continue
 
                 query_lod = texture_func == "textureQueryLod"
-                comparison = not query_lod and (
-                    texture_func
-                    in {
-                        "textureCompare",
-                        "textureCompareOffset",
-                        "textureCompareLod",
-                        "textureCompareLodOffset",
-                        "textureCompareGrad",
-                        "textureCompareGradOffset",
-                        "textureCompareProj",
-                        "textureCompareProjOffset",
-                        "textureCompareProjLod",
-                        "textureCompareProjLodOffset",
-                        "textureCompareProjGrad",
-                        "textureCompareProjGradOffset",
-                        "textureGatherCompare",
-                        "textureGatherCompareOffset",
-                    }
-                    or self.is_shadow_sampler_type(texture_param_types[texture_name])
+                regular = (
+                    not query_lod
+                    and texture_func in self.regular_texture_function_names()
+                )
+                comparison = (
+                    not query_lod
+                    and texture_func in self.comparison_texture_function_names()
                 )
                 self.add_implicit_texture_sampler_parameter(
                     implicit_params,
@@ -2025,6 +2878,7 @@ class HLSLCodeGen:
                     comparison,
                     param_names,
                     query_lod=query_lod,
+                    regular=regular,
                 )
 
         changed = True
@@ -2075,6 +2929,7 @@ class HLSLCodeGen:
                             sampler_info["comparison"],
                             param_names,
                             query_lod=sampler_info.get("query_lod", False),
+                            regular=sampler_info.get("regular", False),
                         )
 
         return implicit_params
@@ -2087,6 +2942,7 @@ class HLSLCodeGen:
         comparison,
         param_names,
         query_lod=False,
+        regular=False,
     ):
         sampler_name = f"{texture_name}Sampler"
         new_info = {
@@ -2094,6 +2950,7 @@ class HLSLCodeGen:
             "comparison": comparison,
             "synthetic": sampler_name not in param_names,
             "query_lod": query_lod,
+            "regular": regular,
         }
         current = implicit_params.setdefault(func_name, {}).get(texture_name)
         if current is None:
@@ -2105,6 +2962,9 @@ class HLSLCodeGen:
             changed = True
         if query_lod and not current.get("query_lod"):
             current["query_lod"] = True
+            changed = True
+        if regular and not current.get("regular"):
+            current["regular"] = True
             changed = True
         return changed
 
@@ -2125,8 +2985,16 @@ class HLSLCodeGen:
             "textureGatherCompare",
             "textureGatherCompareOffset",
         }:
-            return len(args) >= 4 and self.expression_name(args[1]) in sampler_names
-        return len(args) >= 3 and self.expression_name(args[1]) in sampler_names
+            if len(args) < 4:
+                return False
+        elif len(args) < 3:
+            return False
+
+        sampler_name = self.expression_name(args[1])
+        if sampler_name in sampler_names:
+            return True
+        sampler_type = self.expression_result_type(args[1])
+        return sampler_type is not None and self.is_sampler_type(sampler_type)
 
     def collect_implicit_comparison_texture_arguments(self, root, implicit_params):
         texture_names = set()
@@ -2158,18 +3026,6 @@ class HLSLCodeGen:
                         texture_names.add(texture_name)
 
         return texture_names
-
-    def collect_function_parameter_names(self, root):
-        parameter_names = {}
-        for func in self.collect_functions(root):
-            func_name = getattr(func, "name", None)
-            if not func_name:
-                continue
-            parameter_names[func_name] = [
-                param.name
-                for param in getattr(func, "parameters", getattr(func, "params", []))
-            ]
-        return parameter_names
 
     def collect_functions(self, root):
         functions = []
@@ -2335,6 +3191,152 @@ class HLSLCodeGen:
     def is_image_type(self, vtype):
         return self.map_type(self.resource_base_type(vtype)).startswith("RWTexture")
 
+    def is_texture_or_image_type(self, vtype):
+        return self.is_texture_type(vtype) or self.is_image_type(vtype)
+
+    def is_integer_coordinate_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        base_type = self.resource_base_type(type_name)
+        mapped_type = self.map_type(base_type)
+        return base_type in {
+            "int",
+            "uint",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+        } or mapped_type in {
+            "int",
+            "uint",
+            "int2",
+            "int3",
+            "int4",
+            "uint2",
+            "uint3",
+            "uint4",
+        }
+
+    def texture_dimension_descriptor(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        sampling = self.texture_sampling_capabilities(texture_type)
+        is_multisample = texture_type.startswith("Texture2DMS")
+        is_storage_image = texture_type.startswith("RWTexture")
+
+        coordinate_dimension = None
+        if texture_type and "Cube" not in texture_type:
+            if texture_type.startswith("RWTexture1DArray<"):
+                coordinate_dimension = 2
+            elif texture_type.startswith("RWTexture1D<"):
+                coordinate_dimension = 1
+            elif texture_type.startswith("RWTexture2DArray<"):
+                coordinate_dimension = 3
+            elif texture_type.startswith("RWTexture3D<"):
+                coordinate_dimension = 3
+            elif texture_type.startswith("RWTexture2D<"):
+                coordinate_dimension = 2
+            elif texture_type.startswith("Texture2DMSArray"):
+                coordinate_dimension = 3
+            elif texture_type.startswith("Texture2DMS"):
+                coordinate_dimension = 2
+            else:
+                coordinate_dimension = {
+                    "Texture1D": 1,
+                    "Texture1DArray": 2,
+                    "Texture2D": 2,
+                    "Texture2DArray": 3,
+                    "Texture3D": 3,
+                }.get(texture_type)
+
+        offset_dimension = None
+        if texture_type and "Cube" not in texture_type:
+            offset_dimension = {
+                "Texture1D": 1,
+                "Texture1DArray": 1,
+                "Texture2D": 2,
+                "Texture2DArray": 2,
+                "Texture3D": 3,
+            }.get(texture_type)
+
+        gradient_dimension = None
+        if texture_type and not is_storage_image and not is_multisample:
+            gradient_dimension = {
+                "Texture1D": 1,
+                "Texture1DArray": 1,
+                "Texture2D": 2,
+                "Texture2DArray": 2,
+                "Texture3D": 3,
+                "TextureCube": 3,
+                "TextureCubeArray": 3,
+            }.get(texture_type)
+
+        query_lod_coordinate_dimension = None
+        if texture_type and not is_storage_image and not is_multisample:
+            query_lod_coordinate_dimension = {
+                "Texture1D": 1,
+                "Texture1DArray": 2,
+                "Texture2D": 2,
+                "Texture2DArray": 3,
+                "Texture3D": 3,
+                "TextureCube": 3,
+                "TextureCubeArray": 4,
+            }.get(texture_type)
+
+        offset_compare_dimension = 2 if sampling["compare_offset"] else None
+        return {
+            "texture_type": texture_type,
+            "coordinate_dimension": coordinate_dimension,
+            "offset_dimension": offset_dimension,
+            "sample_offset_dimension": (
+                offset_dimension if sampling["sample_offset"] else None
+            ),
+            "texel_fetch_offset_dimension": (
+                None if is_multisample else offset_dimension
+            ),
+            "gather_offset_dimension": 2 if sampling["gather_offset"] else None,
+            "compare_offset_dimension": offset_compare_dimension,
+            "compare_lod_offset_dimension": offset_compare_dimension,
+            "compare_grad_offset_dimension": offset_compare_dimension,
+            "gather_compare_offset_dimension": (
+                2 if sampling["gather_compare_offset"] else None
+            ),
+            "gradient_dimension": gradient_dimension,
+            "query_lod_coordinate_dimension": query_lod_coordinate_dimension,
+        }
+
+    def resource_coordinate_dimension(self, texture_type):
+        return self.texture_dimension_descriptor(texture_type)["coordinate_dimension"]
+
+    def resource_offset_dimension(self, func_name, texture_type):
+        descriptor = self.texture_dimension_descriptor(texture_type)
+        if func_name in {
+            "textureCompareOffset",
+            "textureCompareLodOffset",
+            "textureCompareGradOffset",
+            "textureCompareProjOffset",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGradOffset",
+        }:
+            return descriptor["compare_offset_dimension"]
+        if func_name in {"textureGatherOffset", "textureGatherOffsets"}:
+            return descriptor["gather_offset_dimension"]
+        if func_name == "textureGatherCompareOffset":
+            return descriptor["gather_compare_offset_dimension"]
+        if func_name == "texelFetchOffset":
+            return descriptor["texel_fetch_offset_dimension"]
+        if func_name in OFFSET_DIMENSION_INTRINSIC_NAMES:
+            return descriptor["sample_offset_dimension"]
+        return descriptor["offset_dimension"]
+
+    def resource_gradient_dimension(self, func_name, texture_type):
+        return self.texture_dimension_descriptor(texture_type)["gradient_dimension"]
+
+    def resource_query_lod_coordinate_dimension(self, texture_type):
+        return self.texture_dimension_descriptor(texture_type)[
+            "query_lod_coordinate_dimension"
+        ]
+
     def is_resource_parameter_type(self, vtype):
         return (
             self.is_texture_type(vtype)
@@ -2345,13 +3347,21 @@ class HLSLCodeGen:
     def is_explicit_sampler_argument(self, args):
         if len(args) < 3:
             return False
+        return self.texture_call_uses_explicit_sampler(args)
+
+    def texture_call_uses_explicit_sampler(self, args):
+        if len(args) < 2:
+            return False
         sampler_name = self.expression_name(args[1]) or self.generate_expression(
             args[1]
         )
-        return (
+        if (
             sampler_name in self.sampler_variables
             or sampler_name in self.current_sampler_parameters
-        )
+        ):
+            return True
+        arg_type = self.expression_result_type(args[1])
+        return arg_type is not None and self.is_sampler_type(arg_type)
 
     def resource_array_count(self, size):
         if size is None:
@@ -2399,7 +3409,7 @@ class HLSLCodeGen:
             return func_expr.name
         return None
 
-    def texture_call_parts(self, args):
+    def texture_call_parts(self, args, func_name=None):
         explicit_sampler = self.is_explicit_sampler_argument(args)
         coord_index = 2 if explicit_sampler else 1
         if len(args) <= coord_index:
@@ -2407,13 +3417,22 @@ class HLSLCodeGen:
 
         texture_name = self.generate_expression(args[0])
         texture_base_name = self.expression_name(args[0]) or texture_name
-        sampler_name = (
-            self.generate_expression(args[1])
-            if explicit_sampler
-            else self.current_implicit_texture_samplers.get(
+        if explicit_sampler:
+            sampler_name = self.generate_expression(args[1])
+        elif self.implicit_call_uses_regular_sampler(func_name):
+            sampler_name = self.current_implicit_texture_regular_samplers.get(
+                texture_base_name,
+                self.global_implicit_texture_regular_samplers.get(
+                    texture_base_name,
+                    self.current_implicit_texture_samplers.get(
+                        texture_base_name, f"{texture_base_name}Sampler"
+                    ),
+                ),
+            )
+        else:
+            sampler_name = self.current_implicit_texture_samplers.get(
                 texture_base_name, f"{texture_base_name}Sampler"
             )
-        )
         coord = self.generate_expression(args[coord_index])
         extra_args = args[coord_index + 1 :]
         return texture_name, sampler_name, coord, extra_args
@@ -2431,13 +3450,27 @@ class HLSLCodeGen:
             if texture_param not in implicit_samplers:
                 continue
             sampler_info = implicit_samplers[texture_param]
-            generated_args.append(self.generate_implicit_sampler_argument(arg))
+            if sampler_info["synthetic"]:
+                generated_args.append(self.generate_implicit_sampler_argument(arg))
+            regular_sampler_name = self.implicit_regular_sampler_name(
+                texture_param, sampler_info
+            )
+            if (
+                sampler_info.get("regular")
+                and sampler_info.get("comparison")
+                and regular_sampler_name != sampler_info["sampler_name"]
+                and regular_sampler_name not in param_names
+            ):
+                generated_args.append(
+                    self.generate_implicit_regular_sampler_argument(arg, sampler_info)
+                )
             query_sampler_name = self.implicit_query_lod_sampler_name(
                 texture_param, sampler_info
             )
             if (
                 sampler_info.get("query_lod")
                 and query_sampler_name != sampler_info["sampler_name"]
+                and query_sampler_name not in param_names
             ):
                 generated_args.append(
                     self.generate_implicit_query_lod_sampler_argument(arg, sampler_info)
@@ -2453,6 +3486,35 @@ class HLSLCodeGen:
             return f"{texture_name}Sampler"
 
         texture_expr = self.generate_expression(texture_arg)
+        return f"{texture_expr}Sampler"
+
+    def implicit_call_uses_regular_sampler(self, func_name):
+        return (
+            func_name in self.regular_texture_function_names()
+            and func_name != "textureQueryLod"
+        )
+
+    def implicit_regular_sampler_name(self, texture_name, sampler_info):
+        if sampler_info.get("regular") and sampler_info.get("comparison"):
+            return f"{texture_name}RegularSampler"
+        return sampler_info["sampler_name"]
+
+    def generate_implicit_regular_sampler_argument(
+        self, texture_arg, sampler_info=None
+    ):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name in self.current_implicit_texture_regular_samplers:
+            return self.current_implicit_texture_regular_samplers[texture_name]
+        if texture_name in self.global_implicit_texture_regular_samplers:
+            return self.global_implicit_texture_regular_samplers[texture_name]
+        if texture_name:
+            if sampler_info and sampler_info.get("comparison"):
+                return f"{texture_name}RegularSampler"
+            return f"{texture_name}Sampler"
+
+        texture_expr = self.generate_expression(texture_arg)
+        if sampler_info and sampler_info.get("comparison"):
+            return f"{texture_expr}RegularSampler"
         return f"{texture_expr}Sampler"
 
     def implicit_query_lod_sampler_name(self, texture_name, sampler_info):
@@ -2486,9 +3548,480 @@ class HLSLCodeGen:
             texture_name, self.texture_variable_types.get(texture_name)
         )
 
+    def texture_argument_resource_type(self, texture_arg):
+        texture_type = self.texture_resource_type(texture_arg)
+        if texture_type is not None:
+            return texture_type
+        arg_type = self.expression_result_type(texture_arg)
+        if arg_type is None or not self.is_texture_or_image_type(arg_type):
+            return None
+        return self.map_resource_type_with_format(self.resource_base_type(arg_type))
+
+    def image_resource_access(self, texture_arg):
+        texture_name = self.expression_name(texture_arg)
+        if not texture_name:
+            return None
+        return self.current_image_access_parameters.get(
+            texture_name, self.image_variable_accesses.get(texture_name)
+        )
+
+    def validate_texture_resource_argument(self, func_name, args):
+        if not args or func_name not in self.texture_resource_operation_names():
+            return
+        if self.texture_resource_type(args[0]) is not None:
+            return
+        arg_type = self.expression_result_type(args[0])
+        if arg_type is not None and self.is_texture_or_image_type(arg_type):
+            return
+
+        texture_name = self.expression_name(args[0]) or str(args[0])
+        raise ValueError(
+            f"DirectX texture operation '{func_name}' requires a declared "
+            f"texture or image resource argument: {texture_name}"
+        )
+
+    def validate_image_resource_argument(self, func_name, args):
+        if not args or func_name not in IMAGE_RESOURCE_INTRINSIC_NAMES:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        if self.is_storage_image_resource_type(texture_type):
+            return
+        texture_name = self.expression_name(args[0]) or str(args[0])
+        raise ValueError(
+            f"DirectX image operation '{func_name}' requires a storage "
+            f"image resource argument: {texture_name}"
+        )
+
+    def validate_image_access_argument(self, func_name, args):
+        if not args or func_name not in IMAGE_RESOURCE_INTRINSIC_NAMES:
+            return
+        access = self.image_resource_access(args[0])
+        if access is None or access == "read_write":
+            return
+        texture_name = expression_debug_name(args[0])
+        if func_name == "imageLoad" and access == "write":
+            raise ValueError(
+                f"DirectX image operation '{func_name}' requires read-capable "
+                f"storage image access for {texture_name}: got writeonly"
+            )
+        if func_name == "imageStore" and access == "read":
+            raise ValueError(
+                f"DirectX image operation '{func_name}' requires write-capable "
+                f"storage image access for {texture_name}: got readonly"
+            )
+        if self.image_atomic_intrinsic(func_name):
+            access_name = "readonly" if access == "read" else "writeonly"
+            raise ValueError(
+                f"DirectX image operation '{func_name}' requires read-write "
+                f"storage image access for {texture_name}: got {access_name}"
+            )
+
+    def image_access_requirement_label(self, required_access):
+        return {
+            "read": "read-capable",
+            "write": "write-capable",
+            "read_write": "read-write",
+        }.get(required_access, str(required_access))
+
+    def image_access_diagnostic_name(self, access):
+        return {
+            "read": "readonly",
+            "write": "writeonly",
+            "read_write": "readwrite",
+        }.get(access, str(access))
+
+    def validate_function_image_access_arguments(self, func_name, args):
+        callee_requirements = self.function_image_access_requirements.get(func_name)
+        if not callee_requirements:
+            return
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+            actual_access = self.image_resource_access(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+            actual_name = expression_debug_name(args[index])
+            required_label = self.image_access_requirement_label(required_access)
+            actual_label = self.image_access_diagnostic_name(actual_access)
+            raise ValueError(
+                f"DirectX function call '{func_name}' requires {required_label} "
+                f"storage image access for argument {actual_name} passed to "
+                f"parameter {param_name}: got {actual_label}"
+            )
+
+    def validate_integer_coordinate_argument(self, func_name, args):
+        if func_name not in INTEGER_COORDINATE_INTRINSIC_NAMES or len(args) < 2:
+            return
+        coord_type = self.expression_result_type(args[1])
+        if coord_type is None or self.is_integer_coordinate_type(coord_type):
+            return
+        raise ValueError(
+            f"DirectX resource operation '{func_name}' requires an integer "
+            f"coordinate argument: {expression_debug_name(args[1])} has type "
+            f"{self.type_name_string(coord_type)}"
+        )
+
+    def validate_coordinate_dimension_argument(self, func_name, args):
+        if func_name not in INTEGER_COORDINATE_INTRINSIC_NAMES or len(args) < 2:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_coordinate_dimension(texture_type)
+        if expected_dimension is None:
+            return
+        coord_type = self.expression_result_type(args[1])
+        coord_dimension = integer_coordinate_dimension(
+            self.type_name_string(coord_type)
+        )
+        if coord_dimension is None or coord_dimension == expected_dimension:
+            return
+        raise ValueError(
+            f"DirectX resource operation '{func_name}' requires a "
+            f"{expected_dimension}D integer coordinate for "
+            f"{self.resource_base_type(texture_type)}: "
+            f"{expression_debug_name(args[1])} has type "
+            f"{self.type_name_string(coord_type)}"
+        )
+
+    def validate_offset_dimension_argument(self, func_name, args):
+        offset_indices = texture_offset_argument_indices(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if not offset_indices:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_offset_dimension(func_name, texture_type)
+        if expected_dimension is None:
+            return
+        for offset_index in offset_indices:
+            offset_type = self.expression_result_type(args[offset_index])
+            if offset_type is None:
+                continue
+            if not self.is_integer_coordinate_type(offset_type):
+                raise ValueError(
+                    f"DirectX resource operation '{func_name}' requires an integer "
+                    f"offset argument: {expression_debug_name(args[offset_index])} "
+                    f"has type {self.type_name_string(offset_type)}"
+                )
+            offset_dimension = integer_coordinate_dimension(
+                self.type_name_string(offset_type)
+            )
+            if offset_dimension is None or offset_dimension == expected_dimension:
+                continue
+            raise ValueError(
+                f"DirectX resource operation '{func_name}' requires a "
+                f"{expected_dimension}D integer offset for "
+                f"{self.resource_base_type(texture_type)}: "
+                f"{expression_debug_name(args[offset_index])} has type "
+                f"{self.type_name_string(offset_type)}"
+            )
+
+    def gradient_argument_dimension(self, vtype):
+        type_name = self.resource_base_type(self.type_name_string(vtype))
+        mapped_type = self.map_type(type_name)
+        return floating_coordinate_dimension(
+            mapped_type
+        ) or floating_coordinate_dimension(type_name)
+
+    def query_lod_coordinate_dimension(self, vtype):
+        type_name = self.resource_base_type(self.type_name_string(vtype))
+        mapped_type = self.map_type(type_name)
+        return floating_coordinate_dimension(
+            mapped_type
+        ) or floating_coordinate_dimension(type_name)
+
+    def validate_query_lod_coordinate_argument(self, func_name, args):
+        coord_index = texture_query_lod_coordinate_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if coord_index is None:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_query_lod_coordinate_dimension(texture_type)
+        if expected_dimension is None:
+            return
+        coord_type = self.expression_result_type(args[coord_index])
+        if coord_type is None:
+            return
+        coord_dimension = self.query_lod_coordinate_dimension(coord_type)
+        if coord_dimension is None:
+            raise ValueError(
+                f"DirectX texture query operation '{func_name}' requires a floating "
+                f"coordinate argument: {expression_debug_name(args[coord_index])} "
+                f"has type {self.type_name_string(coord_type)}"
+            )
+        if coord_dimension == expected_dimension:
+            return
+        raise ValueError(
+            f"DirectX texture query operation '{func_name}' requires a "
+            f"{expected_dimension}D floating coordinate for "
+            f"{self.resource_base_type(texture_type)}: "
+            f"{expression_debug_name(args[coord_index])} has type "
+            f"{self.type_name_string(coord_type)}"
+        )
+
+    def validate_gradient_dimension_arguments(self, func_name, args):
+        gradient_indices = texture_gradient_argument_indices(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if not gradient_indices:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_dimension = self.resource_gradient_dimension(func_name, texture_type)
+        if expected_dimension is None:
+            return
+        for gradient_index in gradient_indices:
+            gradient_type = self.expression_result_type(args[gradient_index])
+            if gradient_type is None:
+                continue
+            gradient_dimension = self.gradient_argument_dimension(gradient_type)
+            if gradient_dimension is None:
+                raise ValueError(
+                    f"DirectX resource operation '{func_name}' requires a floating "
+                    f"gradient argument: {expression_debug_name(args[gradient_index])} "
+                    f"has type {self.type_name_string(gradient_type)}"
+                )
+            if gradient_dimension == expected_dimension:
+                continue
+            raise ValueError(
+                f"DirectX resource operation '{func_name}' requires a "
+                f"{expected_dimension}D floating gradient for "
+                f"{self.resource_base_type(texture_type)}: "
+                f"{expression_debug_name(args[gradient_index])} has type "
+                f"{self.type_name_string(gradient_type)}"
+            )
+
+    def is_scalar_floating_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in str(type_name):
+            return False
+        mapped_type = self.map_type(type_name)
+        return is_floating_scalar_type(mapped_type) or is_floating_scalar_type(
+            type_name
+        )
+
+    def is_scalar_numeric_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in str(type_name):
+            return False
+        mapped_type = self.map_type(type_name)
+        return is_numeric_scalar_type(mapped_type) or is_numeric_scalar_type(type_name)
+
+    def is_scalar_integer_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[" in str(type_name):
+            return False
+        mapped_type = self.map_type(type_name)
+        return is_integer_scalar_type(mapped_type) or is_integer_scalar_type(type_name)
+
+    def texture_argument_diagnostic_type(self, arg):
+        texture_type = self.texture_resource_type(arg)
+        if texture_type is not None:
+            return texture_type
+        arg_name = self.expression_name(arg)
+        if (
+            arg_name in self.sampler_variables
+            or arg_name in self.current_sampler_parameters
+        ):
+            return "sampler"
+        return self.expression_result_type(arg)
+
+    def validate_compare_argument(self, func_name, args):
+        compare_index = texture_compare_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if compare_index is None:
+            return
+        compare_type = self.expression_result_type(args[compare_index])
+        if compare_type is None or self.is_scalar_floating_type(compare_type):
+            return
+        raise ValueError(
+            f"DirectX texture compare operation '{func_name}' requires a scalar "
+            f"floating compare argument: {expression_debug_name(args[compare_index])} "
+            f"has type {self.type_name_string(compare_type)}"
+        )
+
+    def validate_lod_argument(self, func_name, args):
+        lod_index = texture_lod_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if lod_index is None:
+            return
+        lod_type = self.texture_argument_diagnostic_type(args[lod_index])
+        if lod_type is None or self.is_scalar_numeric_type(lod_type):
+            return
+        raise ValueError(
+            f"DirectX texture LOD operation '{func_name}' requires a scalar "
+            f"numeric lod argument: {expression_debug_name(args[lod_index])} "
+            f"has type {self.type_name_string(lod_type)}"
+        )
+
+    def validate_bias_argument(self, func_name, args):
+        bias_index = texture_bias_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if bias_index is None:
+            return
+        bias_type = self.texture_argument_diagnostic_type(args[bias_index])
+        if bias_type is None or self.is_scalar_numeric_type(bias_type):
+            return
+        raise ValueError(
+            f"DirectX texture bias operation '{func_name}' requires a scalar "
+            f"numeric bias argument: {expression_debug_name(args[bias_index])} "
+            f"has type {self.type_name_string(bias_type)}"
+        )
+
+    def validate_mip_level_argument(self, func_name, args):
+        level_index = texture_mip_level_argument_index(func_name, len(args))
+        if level_index is None:
+            return
+        level_type = self.texture_argument_diagnostic_type(args[level_index])
+        if level_type is None or self.is_scalar_integer_type(level_type):
+            return
+        raise ValueError(
+            f"DirectX resource operation '{func_name}' requires a scalar integer "
+            f"mip/sample level argument: {expression_debug_name(args[level_index])} "
+            f"has type {self.type_name_string(level_type)}"
+        )
+
+    def validate_sample_index_argument(self, func_name, args):
+        sample_index = texture_sample_index_argument_index(func_name, len(args))
+        if sample_index is None:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        if not self.is_multisample_texture_resource_type(texture_type):
+            return
+        sample_type = self.texture_argument_diagnostic_type(args[sample_index])
+        if sample_type is None or self.is_scalar_integer_type(sample_type):
+            return
+        raise ValueError(
+            f"DirectX multisample texel fetch operation '{func_name}' requires a "
+            f"scalar integer sample index argument: "
+            f"{expression_debug_name(args[sample_index])} has type "
+            f"{self.type_name_string(sample_type)}"
+        )
+
+    def validate_gather_component_argument(self, func_name, args):
+        component_index = texture_gather_component_argument_index(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        if component_index is None:
+            return
+        component_type = self.texture_argument_diagnostic_type(args[component_index])
+        if component_type is None or self.is_scalar_integer_type(component_type):
+            return
+        raise ValueError(
+            f"DirectX texture gather operation '{func_name}' requires a scalar "
+            f"integer component argument: "
+            f"{expression_debug_name(args[component_index])} has type "
+            f"{self.type_name_string(component_type)}"
+        )
+
+    def validate_texture_call_arity(self, func_name, args):
+        if func_name not in self.texture_resource_operation_names():
+            return
+        has_explicit_sampler = self.texture_call_uses_explicit_sampler(args)
+        min_count = texture_intrinsic_min_argument_count(
+            func_name,
+            has_explicit_sampler,
+        )
+        if min_count is not None and len(args) < min_count:
+            raise ValueError(
+                f"DirectX texture operation '{func_name}' requires at least "
+                f"{min_count} argument(s), got {len(args)}"
+            )
+        allowed_counts = texture_intrinsic_allowed_argument_counts(
+            func_name,
+            has_explicit_sampler,
+        )
+        if allowed_counts is not None and len(args) not in allowed_counts:
+            counts = ", ".join(str(count) for count in allowed_counts)
+            raise ValueError(
+                f"DirectX texture operation '{func_name}' accepts "
+                f"{counts} argument(s), got {len(args)}"
+            )
+        max_count = texture_intrinsic_max_argument_count(
+            func_name,
+            has_explicit_sampler,
+        )
+        if max_count is None or len(args) <= max_count:
+            return
+        raise ValueError(
+            f"DirectX texture operation '{func_name}' accepts at most "
+            f"{max_count} argument(s), got {len(args)}"
+        )
+
+    def texture_resource_operation_names(self):
+        return {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "textureCompare",
+            "textureCompareOffset",
+            "textureCompareLod",
+            "textureCompareLodOffset",
+            "textureCompareGrad",
+            "textureCompareGradOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+            "textureGather",
+            "textureGatherOffset",
+            "textureGatherOffsets",
+            "textureGatherCompare",
+            "textureGatherCompareOffset",
+            "textureQueryLod",
+            "textureQueryLevels",
+            "textureSize",
+            "textureSamples",
+            "texelFetch",
+            "texelFetchOffset",
+            "imageLoad",
+            "imageStore",
+            "imageSize",
+            "imageSamples",
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+        }
+
     def is_float_vector_image_resource(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
         return texture_type in {
+            "RWTexture1D<float4>",
+            "RWTexture1DArray<float4>",
             "RWTexture2D<float4>",
             "RWTexture3D<float4>",
             "RWTexture2DArray<float4>",
@@ -2497,12 +4030,18 @@ class HLSLCodeGen:
     def two_component_image_store_constructor(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
         return {
+            "RWTexture1D<float2>": ("float2", "0.0"),
+            "RWTexture1DArray<float2>": ("float2", "0.0"),
             "RWTexture2D<float2>": ("float2", "0.0"),
             "RWTexture3D<float2>": ("float2", "0.0"),
             "RWTexture2DArray<float2>": ("float2", "0.0"),
+            "RWTexture1D<int2>": ("int2", "0"),
+            "RWTexture1DArray<int2>": ("int2", "0"),
             "RWTexture2D<int2>": ("int2", "0"),
             "RWTexture3D<int2>": ("int2", "0"),
             "RWTexture2DArray<int2>": ("int2", "0"),
+            "RWTexture1D<uint2>": ("uint2", "0u"),
+            "RWTexture1DArray<uint2>": ("uint2", "0u"),
             "RWTexture2D<uint2>": ("uint2", "0u"),
             "RWTexture3D<uint2>": ("uint2", "0u"),
             "RWTexture2DArray<uint2>": ("uint2", "0u"),
@@ -2512,6 +4051,8 @@ class HLSLCodeGen:
         texture_type = self.resource_base_type(texture_type)
         if texture_type in {"Texture1D"}:
             return 1
+        if texture_type in {"Texture1DArray"}:
+            return 2
         if texture_type in {
             "Texture2D",
             "TextureCube",
@@ -2524,6 +4065,8 @@ class HLSLCodeGen:
         texture_type = self.resource_base_type(texture_type)
         return texture_type.startswith(
             (
+                "RWTexture1D<",
+                "RWTexture1DArray<",
                 "RWTexture2D<",
                 "RWTexture3D<",
                 "RWTexture2DArray<",
@@ -2535,10 +4078,33 @@ class HLSLCodeGen:
             return None
         return helper_name, texture_type
 
+    def texture_query_resource_descriptor(self, texture_arg):
+        texture_type = self.texture_resource_type(texture_arg)
+        storage_image = self.is_storage_image_resource_type(texture_type)
+        return {
+            "texture_type": texture_type,
+            "storage_image": storage_image,
+            "multisample": (
+                texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}
+            ),
+            "size_descriptor": (
+                self.image_size_helper_descriptor(texture_type)
+                if storage_image
+                else self.texture_size_helper_descriptor(texture_type)
+            ),
+            "levels_descriptor": (
+                None
+                if storage_image
+                else self.texture_query_levels_helper_descriptor(texture_type)
+            ),
+            "samples_descriptor": self.texture_samples_helper_descriptor(texture_type),
+        }
+
     def texture_query_size_expression(self, texture_arg, lod_arg=None):
         texture_name = self.generate_expression(texture_arg)
-        texture_type = self.texture_resource_type(texture_arg)
-        if self.is_storage_image_resource_type(texture_type):
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        texture_type = descriptor["texture_type"]
+        if descriptor["storage_image"]:
             key = self.texture_query_helper_key("imageSize", texture_type)
             if key:
                 self.required_texture_query_helpers.add(key)
@@ -2546,15 +4112,16 @@ class HLSLCodeGen:
         key = self.texture_query_helper_key("textureSize", texture_type)
         if key:
             self.required_texture_query_helpers.add(key)
-        if texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
+        if descriptor["multisample"]:
             return f"textureSize({texture_name})"
         lod = self.generate_expression(lod_arg) if lod_arg is not None else "0"
         return f"textureSize({texture_name}, {lod})"
 
     def texture_query_levels_expression(self, texture_arg):
         texture_name = self.generate_expression(texture_arg)
-        texture_type = self.texture_resource_type(texture_arg)
-        if self.is_storage_image_resource_type(texture_type):
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        texture_type = descriptor["texture_type"]
+        if descriptor["storage_image"]:
             return self.unsupported_texture_query_levels_call(texture_type)
         key = self.texture_query_helper_key("textureQueryLevels", texture_type)
         if key:
@@ -2563,8 +4130,9 @@ class HLSLCodeGen:
 
     def texture_samples_expression(self, texture_arg):
         texture_name = self.generate_expression(texture_arg)
-        texture_type = self.texture_resource_type(texture_arg)
-        if texture_type not in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
+        descriptor = self.texture_query_resource_descriptor(texture_arg)
+        texture_type = descriptor["texture_type"]
+        if not descriptor["multisample"]:
             return "/* unsupported DirectX texture samples query: requires multisample texture */ 0"
         key = self.texture_query_helper_key("textureSamples", texture_type)
         if key:
@@ -2633,18 +4201,37 @@ class HLSLCodeGen:
     def unsupported_texture_gather_call(self, func_name, reason):
         return f"/* unsupported DirectX texture gather: {func_name} {reason} */ float4(0.0)"
 
-    def texture_gather_supported(self, texture_type):
+    def texture_sampling_capabilities(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return texture_type in {
+        gather_types = {
             "Texture2D",
             "Texture2DArray",
             "TextureCube",
             "TextureCubeArray",
         }
+        offset_types = {"Texture2D", "Texture2DArray"}
+        sample_offset_types = {
+            "",
+            "Texture1D",
+            "Texture1DArray",
+            "Texture2D",
+            "Texture2DArray",
+            "Texture3D",
+        }
+        return {
+            "texture_type": texture_type,
+            "gather": texture_type in gather_types,
+            "gather_offset": texture_type in offset_types,
+            "sample_offset": texture_type in sample_offset_types,
+            "compare_offset": texture_type in offset_types,
+            "gather_compare_offset": texture_type in offset_types,
+        }
+
+    def texture_gather_supported(self, texture_type):
+        return self.texture_sampling_capabilities(texture_type)["gather"]
 
     def texture_gather_offset_supported(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        return texture_type in {"Texture2D", "Texture2DArray"}
+        return self.texture_sampling_capabilities(texture_type)["gather_offset"]
 
     def unsupported_multisample_texture_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(
@@ -2662,6 +4249,26 @@ class HLSLCodeGen:
         return (
             "/* unsupported DirectX multisample texture query: "
             f"textureQueryLod on {texture_type} */ float2(0.0)"
+        )
+
+    def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            "/* unsupported DirectX multisample texture comparison: "
+            f"{func_name} on {texture_type} */ 0.0"
+        )
+
+    def unsupported_multisample_texture_gather_compare_call(
+        self, func_name, texture_type
+    ):
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return (
+            "/* unsupported DirectX multisample texture gather comparison: "
+            f"{func_name} on {texture_type} */ float4(0.0)"
         )
 
     def unsupported_texture_query_levels_call(self, texture_type):
@@ -2748,21 +4355,13 @@ class HLSLCodeGen:
         )
 
     def texture_sample_offset_supported(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        return texture_type in {
-            "",
-            "Texture1D",
-            "Texture1DArray",
-            "Texture2D",
-            "Texture2DArray",
-            "Texture3D",
-        }
+        return self.texture_sampling_capabilities(texture_type)["sample_offset"]
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         return f"/* unsupported DirectX texture offset: {func_name} {reason} */ float4(0.0)"
 
     def generate_texture_sample_offset_call(self, func_name, args):
-        parts = self.texture_call_parts(args)
+        parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_sample_offset_call(
                 func_name, "requires texture and coordinate arguments"
@@ -2776,11 +4375,17 @@ class HLSLCodeGen:
             )
 
         if func_name == "textureOffset":
-            if len(extra_args) != 1:
+            if len(extra_args) not in {1, 2}:
                 return self.unsupported_texture_sample_offset_call(
-                    func_name, "requires one offset argument"
+                    func_name, "requires offset and optional bias arguments"
                 )
             offset = self.generate_expression(extra_args[0])
+            if len(extra_args) == 2:
+                bias = self.generate_expression(extra_args[1])
+                return (
+                    f"{texture_name}.SampleBias("
+                    f"{sampler_name}, {coord}, {bias}, {offset})"
+                )
             return f"{texture_name}.Sample({sampler_name}, {coord}, {offset})"
 
         if func_name == "textureLodOffset":
@@ -2857,7 +4462,7 @@ class HLSLCodeGen:
         return projected_coord
 
     def generate_texture_projected_call(self, func_name, args):
-        parts = self.texture_call_parts(args)
+        parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_projected_call(
                 func_name, "requires texture and projected coordinate arguments"
@@ -2952,7 +4557,7 @@ class HLSLCodeGen:
         )
 
     def generate_texture_gather_call(self, func_name, args):
-        parts = self.texture_call_parts(args)
+        parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_gather_call(
                 func_name, "requires texture and coordinate arguments"
@@ -3019,8 +4624,7 @@ class HLSLCodeGen:
         )
 
     def texture_compare_offset_supported(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        return texture_type in {"Texture2D", "Texture2DArray"}
+        return self.texture_sampling_capabilities(texture_type)["compare_offset"]
 
     def unsupported_texture_compare_call(self, func_name, reason):
         return f"/* unsupported DirectX texture compare: {func_name} {reason} */ 0.0"
@@ -3048,7 +4652,7 @@ class HLSLCodeGen:
         return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
 
     def generate_texture_compare_call(self, func_name, args):
-        parts = self.texture_call_parts(args)
+        parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_compare_call(
                 func_name, "requires texture and coordinate arguments"
@@ -3060,6 +4664,12 @@ class HLSLCodeGen:
                 func_name, "requires a compare argument"
             )
 
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_compare_call(
+                func_name, texture_type
+            )
+
         compare = self.generate_expression(extra_args[0])
         if func_name in {
             "textureCompareProj",
@@ -3069,7 +4679,6 @@ class HLSLCodeGen:
             "textureCompareProjGrad",
             "textureCompareProjGradOffset",
         }:
-            texture_type = self.texture_resource_type(args[0])
             coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
             projected_coord = self.texture_compare_projected_coordinate(
                 texture_type, args[coord_index], coord
@@ -3162,7 +4771,6 @@ class HLSLCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "requires compare and offset arguments"
                 )
-            texture_type = self.texture_resource_type(args[0])
             if not self.texture_compare_offset_supported(texture_type):
                 return self.unsupported_texture_compare_call(
                     func_name, "offsets require 2D or 2D-array textures"
@@ -3186,7 +4794,6 @@ class HLSLCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "requires compare, lod, and offset arguments"
                 )
-            texture_type = self.texture_resource_type(args[0])
             if not self.texture_compare_offset_supported(texture_type):
                 return self.unsupported_texture_compare_call(
                     func_name, "offsets require 2D or 2D-array textures"
@@ -3217,7 +4824,6 @@ class HLSLCodeGen:
                     func_name,
                     "requires compare, gradient x, gradient y, and offset arguments",
                 )
-            texture_type = self.texture_resource_type(args[0])
             if not self.texture_compare_offset_supported(texture_type):
                 return self.unsupported_texture_compare_call(
                     func_name, "offsets require 2D or 2D-array textures"
@@ -3235,8 +4841,7 @@ class HLSLCodeGen:
         )
 
     def texture_gather_compare_offset_supported(self, texture_type):
-        texture_type = self.resource_base_type(texture_type)
-        return texture_type in {"Texture2D", "Texture2DArray"}
+        return self.texture_sampling_capabilities(texture_type)["gather_compare_offset"]
 
     def unsupported_texture_gather_compare_call(self, func_name, reason):
         return (
@@ -3245,7 +4850,7 @@ class HLSLCodeGen:
         )
 
     def generate_texture_gather_compare_call(self, func_name, args):
-        parts = self.texture_call_parts(args)
+        parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires texture and coordinate arguments"
@@ -3255,6 +4860,12 @@ class HLSLCodeGen:
         if not extra_args:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires a compare argument"
+            )
+
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_gather_compare_call(
+                func_name, texture_type
             )
 
         compare = self.generate_expression(extra_args[0])
@@ -3269,7 +4880,6 @@ class HLSLCodeGen:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires compare and offset arguments"
             )
-        texture_type = self.texture_resource_type(args[0])
         if not self.texture_gather_compare_offset_supported(texture_type):
             return self.unsupported_texture_gather_compare_call(
                 func_name, "offsets require 2D or 2D-array textures"
@@ -3295,45 +4905,16 @@ class HLSLCodeGen:
         return "".join(helper for helper in helpers if helper)
 
     def image_atomic_helper_name(self, operation, texture_type):
-        suffixes = {
-            "RWTexture2D<int>": "iimage2D",
-            "RWTexture2D<uint>": "uimage2D",
-            "RWTexture3D<int>": "iimage3D",
-            "RWTexture3D<uint>": "uimage3D",
-            "RWTexture2DArray<int>": "iimage2DArray",
-            "RWTexture2DArray<uint>": "uimage2DArray",
-        }
-        suffix = suffixes.get(texture_type)
-        if not suffix:
-            return None
-        return f"{operation}_{suffix}"
+        descriptor = self.image_atomic_helper_descriptor(operation, texture_type)
+        return descriptor["helper_name"] if descriptor else None
 
     def image_atomic_helper_return_type(self, texture_type):
-        if texture_type in {
-            "RWTexture2D<int>",
-            "RWTexture3D<int>",
-            "RWTexture2DArray<int>",
-        }:
-            return "int"
-        if texture_type in {
-            "RWTexture2D<uint>",
-            "RWTexture3D<uint>",
-            "RWTexture2DArray<uint>",
-        }:
-            return "uint"
-        return None
+        descriptor = self.image_atomic_helper_descriptor("imageAtomicAdd", texture_type)
+        return descriptor["return_type"] if descriptor else None
 
     def image_atomic_helper_coord_type(self, texture_type):
-        if texture_type in {"RWTexture2D<int>", "RWTexture2D<uint>"}:
-            return "int2"
-        if texture_type in {
-            "RWTexture3D<int>",
-            "RWTexture3D<uint>",
-            "RWTexture2DArray<int>",
-            "RWTexture2DArray<uint>",
-        }:
-            return "int3"
-        return None
+        descriptor = self.image_atomic_helper_descriptor("imageAtomicAdd", texture_type)
+        return descriptor["coord_type"] if descriptor else None
 
     def image_atomic_intrinsic(self, operation):
         return {
@@ -3346,6 +4927,47 @@ class HLSLCodeGen:
             "imageAtomicExchange": "InterlockedExchange",
             "imageAtomicCompSwap": "InterlockedCompareExchange",
         }.get(operation)
+
+    def image_atomic_helper_descriptor(self, operation, texture_type):
+        intrinsic = self.image_atomic_intrinsic(operation)
+        if not intrinsic:
+            return None
+
+        texture_type = self.resource_base_type(texture_type)
+        if "<" not in texture_type or ">" not in texture_type:
+            return None
+
+        texture_family = texture_type.split("<", 1)[0]
+        component_type = texture_type.split("<", 1)[1].split(">", 1)[0].strip()
+        if component_type not in {"int", "uint"}:
+            return None
+
+        suffix_family = {
+            "RWTexture1D": "image1D",
+            "RWTexture1DArray": "image1DArray",
+            "RWTexture2D": "image2D",
+            "RWTexture3D": "image3D",
+            "RWTexture2DArray": "image2DArray",
+        }.get(texture_family)
+        coord_type = {
+            "RWTexture1D": "int",
+            "RWTexture1DArray": "int2",
+            "RWTexture2D": "int2",
+            "RWTexture3D": "int3",
+            "RWTexture2DArray": "int3",
+        }.get(texture_family)
+        if suffix_family is None or coord_type is None:
+            return None
+
+        return {
+            "helper_name": (
+                f"{operation}_{'i' if component_type == 'int' else 'u'}"
+                f"{suffix_family}"
+            ),
+            "return_type": component_type,
+            "coord_type": coord_type,
+            "intrinsic": intrinsic,
+        }
 
     def image_atomic_expression(self, operation, args):
         if not self.image_atomic_intrinsic(operation):
@@ -3381,12 +5003,13 @@ class HLSLCodeGen:
 
         helpers = []
         for operation, texture_type in sorted(self.required_image_atomic_helpers):
-            helper_name = self.image_atomic_helper_name(operation, texture_type)
-            return_type = self.image_atomic_helper_return_type(texture_type)
-            coord_type = self.image_atomic_helper_coord_type(texture_type)
-            intrinsic = self.image_atomic_intrinsic(operation)
-            if not helper_name or not return_type or not coord_type or not intrinsic:
+            descriptor = self.image_atomic_helper_descriptor(operation, texture_type)
+            if descriptor is None:
                 continue
+            helper_name = descriptor["helper_name"]
+            return_type = descriptor["return_type"]
+            coord_type = descriptor["coord_type"]
+            intrinsic = descriptor["intrinsic"]
             if operation == "imageAtomicCompSwap":
                 helpers.append(
                     f"{return_type} {helper_name}({texture_type} image, {coord_type} coord, {return_type} compareValue, {return_type} value) {{\n"
@@ -3407,263 +5030,268 @@ class HLSLCodeGen:
         return "".join(helpers)
 
     def generate_texture_size_helper(self, texture_type):
-        dimension = self.texture_query_dimension(texture_type)
-        return_type = "int" if dimension == 1 else f"int{dimension}"
-        if texture_type == "Texture1D":
-            return (
-                f"{return_type} textureSize({texture_type} tex, int lod) {{\n"
-                "    uint width;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(lod, width, levels);\n"
-                "    return int(width);\n"
-                "}\n\n"
-            )
-        if texture_type in {"Texture2D", "TextureCube"}:
-            return (
-                f"{return_type} textureSize({texture_type} tex, int lod) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(lod, width, height, levels);\n"
-                "    return int2(width, height);\n"
-                "}\n\n"
-            )
-        if texture_type in {"Texture2DArray", "TextureCubeArray"}:
-            return (
-                f"{return_type} textureSize({texture_type} tex, int lod) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint elements;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(lod, width, height, elements, levels);\n"
-                "    return int3(width, height, elements);\n"
-                "}\n\n"
-            )
-        if texture_type == "Texture3D":
-            return (
-                f"{return_type} textureSize({texture_type} tex, int lod) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint depth;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(lod, width, height, depth, levels);\n"
-                "    return int3(width, height, depth);\n"
-                "}\n\n"
-            )
-        if texture_type == "Texture2DMS<float4>":
-            return (
-                f"{return_type} textureSize({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint samples;\n"
-                "    tex.GetDimensions(width, height, samples);\n"
-                "    return int2(width, height);\n"
-                "}\n\n"
-            )
-        if texture_type == "Texture2DMSArray<float4>":
-            return (
-                f"{return_type} textureSize({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint elements;\n"
-                "    uint samples;\n"
-                "    tex.GetDimensions(width, height, elements, samples);\n"
-                "    return int3(width, height, elements);\n"
-                "}\n\n"
-            )
-        return ""
-
-    def generate_image_size_helper(self, texture_type):
-        if not self.is_storage_image_resource_type(texture_type):
+        descriptor = self.texture_size_helper_descriptor(texture_type)
+        if descriptor is None:
             return ""
+        return self.generate_texture_query_dimension_helper(
+            "textureSize", texture_type, descriptor
+        )
 
-        if self.resource_base_type(texture_type).startswith("RWTexture2DArray<"):
-            return (
-                f"int3 imageSize({texture_type} image) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint elements;\n"
-                "    image.GetDimensions(width, height, elements);\n"
-                "    return int3(width, height, elements);\n"
-                "}\n\n"
+    def generate_texture_query_dimension_helper(
+        self, helper_name, texture_type, descriptor
+    ):
+        texture_type = self.resource_base_type(texture_type)
+        parameters = [f"{texture_type} tex"]
+        if descriptor["function_params"]:
+            parameters.append(descriptor["function_params"])
+        declarations = "".join(
+            f"    uint {dimension};\n" for dimension in descriptor["dimensions"]
+        )
+        get_dimensions_args = descriptor["get_dimensions_args"]
+        get_dimensions_call = ""
+        if get_dimensions_args:
+            get_dimensions_call = (
+                f"    tex.GetDimensions({', '.join(get_dimensions_args)});\n"
             )
-
-        if self.resource_base_type(texture_type).startswith("RWTexture3D<"):
-            return (
-                f"int3 imageSize({texture_type} image) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint depth;\n"
-                "    image.GetDimensions(width, height, depth);\n"
-                "    return int3(width, height, depth);\n"
-                "}\n\n"
-            )
-
         return (
-            f"int2 imageSize({texture_type} image) {{\n"
-            "    uint width;\n"
-            "    uint height;\n"
-            "    image.GetDimensions(width, height);\n"
-            "    return int2(width, height);\n"
+            f"{descriptor['return_type']} {helper_name}({', '.join(parameters)}) {{\n"
+            f"{declarations}"
+            f"{get_dimensions_call}"
+            f"    return {descriptor['return_expr']};\n"
             "}\n\n"
         )
 
+    def texture_size_helper_descriptor(self, texture_type):
+        descriptor = self.texture_query_get_dimensions_descriptor(texture_type, "lod")
+        if descriptor is None:
+            return None
+        return {
+            "return_type": descriptor["size_return_type"],
+            "function_params": descriptor["function_params"],
+            "dimensions": descriptor["dimensions"],
+            "get_dimensions_args": descriptor["get_dimensions_args"],
+            "return_expr": descriptor["size_return_expr"],
+        }
+
+    def texture_query_get_dimensions_descriptor(self, texture_type, lod_arg):
+        texture_type = self.resource_base_type(texture_type)
+        descriptors = {
+            "Texture1D": {
+                "size_return_type": "int",
+                "function_params": "int lod",
+                "dimensions": ("width", "levels"),
+                "get_dimensions_args": (lod_arg, "width", "levels"),
+                "size_return_expr": "int(width)",
+            },
+            "Texture1DArray": {
+                "size_return_type": "int2",
+                "function_params": "int lod",
+                "dimensions": ("width", "elements", "levels"),
+                "get_dimensions_args": (lod_arg, "width", "elements", "levels"),
+                "size_return_expr": "int2(width, elements)",
+            },
+            "Texture2D": {
+                "size_return_type": "int2",
+                "function_params": "int lod",
+                "dimensions": ("width", "height", "levels"),
+                "get_dimensions_args": (lod_arg, "width", "height", "levels"),
+                "size_return_expr": "int2(width, height)",
+            },
+            "TextureCube": {
+                "size_return_type": "int2",
+                "function_params": "int lod",
+                "dimensions": ("width", "height", "levels"),
+                "get_dimensions_args": (lod_arg, "width", "height", "levels"),
+                "size_return_expr": "int2(width, height)",
+            },
+            "Texture2DArray": {
+                "size_return_type": "int3",
+                "function_params": "int lod",
+                "dimensions": ("width", "height", "elements", "levels"),
+                "get_dimensions_args": (
+                    lod_arg,
+                    "width",
+                    "height",
+                    "elements",
+                    "levels",
+                ),
+                "size_return_expr": "int3(width, height, elements)",
+            },
+            "TextureCubeArray": {
+                "size_return_type": "int3",
+                "function_params": "int lod",
+                "dimensions": ("width", "height", "elements", "levels"),
+                "get_dimensions_args": (
+                    lod_arg,
+                    "width",
+                    "height",
+                    "elements",
+                    "levels",
+                ),
+                "size_return_expr": "int3(width, height, elements)",
+            },
+            "Texture3D": {
+                "size_return_type": "int3",
+                "function_params": "int lod",
+                "dimensions": ("width", "height", "depth", "levels"),
+                "get_dimensions_args": (
+                    lod_arg,
+                    "width",
+                    "height",
+                    "depth",
+                    "levels",
+                ),
+                "size_return_expr": "int3(width, height, depth)",
+            },
+            "Texture2DMS<float4>": {
+                "size_return_type": "int2",
+                "function_params": "",
+                "dimensions": ("width", "height", "samples"),
+                "get_dimensions_args": ("width", "height", "samples"),
+                "size_return_expr": "int2(width, height)",
+            },
+            "Texture2DMSArray<float4>": {
+                "size_return_type": "int3",
+                "function_params": "",
+                "dimensions": ("width", "height", "elements", "samples"),
+                "get_dimensions_args": ("width", "height", "elements", "samples"),
+                "size_return_expr": "int3(width, height, elements)",
+            },
+        }
+        return descriptors.get(texture_type)
+
+    def generate_image_size_helper(self, texture_type):
+        descriptor = self.image_size_helper_descriptor(texture_type)
+        if descriptor is None:
+            return ""
+
+        dimensions = descriptor["dimensions"]
+        declarations = "".join(f"    uint {dimension};\n" for dimension in dimensions)
+        dimension_args = ", ".join(dimensions)
+        return (
+            f"{descriptor['return_type']} imageSize({texture_type} image) {{\n"
+            f"{declarations}"
+            f"    image.GetDimensions({dimension_args});\n"
+            f"    return {descriptor['return_expr']};\n"
+            "}\n\n"
+        )
+
+    def image_size_helper_descriptor(self, texture_type):
+        if not self.is_storage_image_resource_type(texture_type):
+            return None
+
+        base_type = self.resource_base_type(texture_type)
+        descriptors = (
+            (
+                "RWTexture2DArray<",
+                {
+                    "return_type": "int3",
+                    "dimensions": ("width", "height", "elements"),
+                    "return_expr": "int3(width, height, elements)",
+                },
+            ),
+            (
+                "RWTexture1DArray<",
+                {
+                    "return_type": "int2",
+                    "dimensions": ("width", "elements"),
+                    "return_expr": "int2(width, elements)",
+                },
+            ),
+            (
+                "RWTexture1D<",
+                {
+                    "return_type": "int",
+                    "dimensions": ("width",),
+                    "return_expr": "int(width)",
+                },
+            ),
+            (
+                "RWTexture3D<",
+                {
+                    "return_type": "int3",
+                    "dimensions": ("width", "height", "depth"),
+                    "return_expr": "int3(width, height, depth)",
+                },
+            ),
+        )
+        for prefix, descriptor in descriptors:
+            if base_type.startswith(prefix):
+                return descriptor
+        return {
+            "return_type": "int2",
+            "dimensions": ("width", "height"),
+            "return_expr": "int2(width, height)",
+        }
+
     def generate_texture_query_levels_helper(self, texture_type):
+        descriptor = self.texture_query_levels_helper_descriptor(texture_type)
+        if descriptor is None:
+            return ""
+        return self.generate_texture_query_dimension_helper(
+            "textureQueryLevels", texture_type, descriptor
+        )
+
+    def texture_query_levels_helper_descriptor(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
         if texture_type in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
-            return (
-                f"int textureQueryLevels({texture_type} tex) {{\n"
-                "    return 1;\n"
-                "}\n\n"
-            )
-        if texture_type == "Texture1D":
-            return (
-                f"int textureQueryLevels({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(0, width, levels);\n"
-                "    return int(levels);\n"
-                "}\n\n"
-            )
-        if texture_type in {"Texture2D", "TextureCube"}:
-            return (
-                f"int textureQueryLevels({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(0, width, height, levels);\n"
-                "    return int(levels);\n"
-                "}\n\n"
-            )
-        if texture_type in {"Texture2DArray", "TextureCubeArray"}:
-            return (
-                f"int textureQueryLevels({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint elements;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(0, width, height, elements, levels);\n"
-                "    return int(levels);\n"
-                "}\n\n"
-            )
-        if texture_type == "Texture3D":
-            return (
-                f"int textureQueryLevels({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint depth;\n"
-                "    uint levels;\n"
-                "    tex.GetDimensions(0, width, height, depth, levels);\n"
-                "    return int(levels);\n"
-                "}\n\n"
-            )
-        return ""
+            return {
+                "return_type": "int",
+                "function_params": "",
+                "dimensions": (),
+                "get_dimensions_args": (),
+                "return_expr": "1",
+            }
+
+        descriptor = self.texture_query_get_dimensions_descriptor(texture_type, "0")
+        if descriptor is None:
+            return None
+        return {
+            "return_type": "int",
+            "function_params": "",
+            "dimensions": descriptor["dimensions"],
+            "get_dimensions_args": descriptor["get_dimensions_args"],
+            "return_expr": "int(levels)",
+        }
 
     def generate_texture_samples_helper(self, texture_type):
-        if texture_type == "Texture2DMS<float4>":
-            return (
-                f"int textureSamples({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint samples;\n"
-                "    tex.GetDimensions(width, height, samples);\n"
-                "    return int(samples);\n"
-                "}\n\n"
-            )
-        if texture_type == "Texture2DMSArray<float4>":
-            return (
-                f"int textureSamples({texture_type} tex) {{\n"
-                "    uint width;\n"
-                "    uint height;\n"
-                "    uint elements;\n"
-                "    uint samples;\n"
-                "    tex.GetDimensions(width, height, elements, samples);\n"
-                "    return int(samples);\n"
-                "}\n\n"
-            )
-        return ""
+        descriptor = self.texture_samples_helper_descriptor(texture_type)
+        if descriptor is None:
+            return ""
+        return self.generate_texture_query_dimension_helper(
+            "textureSamples", texture_type, descriptor
+        )
+
+    def texture_samples_helper_descriptor(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type not in {"Texture2DMS<float4>", "Texture2DMSArray<float4>"}:
+            return None
+        descriptor = self.texture_query_get_dimensions_descriptor(texture_type, "lod")
+        if descriptor is None:
+            return None
+        return {
+            "return_type": "int",
+            "function_params": "",
+            "dimensions": descriptor["dimensions"],
+            "get_dimensions_args": descriptor["get_dimensions_args"],
+            "return_expr": "int(samples)",
+        }
 
     def supported_image_formats(self):
-        return {
-            "r8",
-            "r8_snorm",
-            "r8i",
-            "r8ui",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r16i",
-            "r16ui",
-            "r32f",
-            "r32i",
-            "r32ui",
-            "rg8",
-            "rg8_snorm",
-            "rg8i",
-            "rg8ui",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg16i",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-            "rgba8",
-            "rgba8_snorm",
-            "rgba8i",
-            "rgba8ui",
-            "rgba16",
-            "rgba16_snorm",
-            "rgba16f",
-            "rgba16i",
-            "rgba16ui",
-            "rgba32f",
-            "rgba32i",
-            "rgba32ui",
-        }
+        return supported_image_formats()
 
     def scalar_image_format_components(self):
         return {
-            "r8": "float",
-            "r8_snorm": "float",
-            "r16": "float",
-            "r16_snorm": "float",
-            "r16f": "float",
-            "r32f": "float",
-            "r8i": "int",
-            "r16i": "int",
-            "r32i": "int",
-            "r8ui": "uint",
-            "r16ui": "uint",
-            "r32ui": "uint",
+            image_format: image_format_component_type(image_format)
+            for image_format in supported_image_formats()
+            if image_format_channel_count(image_format) == 1
         }
 
     def vector_image_format_components(self):
         return {
-            "rg8": "float2",
-            "rg8_snorm": "float2",
-            "rg16": "float2",
-            "rg16_snorm": "float2",
-            "rg16f": "float2",
-            "rg8i": "int2",
-            "rg16i": "int2",
-            "rg8ui": "uint2",
-            "rg16ui": "uint2",
-            "rg32f": "float2",
-            "rg32i": "int2",
-            "rg32ui": "uint2",
-            "rgba8": "float4",
-            "rgba8_snorm": "float4",
-            "rgba16": "float4",
-            "rgba16_snorm": "float4",
-            "rgba16f": "float4",
-            "rgba32f": "float4",
-            "rgba8i": "int4",
-            "rgba16i": "int4",
-            "rgba32i": "int4",
-            "rgba8ui": "uint4",
-            "rgba16ui": "uint4",
-            "rgba32ui": "uint4",
+            image_format: image_format_vector_type(image_format)
+            for image_format in supported_image_formats()
+            if image_format_channel_count(image_format) in {2, 4}
         }
 
     def attribute_value_to_string(self, value):
@@ -3677,35 +5305,129 @@ class HLSLCodeGen:
             return str(value.value).strip('"')
         return str(value)
 
-    def explicit_image_format(self, node):
-        if not hasattr(node, "attributes"):
-            return None
-        supported_formats = self.supported_image_formats()
-        for attr in node.attributes:
-            attr_name = getattr(attr, "name", None)
-            if not attr_name:
-                continue
-            attr_name = str(attr_name).lower()
-            if attr_name in supported_formats:
-                return attr_name
-            if attr_name == "format":
-                arguments = getattr(attr, "arguments", []) or []
-                if not arguments:
-                    continue
-                format_name = self.attribute_value_to_string(arguments[0])
-                if format_name is None:
-                    continue
-                format_name = str(format_name).lower()
-                if format_name in supported_formats:
-                    return format_name
-        return None
-
-    def is_image_format_attribute(self, attr):
+    def is_resource_binding_attribute(self, attr):
         attr_name = getattr(attr, "name", None)
         if not attr_name:
             return False
-        attr_name = str(attr_name).lower()
-        return attr_name == "format" or attr_name in self.supported_image_formats()
+        return str(attr_name).lower() in {
+            "binding",
+            "buffer",
+            "packoffset",
+            "register",
+            "sampler",
+            "set",
+            "space",
+            "texture",
+        }
+
+    def is_resource_memory_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {
+            "coherent",
+            "globallycoherent",
+            "readonly",
+            "readwrite",
+            "restrict",
+            "volatile",
+            "writeonly",
+        }
+
+    def binding_index_value(self, value, prefixes=()):
+        if hasattr(value, "value") and value.value is not None:
+            raw_value = value.value
+        elif hasattr(value, "name") and value.name is not None:
+            raw_value = value.name
+        else:
+            raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def register_space_value(self, value):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return f"space{raw_value}"
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return raw_value
+        return None
+
+    def explicit_resource_binding_index(
+        self, node, attribute_names=(), register_prefixes=()
+    ):
+        if not hasattr(node, "attributes"):
+            return None
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name or not arguments:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in attribute_names:
+                binding = self.binding_index_value(arguments[0])
+            elif attr_name == "register":
+                binding = self.binding_index_value(arguments[0], register_prefixes)
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
+    def explicit_resource_register_space(self, node):
+        if not hasattr(node, "attributes"):
+            return None
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name == "space" and arguments:
+                space = self.register_space_value(arguments[0])
+                if space is not None:
+                    return space
+            if attr_name == "register":
+                for argument in arguments[1:]:
+                    space = self.register_space_value(argument)
+                    if space is not None:
+                        return space
+        return None
+
+    def resource_register_suffix(self, register_prefix, binding, node):
+        register = f"{register_prefix}{binding}"
+        space = self.explicit_resource_register_space(node)
+        if space:
+            return f" : register({register}, {space})"
+        return f" : register({register})"
+
+    def resource_memory_qualifier(self, mapped_type, node):
+        if not (
+            str(mapped_type).startswith(("RWTexture", "RWBuffer"))
+            or self.is_hlsl_uav_buffer_type(mapped_type)
+        ):
+            return ""
+
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        if qualifiers & {"coherent", "globallycoherent"} or attributes & {
+            "coherent",
+            "globallycoherent",
+        }:
+            return "globallycoherent "
+        return ""
 
     def semantic_from_node(self, node):
         if hasattr(node, "semantic"):
@@ -3713,7 +5435,13 @@ class HLSLCodeGen:
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
-            if self.is_image_format_attribute(attr):
+            if (
+                is_image_format_attribute(attr)
+                or self.is_resource_binding_attribute(attr)
+                or is_resource_access_attribute(attr)
+                or self.is_resource_memory_attribute(attr)
+                or self.is_glsl_buffer_block_attribute(attr)
+            ):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
@@ -3776,17 +5504,27 @@ class HLSLCodeGen:
 
     def map_image_base_type_with_format(self, vtype, node=None):
         base_type = self.resource_base_type(vtype)
-        explicit_format = self.explicit_image_format(node) if node is not None else None
+        explicit_format = (
+            explicit_image_format(node, self.attribute_value_to_string)
+            if node is not None
+            else None
+        )
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
         texture_types = {
+            "image1D": "RWTexture1D",
+            "iimage1D": "RWTexture1D",
+            "uimage1D": "RWTexture1D",
             "image2D": "RWTexture2D",
             "iimage2D": "RWTexture2D",
             "uimage2D": "RWTexture2D",
             "image3D": "RWTexture3D",
             "iimage3D": "RWTexture3D",
             "uimage3D": "RWTexture3D",
+            "image1DArray": "RWTexture1DArray",
+            "iimage1DArray": "RWTexture1DArray",
+            "uimage1DArray": "RWTexture1DArray",
             "image2DArray": "RWTexture2DArray",
             "iimage2DArray": "RWTexture2DArray",
             "uimage2DArray": "RWTexture2DArray",
@@ -3810,9 +5548,290 @@ class HLSLCodeGen:
             return base_type
         return vtype
 
+    def glsl_buffer_block_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() == "glsl_buffer_block":
+                return attr
+        return None
+
+    def glsl_buffer_block_layout(self, node):
+        attr = self.glsl_buffer_block_attribute(node)
+        arguments = getattr(attr, "arguments", []) if attr is not None else []
+        if arguments:
+            layout = self.attribute_value_to_string(arguments[0])
+            if layout:
+                return layout
+        return "std430"
+
+    def is_glsl_buffer_block_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        return bool(attr_name and str(attr_name).lower() == "glsl_buffer_block")
+
+    def is_glsl_buffer_block_variable(self, node, vtype=None):
+        if self.glsl_buffer_block_attribute(node) is None:
+            return False
+        type_name = self.resource_base_type(vtype or getattr(node, "var_type", None))
+        return str(type_name) in self.structs_by_name
+
+    def collect_glsl_buffer_block_struct_names(self, global_vars):
+        names = set()
+        for node in global_vars:
+            if not self.is_glsl_buffer_block_variable(node):
+                continue
+            type_name = self.resource_base_type(getattr(node, "var_type", None))
+            names.add(str(type_name))
+        return names
+
+    def glsl_buffer_block_lowering_failure_detail(self, type_name, var_name=None):
+        if var_name:
+            reason = self.glsl_buffer_block_lowering_failures.get(var_name)
+            if reason:
+                return reason
+        type_name = str(self.resource_base_type(type_name))
+        return self.glsl_buffer_block_struct_lowering_failures.get(type_name)
+
+    def glsl_buffer_block_member_access(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+        var_name = self.expression_name(object_expr)
+        if not var_name:
+            return None
+        block = self.lowered_glsl_buffer_blocks.get(var_name)
+        if block is None:
+            return None
+        member_name = getattr(expr, "member", None)
+        member = block["members"].get(member_name)
+        if member is None:
+            return None
+        return {
+            "buffer": var_name,
+            "member": member_name,
+            "readonly": block["readonly"],
+            **member,
+        }
+
+    def glsl_buffer_block_array_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        member = self.glsl_buffer_block_member_access(array_expr)
+        if member is None or not member.get("is_array"):
+            return None
+        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
+        index = self.generate_expression(index_expr)
+        offset = byte_offset_expression(member["offset"], index, member["stride"])
+        return {**member, "offset_expr": offset}
+
+    def hlsl_byteaddress_load_method(self, components):
+        return "Load" if components == 1 else f"Load{components}"
+
+    def hlsl_byteaddress_store_method(self, components):
+        return "Store" if components == 1 else f"Store{components}"
+
+    def hlsl_byteaddress_load(self, buffer_name, offset, access):
+        if access.get("matrix_columns"):
+            columns = []
+            for _, column_offset in matrix_column_offsets(
+                offset, access["matrix_columns"], access["column_stride"]
+            ):
+                load = (
+                    f"{buffer_name}."
+                    f"{self.hlsl_byteaddress_load_method(access['matrix_rows'])}"
+                    f"({column_offset})"
+                )
+                columns.append(f"asfloat({load})")
+            return f"{access['hlsl_type']}({', '.join(columns)})"
+
+        load = (
+            f"{buffer_name}."
+            f"{self.hlsl_byteaddress_load_method(access['components'])}({offset})"
+        )
+        if access["component_type"] == "float":
+            return f"asfloat({load})"
+        if access["component_type"] == "int":
+            return f"asint({load})"
+        return load
+
+    def hlsl_byteaddress_store_value(self, value, access):
+        if access["component_type"] in {"float", "int"}:
+            return f"asuint({value})"
+        return value
+
+    def next_hlsl_temp_variable(self, prefix):
+        name = f"__crossgl_{prefix}_{self.hlsl_temp_variable_index}"
+        self.hlsl_temp_variable_index += 1
+        return name
+
+    def hlsl_indexable_expression(self, expression):
+        expression = str(expression)
+        if expression.isidentifier():
+            return expression
+        if all(part.isidentifier() for part in expression.split(".")):
+            return expression
+        return f"({expression})"
+
+    def hlsl_byteaddress_matrix_store(self, buffer_name, offset, value, access):
+        value_expr = self.hlsl_indexable_expression(value)
+        store_method = self.hlsl_byteaddress_store_method(access["matrix_rows"])
+        lines = []
+        for column, column_offset in matrix_column_offsets(
+            offset, access["matrix_columns"], access["column_stride"]
+        ):
+            lines.append(
+                f"{buffer_name}.{store_method}"
+                f"({column_offset}, asuint({value_expr}[{column}]))"
+            )
+        return "\n".join(lines)
+
+    def hlsl_byteaddress_matrix_compound_store(
+        self, buffer_name, offset, value, op, access
+    ):
+        compound_ops = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+        }
+        binary_op = compound_ops.get(op)
+        if binary_op is None:
+            return (
+                "/* unsupported HLSL GLSL buffer block matrix compound store: "
+                "requires explicit matrix operation lowering */"
+            )
+
+        temp_name = self.next_hlsl_temp_variable("matrix_store")
+        current = self.hlsl_byteaddress_load(buffer_name, offset, access)
+        temp = f"{access['hlsl_type']} {temp_name} = ({current} {binary_op} {value})"
+        stores = self.hlsl_byteaddress_matrix_store(
+            buffer_name, offset, temp_name, access
+        )
+        return f"{temp}\n{stores}"
+
+    def hlsl_byteaddress_compound_store_diagnostic(self, op, access):
+        return (
+            "/* unsupported HLSL GLSL buffer block compound store: "
+            f"operator {op} is not supported for "
+            f"{access['component_type']} buffer members */"
+        )
+
+    def generate_glsl_buffer_block_member_load(self, expr):
+        access = self.glsl_buffer_block_member_access(expr)
+        if access is None or access.get("runtime_array"):
+            return None
+        return self.hlsl_byteaddress_load(access["buffer"], access["offset"], access)
+
+    def generate_glsl_buffer_block_array_load(self, expr):
+        access = self.glsl_buffer_block_array_access(expr)
+        if access is None:
+            return None
+        return self.hlsl_byteaddress_load(
+            access["buffer"], access["offset_expr"], access
+        )
+
+    def generate_glsl_buffer_block_store(self, target, value, op):
+        access = self.glsl_buffer_block_array_access(target)
+        if access is None:
+            access = self.glsl_buffer_block_member_access(target)
+            if access is None or access.get("runtime_array"):
+                return None
+            offset = access["offset"]
+        else:
+            offset = access["offset_expr"]
+
+        if access.get("readonly"):
+            return (
+                "/* unsupported HLSL GLSL buffer block store: "
+                "readonly ByteAddressBuffer cannot be written */"
+            )
+
+        rhs = self.generate_expression_with_expected(value, access["type"])
+        if access.get("matrix_columns"):
+            if op != "=":
+                return self.hlsl_byteaddress_matrix_compound_store(
+                    access["buffer"], offset, rhs, op, access
+                )
+            return self.hlsl_byteaddress_matrix_store(
+                access["buffer"], offset, rhs, access
+            )
+
+        if op != "=":
+            binary_op = glsl_buffer_compound_binary_operator(
+                op, access["component_type"]
+            )
+            if binary_op is None:
+                return self.hlsl_byteaddress_compound_store_diagnostic(op, access)
+            current = self.hlsl_byteaddress_load(access["buffer"], offset, access)
+            rhs = f"({current} {binary_op} {rhs})"
+
+        store_value = self.hlsl_byteaddress_store_value(rhs, access)
+        store_method = self.hlsl_byteaddress_store_method(access["components"])
+        return f"{access['buffer']}.{store_method}({offset}, {store_value})"
+
+    def glsl_buffer_block_diagnostic(self, target, type_name, var_name=None, node=None):
+        declaration = str(self.resource_base_type(type_name))
+        if var_name:
+            declaration += f" {var_name}"
+        details = ""
+        if node is not None:
+            layout = self.glsl_buffer_block_layout(node)
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer", "texture", "uav"}, ("b", "t", "u")
+            )
+            details = f" ({layout}"
+            if binding is not None:
+                details += f", binding = {binding}"
+            details += ")"
+        failure_detail = self.glsl_buffer_block_lowering_failure_detail(
+            type_name, var_name
+        )
+        reason = f"; {failure_detail}" if failure_detail else ""
+        return (
+            f"// unsupported {target} GLSL buffer block {declaration}{details}: "
+            "mixed metadata/runtime-array layout requires ByteAddressBuffer "
+            f"offset lowering{reason}\n"
+        )
+
+    def hlsl_resource_type_name(self, vtype):
+        base_type = self.resource_base_type(vtype)
+        return str(base_type).split("<", 1)[0]
+
+    def is_hlsl_readonly_buffer_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype) in {
+            "Buffer",
+            "StructuredBuffer",
+            "ByteAddressBuffer",
+        }
+
+    def is_hlsl_uav_buffer_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype) in {
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+            "RWByteAddressBuffer",
+        }
+
     def generate_texture_call(self, func_name, args):
         if not func_name:
             return None
+
+        self.validate_texture_call_arity(func_name, args)
+        self.validate_image_resource_argument(func_name, args)
+        self.validate_image_access_argument(func_name, args)
+        self.validate_texture_resource_argument(func_name, args)
+        self.validate_integer_coordinate_argument(func_name, args)
+        self.validate_coordinate_dimension_argument(func_name, args)
+        self.validate_query_lod_coordinate_argument(func_name, args)
+        self.validate_compare_argument(func_name, args)
+        self.validate_lod_argument(func_name, args)
+        self.validate_bias_argument(func_name, args)
+        self.validate_sample_index_argument(func_name, args)
+        self.validate_mip_level_argument(func_name, args)
+        self.validate_gradient_dimension_arguments(func_name, args)
+        self.validate_offset_dimension_argument(func_name, args)
+        self.validate_gather_component_argument(func_name, args)
 
         if func_name in {"textureSize", "imageSize"} and args:
             lod_arg = args[1] if len(args) > 1 else None
@@ -3825,7 +5844,7 @@ class HLSLCodeGen:
             return self.texture_samples_expression(args[0])
 
         if func_name == "textureQueryLod" and len(args) >= 2:
-            parts = self.texture_call_parts(args)
+            parts = self.texture_call_parts(args, func_name)
             if parts is None:
                 return None
             texture_name, sampler_name, coord, _ = parts
@@ -3949,7 +5968,7 @@ class HLSLCodeGen:
             "textureGrad": "SampleGrad",
         }
         if func_name in texture_ops:
-            parts = self.texture_call_parts(args)
+            parts = self.texture_call_parts(args, func_name)
             if parts is None:
                 return None
             texture_name, sampler_name, coord, extra_args = parts
@@ -3958,6 +5977,9 @@ class HLSLCodeGen:
                 return self.unsupported_multisample_texture_call(
                     func_name, texture_type
                 )
+            if func_name == "texture" and len(extra_args) == 1:
+                bias = self.generate_expression(extra_args[0])
+                return f"{texture_name}.SampleBias({sampler_name}, {coord}, {bias})"
             mapped_args = [coord] + [
                 self.generate_expression(arg) for arg in extra_args
             ]
@@ -4011,16 +6033,21 @@ class HLSLCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        generic_args = getattr(type_node, "generic_args", [])
+        if hasattr(type_node, "name") and generic_args:
+            args = ", ".join(
+                self.convert_type_node_to_string(arg) for arg in generic_args
+            )
+            return f"{type_node.name}<{args}>"
         if hasattr(type_node, "name"):
             return type_node.name
+        elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            if type_node.rows == type_node.cols:
+                return f"float{type_node.rows}x{type_node.rows}"
+            return f"float{type_node.cols}x{type_node.rows}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
-            if hasattr(type_node, "rows"):
-                element_type = self.convert_type_node_to_string(type_node.element_type)
-                if type_node.rows == type_node.cols:
-                    return f"float{type_node.rows}x{type_node.rows}"
-                else:
-                    return f"float{type_node.cols}x{type_node.rows}"
-            elif str(type(type_node)).find("ArrayType") != -1:
+            if str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):
@@ -4072,6 +6099,22 @@ class HLSLCodeGen:
 
         return self.type_mapping.get(vtype_str, vtype_str)
 
+    def map_struct_member_type(self, struct_name, member_name, vtype):
+        mapped_type = self.map_type(vtype)
+        if (
+            member_name
+            and self.is_sampler_type(vtype)
+            and self.struct_member_uses_comparison_sampler(struct_name, member_name)
+        ):
+            return mapped_type.replace("SamplerState", "SamplerComparisonState", 1)
+        return mapped_type
+
+    def struct_member_uses_comparison_sampler(self, struct_name, member_name):
+        return (
+            struct_name,
+            member_name,
+        ) in self.comparison_sampler_struct_members
+
     def map_operator(self, op):
         op_map = {
             "PLUS": "+",
@@ -4109,6 +6152,7 @@ class HLSLCodeGen:
         return op_map.get(op, op)
 
     def map_semantic(self, semantic):
+        """Map a CrossGL semantic to an HLSL semantic suffix."""
         if semantic:
             return f": {self.semantic_map.get(semantic, semantic)}"
         else:

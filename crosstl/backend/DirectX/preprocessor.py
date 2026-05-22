@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Tuple
 
 @dataclass
 class Macro:
+    """Object-like or function-like HLSL preprocessor macro."""
+
     name: str
     params: Optional[List[str]] = None
     replacement: str = ""
@@ -18,6 +20,8 @@ class Macro:
 
 
 class HLSLPreprocessor:
+    """Small HLSL preprocessor used before lexing imported source files."""
+
     def __init__(
         self,
         include_paths: Optional[List[str]] = None,
@@ -454,6 +458,8 @@ class HLSLPreprocessor:
 
 
 class _ExpressionTokenizer:
+    """Tokenizer for integer expressions inside conditional directives."""
+
     def __init__(self, expr: str):
         self.expr = expr
         self.pos = 0
@@ -516,6 +522,8 @@ class _ExpressionTokenizer:
 
 
 class _ExpressionParser:
+    """Recursive-descent evaluator for preprocessor integer expressions."""
+
     def __init__(self, tokenizer: _ExpressionTokenizer):
         self.tokenizer = tokenizer
         self.current = self.tokenizer.next_token()

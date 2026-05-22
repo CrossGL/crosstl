@@ -53,7 +53,12 @@ def _register_source_specs(module) -> None:
 
 
 def discover_backend_plugins(force: bool = False) -> None:
-    """Discover backend plugin specs under crosstl/backend."""
+    """Discover backend plugin specs under ``crosstl.backend``.
+
+    Discovery imports optional ``backend_spec`` and ``source_spec`` modules from
+    backend packages. Those modules can expose spec constants or a ``register``
+    function to attach additional source parsers and target code generators.
+    """
     if _DISCOVERED["done"] and not force:
         return
 

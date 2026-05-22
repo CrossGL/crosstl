@@ -5,6 +5,7 @@ from .HipAst import (
     ShaderNode,
     FunctionNode,
     KernelNode,
+    KernelLaunchNode,
     StructNode,
     VariableNode,
     AssignmentNode,
@@ -14,6 +15,7 @@ from .HipAst import (
     AtomicOperationNode,
     CaseNode,
     CastNode,
+    DesignatedInitializerNode,
     DoWhileNode,
     InitializerListNode,
     SyncNode,
@@ -28,12 +30,13 @@ from .HipAst import (
     PreprocessorNode,
     SwitchNode,
     TernaryOpNode,
+    TypeAliasNode,
     HipBuiltinNode,
 )
 
 
 class HipToCrossGLConverter:
-    """Converts HIP AST to CrossGL format"""
+    """Serialize HIP backend AST nodes back into CrossGL source."""
 
     VECTOR_TYPE_MAPPING = {
         "float2": "vec2<f32>",
@@ -79,21 +82,31 @@ class HipToCrossGLConverter:
     }
 
     def __init__(self):
+        """Initialize HIP-to-CrossGL visitor state."""
         self.indent_level = 0
         self.output = []
+        self.packed_argument_scopes = []
+        self.unique_ptr_scopes = [set()]
+        self.type_alias_scopes = [{}]
 
     def generate(self, ast_node):
+        """Generate complete CrossGL source from a parsed HIP AST."""
         self.output = []
         self.indent_level = 0
+        self.packed_argument_scopes = []
+        self.unique_ptr_scopes = [set()]
+        self.type_alias_scopes = [{}]
         self.visit(ast_node)
         return "\n".join(self.output)
 
     def visit(self, node):
+        """Dispatch a HIP backend AST node to its converter method."""
         method_name = f"visit_{type(node).__name__}"
         visitor = getattr(self, method_name, self.generic_visit)
         return visitor(node)
 
     def generic_visit(self, node):
+        """Fallback converter for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
             return node
         elif isinstance(node, list):
@@ -102,19 +115,127 @@ class HipToCrossGLConverter:
             return str(node)
 
     def emit(self, code):
+        """Append a line of CrossGL output using the current indentation level."""
         if code.strip():
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
 
     def emit_statement(self, stmt):
+        """Render and append one converted statement."""
+        if isinstance(stmt, list):
+            for item in stmt:
+                self.emit_statement(item)
+            return
+
+        if self.emit_hip_runtime_call_statement(stmt):
+            return
+
         result = self.visit(stmt)
         if isinstance(result, str) and result.strip():
             self.emit(f"{result};")
 
+    def emit_hip_runtime_call_statement(self, stmt):
+        if not isinstance(stmt, FunctionCallNode):
+            return False
+
+        comments = self.format_hip_runtime_call(stmt)
+        if comments is None:
+            return False
+
+        for comment in comments:
+            self.emit(comment)
+        return True
+
+    def format_hip_runtime_call(self, node):
+        args = [self.visit(arg) for arg in node.args]
+        name = node.name
+
+        if name in {"hipMalloc", "hipMallocManaged", "hipHostMalloc"}:
+            if len(node.args) >= 2:
+                target = self.format_runtime_pointer_target(node.args[0])
+                size = self.visit(node.args[1])
+                return [f"// HIP memory allocate: {target}, bytes: {size}"]
+        elif name in {"hipFree", "hipHostFree"}:
+            if args:
+                return [f"// HIP memory free: {args[0]}"]
+        elif name in {"hipMemcpy", "hipMemcpyAsync"}:
+            if len(args) >= 4:
+                comment = (
+                    f"// HIP memory copy: {args[1]} -> {args[0]}, "
+                    f"bytes: {args[2]}, kind: {args[3]}"
+                )
+                if len(args) >= 5:
+                    comment += f", stream: {args[4]}"
+                return [comment]
+        elif name == "hipMemset":
+            if len(args) >= 3:
+                return [
+                    f"// HIP memory set: {args[0]}, value: {args[1]}, "
+                    f"bytes: {args[2]}"
+                ]
+        elif name in {"hipStreamSynchronize"}:
+            if args:
+                return [f"// HIP synchronize: {args[0]}"]
+        elif name in {"hipStreamCreate", "hipStreamDestroy"}:
+            if args:
+                action = "create" if name == "hipStreamCreate" else "destroy"
+                stream = (
+                    self.format_runtime_pointer_target(node.args[0])
+                    if action == "create"
+                    else args[0]
+                )
+                return [f"// HIP stream {action}: {stream}"]
+        elif name in {"hipEventCreate", "hipEventCreateWithFlags"}:
+            if args:
+                event = self.format_runtime_pointer_target(node.args[0])
+                comment = f"// HIP event create: {event}"
+                if len(args) >= 2:
+                    comment += f", flags: {args[1]}"
+                return [comment]
+        elif name == "hipEventRecord":
+            if args:
+                comment = f"// HIP event record: {args[0]}"
+                if len(args) >= 2:
+                    comment += f", stream: {args[1]}"
+                return [comment]
+        elif name == "hipEventSynchronize":
+            if args:
+                return [f"// HIP event synchronize: {args[0]}"]
+        elif name == "hipEventElapsedTime":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP event elapsed time: {args[1]} -> {args[2]}, "
+                    f"output: {output}"
+                ]
+        elif name == "hipEventDestroy":
+            if args:
+                return [f"// HIP event destroy: {args[0]}"]
+        elif name == "hipEventQuery":
+            if args:
+                return [f"// HIP event query: {args[0]}"]
+        elif name == "hipStreamWaitEvent":
+            if len(args) >= 2:
+                comment = f"// HIP stream wait event: {args[0]} waits for {args[1]}"
+                if len(args) >= 3:
+                    comment += f", flags: {args[2]}"
+                return [comment]
+
+        return None
+
+    def format_runtime_pointer_target(self, arg):
+        if isinstance(arg, CastNode):
+            return self.format_runtime_pointer_target(arg.expression)
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
+
     def format_statement_fragment(self, stmt):
         if stmt is None:
             return ""
+        if isinstance(stmt, list):
+            return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
             var_type = self.convert_hip_type_to_crossgl(getattr(stmt, "vtype", "int"))
             if hasattr(stmt, "value") and stmt.value:
@@ -131,6 +252,7 @@ class HipToCrossGLConverter:
         return result if isinstance(result, str) else ""
 
     def visit_HipProgramNode(self, node):
+        """Render a HIP program AST as a CrossGL shader block."""
         self.emit("// HIP to CrossGL conversion")
 
         for stmt in node.statements:
@@ -150,10 +272,14 @@ class HipToCrossGLConverter:
             elif isinstance(stmt, VariableNode):
                 self.visit(stmt)
                 self.emit("")
+            elif isinstance(stmt, TypeAliasNode):
+                self.visit(stmt)
+                self.emit("")
             else:
                 self.visit(stmt)
 
     def visit_FunctionNode(self, node):
+        """Render a HIP function node as a CrossGL function."""
         # Skip device functions in CrossGL (they become inline)
         if hasattr(node, "qualifiers") and "__device__" in getattr(
             node, "qualifiers", []
@@ -184,17 +310,34 @@ class HipToCrossGLConverter:
         self.emit(f"{return_type} {node.name}({param_str}) {{")
 
         self.indent_level += 1
+        self.push_packed_argument_scope()
+        self.push_type_alias_scope()
+        self.push_unique_ptr_scope()
+        if hasattr(node, "params") and node.params:
+            for param in node.params:
+                self.register_unique_ptr_parameter(param)
         if hasattr(node, "body") and node.body:
-            if isinstance(node.body, list):
-                for stmt in node.body:
-                    self.emit_statement(stmt)
-            else:
-                self.emit_statement(node.body)
-        self.indent_level -= 1
+            try:
+                if isinstance(node.body, list):
+                    for stmt in node.body:
+                        self.emit_statement(stmt)
+                else:
+                    self.emit_statement(node.body)
+            finally:
+                self.pop_unique_ptr_scope()
+                self.pop_type_alias_scope()
+                self.pop_packed_argument_scope()
+                self.indent_level -= 1
+        else:
+            self.pop_unique_ptr_scope()
+            self.pop_type_alias_scope()
+            self.pop_packed_argument_scope()
+            self.indent_level -= 1
 
         self.emit("}")
 
     def visit_kernel_as_compute_shader(self, kernel):
+        """Render a HIP kernel as a CrossGL compute shader block."""
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
@@ -244,11 +387,22 @@ class HipToCrossGLConverter:
         self.emit("")
 
         if hasattr(kernel, "body") and kernel.body:
-            if isinstance(kernel.body, list):
-                for stmt in kernel.body:
-                    self.emit_statement(stmt)
-            else:
-                self.emit_statement(kernel.body)
+            self.push_packed_argument_scope()
+            self.push_type_alias_scope()
+            self.push_unique_ptr_scope()
+            if hasattr(kernel, "params") and kernel.params:
+                for param in kernel.params:
+                    self.register_unique_ptr_parameter(param)
+            try:
+                if isinstance(kernel.body, list):
+                    for stmt in kernel.body:
+                        self.emit_statement(stmt)
+                else:
+                    self.emit_statement(kernel.body)
+            finally:
+                self.pop_unique_ptr_scope()
+                self.pop_type_alias_scope()
+                self.pop_packed_argument_scope()
 
         self.indent_level -= 1
         self.emit("}")
@@ -271,11 +425,139 @@ class HipToCrossGLConverter:
     def visit_VariableNode(self, node):
         var_type = self.convert_hip_type_to_crossgl(getattr(node, "vtype", "int"))
 
+        self.register_packed_argument_list(node)
+        self.register_unique_ptr_name(node.name, getattr(node, "vtype", "int"))
         if hasattr(node, "value") and node.value:
             value = self.visit(node.value)
             self.emit(f"var {node.name}: {var_type} = {value};")
         else:
             self.emit(f"var {node.name}: {var_type};")
+
+    def visit_KernelLaunchNode(self, node):
+        kernel_name = self.visit(node.kernel_name)
+        config = [self.visit(node.blocks), self.visit(node.threads)]
+        if node.shared_mem is not None:
+            config.append(self.visit(node.shared_mem))
+        if node.stream is not None:
+            config.append(self.visit(node.stream))
+
+        self.emit(f"// Kernel launch: {kernel_name}<<<{', '.join(config)}>>>()")
+        if node.args:
+            args = self.resolve_packed_launch_args(node.args)
+            args_str = ", ".join([self.format_kernel_launch_arg(arg) for arg in args])
+            self.emit(f"// Arguments: {args_str}")
+
+    def push_packed_argument_scope(self):
+        self.packed_argument_scopes.append({})
+
+    def pop_packed_argument_scope(self):
+        if self.packed_argument_scopes:
+            self.packed_argument_scopes.pop()
+
+    def push_unique_ptr_scope(self):
+        self.unique_ptr_scopes.append(set())
+
+    def pop_unique_ptr_scope(self):
+        if len(self.unique_ptr_scopes) > 1:
+            self.unique_ptr_scopes.pop()
+
+    def push_type_alias_scope(self):
+        self.type_alias_scopes.append({})
+
+    def pop_type_alias_scope(self):
+        if len(self.type_alias_scopes) > 1:
+            self.type_alias_scopes.pop()
+
+    def register_type_alias(self, name, alias_type):
+        self.type_alias_scopes[-1][name] = alias_type
+
+    def resolve_type_alias(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name)
+        for scope in reversed(self.type_alias_scopes):
+            if type_name in scope:
+                return scope[type_name]
+        return type_name
+
+    def register_unique_ptr_parameter(self, param):
+        if isinstance(param, dict):
+            self.register_unique_ptr_name(param.get("name", ""), param.get("type", ""))
+        else:
+            self.register_unique_ptr_name(
+                getattr(param, "name", ""), getattr(param, "vtype", "")
+            )
+
+    def register_unique_ptr_name(self, name, type_name):
+        if self.is_unique_ptr_type_name(type_name):
+            self.unique_ptr_scopes[-1].add(name)
+
+    def is_unique_ptr_expression(self, expr):
+        if not isinstance(expr, str):
+            return False
+        return any(expr in scope for scope in reversed(self.unique_ptr_scopes))
+
+    def register_packed_argument_list(self, node):
+        if not self.packed_argument_scopes:
+            return
+        if self.is_packed_argument_list(node):
+            self.packed_argument_scopes[-1][node.name] = (
+                self.get_initializer_list_elements(node.value)
+            )
+
+    def is_packed_argument_list(self, node):
+        if self.get_initializer_list_elements(getattr(node, "value", None)) is None:
+            return False
+
+        compact_type = getattr(node, "vtype", "").replace(" ", "")
+        return compact_type in {"void*[]", "void**"}
+
+    def get_initializer_list_elements(self, value):
+        if isinstance(value, InitializerListNode):
+            return value.elements
+        if isinstance(value, CastNode) and isinstance(
+            value.expression, InitializerListNode
+        ):
+            return value.expression.elements
+        return None
+
+    def resolve_packed_launch_args(self, args):
+        if len(args) != 1:
+            return args
+
+        compound_elements = self.get_packed_compound_literal_elements(args[0])
+        if compound_elements is not None:
+            return compound_elements
+
+        packed_arg_name = self.get_packed_argument_name(args[0])
+        if packed_arg_name is None:
+            return args
+
+        for scope in reversed(self.packed_argument_scopes):
+            if packed_arg_name in scope:
+                return scope[packed_arg_name]
+
+        return args
+
+    def get_packed_argument_name(self, arg):
+        if isinstance(arg, str):
+            return arg
+        if isinstance(arg, CastNode):
+            return self.get_packed_argument_name(arg.expression)
+        return None
+
+    def get_packed_compound_literal_elements(self, arg):
+        if not isinstance(arg, CastNode):
+            return None
+
+        compact_type = arg.target_type.replace(" ", "")
+        if compact_type not in {"void*[]", "void**"}:
+            return None
+
+        return self.get_initializer_list_elements(arg.expression)
+
+    def format_kernel_launch_arg(self, arg):
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
 
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)
@@ -298,6 +580,9 @@ class HipToCrossGLConverter:
             return f"({node.op}{operand})"
 
     def visit_FunctionCallNode(self, node):
+        if self.is_get_method_call(node):
+            return self.visit(node.name.object)
+
         args = []
         if hasattr(node, "args") and node.args:
             args = [self.visit(arg) for arg in node.args]
@@ -311,13 +596,77 @@ class HipToCrossGLConverter:
         else:
             func_name = str(node.function) if hasattr(node, "function") else "unknown"
 
+        if not isinstance(func_name, str):
+            func_name = self.visit(func_name)
+
+        make_unique = self.format_make_unique_call(func_name, args)
+        if make_unique is not None:
+            return make_unique
+
+        unique_ptr_init = self.format_unique_ptr_constructor_call(func_name, args)
+        if unique_ptr_init is not None:
+            return unique_ptr_init
+
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
 
+    def is_get_method_call(self, node):
+        return (
+            isinstance(getattr(node, "name", None), MemberAccessNode)
+            and node.name.member == "get"
+            and not getattr(node, "args", [])
+            and self.is_unique_ptr_expression(node.name.object)
+        )
+
+    def format_make_unique_call(self, function_name, args):
+        base_name, template_args = self.parse_cpp_template(function_name)
+        if base_name.split("::")[-1] != "make_unique" or not template_args:
+            return None
+
+        target_type, is_array = self.unwrap_array_template_type(template_args[0])
+        target_type = self.convert_hip_type_to_crossgl(target_type)
+        args_str = ", ".join(args)
+        if is_array:
+            return f"new_array<{target_type}>({args_str})"
+        return f"new<{target_type}>({args_str})"
+
+    def format_unique_ptr_constructor_call(self, function_name, args):
+        base_name, _ = self.parse_cpp_template(function_name)
+        if len(args) != 1:
+            return None
+        if base_name.split("::")[
+            -1
+        ] != "unique_ptr" and not self.is_unique_ptr_type_name(function_name):
+            return None
+
+        return args[0]
+
+    def visit_NewNode(self, node):
+        target_type = self.convert_hip_type_to_crossgl(node.target_type)
+        if node.is_array:
+            size = self.visit(node.size) if node.size is not None else ""
+            return f"new_array<{target_type}>({size})"
+
+        args = ", ".join(self.visit(arg) for arg in node.args)
+        return f"new<{target_type}>({args})"
+
+    def visit_DeleteNode(self, node):
+        target = self.visit(node.expression)
+        if node.is_array:
+            self.emit(f"// delete array: {target}")
+        else:
+            self.emit(f"// delete: {target}")
+
+    def visit_TypeAliasNode(self, node):
+        self.register_type_alias(node.name, node.alias_type)
+        alias_type = self.convert_hip_type_to_crossgl(node.alias_type)
+        self.emit(f"typedef {alias_type} {node.name};")
+
     def visit_MemberAccessNode(self, node):
         obj = self.visit(node.object)
-        return f"{obj}.{node.member}"
+        operator = "->" if getattr(node, "is_pointer", False) else "."
+        return f"{obj}{operator}{node.member}"
 
     def visit_ArrayAccessNode(self, node):
         array = self.visit(node.array)
@@ -328,9 +677,22 @@ class HipToCrossGLConverter:
         elements = ", ".join(self.visit(element) for element in node.elements)
         return f"{{{elements}}}"
 
+    def visit_DesignatedInitializerNode(self, node):
+        designators = []
+        for kind, target in node.designators:
+            if kind == "index":
+                designators.append(f"[{self.visit(target)}]")
+            else:
+                designators.append(f".{target}")
+
+        value = self.visit(node.value)
+        return f"{''.join(designators)} = {value}"
+
     def visit_SyncNode(self, node):
-        if node.sync_type in {"__syncthreads", "hipDeviceSynchronize"}:
+        if node.sync_type == "__syncthreads":
             self.emit("workgroupBarrier();")
+        elif node.sync_type == "hipDeviceSynchronize":
+            self.emit("// HIP device synchronize")
         elif node.sync_type == "__syncwarp":
             self.emit("// Warp sync not directly supported in CrossGL")
         else:
@@ -389,9 +751,16 @@ class HipToCrossGLConverter:
         self.emit("}")
 
     def visit_ForNode(self, node):
-        init = self.format_statement_fragment(
-            node.init if hasattr(node, "init") else None
-        )
+        init_node = node.init if hasattr(node, "init") else None
+        scoped_init = isinstance(init_node, list)
+        if scoped_init:
+            self.emit("{")
+            self.indent_level += 1
+            for stmt in init_node:
+                self.emit_statement(stmt)
+            init = ""
+        else:
+            init = self.format_statement_fragment(init_node)
         condition = (
             self.visit(node.condition)
             if hasattr(node, "condition") and node.condition
@@ -402,6 +771,24 @@ class HipToCrossGLConverter:
         )
 
         self.emit(f"for ({init}; {condition}; {update}) {{")
+
+        self.indent_level += 1
+        if hasattr(node, "body") and node.body:
+            if isinstance(node.body, list):
+                for stmt in node.body:
+                    self.emit_statement(stmt)
+            else:
+                self.emit_statement(node.body)
+        self.indent_level -= 1
+
+        self.emit("}")
+        if scoped_init:
+            self.indent_level -= 1
+            self.emit("}")
+
+    def visit_RangeForNode(self, node):
+        iterable = self.visit(node.iterable)
+        self.emit(f"for {node.name} in {iterable} {{")
 
         self.indent_level += 1
         if hasattr(node, "body") and node.body:
@@ -452,7 +839,7 @@ class HipToCrossGLConverter:
         for case in getattr(node, "cases", []):
             self.visit(case)
 
-        if getattr(node, "default_case", None):
+        if getattr(node, "default_case", None) is not None:
             self.emit("default:")
             self.indent_level += 1
             for stmt in node.default_case:
@@ -483,6 +870,7 @@ class HipToCrossGLConverter:
         return f"{target_type}({expression})"
 
     def convert_hip_type_to_crossgl(self, hip_type):
+        """Map a HIP type name to the closest CrossGL type name."""
         if hip_type is None:
             return "void"
 
@@ -511,22 +899,108 @@ class HipToCrossGLConverter:
             "dim3": "vec3<u32>",
         }
 
+        unique_ptr_type = self.convert_unique_ptr_type(hip_type)
+        if unique_ptr_type is not None:
+            return unique_ptr_type
+
         # Handle arrays
-        if "[" in hip_type and "]" in hip_type:
+        if self.has_array_suffix(hip_type):
             return self.convert_hip_array_type(hip_type, type_mapping)
 
         # Handle pointers
         if "*" in hip_type:
-            return f"ptr<{self.convert_hip_pointer_element_type(hip_type)}>"
+            return self.convert_hip_pointer_type(hip_type)
 
         return type_mapping.get(hip_type, hip_type)
 
-    def convert_hip_pointer_element_type(self, hip_type):
+    def convert_unique_ptr_type(self, hip_type):
+        base_name, template_args = self.parse_cpp_template(hip_type)
+        if not self.is_unique_ptr_base_name(base_name) or not template_args:
+            return None
+
+        target_type, _ = self.unwrap_array_template_type(template_args[0])
+        return f"ptr<{self.convert_hip_type_to_crossgl(target_type)}>"
+
+    def is_unique_ptr_type_name(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name)
+        type_name = self.resolve_type_alias(type_name)
+        base_name, template_args = self.parse_cpp_template(type_name)
+        return self.is_unique_ptr_base_name(base_name) and bool(template_args)
+
+    def is_unique_ptr_base_name(self, base_name):
+        return base_name.split("::")[-1] == "unique_ptr"
+
+    def has_array_suffix(self, type_name):
+        depth = 0
+        for char in str(type_name):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "[" and depth == 0:
+                return True
+        return False
+
+    def unwrap_array_template_type(self, type_name):
+        type_name = type_name.strip()
+        if type_name.endswith("[]"):
+            return type_name[:-2].strip(), True
+        return type_name, False
+
+    def parse_cpp_template(self, text):
+        if not isinstance(text, str):
+            return str(text), []
+
+        start = text.find("<")
+        if start == -1 or not text.endswith(">"):
+            return text, []
+
+        base_name = text[:start].strip()
+        args = self.split_cpp_template_args(text[start + 1 : -1])
+        return base_name, args
+
+    def split_cpp_template_args(self, args_text):
+        args = []
+        depth = 0
+        start = 0
+
+        for index, char in enumerate(args_text):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append(args_text[start:index].strip())
+                start = index + 1
+
+        tail = args_text[start:].strip()
+        if tail:
+            args.append(tail)
+        return args
+
+    def convert_hip_pointer_type(self, hip_type):
+        """Convert a HIP pointer type into nested CrossGL pointer syntax."""
+        pointer_depth = hip_type.count("*")
         base_type = hip_type.replace("*", "").strip()
-        return self.convert_hip_type_to_crossgl(base_type)
+        mapped_type = self.convert_hip_type_to_crossgl(base_type)
+
+        for _ in range(pointer_depth):
+            mapped_type = f"ptr<{mapped_type}>"
+
+        return mapped_type
+
+    def convert_hip_pointer_element_type(self, hip_type):
+        pointer_depth = hip_type.count("*")
+        base_type = hip_type.replace("*", "").strip()
+        mapped_type = self.convert_hip_type_to_crossgl(base_type)
+
+        for _ in range(max(0, pointer_depth - 1)):
+            mapped_type = f"ptr<{mapped_type}>"
+
+        return mapped_type
 
     def strip_type_qualifiers(self, type_name):
-        qualifiers = {"const", "volatile", "__restrict__", "restrict"}
+        qualifiers = {"const", "volatile", "__restrict__", "restrict", "&", "&&"}
         return " ".join(
             part for part in str(type_name).split() if part not in qualifiers
         )
@@ -534,16 +1008,18 @@ class HipToCrossGLConverter:
     def convert_hip_array_type(self, hip_type, type_mapping):
         base_type = hip_type.split("[", 1)[0].strip()
         dimensions = []
-        remainder = hip_type[len(base_type) :]
+        remainder = hip_type[len(base_type) :].strip()
 
         while remainder.startswith("["):
             close_index = remainder.find("]")
             if close_index == -1:
                 break
             dimensions.append(remainder[1:close_index].strip())
-            remainder = remainder[close_index + 1 :]
+            remainder = remainder[close_index + 1 :].strip()
 
-        mapped_type = type_mapping.get(base_type, base_type)
+        mapped_type = type_mapping.get(base_type)
+        if mapped_type is None:
+            mapped_type = self.convert_hip_type_to_crossgl(base_type)
         for size in reversed(dimensions):
             if size:
                 mapped_type = f"array<{mapped_type}, {size}>"
@@ -553,6 +1029,7 @@ class HipToCrossGLConverter:
         return mapped_type
 
     def convert_hip_builtin_function(self, func_name):
+        """Convert HIP built-in functions to CrossGL equivalents."""
         function_mapping = {
             # Math functions
             "sqrtf": "sqrt",
@@ -563,6 +1040,7 @@ class HipToCrossGLConverter:
             "logf": "log",
             "expf": "exp",
             "fabsf": "abs",
+            "fmodf": "mod",
             "fminf": "min",
             "fmaxf": "max",
             "floorf": "floor",
@@ -576,10 +1054,19 @@ class HipToCrossGLConverter:
             "log": "log",
             "exp": "exp",
             "fabs": "abs",
+            "fmod": "mod",
             "fmin": "min",
             "fmax": "max",
             "floor": "floor",
             "ceil": "ceil",
+            "bool": "bool",
+            "char": "i8",
+            "short": "i16",
+            "int": "i32",
+            "long": "i64",
+            "float": "f32",
+            "double": "f64",
+            "size_t": "u32",
             # Vector functions
             **self.VECTOR_CONSTRUCTOR_MAPPING,
             "dim3": "vec3<u32>",

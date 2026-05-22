@@ -14,7 +14,10 @@ from ..ast import (
 
 
 class VectorArithmeticMixin:
+    """Helpers for inferring and lowering vector arithmetic expressions."""
+
     def collect_function_return_types(self, ast_node):
+        """Collect function return types from global and stage-local functions."""
         function_return_types = {}
 
         for func in getattr(ast_node, "functions", []):
@@ -32,6 +35,7 @@ class VectorArithmeticMixin:
         return function_return_types
 
     def resource_call_result_type(self, func_name, raw_args):
+        """Infer the result type of resource-related intrinsic calls."""
         if not isinstance(func_name, str):
             return None
 
@@ -84,6 +88,7 @@ class VectorArithmeticMixin:
         return None
 
     def expression_result_type(self, node):
+        """Infer the best-effort result type for an expression node."""
         if node is None:
             return None
         if isinstance(node, (IdentifierNode, VariableNode, ArrayAccessNode)):
@@ -150,6 +155,7 @@ class VectorArithmeticMixin:
         return None
 
     def vector_type_info(self, type_name):
+        """Return constructor and component metadata for a vector type."""
         if type_name is None:
             return None
         if not isinstance(type_name, str):
@@ -184,6 +190,7 @@ class VectorArithmeticMixin:
         }
 
     def vector_type_for_components(self, component_type, component_count):
+        """Return a vector type name for a component type/count pair."""
         if component_count < 2 or component_count > 4:
             return component_type
         prefixes = {
@@ -206,6 +213,7 @@ class VectorArithmeticMixin:
         right_expr,
         operator,
     ):
+        """Lower vector binary arithmetic into a helper call when required."""
         if operator not in {"+", "-", "*", "/"}:
             return None
         left_type = self.expression_result_type(left_node)
@@ -240,6 +248,7 @@ class VectorArithmeticMixin:
         return None
 
     def require_vector_binary_helper(self, vector_info, operator, operand_shape):
+        """Register and return a helper function for vector binary arithmetic."""
         if vector_info["component_type"] == "bool":
             return None
 
@@ -287,6 +296,7 @@ class VectorArithmeticMixin:
         return helper_name
 
     def vector_scalar_parameter_type(self, vector_info):
+        """Return the scalar parameter type used by generated vector helpers."""
         if vector_info["component_type"] == "uint":
             return "unsigned int"
         return vector_info["component_type"]

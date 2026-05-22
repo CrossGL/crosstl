@@ -40,6 +40,7 @@ TOKENS = OrderedDict(
         ("CASE", r"\bcase\b"),
         ("DEFAULT", r"\bdefault\b"),
         ("FOR", r"\bfor\b"),
+        ("DO", r"\bdo\b"),
         ("WHILE", r"\bwhile\b"),
         ("LOOP", r"\bloop\b"),
         ("IN", r"\bin\b"),
@@ -150,6 +151,7 @@ TOKENS = OrderedDict(
         ("TEXTURE2DARRAY", r"\btexture2darray\b"),
         ("SAMPLER", r"\bsampler\b"),
         ("SAMPLER1D", r"\bsampler1d\b"),
+        ("SAMPLER1DARRAY", r"\bsampler1[Dd][Aa]rray\b"),
         ("SAMPLER2D", r"\bsampler2d\b"),
         ("SAMPLER3D", r"\bsampler3d\b"),
         ("SAMPLERCUBE", r"\bsamplercube\b"),
@@ -161,16 +163,22 @@ TOKENS = OrderedDict(
         ("SAMPLERCUBEARRAYSHADOW", r"\bsamplercubearrayshadow\b"),
         ("SAMPLER2DMS", r"\bsampler2dms\b"),
         ("SAMPLER2DMSARRAY", r"\bsampler2dmsarray\b"),
+        ("IIMAGE1D", r"\biimage1[Dd]\b"),
+        ("IIMAGE1DARRAY", r"\biimage1[Dd][Aa]rray\b"),
         ("IIMAGE2D", r"\biimage2[Dd]\b"),
         ("IIMAGE3D", r"\biimage3[Dd]\b"),
         ("IIMAGE2DARRAY", r"\biimage2[Dd][Aa]rray\b"),
         ("IIMAGE2DMS", r"\biimage2[Dd][Mm][Ss]\b"),
         ("IIMAGE2DMSARRAY", r"\biimage2[Dd][Mm][Ss][Aa]rray\b"),
+        ("UIMAGE1D", r"\buimage1[Dd]\b"),
+        ("UIMAGE1DARRAY", r"\buimage1[Dd][Aa]rray\b"),
         ("UIMAGE2D", r"\buimage2[Dd]\b"),
         ("UIMAGE3D", r"\buimage3[Dd]\b"),
         ("UIMAGE2DARRAY", r"\buimage2[Dd][Aa]rray\b"),
         ("UIMAGE2DMS", r"\buimage2[Dd][Mm][Ss]\b"),
         ("UIMAGE2DMSARRAY", r"\buimage2[Dd][Mm][Ss][Aa]rray\b"),
+        ("IMAGE1D", r"\bimage1[Dd]\b"),
+        ("IMAGE1DARRAY", r"\bimage1[Dd][Aa]rray\b"),
         ("IMAGE2D", r"\bimage2[Dd]\b"),
         ("IMAGE3D", r"\bimage3[Dd]\b"),
         ("IMAGECUBE", r"\bimage[Cc]ube\b"),
@@ -294,6 +302,7 @@ KEYWORDS = {
     "case": "CASE",
     "default": "DEFAULT",
     "for": "FOR",
+    "do": "DO",
     "while": "WHILE",
     "loop": "LOOP",
     "in": "IN",
@@ -462,6 +471,7 @@ class Lexer:
     """Tokenizer for CrossGL Universal IR."""
 
     def __init__(self, code):
+        """Tokenize CrossGL source text immediately on construction."""
         self.code = code
         self.tokens = []
         self.token_cache = {}
@@ -469,18 +479,21 @@ class Lexer:
         self.tokenize()
 
     def _compile_patterns(self):
+        """Compile the ordered token specification into one regex."""
         combined_pattern = "|".join(
             f"(?P<{name}>{pattern})" for name, pattern in TOKENS.items()
         )
         return re.compile(combined_pattern)
 
     def _get_cached_token(self, text, token_type):
+        """Return a stable tuple object for repeated token text/type pairs."""
         cache_key = (text, token_type)
         if cache_key not in self.token_cache:
             self.token_cache[cache_key] = (token_type, text)
         return self.token_cache[cache_key]
 
     def tokenize(self):
+        """Scan source text into parser-ready tokens."""
         pos = 0
         length = len(self.code)
 
@@ -519,8 +532,10 @@ class Lexer:
         self.tokens.append(self._get_cached_token(None, "EOF"))
 
     def get_tokens(self):
+        """Return the token list produced by the lexer."""
         return self.tokens
 
     def debug_print(self):
+        """Print token indexes, types, and text for grammar debugging."""
         for i, (token_type, text) in enumerate(self.tokens):
             print(f"{i:3d}: {token_type:20s} '{text}'")

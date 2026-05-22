@@ -268,6 +268,8 @@ KEYWORDS = {
 
 
 class TokenType(Enum):
+    """Token names emitted by the CUDA lexer."""
+
     COMMENT_SINGLE = auto()
     COMMENT_MULTI = auto()
     KERNEL_LAUNCH_START = auto()
@@ -434,7 +436,10 @@ class TokenType(Enum):
 
 
 class CudaLexer:
+    """Tokenize CUDA source for the CUDA backend parser."""
+
     def __init__(self, code: str):
+        """Initialize the lexer with raw CUDA source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
@@ -485,11 +490,13 @@ class Lexer:
     """Compatibility wrapper around CudaLexer"""
 
     def __init__(self, input_str):
+        """Tokenize ``input_str`` and prepare cursor-based access."""
         self.lexer = CudaLexer(input_str)
         self.tokens = self.lexer.tokenize()
         self.current_pos = 0
 
     def next(self):
+        """Return the next token and advance the cursor."""
         if self.current_pos < len(self.tokens):
             token = self.tokens[self.current_pos]
             self.current_pos += 1
@@ -497,6 +504,7 @@ class Lexer:
         return ("EOF", "")
 
     def peek(self):
+        """Return the next token without advancing the cursor."""
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
         return ("EOF", "")

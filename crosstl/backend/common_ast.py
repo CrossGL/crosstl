@@ -2,7 +2,7 @@
 
 
 class ASTNode:
-    pass
+    """Base class for backend AST nodes produced by native source parsers."""
 
 
 class ShaderNode(ASTNode):
@@ -170,6 +170,20 @@ class InitializerListNode(ASTNode):
         return f"InitializerListNode(elements={self.elements})"
 
 
+class DesignatedInitializerNode(ASTNode):
+    """Node representing C99-style designated initializer entries."""
+
+    def __init__(self, designators=None, value=None):
+        self.designators = designators or []
+        self.value = value
+
+    def __repr__(self):
+        return (
+            f"DesignatedInitializerNode(designators={self.designators}, "
+            f"value={self.value})"
+        )
+
+
 class AssignmentNode(ASTNode):
     """Node representing an assignment operation"""
 
@@ -324,6 +338,19 @@ class ForNode(ASTNode):
         return f"ForNode(init={self.init}, condition={self.condition}, update={self.update}, body={self.body})"
 
 
+class RangeForNode(ASTNode):
+    """Node representing a C++ range-based for loop"""
+
+    def __init__(self, vtype, name, iterable, body):
+        self.vtype = vtype
+        self.name = name
+        self.iterable = iterable
+        self.body = body
+
+    def __repr__(self):
+        return f"RangeForNode(vtype={self.vtype}, name={self.name}, iterable={self.iterable}, body={self.body})"
+
+
 class WhileNode(ASTNode):
     """Node representing a while loop"""
 
@@ -352,7 +379,7 @@ class SwitchNode(ASTNode):
     def __init__(self, expression, cases, default_case=None, default=None):
         self.expression = expression
         self.cases = cases
-        self.default_case = default_case or default
+        self.default_case = default_case if default_case is not None else default
         self.default = self.default_case
 
     def __repr__(self):
@@ -449,6 +476,30 @@ class CastNode(ASTNode):
 
     def __repr__(self):
         return f"CastNode(target_type={self.target_type}, expression={self.expression})"
+
+
+class NewNode(ASTNode):
+    """Node representing a C++ new expression"""
+
+    def __init__(self, target_type, size=None, args=None, is_array=False):
+        self.target_type = target_type
+        self.size = size
+        self.args = args or []
+        self.is_array = is_array
+
+    def __repr__(self):
+        return f"NewNode(target_type={self.target_type}, size={self.size}, args={self.args}, is_array={self.is_array})"
+
+
+class DeleteNode(ASTNode):
+    """Node representing a C++ delete expression statement"""
+
+    def __init__(self, expression, is_array=False):
+        self.expression = expression
+        self.is_array = is_array
+
+    def __repr__(self):
+        return f"DeleteNode(expression={self.expression}, is_array={self.is_array})"
 
 
 class PreprocessorNode(ASTNode):

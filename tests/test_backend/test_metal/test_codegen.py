@@ -4,6 +4,13 @@ from typing import List
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.directx_codegen import (
+    HLSLCodeGen as TranslatorHLSLCodeGen,
+)
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 def tokenize_code(code: str) -> List:
@@ -32,6 +39,12 @@ def convert(code: str) -> str:
 
 def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def parse_crossgl(code: str):
+    tokens = CrossGLLexer(code).get_tokens()
+    parser = CrossGLParser(tokens)
+    return parser.parse()
 
 
 def test_codegen_emits_shader_and_stages():
@@ -168,8 +181,143 @@ def test_codegen_texture_and_sampler_translation():
     """
     result = convert(code)
     assert re.search(r"sampler2d", result, re.IGNORECASE)
-    assert "texture(" in result or "texture2D(" in result
+    assert "texture(albedo, samp, in.uv)" in result
     assert "albedo" in result
+
+
+def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
+    code = """
+    float4 sampleColor(texture2d<float> albedo, sampler linearSampler, float2 uv, float lod) {
+        float4 base = albedo.sample(linearSampler, uv);
+        float4 mip = albedo.sample(linearSampler, uv, lod);
+        return base + mip;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "texture(albedo, linearSampler, uv)" in crossgl
+    assert "textureLod(albedo, linearSampler, uv, lod)" in crossgl
+    assert "texture(albedo, uv)" not in crossgl
+    assert "textureLod(albedo, uv, lod)" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "texture(albedo, uv)" in glsl
+    assert "textureLod(albedo, uv, lod)" in glsl
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "Texture2D albedo" in hlsl
+    assert "SamplerState linearSampler" in hlsl
+    assert "albedo.Sample(linearSampler, uv)" in hlsl
+    assert "albedo.SampleLevel(linearSampler, uv, lod)" in hlsl
+
+    metal = MetalCodeGen().generate(ast)
+    assert "texture2d<float> albedo" in metal
+    assert "sampler linearSampler" in metal
+    assert "albedo.sample(linearSampler, uv)" in metal
+    assert "albedo.sample(linearSampler, uv, level(lod))" in metal
+
+
+def test_codegen_texture_method_descriptors():
+    converter = MetalToCrossGLConverter()
+
+    assert converter.texture_method_descriptor("read") == {
+        "method": "read",
+        "function": "textureLoad",
+        "storage_operation": "read",
+        "sampled_texture": False,
+    }
+    assert converter.texture_method_descriptor("write") == {
+        "method": "write",
+        "function": "textureStore",
+        "storage_operation": "write",
+        "sampled_texture": False,
+    }
+    assert converter.texture_method_descriptor("sample_compare") == {
+        "method": "sample_compare",
+        "function": "textureCompare",
+        "storage_operation": None,
+        "sampled_texture": True,
+    }
+    assert converter.texture_method_descriptor("sample_compare_level") == {
+        "method": "sample_compare_level",
+        "function": "textureCompareLod",
+        "storage_operation": None,
+        "sampled_texture": True,
+    }
+    assert converter.texture_method_descriptor("gather") == {
+        "method": "gather",
+        "function": "textureGather",
+        "storage_operation": None,
+        "sampled_texture": True,
+    }
+    assert converter.texture_method_descriptor("gather_compare") == {
+        "method": "gather_compare",
+        "function": "textureGatherCompare",
+        "storage_operation": None,
+        "sampled_texture": True,
+    }
+    assert converter.texture_method_descriptor("sample") is None
+    assert converter.resource_method_descriptor("read") == {
+        "method": "read",
+        "function": "textureLoad",
+        "storage_operation": "read",
+        "sampled_texture": False,
+        "resource": "texture_or_image",
+        "operation": "load",
+    }
+    assert converter.resource_method_descriptor("write") == {
+        "method": "write",
+        "function": "textureStore",
+        "storage_operation": "write",
+        "sampled_texture": False,
+        "resource": "texture_or_image",
+        "operation": "store",
+    }
+    assert converter.resource_method_descriptor("sample_compare") == {
+        "method": "sample_compare",
+        "function": "textureCompare",
+        "storage_operation": None,
+        "sampled_texture": True,
+        "resource": "texture",
+        "operation": "sample_compare",
+    }
+    assert converter.resource_method_descriptor("gather_compare") == {
+        "method": "gather_compare",
+        "function": "textureGatherCompare",
+        "storage_operation": None,
+        "sampled_texture": True,
+        "resource": "texture",
+        "operation": "gather_compare",
+    }
+    assert converter.resource_method_descriptor("sample") is None
+
+
+def test_codegen_binding_attributes_do_not_roundtrip_as_semantics():
+    code = """
+    float4 sampleBound(texture2d<float> tex [[texture(1)]], sampler samp [[sampler(2)]], float2 uv) {
+        return tex.sample(samp, uv);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "@texture(1)" in crossgl
+    assert "@sampler(2)" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "vec4 sampleBound(sampler2D tex, vec2 uv)" in glsl
+    assert "tex texture" not in glsl
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "float4 sampleBound(Texture2D tex, SamplerState samp, float2 uv)" in hlsl
+    assert ": texture" not in hlsl
+    assert ": sampler" not in hlsl
+
+    metal = MetalCodeGen().generate(ast)
+    assert "float4 sampleBound(texture2d<float> tex, sampler samp, float2 uv)" in metal
+    assert "[[texture]]" not in metal
+    assert "[[sampler]]" not in metal
 
 
 def test_codegen_control_flow_and_ops():
@@ -276,7 +424,44 @@ def test_codegen_compute_kernel():
     result = convert(code)
     assert "compute" in result
     assert "compute_main" in result
-    assert "data[" in result
+    assert "RWStructuredBuffer<float> data @buffer(0)" in result
+    assert "buffer_store(data, tid, buffer_load(data, tid) * 2.0);" in result
+
+
+def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void compute_main(device float* data [[buffer(0)]],
+                             constant float* input [[buffer(1)]],
+                             uint tid [[thread_position_in_grid]]) {
+        float value = input[tid];
+        data[tid] = value * 2.0;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "RWStructuredBuffer<float> data @buffer(0)" in crossgl
+    assert "StructuredBuffer<float> input @buffer(1)" in crossgl
+    assert "float value = buffer_load(input, tid);" in crossgl
+    assert "buffer_store(data, tid, value * 2.0);" in crossgl
+    assert "data[tid]" not in crossgl
+    assert "input[tid]" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    assert ast is not None
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "RWStructuredBuffer<float> data" in hlsl
+    assert "StructuredBuffer<float> input" in hlsl
+    assert "float value = input.Load(tid);" in hlsl
+    assert "data.Store(tid, (value * 2.0));" in hlsl
+
+    metal = MetalCodeGen().generate(ast)
+    assert "void compute_main(device float* data, const device float* input" in metal
+    assert "float value = input[tid];" in metal
+    assert "data[tid] = value * 2.0;" in metal
 
 
 def test_codegen_preserves_literals_and_swizzles():
@@ -363,10 +548,123 @@ def test_codegen_texture_read_write_and_compare():
     }
     """
     result = convert(code)
+    assert "sampler2D tex @texture(0)" in result
+    assert "image2D tex" not in result
     assert "textureLoad" in result
     assert "textureStore" in result
     assert "textureCompare" in result
     assert "textureGather" in result
+
+
+def test_codegen_access_qualified_1d_storage_textures():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void compute_main(texture1d<float, access::read_write> line [[texture(0)]],
+                             texture1d_array<uint, access::read_write> counters [[texture(1)]],
+                             uint tid [[thread_position_in_grid]]) {
+        float4 c = line.read(tid);
+        line.write(c, tid);
+        uint v = counters.read(tid, 0);
+        counters.write(v, tid, 0);
+    }
+    """
+    result = convert(code)
+    assert "image1D line @texture(0) @readwrite" in result
+    assert "uimage1DArray counters @texture(1) @readwrite" in result
+    assert "vec4 c = imageLoad(line, tid);" in result
+    assert "imageStore(line, tid, c);" in result
+    assert "uint v = imageLoad(counters, uvec2(tid, 0));" in result
+    assert "imageStore(counters, uvec2(tid, 0), v);" in result
+
+    shader_ast = parse_crossgl(result)
+    assert shader_ast is not None
+
+
+def test_codegen_access_qualified_2d_3d_storage_textures():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void compute_main(texture2d<uint, access::read_write> counters [[texture(0)]],
+                             texture2d_array<float, access::read_write> layers [[texture(1)]],
+                             texture3d<int, access::read_write> volume [[texture(2)]],
+                             uint2 pixel [[thread_position_in_grid]]) {
+        uint oldValue = counters.read(pixel).x;
+        counters.write(uint4(oldValue), pixel);
+        float4 c = layers.read(pixel, 1);
+        layers.write(c, pixel, 1);
+        int s = volume.read(uint3(pixel, 0)).x;
+        volume.write(int4(s), uint3(pixel, 0));
+    }
+    """
+    result = convert(code)
+    assert "uimage2D counters @texture(0) @readwrite" in result
+    assert "image2DArray layers @texture(1) @readwrite" in result
+    assert "iimage3D volume @texture(2) @readwrite" in result
+    assert "uint oldValue = imageLoad(counters, pixel).x;" in result
+    assert "imageStore(counters, pixel, uvec4(oldValue));" in result
+    assert "vec4 c = imageLoad(layers, uvec3(pixel, 1));" in result
+    assert "imageStore(layers, uvec3(pixel, 1), c);" in result
+    assert "int s = imageLoad(volume, uvec3(pixel, 0)).x;" in result
+    assert "imageStore(volume, uvec3(pixel, 0), ivec4(s));" in result
+
+    shader_ast = parse_crossgl(result)
+    assert shader_ast is not None
+
+
+def test_codegen_fixed_texture_arrays_lower_resource_methods():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 fragment_main(array<texture2d<float>, 2> textures [[texture(0)]],
+                                  array<texture2d<float, access::read_write>, 2> images [[texture(2)]],
+                                  sampler samp [[sampler(0)]],
+                                  uint index [[user(locn0)]]) {
+        float4 c = textures[index].sample(samp, float2(0.5, 0.5));
+        float4 r = images[index].read(uint2(1, 2));
+        images[index].write(c, uint2(1, 2));
+        return c + r;
+    }
+    """
+    result = convert(code)
+
+    assert "sampler2D[2] textures @texture(0)" in result
+    assert "image2D[2] images @texture(2) @readwrite" in result
+    assert "texture(textures[index], samp, vec2(0.5, 0.5))" in result
+    assert "imageLoad(images[index], uvec2(1, 2))" in result
+    assert "imageStore(images[index], uvec2(1, 2), c);" in result
+    assert "array<texture" not in result
+    assert "textureLoad(images" not in result
+    assert "textureStore(images" not in result
+
+    shader_ast = parse_crossgl(result)
+    assert shader_ast is not None
+
+
+def test_codegen_preserves_storage_texture_access_modes():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void compute_main(texture2d<uint, access::read> counters [[texture(0)]],
+                             texture2d<float, access::write> outImage [[texture(1)]],
+                             uint2 pixel [[thread_position_in_grid]]) {
+        uint4 value = counters.read(pixel);
+        outImage.write(float4(value), pixel);
+    }
+    """
+    result = convert(code)
+
+    assert "uimage2D counters @texture(0) @readonly" in result
+    assert "image2D outImage @texture(1) @writeonly" in result
+    assert "uvec4 value = imageLoad(counters, pixel);" in result
+    assert "imageStore(outImage, pixel, vec4(value));" in result
+
+    shader_ast = parse_crossgl(result)
+    assert shader_ast is not None
 
 
 def test_codegen_compute_builtins():

@@ -7,6 +7,8 @@ from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
 
 
 class GLSLPreprocessor:
+    """GLSL preprocessor wrapper that preserves #version placement rules."""
+
     def __init__(
         self,
         include_paths: Optional[List[str]] = None,

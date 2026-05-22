@@ -2,6 +2,11 @@ import textwrap
 
 import pytest
 
+from crosstl.backend.common_ast import (
+    FunctionCallNode,
+    MemberAccessNode,
+    TextureSampleNode,
+)
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 
@@ -187,6 +192,22 @@ def assert_parses(code: str):
 def assert_parse_error(code: str):
     with pytest.raises(SyntaxError):
         parse_code(code)
+
+
+def iter_ast_nodes(node):
+    if node is None or isinstance(node, (str, int, float, bool)):
+        return
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from iter_ast_nodes(value)
+        return
+    if isinstance(node, (list, tuple, set)):
+        for value in node:
+            yield from iter_ast_nodes(value)
+        return
+    yield node
+    for value in getattr(node, "__dict__", {}).values():
+        yield from iter_ast_nodes(value)
 
 
 def test_parse_vertex_pixel_shader():
@@ -403,6 +424,69 @@ def test_parse_texture_methods():
     }
     """
     assert_parses(code)
+
+
+def test_parse_resource_method_ast_shapes():
+    code = """
+    Texture2D tex : register(t0);
+    SamplerState samp : register(s0);
+    RWStructuredBuffer<int> buffer : register(u0);
+    AppendStructuredBuffer<int> appendBuf : register(u1);
+    ConsumeStructuredBuffer<int> consumeBuf : register(u2);
+
+    float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+        float4 base = tex.Sample(
+            samp,
+            uv
+        );
+        float4 mip = tex.SampleLevel(
+            samp,
+            uv,
+            1.0
+        );
+        float4 grad = tex.SampleGrad(
+            samp,
+            uv,
+            float2(1.0, 0.0),
+            float2(0.0, 1.0)
+        );
+        float cmp = tex.SampleCmpLevelZero(samp, uv, 0.5);
+        int loaded = buffer.Load(0);
+        buffer.Store(
+            1,
+            loaded
+        );
+        appendBuf.Append(
+            loaded
+        );
+        int consumed = consumeBuf.Consume();
+        return base + mip + grad + float4(cmp + loaded + consumed);
+    }
+    """
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    samples = [node for node in nodes if isinstance(node, TextureSampleNode)]
+    assert len(samples) == 2
+    assert samples[0].lod is None
+    assert samples[1].lod is not None
+
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert "Sample" not in members
+    assert "SampleLevel" not in members
+    assert {
+        "SampleGrad",
+        "SampleCmpLevelZero",
+        "Load",
+        "Store",
+        "Append",
+        "Consume",
+    }.issubset(set(members))
 
 
 @pytest.mark.parametrize(

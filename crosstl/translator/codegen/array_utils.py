@@ -116,6 +116,7 @@ def collect_struct_member_types(structs, type_name_string) -> Dict[str, Dict[str
 
 
 def _struct_member_type_name(member, type_name_string) -> str:
+    """Return a string type name for a struct member-like node."""
     if member.__class__.__name__ == "ArrayNode":
         element_type = getattr(
             member, "element_type", getattr(member, "vtype", "float")
@@ -265,6 +266,7 @@ def collect_literal_int_constants(constants) -> Dict[str, int]:
 
 
 def _parse_decimal_int_literal(value: str) -> Optional[int]:
+    """Parse a signed decimal integer string, returning ``None`` on failure."""
     value = value.strip()
     if not value:
         return None

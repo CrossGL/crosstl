@@ -33,7 +33,10 @@ from .OpenglAst import (
 
 
 class GLSLToCrossGLConverter:
+    """Serialize OpenGL backend AST nodes back into CrossGL source."""
+
     def __init__(self, shader_type="vertex"):
+        """Initialize GLSL-to-CrossGL mappings for a shader stage."""
         self.shader_type = shader_type
         self.indent_level = 0
         self.indent_str = "    "
@@ -69,9 +72,63 @@ class GLSLToCrossGLConverter:
             "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+        }
+        self.texture_function_operations = {
             "texture": "sample",
             "texture2D": "sample",
             "textureCube": "sample",
+            "textureLod": "sample_lod",
+            "textureLodOffset": "sample_lod",
+            "textureGrad": "sample_grad",
+            "textureGradOffset": "sample_grad",
+            "textureProj": "sample_projected",
+            "textureProjLod": "sample_projected",
+            "textureProjLodOffset": "sample_projected",
+            "textureProjGrad": "sample_projected",
+            "textureProjGradOffset": "sample_projected",
+            "textureOffset": "sample_offset",
+            "textureGather": "gather",
+            "textureGatherOffset": "gather",
+            "textureGatherOffsets": "gather",
+            "textureGatherCompare": "gather_compare",
+            "textureGatherCompareOffset": "gather_compare",
+            "textureGatherCompareOffsets": "gather_compare",
+            "textureCompare": "compare",
+            "textureCompareOffset": "compare",
+            "textureCompareLod": "compare",
+            "textureCompareLodOffset": "compare",
+            "textureCompareGrad": "compare",
+            "textureCompareGradOffset": "compare",
+            "textureCompareProj": "compare",
+            "textureCompareProjOffset": "compare",
+            "textureCompareProjLod": "compare",
+            "textureCompareProjLodOffset": "compare",
+            "textureCompareProjGrad": "compare",
+            "textureCompareProjGradOffset": "compare",
+            "texelFetch": "fetch",
+            "texelFetchOffset": "fetch",
+            "textureSize": "query_size",
+            "textureQueryLevels": "query_levels",
+            "textureQueryLod": "query_lod",
+            "textureSamples": "query_samples",
+        }
+        self.legacy_texture_function_names = {
+            "texture2D": "texture",
+            "textureCube": "texture",
+        }
+        self.image_function_operations = {
+            "imageLoad": "load",
+            "imageStore": "store",
+            "imageSize": "query_size",
+            "imageSamples": "query_samples",
+            "imageAtomicAdd": "atomic",
+            "imageAtomicMin": "atomic",
+            "imageAtomicMax": "atomic",
+            "imageAtomicAnd": "atomic",
+            "imageAtomicOr": "atomic",
+            "imageAtomicXor": "atomic",
+            "imageAtomicExchange": "atomic",
+            "imageAtomicCompSwap": "atomic",
         }
 
         # Mapping of GLSL types to CrossGL types
@@ -92,79 +149,79 @@ class GLSLToCrossGLConverter:
             "mat2": "mat2",
             "mat3": "mat3",
             "mat4": "mat4",
-            "sampler1D": "Texture1D",
-            "sampler2D": "Texture2D",
-            "sampler3D": "Texture3D",
-            "samplerCube": "TextureCube",
-            "sampler1DArray": "Texture1DArray",
-            "sampler2DArray": "Texture2DArray",
-            "samplerCubeArray": "TextureCubeArray",
-            "sampler2DShadow": "Texture2DShadow",
-            "sampler1DShadow": "Texture1DShadow",
-            "sampler1DArrayShadow": "Texture1DArrayShadow",
-            "sampler2DArrayShadow": "Texture2DArrayShadow",
-            "samplerCubeShadow": "TextureCubeShadow",
-            "samplerCubeArrayShadow": "TextureCubeArrayShadow",
-            "sampler2DRect": "Texture2DRect",
-            "sampler2DRectShadow": "Texture2DRectShadow",
-            "samplerBuffer": "TextureBuffer",
-            "sampler2DMS": "Texture2DMS",
-            "sampler2DMSArray": "Texture2DMSArray",
-            "isampler1D": "Texture1DInt",
-            "isampler2D": "Texture2DInt",
-            "isampler3D": "Texture3DInt",
-            "isamplerCube": "TextureCubeInt",
-            "isampler1DArray": "Texture1DArrayInt",
-            "isampler2DArray": "Texture2DArrayInt",
-            "isamplerCubeArray": "TextureCubeArrayInt",
-            "isampler2DRect": "Texture2DRectInt",
-            "isamplerBuffer": "TextureBufferInt",
-            "isampler2DMS": "Texture2DMSInt",
-            "isampler2DMSArray": "Texture2DMSArrayInt",
-            "usampler1D": "Texture1DUint",
-            "usampler2D": "Texture2DUint",
-            "usampler3D": "Texture3DUint",
-            "usamplerCube": "TextureCubeUint",
-            "usampler1DArray": "Texture1DArrayUint",
-            "usampler2DArray": "Texture2DArrayUint",
-            "usamplerCubeArray": "TextureCubeArrayUint",
-            "usampler2DRect": "Texture2DRectUint",
-            "usamplerBuffer": "TextureBufferUint",
-            "usampler2DMS": "Texture2DMSUint",
-            "usampler2DMSArray": "Texture2DMSArrayUint",
-            "image1D": "Image1D",
-            "image2D": "Image2D",
-            "image3D": "Image3D",
-            "imageCube": "ImageCube",
-            "image1DArray": "Image1DArray",
-            "image2DArray": "Image2DArray",
-            "imageCubeArray": "ImageCubeArray",
-            "image2DRect": "Image2DRect",
-            "imageBuffer": "ImageBuffer",
-            "image2DMS": "Image2DMS",
-            "image2DMSArray": "Image2DMSArray",
-            "iimage1D": "Image1DInt",
-            "iimage2D": "Image2DInt",
-            "iimage3D": "Image3DInt",
-            "iimageCube": "ImageCubeInt",
-            "iimage1DArray": "Image1DArrayInt",
-            "iimage2DArray": "Image2DArrayInt",
-            "iimageCubeArray": "ImageCubeArrayInt",
-            "iimage2DRect": "Image2DRectInt",
-            "iimageBuffer": "ImageBufferInt",
-            "iimage2DMS": "Image2DMSInt",
-            "iimage2DMSArray": "Image2DMSArrayInt",
-            "uimage1D": "Image1DUint",
-            "uimage2D": "Image2DUint",
-            "uimage3D": "Image3DUint",
-            "uimageCube": "ImageCubeUint",
-            "uimage1DArray": "Image1DArrayUint",
-            "uimage2DArray": "Image2DArrayUint",
-            "uimageCubeArray": "ImageCubeArrayUint",
-            "uimage2DRect": "Image2DRectUint",
-            "uimageBuffer": "ImageBufferUint",
-            "uimage2DMS": "Image2DMSUint",
-            "uimage2DMSArray": "Image2DMSArrayUint",
+            "sampler1D": "sampler1D",
+            "sampler2D": "sampler2D",
+            "sampler3D": "sampler3D",
+            "samplerCube": "samplerCube",
+            "sampler1DArray": "sampler1DArray",
+            "sampler2DArray": "sampler2DArray",
+            "samplerCubeArray": "samplerCubeArray",
+            "sampler2DShadow": "sampler2DShadow",
+            "sampler1DShadow": "sampler1DShadow",
+            "sampler1DArrayShadow": "sampler1DArrayShadow",
+            "sampler2DArrayShadow": "sampler2DArrayShadow",
+            "samplerCubeShadow": "samplerCubeShadow",
+            "samplerCubeArrayShadow": "samplerCubeArrayShadow",
+            "sampler2DRect": "sampler2DRect",
+            "sampler2DRectShadow": "sampler2DRectShadow",
+            "samplerBuffer": "samplerBuffer",
+            "sampler2DMS": "sampler2DMS",
+            "sampler2DMSArray": "sampler2DMSArray",
+            "isampler1D": "isampler1D",
+            "isampler2D": "isampler2D",
+            "isampler3D": "isampler3D",
+            "isamplerCube": "isamplerCube",
+            "isampler1DArray": "isampler1DArray",
+            "isampler2DArray": "isampler2DArray",
+            "isamplerCubeArray": "isamplerCubeArray",
+            "isampler2DRect": "isampler2DRect",
+            "isamplerBuffer": "isamplerBuffer",
+            "isampler2DMS": "isampler2DMS",
+            "isampler2DMSArray": "isampler2DMSArray",
+            "usampler1D": "usampler1D",
+            "usampler2D": "usampler2D",
+            "usampler3D": "usampler3D",
+            "usamplerCube": "usamplerCube",
+            "usampler1DArray": "usampler1DArray",
+            "usampler2DArray": "usampler2DArray",
+            "usamplerCubeArray": "usamplerCubeArray",
+            "usampler2DRect": "usampler2DRect",
+            "usamplerBuffer": "usamplerBuffer",
+            "usampler2DMS": "usampler2DMS",
+            "usampler2DMSArray": "usampler2DMSArray",
+            "image1D": "image1D",
+            "image2D": "image2D",
+            "image3D": "image3D",
+            "imageCube": "imageCube",
+            "image1DArray": "image1DArray",
+            "image2DArray": "image2DArray",
+            "imageCubeArray": "imageCubeArray",
+            "image2DRect": "image2DRect",
+            "imageBuffer": "imageBuffer",
+            "image2DMS": "image2DMS",
+            "image2DMSArray": "image2DMSArray",
+            "iimage1D": "iimage1D",
+            "iimage2D": "iimage2D",
+            "iimage3D": "iimage3D",
+            "iimageCube": "iimageCube",
+            "iimage1DArray": "iimage1DArray",
+            "iimage2DArray": "iimage2DArray",
+            "iimageCubeArray": "iimageCubeArray",
+            "iimage2DRect": "iimage2DRect",
+            "iimageBuffer": "iimageBuffer",
+            "iimage2DMS": "iimage2DMS",
+            "iimage2DMSArray": "iimage2DMSArray",
+            "uimage1D": "uimage1D",
+            "uimage2D": "uimage2D",
+            "uimage3D": "uimage3D",
+            "uimageCube": "uimageCube",
+            "uimage1DArray": "uimage1DArray",
+            "uimage2DArray": "uimage2DArray",
+            "uimageCubeArray": "uimageCubeArray",
+            "uimage2DRect": "uimage2DRect",
+            "uimageBuffer": "uimageBuffer",
+            "uimage2DMS": "uimage2DMS",
+            "uimage2DMSArray": "uimage2DMSArray",
             "void": "void",
         }
 
@@ -203,6 +260,10 @@ class GLSLToCrossGLConverter:
         self.inputs = []
         self.outputs = []
         self.local_vars = []
+        self.structs_by_name = {}
+        self.structured_buffer_names = set()
+        self.structured_buffer_instance_members = {}
+        self.converted_ssbo_struct_names = set()
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -238,6 +299,201 @@ class GLSLToCrossGLConverter:
             ("sampler", "isampler", "usampler", "image", "iimage", "uimage")
         )
 
+    def resource_function_descriptor(self, name):
+        if name in self.texture_function_operations:
+            return {
+                "name": name,
+                "function": self.legacy_texture_function_names.get(name, name),
+                "resource": "texture",
+                "operation": self.texture_function_operations[name],
+            }
+        if name in self.image_function_operations:
+            return {
+                "name": name,
+                "function": name,
+                "resource": "image",
+                "operation": self.image_function_operations[name],
+            }
+        return None
+
+    def _is_image_resource_type(self, type_name):
+        if not type_name:
+            return False
+        return str(type_name).startswith(("image", "iimage", "uimage"))
+
+    def _is_buffer_qualified(self, var):
+        return "buffer" in self._qualifier_set(var)
+
+    def ssbo_binding_attribute_suffix(self, var):
+        layout = getattr(var, "layout", None) or {}
+        binding = layout.get("binding")
+        return f" @binding({binding})" if binding is not None else ""
+
+    def ssbo_block_attribute_suffix(self, var):
+        layout = getattr(var, "layout", None) or {}
+        layout_name = next(
+            (
+                str(name)
+                for name, value in layout.items()
+                if value is None and str(name).lower() in {"std140", "std430", "scalar"}
+            ),
+            "std430",
+        )
+        attributes = [f"@glsl_buffer_block({layout_name})"]
+        binding = layout.get("binding")
+        if binding is not None:
+            attributes.append(f"@binding({binding})")
+
+        qualifiers = self._qualifier_set(var)
+        for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
+            if qualifier in qualifiers:
+                attributes.append(f"@{qualifier}")
+
+        return " " + " ".join(attributes)
+
+    def ssbo_element_member(self, var):
+        if not self._is_buffer_qualified(var):
+            return None
+
+        struct = self.structs_by_name.get(getattr(var, "vtype", None))
+        if struct is not None:
+            members = getattr(struct, "members", None) or getattr(struct, "fields", [])
+            if len(members) != 1:
+                return None
+            member = members[0]
+            if not getattr(member, "is_array", False):
+                return None
+            return member
+
+        if getattr(var, "is_array", False):
+            return var
+
+        return None
+
+    def unsupported_runtime_array_ssbo_diagnostic(self, var):
+        if not self._is_buffer_qualified(var):
+            return ""
+
+        struct = self.structs_by_name.get(getattr(var, "vtype", None))
+        if struct is None:
+            return ""
+
+        members = getattr(struct, "members", None) or getattr(struct, "fields", [])
+        has_runtime_array = any(
+            getattr(member, "is_array", False) for member in members
+        )
+        if not has_runtime_array or self.ssbo_element_member(var) is not None:
+            return ""
+
+        return (
+            f"// unsupported GLSL SSBO block {struct.name}: mixed metadata and "
+            "runtime-array members require explicit layout handling; preserved as "
+            "attributed block struct"
+        )
+
+    def structured_buffer_type(self, var, member):
+        base = (
+            "StructuredBuffer"
+            if "readonly" in self._qualifier_set(var)
+            else "RWStructuredBuffer"
+        )
+        return f"{base}<{self.convert_type(member.vtype)}>"
+
+    def prepare_structured_buffers(self, node):
+        self.structs_by_name = {struct.name: struct for struct in node.structs}
+        self.structured_buffer_names = set()
+        self.structured_buffer_instance_members = {}
+        self.converted_ssbo_struct_names = set()
+
+        for var in getattr(node, "global_variables", []) or []:
+            member = self.ssbo_element_member(var)
+            if member is None:
+                continue
+
+            self.structured_buffer_names.add(var.name)
+            if getattr(var, "vtype", None) in self.structs_by_name:
+                self.converted_ssbo_struct_names.add(var.vtype)
+                self.structured_buffer_instance_members[(var.name, member.name)] = True
+            else:
+                block_name = getattr(var, "interface_block", None)
+                if block_name:
+                    self.converted_ssbo_struct_names.add(block_name)
+
+    def structured_buffer_declaration(self, var):
+        member = self.ssbo_element_member(var)
+        if member is None:
+            return None
+        array_suffix = self.array_suffix(var)
+        return (
+            f"{self.structured_buffer_type(var, member)} {var.name}{array_suffix}"
+            f"{self.ssbo_binding_attribute_suffix(var)}"
+        )
+
+    def supported_image_formats(self):
+        return {
+            "r8",
+            "r8_snorm",
+            "r8i",
+            "r8ui",
+            "r16",
+            "r16_snorm",
+            "r16f",
+            "r16i",
+            "r16ui",
+            "r32f",
+            "r32i",
+            "r32ui",
+            "rg8",
+            "rg8_snorm",
+            "rg8i",
+            "rg8ui",
+            "rg16",
+            "rg16_snorm",
+            "rg16f",
+            "rg16i",
+            "rg16ui",
+            "rg32f",
+            "rg32i",
+            "rg32ui",
+            "rgba8",
+            "rgba8_snorm",
+            "rgba8i",
+            "rgba8ui",
+            "rgba16",
+            "rgba16_snorm",
+            "rgba16f",
+            "rgba16i",
+            "rgba16ui",
+            "rgba32f",
+            "rgba32i",
+            "rgba32ui",
+        }
+
+    def image_resource_attribute_suffix(self, var):
+        var_type = getattr(var, "vtype", None)
+        if not self._is_image_resource_type(var_type):
+            return ""
+
+        attributes = []
+        layout = getattr(var, "layout", None) or {}
+        binding = layout.get("binding")
+        if binding is not None:
+            attributes.append(f"@binding({binding})")
+
+        supported_formats = self.supported_image_formats()
+        for key in layout:
+            format_name = str(key).lower()
+            if format_name in supported_formats:
+                attributes.append(f"@{format_name}")
+                break
+
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
+            if qualifier in qualifiers:
+                attributes.append(f"@{qualifier}")
+
+        return f" {' '.join(attributes)}" if attributes else ""
+
     def format_layout(self, layout_entry):
         layout = (
             layout_entry.get("layout", {}) if isinstance(layout_entry, dict) else {}
@@ -257,6 +513,7 @@ class GLSLToCrossGLConverter:
         return layout_str.strip()
 
     def generate(self, ast):
+        """Generate a complete CrossGL shader from a parsed GLSL AST."""
         if ast is None:
             return "// Empty shader"
 
@@ -270,6 +527,7 @@ class GLSLToCrossGLConverter:
         self.inputs = []
         self.outputs = []
         self.local_vars = []
+        self.prepare_structured_buffers(node)
 
         for var in node.io_variables:
             if isinstance(var, (LayoutNode, VariableNode)):
@@ -321,6 +579,8 @@ class GLSLToCrossGLConverter:
 
         # Generate struct definitions
         for struct in node.structs:
+            if struct.name in self.converted_ssbo_struct_names:
+                continue
             result += self.indent_str + self.generate_struct(struct) + "\n\n"
 
         # Generate input struct if needed
@@ -374,10 +634,14 @@ class GLSLToCrossGLConverter:
             for uniform in resource_uniforms:
                 var_type = self.convert_type(uniform.vtype)
                 var_name = uniform.name
+                attributes = self.image_resource_attribute_suffix(uniform)
                 array_suffix = ""
                 if getattr(uniform, "array_size", None) is not None:
                     array_suffix = f"[{self.generate_expression(uniform.array_size)}]"
-                result += self.indent_str + f"{var_type} {var_name}{array_suffix};\n"
+                result += (
+                    self.indent_str
+                    + f"{var_type} {var_name}{array_suffix}{attributes};\n"
+                )
 
             if data_uniforms:
                 result += self.indent_str + "cbuffer Uniforms {\n"
@@ -406,6 +670,18 @@ class GLSLToCrossGLConverter:
 
         # Generate global variables
         for global_var in getattr(node, "global_variables", []) or []:
+            structured_buffer_decl = self.structured_buffer_declaration(global_var)
+            if structured_buffer_decl is not None:
+                result += self.indent_str + structured_buffer_decl + ";\n"
+                continue
+            diagnostic = self.unsupported_runtime_array_ssbo_diagnostic(global_var)
+            if diagnostic:
+                result += self.indent_str + diagnostic + "\n"
+                declaration = self.generate_variable_declaration(
+                    global_var
+                ) + self.ssbo_block_attribute_suffix(global_var)
+                result += self.indent_str + declaration + ";\n"
+                continue
             result += (
                 self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
             )
@@ -512,19 +788,31 @@ class GLSLToCrossGLConverter:
                 var_type = self.convert_type(field.get("type"))
                 var_name = field.get("name")
                 semantic = ""
+                array_suffix = ""
             else:
                 var_type = self.convert_type(getattr(field, "vtype", ""))
                 var_name = getattr(field, "name", "")
                 semantic = ""
                 if getattr(field, "semantic", None):
                     semantic = f" @ {field.semantic}"
-            result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+                array_suffix = self.array_suffix(field)
+            result += (
+                self.indent() + f"{var_type} {var_name}{array_suffix}{semantic};\n"
+            )
         self.decrease_indent()
 
         result += self.indent() + "};"
         return result
 
+    def array_suffix(self, node):
+        if getattr(node, "array_size", None) is not None:
+            return f"[{self.generate_expression(node.array_size)}]"
+        if getattr(node, "is_array", False):
+            return "[]"
+        return ""
+
     def generate_function(self, node):
+        """Render one GLSL function node as a CrossGL function block."""
         return_type = self.convert_type(node.return_type)
         name = node.name
 
@@ -549,6 +837,7 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_statement(self, node):
+        """Render a GLSL statement node as CrossGL source."""
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node) + ";"
         elif isinstance(node, IfNode):
@@ -591,6 +880,35 @@ class GLSLToCrossGLConverter:
                 var_name = lhs.name
                 value = self.generate_expression(rhs)
                 return f"{var_type} {var_name} {op} {value}"
+
+            structured_length = self.structured_buffer_length_call(rhs)
+            if structured_length is not None and op == "=":
+                target = self.generate_expression(lhs)
+                return f"buffer_dimensions({structured_length}, {target})"
+
+            structured_access = self.structured_buffer_access_parts(lhs)
+            if structured_access is not None:
+                buffer_expr, index_expr = structured_access
+                value = self.generate_expression(rhs)
+                if op != "=":
+                    compound_ops = {
+                        "+=": "+",
+                        "-=": "-",
+                        "*=": "*",
+                        "/=": "/",
+                        "%=": "%",
+                        "&=": "&",
+                        "|=": "|",
+                        "^=": "^",
+                        "<<=": "<<",
+                        ">>=": ">>",
+                    }
+                    binary_op = compound_ops.get(op)
+                    if binary_op is None:
+                        return None
+                    current = f"buffer_load({buffer_expr}, {index_expr})"
+                    value = f"{current} {binary_op} {value}"
+                return f"buffer_store({buffer_expr}, {index_expr}, {value})"
 
             left_expr = self.generate_expression(lhs)
             right_expr = self.generate_expression(rhs)
@@ -698,6 +1016,7 @@ class GLSLToCrossGLConverter:
         return f"return {self.generate_expression(node.value)}"
 
     def generate_expression(self, node):
+        """Render an OpenGL backend expression node as CrossGL syntax."""
         if node is None:
             return ""
 
@@ -756,6 +1075,10 @@ class GLSLToCrossGLConverter:
             return str(node)
 
     def generate_function_call(self, node):
+        structured_length = self.structured_buffer_length_call(node)
+        if structured_length is not None:
+            return f"buffer_dimensions({structured_length})"
+
         name = node.name
         if isinstance(name, MemberAccessNode):
             name = self.generate_member_access(name)
@@ -794,7 +1117,12 @@ class GLSLToCrossGLConverter:
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
             return f"{self.convert_type(name)}({args})"
 
-        mapped_name = self.function_map.get(name, name)
+        descriptor = self.resource_function_descriptor(name)
+        mapped_name = (
+            descriptor["function"]
+            if descriptor is not None
+            else self.function_map.get(name, name)
+        )
 
         args = ", ".join(self.generate_expression(arg) for arg in node.args)
 
@@ -834,9 +1162,81 @@ class GLSLToCrossGLConverter:
         Returns:
             str: The CrossGL array access expression
         """
+        structured_access = self.structured_buffer_access_parts(node)
+        if structured_access is not None:
+            buffer_expr, index_expr = structured_access
+            return f"buffer_load({buffer_expr}, {index_expr})"
+
         array = self.generate_expression(node.array)
         index = self.generate_expression(node.index)
         return f"{array}[{index}]"
+
+    def structured_buffer_access_parts(self, node):
+        if not isinstance(node, ArrayAccessNode):
+            return None
+
+        index = self.generate_expression(node.index)
+        array_expr = node.array
+
+        if (
+            isinstance(array_expr, VariableNode)
+            and array_expr.name in self.structured_buffer_names
+        ):
+            return array_expr.name, index
+
+        if isinstance(array_expr, MemberAccessNode):
+            base_name = self.expression_base_name(array_expr.object)
+            if (
+                base_name
+                and (base_name, array_expr.member)
+                in self.structured_buffer_instance_members
+            ):
+                return (
+                    self.generate_buffer_receiver_expression(array_expr.object),
+                    index,
+                )
+
+        return None
+
+    def structured_buffer_length_call(self, node):
+        if not isinstance(node, FunctionCallNode) or getattr(node, "args", None):
+            return None
+        if not isinstance(node.name, MemberAccessNode) or node.name.member != "length":
+            return None
+
+        target = node.name.object
+        if (
+            isinstance(target, VariableNode)
+            and target.name in self.structured_buffer_names
+        ):
+            return target.name
+        if isinstance(target, MemberAccessNode):
+            base_name = self.expression_base_name(target.object)
+            if (
+                base_name
+                and (base_name, target.member)
+                in self.structured_buffer_instance_members
+            ):
+                return self.generate_buffer_receiver_expression(target.object)
+        return None
+
+    def generate_buffer_receiver_expression(self, node):
+        if isinstance(node, ArrayAccessNode):
+            array = self.generate_buffer_receiver_expression(node.array)
+            index = self.generate_expression(node.index)
+            return f"{array}[{index}]"
+        return self.generate_expression(node)
+
+    def expression_base_name(self, node):
+        if isinstance(node, str):
+            return node
+        if isinstance(node, VariableNode):
+            return node.name
+        if isinstance(node, ArrayAccessNode):
+            return self.expression_base_name(node.array)
+        if isinstance(node, MemberAccessNode):
+            return self.expression_base_name(node.object)
+        return None
 
     def convert_type(self, type_name):
         """Convert a GLSL type to its CrossGL equivalent
@@ -866,16 +1266,14 @@ class GLSLToCrossGLConverter:
             if getattr(node, "is_const", False) or "const" in qualifiers
             else ""
         )
-        array_suffix = ""
-        if node.array_size is not None:
-            array_size = self.generate_expression(node.array_size)
-            array_suffix = f"[{array_size}]"
+        array_suffix = self.array_suffix(node)
+        attributes = self.image_resource_attribute_suffix(node)
 
         if getattr(node, "value", None) is not None:
             value = self.generate_expression(node.value)
-            return f"{prefix}{var_type} {var_name}{array_suffix} = {value}"
+            return f"{prefix}{var_type} {var_name}{attributes}{array_suffix} = {value}"
 
-        return f"{prefix}{var_type} {var_name}{array_suffix}"
+        return f"{prefix}{var_type} {var_name}{attributes}{array_suffix}"
 
     def generate_switch_statement(self, node):
         """Generate CrossGL code for a switch statement

@@ -2,13 +2,55 @@ import pytest
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
 from crosstl.backend.Rust.RustAst import (
+    AssociatedTypeNode,
+    AssignmentNode,
+    AsyncBlockNode,
+    AwaitNode,
+    BinaryOpNode,
+    CastNode,
+    ClosureNode,
+    ClosureParameterNode,
+    ConditionChainNode,
+    ConstBlockNode,
     ConstNode,
+    EnumNode,
+    EnumVariantNode,
+    FunctionCallNode,
     FunctionNode,
+    IfNode,
     ImplNode,
+    LetNode,
+    LetPatternConditionNode,
+    MemberAccessNode,
+    MatchBindingPatternNode,
+    MatchNode,
+    MatchOrPatternNode,
+    MatchRestPatternNode,
+    MatchStructPatternNode,
+    MatchesMacroNode,
+    RangeNode,
+    ReferenceNode,
+    ReturnNode,
     StaticNode,
+    StructInitializationNode,
     StructNode,
+    TernaryOpNode,
+    TypeAliasNode,
+    TupleNode,
+    TryBlockNode,
+    TryNode,
+    UnaryOpNode,
+    UnsafeBlockNode,
     UseNode,
     ArrayNode,
+    ArrayAccessNode,
+    BlockNode,
+    BreakNode,
+    ContinueNode,
+    DereferenceNode,
+    ForNode,
+    LoopNode,
+    WhileNode,
 )
 
 
@@ -40,6 +82,236 @@ def test_struct_parsing():
         assert len(struct.attributes) == 1
     except Exception as e:
         pytest.fail(f"Struct parsing failed: {e}")
+
+
+def test_enum_parsing():
+    code = """
+    #[repr(u32)]
+    pub enum Message<T>
+    where
+        T: Copy,
+    {
+        Quit,
+        AxisX = 0,
+        Data(T, Vec3<f32>),
+        Move { x: f32, y: f32 },
+    }
+    """
+    try:
+        ast = parse_code(code)
+        assert len(ast.enums) == 1
+
+        enum = ast.enums[0]
+        assert isinstance(enum, EnumNode)
+        assert enum.name == "Message"
+        assert enum.visibility == "pub"
+        assert enum.generics == ["T"]
+        assert enum.where_clauses == [("T", ["Copy"])]
+        assert len(enum.attributes) == 1
+
+        assert [variant.name for variant in enum.variants] == [
+            "Quit",
+            "AxisX",
+            "Data",
+            "Move",
+        ]
+        assert all(isinstance(variant, EnumVariantNode) for variant in enum.variants)
+        assert enum.variants[0].kind == "unit"
+        assert enum.variants[1].value == "0"
+        assert enum.variants[2].kind == "tuple"
+        assert enum.variants[2].fields == ["T", "Vec3<f32>"]
+        assert enum.variants[3].kind == "struct"
+        assert [field.name for field in enum.variants[3].fields] == ["x", "y"]
+        assert [field.vtype for field in enum.variants[3].fields] == ["f32", "f32"]
+    except Exception as e:
+        pytest.fail(f"Enum parsing failed: {e}")
+
+
+def test_enum_discriminant_expression_parsing():
+    code = """
+    enum Flags {
+        A = crate::flags::A,
+        B = Type::<u32>::VALUE,
+        C = 1 << 2,
+        D = C | 8,
+        E = D & 3,
+        F = E ^ 1,
+        G = -1,
+        H = 1u32 as i32,
+    }
+    """
+    try:
+        ast = parse_code(code)
+        variants = ast.enums[0].variants
+
+        assert variants[0].value == "crate::flags::A"
+        assert variants[1].value == "Type<u32>::VALUE"
+        assert isinstance(variants[2].value, BinaryOpNode)
+        assert variants[2].value.op == "<<"
+        assert isinstance(variants[3].value, BinaryOpNode)
+        assert variants[3].value.op == "|"
+        assert isinstance(variants[4].value, BinaryOpNode)
+        assert variants[4].value.op == "&"
+        assert isinstance(variants[5].value, BinaryOpNode)
+        assert variants[5].value.op == "^"
+        assert isinstance(variants[6].value, UnaryOpNode)
+        assert isinstance(variants[7].value, CastNode)
+    except Exception as e:
+        pytest.fail(f"Enum discriminant expression parsing failed: {e}")
+
+
+def test_tuple_struct_and_variant_visibility_parsing():
+    code = """
+    #[repr(transparent)]
+    pub(crate) struct Marker;
+    struct Tagged<T>;
+    pub(super) struct Pair(pub(crate) f32, pub(self) Vec3<f32>);
+
+    enum Message {
+        Data(
+            #[location(0)] pub(crate) f32,
+            #[location(1)] pub(super) Vec3<f32>,
+        ),
+        Move { pub(crate) x: f32, pub(super) y: f32 },
+    }
+    """
+    try:
+        ast = parse_code(code)
+
+        marker = ast.structs[0]
+        assert marker.name == "Marker"
+        assert marker.members == []
+        assert marker.visibility == "pub(crate)"
+        assert [attr.name for attr in marker.attributes] == ["repr"]
+
+        tagged = ast.structs[1]
+        assert tagged.name == "Tagged"
+        assert tagged.members == []
+        assert tagged.generics == ["T"]
+
+        pair = ast.structs[2]
+        assert pair.visibility == "pub(super)"
+        assert [member.name for member in pair.members] == ["field0", "field1"]
+        assert [member.vtype for member in pair.members] == ["f32", "Vec3<f32>"]
+        assert [member.visibility for member in pair.members] == [
+            "pub(crate)",
+            "pub(self)",
+        ]
+
+        data = ast.enums[0].variants[0]
+        assert data.kind == "tuple"
+        assert [field.name for field in data.fields] == ["field0", "field1"]
+        assert [field.vtype for field in data.fields] == ["f32", "Vec3<f32>"]
+        assert [field.visibility for field in data.fields] == [
+            "pub(crate)",
+            "pub(super)",
+        ]
+        assert [[attr.name for attr in field.attributes] for field in data.fields] == [
+            ["location"],
+            ["location"],
+        ]
+
+        move = ast.enums[0].variants[1]
+        assert [field.name for field in move.fields] == ["x", "y"]
+        assert [field.visibility for field in move.fields] == [
+            "pub(crate)",
+            "pub(super)",
+        ]
+    except Exception as e:
+        pytest.fail(f"Tuple struct and variant visibility parsing failed: {e}")
+
+
+def test_struct_where_clause_parsing():
+    code = """
+    pub struct Buffer<T>
+    where
+        T: Copy,
+    {
+        value: T,
+    }
+
+    pub(super) struct Pair<T>(T, Vec3<f32>)
+    where
+        T: Copy + Clone;
+
+    struct Marker<T>
+    where
+        T: Copy;
+    """
+    try:
+        ast = parse_code(code)
+
+        buffer, pair, marker = ast.structs
+        assert buffer.name == "Buffer"
+        assert buffer.generics == ["T"]
+        assert buffer.where_clauses == [("T", ["Copy"])]
+        assert buffer.members[0].vtype == "T"
+
+        assert pair.name == "Pair"
+        assert pair.visibility == "pub(super)"
+        assert pair.where_clauses == [("T", ["Copy", "Clone"])]
+        assert [member.vtype for member in pair.members] == ["T", "Vec3<f32>"]
+
+        assert marker.name == "Marker"
+        assert marker.generics == ["T"]
+        assert marker.members == []
+        assert marker.where_clauses == [("T", ["Copy"])]
+    except Exception as e:
+        pytest.fail(f"Struct where-clause parsing failed: {e}")
+
+
+def test_type_alias_parsing():
+    code = """
+    #[repr(transparent)]
+    pub type Real = f32;
+    type Buffer<T> = [T; 4];
+    type Table<T>
+    where
+        T: Copy,
+    = Vec3<T>;
+
+    impl<T> Kernel<T>
+    where
+        T: Clone,
+    {
+        type Output = T;
+        pub type Scratch = [T; 2];
+    }
+    """
+    try:
+        ast = parse_code(code)
+        assert len(ast.type_aliases) == 3
+        assert all(isinstance(alias, TypeAliasNode) for alias in ast.type_aliases)
+
+        real, buffer, table = ast.type_aliases
+        assert real.name == "Real"
+        assert real.alias_type == "f32"
+        assert real.visibility == "pub"
+        assert len(real.attributes) == 1
+
+        assert buffer.name == "Buffer"
+        assert buffer.generics == ["T"]
+        assert buffer.alias_type == "T[4]"
+
+        assert table.name == "Table"
+        assert table.generics == ["T"]
+        assert table.where_clauses == [("T", ["Copy"])]
+        assert table.alias_type == "Vec3<T>"
+
+        impl_block = ast.impl_blocks[0]
+        assert impl_block.struct_name == "Kernel<T>"
+        assert impl_block.where_clauses == [("T", ["Clone"])]
+        assert [alias.name for alias in impl_block.type_aliases] == [
+            "Output",
+            "Scratch",
+        ]
+        assert [alias.alias_type for alias in impl_block.type_aliases] == [
+            "T",
+            "T[2]",
+        ]
+        assert impl_block.type_aliases[1].visibility == "pub"
+    except Exception as e:
+        pytest.fail(f"Type alias parsing failed: {e}")
 
 
 def test_function_parsing():
@@ -87,19 +359,186 @@ def test_impl_block_parsing():
         pytest.fail(f"Impl block parsing failed: {e}")
 
 
+def test_generic_impl_where_clause_parsing():
+    code = """
+    impl<T> Drawable for Sprite<T>
+    where
+        T: Copy + Clone,
+    {
+        fn draw(&self) {}
+    }
+
+    impl<T> Sprite<T>
+    where
+        T: Copy,
+    {
+        fn new(value: T) -> Self {
+            Self { value: value }
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        assert len(ast.impl_blocks) == 2
+
+        trait_impl = ast.impl_blocks[0]
+        assert trait_impl.trait_name == "Drawable"
+        assert trait_impl.struct_name == "Sprite<T>"
+        assert trait_impl.generics == ["T"]
+        assert trait_impl.where_clauses == [("T", ["Copy", "Clone"])]
+        assert trait_impl.functions[0].name == "draw"
+
+        inherent_impl = ast.impl_blocks[1]
+        assert inherent_impl.trait_name is None
+        assert inherent_impl.struct_name == "Sprite<T>"
+        assert inherent_impl.generics == ["T"]
+        assert inherent_impl.where_clauses == [("T", ["Copy"])]
+        assert inherent_impl.functions[0].return_type == "Self"
+    except Exception as e:
+        pytest.fail(f"Generic impl where-clause parsing failed: {e}")
+
+
+def test_shader_type_token_declaration_names_parsing():
+    code = """
+    struct Vec2<T> {
+        x: T,
+        y: T,
+    }
+
+    impl<T> Vec2<T> {
+        fn x(&self) -> T {
+            return self.x;
+        }
+    }
+
+    enum Option {
+        None,
+        Some(i32),
+        Vec3 { value: i32 },
+    }
+
+    trait Result {
+        type Vec4;
+        fn Some(&self) -> i32;
+    }
+
+    type Mat4 = Vec2<f32>;
+    """
+    try:
+        ast = parse_code(code)
+
+        assert ast.structs[0].name == "Vec2"
+        assert [member.name for member in ast.structs[0].members] == ["x", "y"]
+        assert ast.impl_blocks[0].struct_name == "Vec2<T>"
+        assert ast.impl_blocks[0].functions[0].name == "x"
+        assert ast.enums[0].name == "Option"
+        assert [variant.name for variant in ast.enums[0].variants] == [
+            "None",
+            "Some",
+            "Vec3",
+        ]
+        assert ast.traits[0].name == "Result"
+        assert ast.traits[0].associated_types[0].name == "Vec4"
+        assert ast.traits[0].methods[0].name == "Some"
+        assert ast.type_aliases[0].name == "Mat4"
+    except Exception as e:
+        pytest.fail(f"Shader type-token declaration name parsing failed: {e}")
+
+
 def test_use_statement_parsing():
     code = """
     use std::collections::HashMap;
     use gpu::*;
     use math::{sin, cos, tan};
+    use glam::Vec3 as GVec3;
+    use crate::math::Mat4 as CMat4;
+    use crate::math as shader_math;
+    use glam::{Vec3 as GVec3Grouped, Vec4 as GVec4Grouped};
+    use crate::math::{Mat4 as CMat4Grouped, Unknown};
+    use crate::{math as grouped_math, math::{Vec3 as NestedVec3, Mat4 as NestedMat4}, color::Vec4 as NestedVec4};
+    use crate::{math::{*, Vec3 as GlobVec3}, color::*};
+    pub use crate::shared as shared;
+    pub(crate) use crate::internal::Vec4 as InternalVec4;
     """
     try:
         ast = parse_code(code)
-        assert len(ast.use_statements) >= 1
+        assert len(ast.use_statements) >= 12
         use_stmt = ast.use_statements[0]
         assert isinstance(use_stmt, UseNode)
+        assert ast.use_statements[2].items == [
+            {"path": "sin", "alias": None},
+            {"path": "cos", "alias": None},
+            {"path": "tan", "alias": None},
+        ]
+        assert ast.use_statements[3].path == "glam::Vec3"
+        assert ast.use_statements[3].alias == "GVec3"
+        assert ast.use_statements[4].path == "crate::math::Mat4"
+        assert ast.use_statements[4].alias == "CMat4"
+        assert ast.use_statements[5].path == "crate::math"
+        assert ast.use_statements[5].alias == "shader_math"
+        assert ast.use_statements[6].path == (
+            "glam::{Vec3 as GVec3Grouped, Vec4 as GVec4Grouped}"
+        )
+        assert ast.use_statements[6].items == [
+            {"path": "Vec3", "alias": "GVec3Grouped"},
+            {"path": "Vec4", "alias": "GVec4Grouped"},
+        ]
+        assert ast.use_statements[7].items == [
+            {"path": "Mat4", "alias": "CMat4Grouped"},
+            {"path": "Unknown", "alias": None},
+        ]
+        assert ast.use_statements[8].items == [
+            {"path": "math", "alias": "grouped_math"},
+            {"path": "math::Vec3", "alias": "NestedVec3"},
+            {"path": "math::Mat4", "alias": "NestedMat4"},
+            {"path": "color::Vec4", "alias": "NestedVec4"},
+        ]
+        assert ast.use_statements[9].items == [
+            {"path": "math::*", "alias": None},
+            {"path": "math::Vec3", "alias": "GlobVec3"},
+            {"path": "color::*", "alias": None},
+        ]
+        assert ast.use_statements[10].visibility == "pub"
+        assert ast.use_statements[10].alias == "shared"
+        assert ast.use_statements[11].visibility == "pub(crate)"
+        assert ast.use_statements[11].alias == "InternalVec4"
     except Exception as e:
         pytest.fail(f"Use statement parsing failed: {e}")
+
+
+def test_restricted_visibility_parsing():
+    code = """
+    #[inline]
+    pub(in crate::math) fn helper() {}
+
+    pub(super) struct Data {
+        pub(crate) value: f32,
+        pub(self) local: f32,
+    }
+
+    pub(in crate::math) type Real = f32;
+    pub(super) const PI: f32 = 3.0;
+
+    impl Data {
+        pub(super) fn update(&self) {}
+        pub(in crate::math) type Output = f32;
+    }
+    """
+    try:
+        ast = parse_code(code)
+
+        assert ast.functions[0].visibility == "pub(in crate::math)"
+        assert ast.structs[0].visibility == "pub(super)"
+        assert [member.visibility for member in ast.structs[0].members] == [
+            "pub(crate)",
+            "pub(self)",
+        ]
+        assert ast.type_aliases[0].visibility == "pub(in crate::math)"
+        assert ast.global_variables[0].visibility == "pub(super)"
+        assert ast.impl_blocks[0].functions[0].visibility == "pub(super)"
+        assert ast.impl_blocks[0].type_aliases[0].visibility == ("pub(in crate::math)")
+    except Exception as e:
+        pytest.fail(f"Restricted visibility parsing failed: {e}")
 
 
 def test_if_statement_parsing():
@@ -136,6 +575,62 @@ def test_for_loop_parsing():
         assert len(func.body) >= 1
     except Exception as e:
         pytest.fail(f"For loop parsing failed: {e}")
+
+
+def test_for_loop_pattern_parsing():
+    code = """
+    fn test_for_patterns() {
+        for _ in 0..4 {
+            tick();
+        }
+        for (_, value) in pairs {
+            consume(value);
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert body[0].pattern == "_"
+
+        tuple_pattern = body[1].pattern
+        assert isinstance(tuple_pattern, TupleNode)
+        assert tuple_pattern.elements == ["_", "value"]
+    except Exception as e:
+        pytest.fail(f"For loop pattern parsing failed: {e}")
+
+
+def test_for_loop_step_by_range_parsing():
+    code = """
+    fn test_for_step_by() {
+        for i in (0..10).step_by(2) {
+            use_index(i);
+        }
+        for j in (1..=9).step_by(step) {
+            use_index(j);
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        first_iterable = body[0].iterable
+        assert isinstance(first_iterable, FunctionCallNode)
+        assert isinstance(first_iterable.name, MemberAccessNode)
+        assert first_iterable.name.member == "step_by"
+        assert isinstance(first_iterable.name.object, RangeNode)
+        assert first_iterable.name.object.start == "0"
+        assert first_iterable.name.object.end == "10"
+        assert first_iterable.args == ["2"]
+
+        second_iterable = body[1].iterable
+        assert isinstance(second_iterable.name.object, RangeNode)
+        assert second_iterable.name.object.inclusive is True
+        assert second_iterable.args == ["step"]
+    except Exception as e:
+        pytest.fail(f"For loop step_by range parsing failed: {e}")
 
 
 def test_while_loop_parsing():
@@ -255,6 +750,30 @@ def test_reference_array_type_parsing():
         pytest.fail(f"Reference array type parsing failed: {e}")
 
 
+def test_lifetime_reference_type_parsing():
+    code = """
+    fn borrow<'a>(value: &'a Vec3<f32>) -> &'a Vec3<f32> {
+        return value;
+    }
+
+    fn borrow_mut<'a>(value: &'a mut Vec3<f32>) -> &'a mut Vec3<f32> {
+        return value;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        borrowed, borrowed_mut = ast.functions
+
+        assert borrowed.generics == ["'a"]
+        assert borrowed.params[0].vtype == "&Vec3<f32>"
+        assert borrowed.return_type == "&Vec3<f32>"
+        assert borrowed_mut.generics == ["'a"]
+        assert borrowed_mut.params[0].vtype == "&mut Vec3<f32>"
+        assert borrowed_mut.return_type == "&mut Vec3<f32>"
+    except Exception as e:
+        pytest.fail(f"Lifetime reference type parsing failed: {e}")
+
+
 def test_function_call_parsing():
     code = """
     fn test_call() {
@@ -269,6 +788,1158 @@ def test_function_call_parsing():
         assert len(func.body) >= 2
     except Exception as e:
         pytest.fail(f"Function call parsing failed: {e}")
+
+
+def test_char_literal_expression_parsing():
+    code = r"""
+    fn test_chars(c: char) -> char {
+        let letter = 'a';
+        let newline = '\n';
+        match c {
+            'a' => hit_a(),
+            '\n' => hit_newline(),
+            _ => hit_default(),
+        }
+        return 'z';
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert body[0].value == "'a'"
+        assert body[1].value == r"'\n'"
+
+        match_stmt = body[2]
+        assert isinstance(match_stmt, MatchNode)
+        assert match_stmt.arms[0].pattern == "'a'"
+        assert match_stmt.arms[1].pattern == r"'\n'"
+
+        assert isinstance(body[3], ReturnNode)
+        assert body[3].value == "'z'"
+    except Exception as e:
+        pytest.fail(f"Char literal expression parsing failed: {e}")
+
+
+def test_raw_string_literal_expression_parsing():
+    code = r"""
+    fn test_raw_strings(s: String) -> String {
+        let plain = r"plain raw";
+        let quoted = r#"This is a "raw" string"#;
+        let hashed = r##"This has "# in it"##;
+        match s {
+            r#"ok"# => hit_ok(),
+            _ => hit_default(),
+        }
+        return r#"done"#;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert body[0].value == 'r"plain raw"'
+        assert body[1].value == 'r#"This is a "raw" string"#'
+        assert body[2].value == 'r##"This has "# in it"##'
+
+        match_stmt = body[3]
+        assert isinstance(match_stmt, MatchNode)
+        assert match_stmt.arms[0].pattern == 'r#"ok"#'
+
+        assert isinstance(body[4], ReturnNode)
+        assert body[4].value == 'r#"done"#'
+    except Exception as e:
+        pytest.fail(f"Raw string literal expression parsing failed: {e}")
+
+
+def test_byte_literal_expression_parsing():
+    code = r"""
+    fn test_byte_literals(c: u8) {
+        let bytes = b"abc";
+        let byte = b'a';
+        let newline = b'\n';
+        let raw = br#"a "quoted" byte raw"#;
+        match c {
+            b'a' => hit_a(),
+            b'\n' => hit_newline(),
+            _ => hit_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert body[0].value == 'b"abc"'
+        assert body[1].value == "b'a'"
+        assert body[2].value == r"b'\n'"
+        assert body[3].value == 'br#"a "quoted" byte raw"#'
+
+        match_stmt = body[4]
+        assert isinstance(match_stmt, MatchNode)
+        assert match_stmt.arms[0].pattern == "b'a'"
+        assert match_stmt.arms[1].pattern == r"b'\n'"
+    except Exception as e:
+        pytest.fail(f"Byte literal expression parsing failed: {e}")
+
+
+def test_turbofish_path_expression_parsing():
+    code = """
+    type Vector<T> = Vec3<T>;
+
+    fn test_paths() {
+        let a = Vec3::<f32>::new(1.0, 2.0, 3.0);
+        let b = Vector::<f32>::new(1.0, 2.0, 3.0);
+        let c = Type::<f32>::CONST;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "Vec3<f32>::new"
+        assert isinstance(body[1].value, FunctionCallNode)
+        assert body[1].value.name == "Vector<f32>::new"
+        assert body[2].value == "Type<f32>::CONST"
+    except Exception as e:
+        pytest.fail(f"Turbofish path expression parsing failed: {e}")
+
+
+def test_module_path_expression_parsing():
+    code = """
+    type Vector<T> = Vec3<T>;
+
+    fn test_paths() {
+        let a = crate::math::value();
+        let b = super::math::VALUE;
+        let c = self::helper::CONST;
+        let d = crate::math::Vector::<f32>::new(1.0, 2.0, 3.0);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "crate::math::value"
+        assert body[1].value == "super::math::VALUE"
+        assert body[2].value == "self::helper::CONST"
+        assert isinstance(body[3].value, FunctionCallNode)
+        assert body[3].value.name == "crate::math::Vector<f32>::new"
+    except Exception as e:
+        pytest.fail(f"Module path expression parsing failed: {e}")
+
+
+def test_option_result_constructor_expression_parsing():
+    code = """
+    use std::option::Option::{Some, None};
+
+    fn test_option_result(value: i32, err: i32) -> Result<i32, i32> {
+        let maybe: Option<i32> = Some(value);
+        let empty: Option<i32> = None;
+        let ok_value = Ok(value + 1);
+        let err_value = Err(err);
+        match maybe {
+            Some(v) => v,
+            None => 0,
+        }
+        return Ok(value);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        assert ast.use_statements[0].items == [
+            {"path": "Some", "alias": None},
+            {"path": "None", "alias": None},
+        ]
+
+        body = ast.functions[0].body
+        assert body[0].vtype == "Option<i32>"
+        assert isinstance(body[0].value, FunctionCallNode)
+        assert body[0].value.name == "Some"
+        assert body[0].value.args == ["value"]
+
+        assert body[1].vtype == "Option<i32>"
+        assert body[1].value == "None"
+
+        assert isinstance(body[2].value, FunctionCallNode)
+        assert body[2].value.name == "Ok"
+        assert isinstance(body[2].value.args[0], BinaryOpNode)
+
+        assert isinstance(body[3].value, FunctionCallNode)
+        assert body[3].value.name == "Err"
+        assert body[3].value.args == ["err"]
+
+        match_stmt = body[4]
+        assert isinstance(match_stmt, MatchNode)
+        assert isinstance(match_stmt.arms[0].pattern, FunctionCallNode)
+        assert match_stmt.arms[0].pattern.name == "Some"
+        assert match_stmt.arms[0].pattern.args == ["v"]
+        assert match_stmt.arms[1].pattern == "None"
+
+        assert isinstance(body[5], ReturnNode)
+        assert isinstance(body[5].value, FunctionCallNode)
+        assert body[5].value.name == "Ok"
+    except Exception as e:
+        pytest.fail(f"Option/Result constructor expression parsing failed: {e}")
+
+
+def test_tuple_constructor_match_pattern_parsing():
+    code = """
+    fn test_constructor_patterns(pair: Pair, color: Color) {
+        match pair {
+            Pair(a, b) => use_pair(a, b),
+            Pair(x, 3) => use_literal(x),
+            _ => use_default(),
+        }
+        match color {
+            Color::Rgb(r, g, b) => use_rgb(r, g, b),
+            Color::Red => use_red(),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        pair_match = ast.functions[0].body[0]
+        color_match = ast.functions[0].body[1]
+
+        assert isinstance(pair_match, MatchNode)
+        assert isinstance(pair_match.arms[0].pattern, FunctionCallNode)
+        assert pair_match.arms[0].pattern.name == "Pair"
+        assert pair_match.arms[0].pattern.args == ["a", "b"]
+
+        assert isinstance(pair_match.arms[1].pattern, FunctionCallNode)
+        assert pair_match.arms[1].pattern.name == "Pair"
+        assert pair_match.arms[1].pattern.args == ["x", "3"]
+        assert pair_match.arms[2].pattern == "_"
+
+        assert isinstance(color_match, MatchNode)
+        assert isinstance(color_match.arms[0].pattern, FunctionCallNode)
+        assert color_match.arms[0].pattern.name == "Color::Rgb"
+        assert color_match.arms[0].pattern.args == ["r", "g", "b"]
+        assert color_match.arms[1].pattern == "Color::Red"
+        assert color_match.arms[2].pattern == "_"
+    except Exception as e:
+        pytest.fail(f"Tuple constructor match pattern parsing failed: {e}")
+
+
+def test_nested_constructor_match_pattern_parsing():
+    code = """
+    fn test_nested_constructor_patterns(value: Option<Result<i32, i32>>, pair: Pair) {
+        match value {
+            Some(Ok(v)) => use_ok(v),
+            Some(Err(3)) => use_literal_err(),
+            None => use_none(),
+        }
+        match pair {
+            Pair(Some(x), y) => use_pair(x, y),
+            Pair(None, 3) => use_none_pair(),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        value_match = ast.functions[0].body[0]
+        pair_match = ast.functions[0].body[1]
+
+        assert isinstance(value_match, MatchNode)
+        some_ok = value_match.arms[0].pattern
+        assert isinstance(some_ok, FunctionCallNode)
+        assert some_ok.name == "Some"
+        assert len(some_ok.args) == 1
+        assert isinstance(some_ok.args[0], FunctionCallNode)
+        assert some_ok.args[0].name == "Ok"
+        assert some_ok.args[0].args == ["v"]
+
+        some_err = value_match.arms[1].pattern
+        assert isinstance(some_err, FunctionCallNode)
+        assert isinstance(some_err.args[0], FunctionCallNode)
+        assert some_err.args[0].name == "Err"
+        assert some_err.args[0].args == ["3"]
+        assert value_match.arms[2].pattern == "None"
+
+        pair_some = pair_match.arms[0].pattern
+        assert isinstance(pair_some, FunctionCallNode)
+        assert pair_some.name == "Pair"
+        assert isinstance(pair_some.args[0], FunctionCallNode)
+        assert pair_some.args[0].name == "Some"
+        assert pair_some.args[0].args == ["x"]
+        assert pair_some.args[1] == "y"
+
+        pair_none = pair_match.arms[1].pattern
+        assert isinstance(pair_none, FunctionCallNode)
+        assert pair_none.args == ["None", "3"]
+    except Exception as e:
+        pytest.fail(f"Nested constructor match pattern parsing failed: {e}")
+
+
+def test_guarded_nested_constructor_match_pattern_parsing():
+    code = """
+    fn test_guarded_nested_patterns(value: Option<Result<i32, i32>>) {
+        match value {
+            Some(Ok(v)) if v > 0 => use_positive(v),
+            Some(Err(e)) if e != 0 => use_err(e),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        match_stmt = ast.functions[0].body[0]
+
+        assert isinstance(match_stmt, MatchNode)
+        some_ok = match_stmt.arms[0].pattern
+        assert isinstance(some_ok, FunctionCallNode)
+        assert isinstance(some_ok.args[0], FunctionCallNode)
+        assert some_ok.args[0].name == "Ok"
+        assert some_ok.args[0].args == ["v"]
+        assert isinstance(match_stmt.arms[0].guard, BinaryOpNode)
+        assert match_stmt.arms[0].guard.op == ">"
+        assert match_stmt.arms[0].guard.left == "v"
+        assert match_stmt.arms[0].guard.right == "0"
+
+        some_err = match_stmt.arms[1].pattern
+        assert isinstance(some_err, FunctionCallNode)
+        assert isinstance(some_err.args[0], FunctionCallNode)
+        assert some_err.args[0].name == "Err"
+        assert some_err.args[0].args == ["e"]
+        assert isinstance(match_stmt.arms[1].guard, BinaryOpNode)
+        assert match_stmt.arms[1].guard.op == "!="
+        assert match_stmt.arms[1].guard.left == "e"
+        assert match_stmt.arms[1].guard.right == "0"
+    except Exception as e:
+        pytest.fail(f"Guarded nested constructor match parsing failed: {e}")
+
+
+def test_match_or_pattern_parsing():
+    code = """
+    fn test_or_patterns(mode: i32, color: Color, value: Option<Result<i32, i32>>) {
+        match mode {
+            0 | 1 => hit_small(),
+            _ => hit_default(),
+        }
+        match color {
+            Color::Red | Color::Green => hit_warm(),
+            _ => hit_default(),
+        }
+        match value {
+            Some(Ok(v)) | Some(Err(v)) if v > 0 => use_value(v),
+            _ => use_default(),
+        }
+        match value {
+            Some(Ok(v) | Err(v)) if v > 0 => use_nested(v),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        mode_match = ast.functions[0].body[0]
+        color_match = ast.functions[0].body[1]
+        value_match = ast.functions[0].body[2]
+        nested_value_match = ast.functions[0].body[3]
+
+        assert isinstance(mode_match.arms[0].pattern, MatchOrPatternNode)
+        assert mode_match.arms[0].pattern.patterns == ["0", "1"]
+
+        assert isinstance(color_match.arms[0].pattern, MatchOrPatternNode)
+        assert color_match.arms[0].pattern.patterns == [
+            "Color::Red",
+            "Color::Green",
+        ]
+
+        value_pattern = value_match.arms[0].pattern
+        assert isinstance(value_pattern, MatchOrPatternNode)
+        assert len(value_pattern.patterns) == 2
+        assert all(
+            isinstance(pattern, FunctionCallNode) for pattern in value_pattern.patterns
+        )
+        assert value_pattern.patterns[0].name == "Some"
+        assert value_pattern.patterns[0].args[0].name == "Ok"
+        assert value_pattern.patterns[1].name == "Some"
+        assert value_pattern.patterns[1].args[0].name == "Err"
+        assert isinstance(value_match.arms[0].guard, BinaryOpNode)
+        assert value_match.arms[0].guard.op == ">"
+
+        nested_value_pattern = nested_value_match.arms[0].pattern
+        assert isinstance(nested_value_pattern, FunctionCallNode)
+        assert nested_value_pattern.name == "Some"
+        assert isinstance(nested_value_pattern.args[0], MatchOrPatternNode)
+        assert nested_value_pattern.args[0].patterns[0].name == "Ok"
+        assert nested_value_pattern.args[0].patterns[1].name == "Err"
+    except Exception as e:
+        pytest.fail(f"Match or-pattern parsing failed: {e}")
+
+
+def test_match_range_pattern_parsing():
+    code = """
+    fn test_range_patterns(mode: i32, signed: i32, value: Option<i32>) {
+        match mode {
+            1..=10 => hit_inclusive(),
+            11..20 => hit_exclusive(),
+            0 | 30..=40 => hit_or_range(),
+            _ => hit_default(),
+        }
+        match signed {
+            -5..=-1 => hit_negative(),
+            _ => hit_default(),
+        }
+        match value {
+            Some(1..=3 | 7..10) => hit_nested(),
+            _ => hit_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        mode_match = ast.functions[0].body[0]
+        signed_match = ast.functions[0].body[1]
+        value_match = ast.functions[0].body[2]
+
+        inclusive = mode_match.arms[0].pattern
+        assert isinstance(inclusive, RangeNode)
+        assert inclusive.start == "1"
+        assert inclusive.end == "10"
+        assert inclusive.inclusive is True
+
+        exclusive = mode_match.arms[1].pattern
+        assert isinstance(exclusive, RangeNode)
+        assert exclusive.start == "11"
+        assert exclusive.end == "20"
+        assert exclusive.inclusive is False
+
+        or_range = mode_match.arms[2].pattern
+        assert isinstance(or_range, MatchOrPatternNode)
+        assert or_range.patterns[0] == "0"
+        assert isinstance(or_range.patterns[1], RangeNode)
+        assert or_range.patterns[1].start == "30"
+        assert or_range.patterns[1].end == "40"
+
+        negative = signed_match.arms[0].pattern
+        assert isinstance(negative, RangeNode)
+        assert isinstance(negative.start, UnaryOpNode)
+        assert negative.start.op == "-"
+        assert negative.start.operand == "5"
+        assert isinstance(negative.end, UnaryOpNode)
+        assert negative.end.op == "-"
+        assert negative.end.operand == "1"
+
+        nested_arg = value_match.arms[0].pattern.args[0]
+        assert isinstance(nested_arg, MatchOrPatternNode)
+        assert isinstance(nested_arg.patterns[0], RangeNode)
+        assert nested_arg.patterns[0].inclusive is True
+        assert isinstance(nested_arg.patterns[1], RangeNode)
+        assert nested_arg.patterns[1].inclusive is False
+    except Exception as e:
+        pytest.fail(f"Match range pattern parsing failed: {e}")
+
+
+def test_match_grouped_reference_pattern_parsing():
+    code = """
+    fn test_grouped_reference_patterns(mode: i32, value: &Option<Result<i32, i32>>, nested: Option<&i32>) {
+        match mode {
+            (0 | 1) => hit_grouped(),
+            _ => hit_default(),
+        }
+        match mode {
+            &(2..=4) => hit_ref_range(),
+            &mut (5 | 6) => hit_mut_ref_or(),
+            _ => hit_default(),
+        }
+        match value {
+            &Some(Ok(v) | Err(v)) if v > 0 => use_value(v),
+            _ => use_default(),
+        }
+        match nested {
+            Some(&(1 | 2)) => hit_nested_ref(),
+            _ => hit_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        grouped_match = ast.functions[0].body[0]
+        ref_match = ast.functions[0].body[1]
+        value_match = ast.functions[0].body[2]
+        nested_match = ast.functions[0].body[3]
+
+        grouped_pattern = grouped_match.arms[0].pattern
+        assert isinstance(grouped_pattern, MatchOrPatternNode)
+        assert grouped_pattern.patterns == ["0", "1"]
+
+        ref_range = ref_match.arms[0].pattern
+        assert isinstance(ref_range, ReferenceNode)
+        assert isinstance(ref_range.expression, RangeNode)
+        assert ref_range.expression.start == "2"
+        assert ref_range.expression.end == "4"
+
+        mut_ref_or = ref_match.arms[1].pattern
+        assert isinstance(mut_ref_or, ReferenceNode)
+        assert mut_ref_or.is_mutable is True
+        assert isinstance(mut_ref_or.expression, MatchOrPatternNode)
+        assert mut_ref_or.expression.patterns == ["5", "6"]
+
+        value_pattern = value_match.arms[0].pattern
+        assert isinstance(value_pattern, ReferenceNode)
+        assert value_pattern.expression.name == "Some"
+        inner_or = value_pattern.expression.args[0]
+        assert isinstance(inner_or, MatchOrPatternNode)
+        assert inner_or.patterns[0].name == "Ok"
+        assert inner_or.patterns[1].name == "Err"
+
+        nested_arg = nested_match.arms[0].pattern.args[0]
+        assert isinstance(nested_arg, ReferenceNode)
+        assert isinstance(nested_arg.expression, MatchOrPatternNode)
+        assert nested_arg.expression.patterns == ["1", "2"]
+    except Exception as e:
+        pytest.fail(f"Grouped/reference match pattern parsing failed: {e}")
+
+
+def test_match_binding_pattern_parsing():
+    code = """
+    fn test_binding_patterns(mode: i32, value: Option<Result<i32, i32>>, nested: Option<i32>) {
+        match mode {
+            whole @ 1..=10 if whole > 3 => use_mode(whole),
+            label @ (0 | 20) => use_label(label),
+            _ @ _ => use_discard(),
+        }
+        match value {
+            outer @ Some(Ok(v) | Err(v)) if outer_ready(outer) && v > 0 => use_result(outer, v),
+            _ => use_default(),
+        }
+        match nested {
+            Some(inner @ (1..=3 | 7..10)) => use_inner(inner),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        mode_match = ast.functions[0].body[0]
+        value_match = ast.functions[0].body[1]
+        nested_match = ast.functions[0].body[2]
+
+        whole = mode_match.arms[0].pattern
+        assert isinstance(whole, MatchBindingPatternNode)
+        assert whole.name == "whole"
+        assert isinstance(whole.pattern, RangeNode)
+        assert whole.pattern.inclusive is True
+        assert isinstance(mode_match.arms[0].guard, BinaryOpNode)
+
+        label = mode_match.arms[1].pattern
+        assert isinstance(label, MatchBindingPatternNode)
+        assert label.name == "label"
+        assert isinstance(label.pattern, MatchOrPatternNode)
+        assert label.pattern.patterns == ["0", "20"]
+
+        discard = mode_match.arms[2].pattern
+        assert isinstance(discard, MatchBindingPatternNode)
+        assert discard.name == "_"
+        assert discard.pattern == "_"
+
+        outer = value_match.arms[0].pattern
+        assert isinstance(outer, MatchBindingPatternNode)
+        assert outer.name == "outer"
+        assert isinstance(outer.pattern, FunctionCallNode)
+        assert outer.pattern.name == "Some"
+        assert isinstance(outer.pattern.args[0], MatchOrPatternNode)
+        assert outer.pattern.args[0].patterns[0].name == "Ok"
+        assert outer.pattern.args[0].patterns[1].name == "Err"
+
+        inner = nested_match.arms[0].pattern.args[0]
+        assert isinstance(inner, MatchBindingPatternNode)
+        assert inner.name == "inner"
+        assert isinstance(inner.pattern, MatchOrPatternNode)
+        assert isinstance(inner.pattern.patterns[0], RangeNode)
+        assert isinstance(inner.pattern.patterns[1], RangeNode)
+    except Exception as e:
+        pytest.fail(f"Match binding pattern parsing failed: {e}")
+
+
+def test_match_tuple_pattern_parsing():
+    code = """
+    fn test_tuple_patterns(mode: i32, state: i32, value: Option<i32>) {
+        match (mode, state) {
+            (0, y) if y > 1 => use_y(y),
+            (1..=3, 4 | 5) => hit_range_or(),
+            (left @ (6 | 7), right @ 8..10) => use_pair(left, right),
+            _ => use_default(),
+        }
+        match (value, mode) {
+            (Some(v), 1) => use_some(v),
+            (None, _) => use_none(),
+            _ => use_default(),
+        }
+        match (mode, (state, value)) {
+            (9, (kept @ 10..=12, Some(v))) => use_nested(kept, v),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        tuple_match = ast.functions[0].body[0]
+        option_match = ast.functions[0].body[1]
+        nested_match = ast.functions[0].body[2]
+
+        assert isinstance(tuple_match.expression, TupleNode)
+        assert tuple_match.expression.elements == ["mode", "state"]
+
+        first_pattern = tuple_match.arms[0].pattern
+        assert isinstance(first_pattern, TupleNode)
+        assert first_pattern.elements == ["0", "y"]
+        assert isinstance(tuple_match.arms[0].guard, BinaryOpNode)
+
+        range_or = tuple_match.arms[1].pattern
+        assert isinstance(range_or, TupleNode)
+        assert isinstance(range_or.elements[0], RangeNode)
+        assert isinstance(range_or.elements[1], MatchOrPatternNode)
+        assert range_or.elements[1].patterns == ["4", "5"]
+
+        bindings = tuple_match.arms[2].pattern
+        assert isinstance(bindings.elements[0], MatchBindingPatternNode)
+        assert bindings.elements[0].name == "left"
+        assert isinstance(bindings.elements[1], MatchBindingPatternNode)
+        assert bindings.elements[1].name == "right"
+
+        option_pattern = option_match.arms[0].pattern
+        assert isinstance(option_pattern, TupleNode)
+        assert option_pattern.elements[0].name == "Some"
+        assert option_pattern.elements[0].args == ["v"]
+
+        nested_pattern = nested_match.arms[0].pattern
+        assert isinstance(nested_pattern, TupleNode)
+        assert isinstance(nested_pattern.elements[1], TupleNode)
+        nested_inner = nested_pattern.elements[1]
+        assert isinstance(nested_inner.elements[0], MatchBindingPatternNode)
+        assert nested_inner.elements[1].name == "Some"
+    except Exception as e:
+        pytest.fail(f"Match tuple pattern parsing failed: {e}")
+
+
+def test_match_array_pattern_parsing():
+    code = """
+    fn test_array_patterns(values: [i32; 4], option_values: [Option<i32>; 2], mode: i32, state: i32) {
+        match values {
+            [first, 2, third @ 3..=5, _] if first > 0 => use_fixed(first, third),
+            [0 | 1, ..] => hit_prefix(),
+            [head, middle @ .., tail] => use_rest(head, middle, tail),
+            [] => use_empty(),
+            _ => use_default(),
+        }
+        match option_values {
+            [Some(v), _] => use_some(v),
+            _ => use_default(),
+        }
+        match [mode, state] {
+            [0, kept @ 1..=3] => use_literal(kept),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        values_match = ast.functions[0].body[0]
+        option_match = ast.functions[0].body[1]
+        literal_match = ast.functions[0].body[2]
+
+        fixed = values_match.arms[0].pattern
+        assert isinstance(fixed, ArrayNode)
+        assert fixed.elements[0] == "first"
+        assert fixed.elements[1] == "2"
+        assert isinstance(fixed.elements[2], MatchBindingPatternNode)
+        assert fixed.elements[2].name == "third"
+        assert isinstance(fixed.elements[2].pattern, RangeNode)
+        assert fixed.elements[3] == "_"
+
+        prefix = values_match.arms[1].pattern
+        assert isinstance(prefix.elements[0], MatchOrPatternNode)
+        assert isinstance(prefix.elements[1], MatchRestPatternNode)
+
+        rest = values_match.arms[2].pattern
+        assert rest.elements[0] == "head"
+        assert isinstance(rest.elements[1], MatchBindingPatternNode)
+        assert rest.elements[1].name == "middle"
+        assert isinstance(rest.elements[1].pattern, MatchRestPatternNode)
+        assert rest.elements[2] == "tail"
+
+        empty = values_match.arms[3].pattern
+        assert isinstance(empty, ArrayNode)
+        assert empty.elements == []
+
+        option_pattern = option_match.arms[0].pattern
+        assert isinstance(option_pattern, ArrayNode)
+        assert option_pattern.elements[0].name == "Some"
+        assert option_pattern.elements[0].args == ["v"]
+
+        assert isinstance(literal_match.expression, ArrayNode)
+        literal_pattern = literal_match.arms[0].pattern
+        assert isinstance(literal_pattern, ArrayNode)
+        assert literal_pattern.elements[0] == "0"
+        assert isinstance(literal_pattern.elements[1], MatchBindingPatternNode)
+    except Exception as e:
+        pytest.fail(f"Match array pattern parsing failed: {e}")
+
+
+def test_match_struct_pattern_parsing():
+    code = """
+    fn test_struct_patterns(point: Point, shape: Shape) {
+        match point {
+            Point { x, y: 0, .. } if x > 0 => use_x(x),
+            Point { x: left @ 1..=3, y } => use_pair(left, y),
+            _ => use_default(),
+        }
+        match shape {
+            Shape::Circle { radius } if radius > 0 => use_radius(radius),
+            Shape::Rect { corner: Point { x, y }, size: 1..=10, .. } => use_rect(x, y),
+            Shape::Circle { radius: small @ (1 | 2), .. }
+            | Shape::Circle { radius: small @ 3, .. } => use_small(small),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        point_match = ast.functions[0].body[0]
+        shape_match = ast.functions[0].body[1]
+
+        first_point = point_match.arms[0].pattern
+        assert isinstance(first_point, MatchStructPatternNode)
+        assert first_point.name == "Point"
+        assert first_point.has_rest is True
+        assert first_point.fields[0] == ("x", "x")
+        assert first_point.fields[1] == ("y", "0")
+        assert isinstance(point_match.arms[0].guard, BinaryOpNode)
+
+        second_point = point_match.arms[1].pattern
+        assert isinstance(second_point.fields[0][1], MatchBindingPatternNode)
+        assert second_point.fields[0][1].name == "left"
+        assert isinstance(second_point.fields[0][1].pattern, RangeNode)
+        assert second_point.fields[1] == ("y", "y")
+
+        circle = shape_match.arms[0].pattern
+        assert isinstance(circle, MatchStructPatternNode)
+        assert circle.name == "Shape::Circle"
+        assert circle.fields == [("radius", "radius")]
+
+        rect = shape_match.arms[1].pattern
+        assert isinstance(rect, MatchStructPatternNode)
+        assert rect.name == "Shape::Rect"
+        assert rect.has_rest is True
+        corner = rect.fields[0][1]
+        assert isinstance(corner, MatchStructPatternNode)
+        assert corner.name == "Point"
+        assert corner.fields == [("x", "x"), ("y", "y")]
+        assert isinstance(rect.fields[1][1], RangeNode)
+
+        small = shape_match.arms[2].pattern
+        assert isinstance(small, MatchOrPatternNode)
+        assert all(
+            isinstance(pattern, MatchStructPatternNode) for pattern in small.patterns
+        )
+        assert small.patterns[0].fields[0][0] == "radius"
+        assert isinstance(small.patterns[0].fields[0][1], MatchBindingPatternNode)
+    except Exception as e:
+        pytest.fail(f"Match struct pattern parsing failed: {e}")
+
+
+def test_match_binding_modifier_pattern_parsing():
+    code = """
+    fn test_binding_modifier_patterns(value: Option<i32>, point: Point, pair: Pair, values: [i32; 3]) {
+        match value {
+            Some(ref v) if v > 0 => use_ref(v),
+            Some(mut bounded @ 1..=3) => use_mut(bounded),
+            Some(ref mut choice @ (4 | 5)) => use_choice(choice),
+            _ => use_default(),
+        }
+        match point {
+            Point { ref x, mut y, z: ref renamed, w: mut kept @ 1..=2, .. } => use_point(x, y, renamed, kept),
+            _ => use_default(),
+        }
+        match pair {
+            Pair(ref left, mut right) => use_pair(left, right),
+        }
+        match values {
+            [ref first, mut second @ 2..=3, ..] => use_array(first, second),
+            _ => use_default(),
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        value_match = ast.functions[0].body[0]
+        point_match = ast.functions[0].body[1]
+        pair_match = ast.functions[0].body[2]
+        values_match = ast.functions[0].body[3]
+
+        ref_value = value_match.arms[0].pattern.args[0]
+        assert ref_value == "v"
+
+        bounded = value_match.arms[1].pattern.args[0]
+        assert isinstance(bounded, MatchBindingPatternNode)
+        assert bounded.name == "bounded"
+        assert isinstance(bounded.pattern, RangeNode)
+
+        choice = value_match.arms[2].pattern.args[0]
+        assert isinstance(choice, MatchBindingPatternNode)
+        assert choice.name == "choice"
+        assert isinstance(choice.pattern, MatchOrPatternNode)
+
+        point_pattern = point_match.arms[0].pattern
+        assert isinstance(point_pattern, MatchStructPatternNode)
+        assert point_pattern.fields[0] == ("x", "x")
+        assert point_pattern.fields[1] == ("y", "y")
+        assert point_pattern.fields[2] == ("z", "renamed")
+        assert isinstance(point_pattern.fields[3][1], MatchBindingPatternNode)
+        assert point_pattern.fields[3][1].name == "kept"
+
+        pair_pattern = pair_match.arms[0].pattern
+        assert pair_pattern.args == ["left", "right"]
+
+        array_pattern = values_match.arms[0].pattern
+        assert isinstance(array_pattern, ArrayNode)
+        assert array_pattern.elements[0] == "first"
+        assert isinstance(array_pattern.elements[1], MatchBindingPatternNode)
+        assert array_pattern.elements[1].name == "second"
+    except Exception as e:
+        pytest.fail(f"Match binding modifier pattern parsing failed: {e}")
+
+
+def test_if_while_let_pattern_condition_parsing():
+    code = """
+    fn test_let_conditions(value: Option<i32>, point: Point) {
+        if let Some(Ok(v) | Err(v)) = value {
+            use_value(v);
+        } else if let Some(_) = value {
+            use_other();
+        } else {
+            use_default();
+        }
+
+        if let Point { ref x, y: 0, .. } = point {
+            use_point(x);
+        }
+
+        while let Some(item) = next_value() {
+            consume(item);
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        function = ast.functions[0]
+
+        first_if = function.body[0]
+        assert isinstance(first_if.condition, LetPatternConditionNode)
+        assert first_if.condition.expression == "value"
+        assert first_if.condition.pattern.name == "Some"
+        assert isinstance(first_if.condition.pattern.args[0], MatchOrPatternNode)
+
+        else_if = first_if.else_body[0]
+        assert isinstance(else_if, IfNode)
+        assert isinstance(else_if.condition, LetPatternConditionNode)
+        assert else_if.condition.pattern.name == "Some"
+        assert else_if.condition.pattern.args == ["_"]
+
+        point_if = function.body[1]
+        assert isinstance(point_if.condition, LetPatternConditionNode)
+        assert isinstance(point_if.condition.pattern, MatchStructPatternNode)
+        assert point_if.condition.pattern.fields[0] == ("x", "x")
+        assert point_if.condition.pattern.fields[1] == ("y", "0")
+        assert point_if.condition.pattern.has_rest is True
+
+        while_loop = function.body[2]
+        assert isinstance(while_loop, WhileNode)
+        assert isinstance(while_loop.condition, LetPatternConditionNode)
+        assert while_loop.condition.pattern.name == "Some"
+        assert while_loop.condition.pattern.args == ["item"]
+    except Exception as e:
+        pytest.fail(f"If/while let pattern condition parsing failed: {e}")
+
+
+def test_let_else_pattern_parsing():
+    code = """
+    fn test_let_else(value: Option<i32>, pair: Pair, point: Point) -> i32 {
+        let Some(v) = value else {
+            return 0;
+        };
+        let Pair(left, bounded @ 1..=3) = pair else {
+            return v;
+        };
+        let Point { ref x, y: 0, .. } = point else {
+            return bounded;
+        };
+        return x;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        option_let = body[0]
+        assert isinstance(option_let, LetNode)
+        assert option_let.name.name == "Some"
+        assert option_let.name.args == ["v"]
+        assert len(option_let.else_body) == 1
+        assert isinstance(option_let.else_body[0], ReturnNode)
+
+        pair_let = body[1]
+        assert isinstance(pair_let, LetNode)
+        assert pair_let.name.name == "Pair"
+        assert pair_let.name.args[0] == "left"
+        assert isinstance(pair_let.name.args[1], MatchBindingPatternNode)
+        assert pair_let.name.args[1].name == "bounded"
+        assert isinstance(pair_let.name.args[1].pattern, RangeNode)
+
+        struct_let = body[2]
+        assert isinstance(struct_let, LetNode)
+        assert isinstance(struct_let.name, MatchStructPatternNode)
+        assert struct_let.name.fields[0] == ("x", "x")
+        assert struct_let.name.fields[1] == ("y", "0")
+        assert struct_let.name.has_rest is True
+        assert len(struct_let.else_body) == 1
+    except Exception as e:
+        pytest.fail(f"Let else pattern parsing failed: {e}")
+
+
+def test_matches_macro_pattern_parsing():
+    code = """
+    fn test_matches(value: Option<Result<i32, i32>>, mode: i32, point: Point) {
+        let ready = matches!(value, Some(Ok(v) | Err(v)) if v > 0);
+        let simple = matches!(mode, 0 | 1,);
+        if matches!(point, Point { x, y: 0, .. }) {
+            use_point();
+        }
+        while matches!(next_value(), Some(_)) {
+            spin();
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        ready = body[0].value
+        assert isinstance(ready, MatchesMacroNode)
+        assert ready.expression == "value"
+        assert ready.pattern.name == "Some"
+        assert isinstance(ready.pattern.args[0], MatchOrPatternNode)
+        assert isinstance(ready.guard, BinaryOpNode)
+
+        simple = body[1].value
+        assert isinstance(simple, MatchesMacroNode)
+        assert simple.expression == "mode"
+        assert isinstance(simple.pattern, MatchOrPatternNode)
+        assert simple.guard is None
+
+        point_if = body[2]
+        assert isinstance(point_if.condition, MatchesMacroNode)
+        assert isinstance(point_if.condition.pattern, MatchStructPatternNode)
+        assert point_if.condition.pattern.fields[1] == ("y", "0")
+
+        loop = body[3]
+        assert isinstance(loop, WhileNode)
+        assert isinstance(loop.condition, MatchesMacroNode)
+        assert loop.condition.pattern.name == "Some"
+        assert loop.condition.pattern.args == ["_"]
+    except Exception as e:
+        pytest.fail(f"Matches macro pattern parsing failed: {e}")
+
+
+def test_let_condition_chain_parsing():
+    code = """
+    fn test_condition_chains(value: Option<i32>, other: Option<i32>) {
+        if ready && let Some(v) = value && v > 0 {
+            use_value(v);
+        } else {
+            use_default();
+        }
+
+        if let Some(a) = value && let Some(b) = other && (a + b) > 0 {
+            use_pair(a, b);
+        }
+
+        while has_next() && let Some(item) = next_value() && item != 0 {
+            consume(item);
+        }
+
+        let result = if ready && let Some(v) = value && v > 0 {
+            v
+        } else {
+            0
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        first_if = body[0]
+        assert isinstance(first_if.condition, ConditionChainNode)
+        assert first_if.condition.operands[0] == "ready"
+        assert isinstance(first_if.condition.operands[1], LetPatternConditionNode)
+        assert first_if.condition.operands[1].pattern.name == "Some"
+        assert isinstance(first_if.condition.operands[2], BinaryOpNode)
+
+        second_if = body[1]
+        assert isinstance(second_if.condition, ConditionChainNode)
+        assert isinstance(second_if.condition.operands[0], LetPatternConditionNode)
+        assert isinstance(second_if.condition.operands[1], LetPatternConditionNode)
+        assert isinstance(second_if.condition.operands[2], BinaryOpNode)
+
+        while_loop = body[2]
+        assert isinstance(while_loop, WhileNode)
+        assert isinstance(while_loop.condition, ConditionChainNode)
+        assert isinstance(while_loop.condition.operands[0], FunctionCallNode)
+        assert isinstance(while_loop.condition.operands[1], LetPatternConditionNode)
+
+        result_if = body[3].value
+        assert isinstance(result_if, IfNode)
+        assert isinstance(result_if.condition, ConditionChainNode)
+        assert len(result_if.condition.operands) == 3
+    except Exception as e:
+        pytest.fail(f"Let condition chain parsing failed: {e}")
+
+
+def test_closure_expression_parsing():
+    code = """
+    fn test_closures(values: Values) {
+        let add = |x, y| x + y;
+        let typed = |x: i32| x + 1;
+        let always = || true;
+        let moved = move |v| v * 2;
+        let mapped = values.map(|x| x + 1).filter(|x| x > 0);
+        let block = |x| {
+            let y = x + 1;
+            y * 2
+        };
+        let tupled = |(x, y)| x + y;
+        let optioned = |Some(v)| v;
+        let pointed = |Point { x, y }| x + y;
+        let ignored = |_| true;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        add = body[0].value
+        assert isinstance(add, ClosureNode)
+        assert [param.pattern for param in add.params] == ["x", "y"]
+        assert isinstance(add.body, BinaryOpNode)
+
+        typed = body[1].value
+        assert isinstance(typed, ClosureNode)
+        assert isinstance(typed.params[0], ClosureParameterNode)
+        assert typed.params[0].pattern == "x"
+        assert typed.params[0].param_type == "i32"
+
+        always = body[2].value
+        assert isinstance(always, ClosureNode)
+        assert always.params == []
+        assert always.body == "true"
+
+        moved = body[3].value
+        assert isinstance(moved, ClosureNode)
+        assert moved.is_move is True
+        assert moved.params[0].pattern == "v"
+
+        filtered = body[4].value
+        assert isinstance(filtered, FunctionCallNode)
+        assert filtered.name.member == "filter"
+        assert isinstance(filtered.args[0], ClosureNode)
+
+        mapped = filtered.name.object
+        assert isinstance(mapped, FunctionCallNode)
+        assert mapped.name.member == "map"
+        assert isinstance(mapped.args[0], ClosureNode)
+
+        block = body[5].value
+        assert isinstance(block, ClosureNode)
+        assert isinstance(block.body, BlockNode)
+        assert len(block.body.statements) == 1
+        assert isinstance(block.body.statements[0], LetNode)
+        assert isinstance(block.body.expression, BinaryOpNode)
+
+        tupled = body[6].value
+        assert isinstance(tupled, ClosureNode)
+        assert isinstance(tupled.params[0].pattern, TupleNode)
+        assert tupled.params[0].pattern.elements == ["x", "y"]
+
+        optioned = body[7].value
+        assert isinstance(optioned, ClosureNode)
+        assert isinstance(optioned.params[0].pattern, FunctionCallNode)
+        assert optioned.params[0].pattern.name == "Some"
+        assert optioned.params[0].pattern.args == ["v"]
+
+        pointed = body[8].value
+        assert isinstance(pointed, ClosureNode)
+        assert isinstance(pointed.params[0].pattern, MatchStructPatternNode)
+        assert pointed.params[0].pattern.name == "Point"
+        assert pointed.params[0].pattern.fields == [("x", "x"), ("y", "y")]
+
+        ignored = body[9].value
+        assert isinstance(ignored, ClosureNode)
+        assert ignored.params[0].pattern == "_"
+    except Exception as e:
+        pytest.fail(f"Closure expression parsing failed: {e}")
+
+
+def test_closure_return_type_parsing():
+    code = """
+    fn test_closure_return_types() {
+        let parsed = |value: Result<i32, i32>| -> Result<i32, i32> {
+            let v: i32 = value?;
+            Ok(v)
+        };
+        let optional = || -> Option<i32> {
+            Some(1)
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        parsed = body[0].value
+        assert isinstance(parsed, ClosureNode)
+        assert parsed.return_type == "Result<i32, i32>"
+        assert isinstance(parsed.body, BlockNode)
+        assert isinstance(parsed.body.statements[0], LetNode)
+        assert isinstance(parsed.body.statements[0].value, TryNode)
+        assert isinstance(parsed.body.expression, FunctionCallNode)
+        assert parsed.body.expression.name == "Ok"
+
+        optional = body[1].value
+        assert isinstance(optional, ClosureNode)
+        assert optional.return_type == "Option<i32>"
+        assert isinstance(optional.body, BlockNode)
+        assert isinstance(optional.body.expression, FunctionCallNode)
+        assert optional.body.expression.name == "Some"
+    except Exception as e:
+        pytest.fail(f"Closure return type parsing failed: {e}")
+
+
+def test_module_path_type_parsing():
+    code = """
+    fn sample(x: crate::math::Real) -> crate::math::Real {
+        x
+    }
+
+    type Name = std::vec::Vec<f32>;
+    """
+    try:
+        ast = parse_code(code)
+        func = ast.functions[0]
+
+        assert func.params[0].vtype == "crate::math::Real"
+        assert func.return_type == "crate::math::Real"
+        assert ast.type_aliases[0].alias_type == "std::vec::Vec<f32>"
+    except Exception as e:
+        pytest.fail(f"Module path type parsing failed: {e}")
 
 
 def test_binary_operations_parsing():
@@ -306,26 +1977,90 @@ def test_unary_operations_parsing():
     """
     try:
         ast = parse_code(code)
-        assert len(ast.functions) == 1
-        func = ast.functions[0]
-        assert len(func.body) >= 4
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, UnaryOpNode)
+        assert body[0].value.op == "-"
+        assert isinstance(body[1].value, UnaryOpNode)
+        assert body[1].value.op == "!"
+        assert isinstance(body[2].value, ReferenceNode)
+        assert body[2].value.expression == "x"
+        assert body[2].value.is_mutable is False
+        assert isinstance(body[3].value, DereferenceNode)
+        assert body[3].value.expression == "ptr"
     except Exception as e:
         pytest.fail(f"Unary operations parsing failed: {e}")
+
+
+def test_reference_dereference_expression_parsing():
+    code = """
+    fn test_reference_deref(ptr: f32, value: f32) -> f32 {
+        let shared = &value;
+        let writable = &mut value;
+        output.value = *ptr;
+        return *ptr;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, ReferenceNode)
+        assert body[0].value.is_mutable is False
+        assert body[0].value.expression == "value"
+
+        assert isinstance(body[1].value, ReferenceNode)
+        assert body[1].value.is_mutable is True
+        assert body[1].value.expression == "value"
+
+        assert isinstance(body[2], AssignmentNode)
+        assert isinstance(body[2].right, DereferenceNode)
+        assert body[2].right.expression == "ptr"
+
+        assert isinstance(body[3], ReturnNode)
+        assert isinstance(body[3].value, DereferenceNode)
+        assert body[3].value.expression == "ptr"
+    except Exception as e:
+        pytest.fail(f"Reference/dereference expression parsing failed: {e}")
 
 
 def test_array_access_parsing():
     code = """
     fn test_array() {
         let arr = [1, 2, 3, 4, 5];
+        let start = 1;
+        let end = 3;
         let element = arr[0];
         let slice = &arr[1..3];
+        let prefix = &arr[..end];
+        let suffix = &arr[start..];
+        let full = &arr[..];
     }
     """
     try:
         ast = parse_code(code)
         assert len(ast.functions) == 1
         func = ast.functions[0]
-        assert len(func.body) >= 3
+        assert len(func.body) >= 8
+
+        closed_range = func.body[4].value.expression.index
+        prefix_range = func.body[5].value.expression.index
+        suffix_range = func.body[6].value.expression.index
+        full_range = func.body[7].value.expression.index
+
+        assert isinstance(func.body[3].value, ArrayAccessNode)
+        assert isinstance(closed_range, RangeNode)
+        assert closed_range.start == "1"
+        assert closed_range.end == "3"
+        assert isinstance(prefix_range, RangeNode)
+        assert prefix_range.start is None
+        assert prefix_range.end == "end"
+        assert isinstance(suffix_range, RangeNode)
+        assert suffix_range.start == "start"
+        assert suffix_range.end is None
+        assert isinstance(full_range, RangeNode)
+        assert full_range.start is None
+        assert full_range.end is None
     except Exception as e:
         pytest.fail(f"Array access parsing failed: {e}")
 
@@ -353,13 +2088,35 @@ def test_type_casting_parsing():
         let x = 42i32;
         let y = x as f64;
         let z = y as i32;
+        let chained = x as f32 as i32;
+        let from_deref = *ptr as f32;
+        let from_swizzle = color.xyz() as Vec3<f32>;
     }
     """
     try:
         ast = parse_code(code)
-        assert len(ast.functions) == 1
-        func = ast.functions[0]
-        assert len(func.body) >= 3
+        body = ast.functions[0].body
+
+        assert isinstance(body[1].value, CastNode)
+        assert body[1].value.target_type == "f64"
+        assert isinstance(body[2].value, CastNode)
+        assert body[2].value.target_type == "i32"
+
+        chained = body[3].value
+        assert isinstance(chained, CastNode)
+        assert chained.target_type == "i32"
+        assert isinstance(chained.expression, CastNode)
+        assert chained.expression.target_type == "f32"
+
+        from_deref = body[4].value
+        assert isinstance(from_deref, CastNode)
+        assert from_deref.target_type == "f32"
+        assert isinstance(from_deref.expression, DereferenceNode)
+
+        from_swizzle = body[5].value
+        assert isinstance(from_swizzle, CastNode)
+        assert from_swizzle.target_type == "Vec3<f32>"
+        assert isinstance(from_swizzle.expression, FunctionCallNode)
     except Exception as e:
         pytest.fail(f"Type casting parsing failed: {e}")
 
@@ -373,15 +2130,69 @@ def test_assignment_operations_parsing():
         a *= 4;
         a /= 2;
         a %= 3;
+        a &= 1;
+        a |= 2;
+        a ^= 3;
+        a <<= 1;
+        a >>= 2;
     }
     """
     try:
         ast = parse_code(code)
-        assert len(ast.functions) == 1
-        func = ast.functions[0]
-        assert len(func.body) >= 6
+        body = ast.functions[0].body
+        assignments = [stmt for stmt in body if isinstance(stmt, AssignmentNode)]
+
+        assert [stmt.operator for stmt in assignments] == [
+            "+=",
+            "-=",
+            "*=",
+            "/=",
+            "%=",
+            "&=",
+            "|=",
+            "^=",
+            "<<=",
+            ">>=",
+        ]
     except Exception as e:
         pytest.fail(f"Assignment operations parsing failed: {e}")
+
+
+def test_assignment_expression_parsing():
+    code = """
+    fn test_assignment_expr() {
+        let mut a = 0;
+        (a = 1);
+        let unit = (a = 2);
+        let compound = (a += 3);
+        let block_unit = { a = 4; };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[1], AssignmentNode)
+        assert body[1].operator == "="
+        assert body[1].right == "1"
+
+        assert isinstance(body[2], LetNode)
+        assert isinstance(body[2].value, AssignmentNode)
+        assert body[2].value.operator == "="
+        assert body[2].value.right == "2"
+
+        assert isinstance(body[3], LetNode)
+        assert isinstance(body[3].value, AssignmentNode)
+        assert body[3].value.operator == "+="
+        assert body[3].value.right == "3"
+
+        assert isinstance(body[4], LetNode)
+        assert isinstance(body[4].value, BlockNode)
+        assert isinstance(body[4].value.statements[0], AssignmentNode)
+        assert body[4].value.statements[0].operator == "="
+        assert body[4].value.statements[0].right == "4"
+    except Exception as e:
+        pytest.fail(f"Assignment expression parsing failed: {e}")
 
 
 def test_control_flow_parsing():
@@ -405,6 +2216,979 @@ def test_control_flow_parsing():
         pytest.fail(f"Control flow parsing failed: {e}")
 
 
+def test_labeled_control_flow_parsing():
+    code = """
+    fn test_labeled_control() {
+        'outer: loop {
+            'inner: while ready {
+                continue 'outer;
+                break 'inner;
+            }
+            'scan: for i in 0..4 {
+                break 'scan;
+            }
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        outer = body[0]
+        assert isinstance(outer, LoopNode)
+        assert outer.label == "'outer"
+
+        inner = outer.body[0]
+        assert isinstance(inner, WhileNode)
+        assert inner.label == "'inner"
+        assert isinstance(inner.body[0], ContinueNode)
+        assert inner.body[0].label == "'outer"
+        assert isinstance(inner.body[1], BreakNode)
+        assert inner.body[1].label == "'inner"
+
+        scan = outer.body[1]
+        assert isinstance(scan, ForNode)
+        assert scan.label == "'scan"
+        assert isinstance(scan.body[0], BreakNode)
+        assert scan.body[0].label == "'scan"
+    except Exception as e:
+        pytest.fail(f"Labeled control flow parsing failed: {e}")
+
+
+def test_break_value_parsing():
+    code = """
+    fn test_break_values() {
+        loop {
+            break result;
+        }
+        'outer: loop {
+            break 'outer value + 1;
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        plain_break = body[0].body[0]
+        assert isinstance(plain_break, BreakNode)
+        assert plain_break.label is None
+        assert plain_break.value == "result"
+
+        labeled_break = body[1].body[0]
+        assert isinstance(labeled_break, BreakNode)
+        assert labeled_break.label == "'outer"
+        assert isinstance(labeled_break.value, BinaryOpNode)
+        assert labeled_break.value.op == "+"
+        assert labeled_break.value.left == "value"
+        assert labeled_break.value.right == "1"
+    except Exception as e:
+        pytest.fail(f"Break value parsing failed: {e}")
+
+
+def test_break_result_expression_parsing():
+    code = """
+    fn test_break_result_expressions() {
+        let from_if: i32 = loop {
+            break if ready {
+                let seed = 1;
+                seed + 1
+            } else {
+                2
+            };
+        };
+        let from_match: i32 = loop {
+            break match mode {
+                0 => 1,
+                _ => {
+                    let fallback = 2;
+                    fallback
+                },
+            };
+        };
+        let from_block: i32 = loop {
+            break {
+                let base = 3;
+                base + 1
+            };
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        if_break = body[0].value.body[0]
+        assert isinstance(if_break, BreakNode)
+        assert isinstance(if_break.value, IfNode)
+        assert isinstance(if_break.value.if_body, BlockNode)
+        assert len(if_break.value.if_body.statements) == 1
+        assert isinstance(if_break.value.if_body.expression, BinaryOpNode)
+
+        match_break = body[1].value.body[0]
+        assert isinstance(match_break, BreakNode)
+        assert isinstance(match_break.value, MatchNode)
+        assert match_break.value.arms[0].body == "1"
+        assert isinstance(match_break.value.arms[1].body, BlockNode)
+        assert match_break.value.arms[1].body.expression == "fallback"
+
+        block_break = body[2].value.body[0]
+        assert isinstance(block_break, BreakNode)
+        assert isinstance(block_break.value, BlockNode)
+        assert len(block_break.value.statements) == 1
+        assert isinstance(block_break.value.expression, BinaryOpNode)
+    except Exception as e:
+        pytest.fail(f"Break result expression parsing failed: {e}")
+
+
+def test_loop_expression_let_parsing():
+    code = """
+    fn test_loop_expression() {
+        let value: i32 = loop {
+            if ready {
+                break 7;
+            }
+        };
+        let labeled: i32 = 'outer: loop {
+            break 'outer value + 1;
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        value_loop = body[0].value
+        assert isinstance(value_loop, LoopNode)
+        value_break = value_loop.body[0].if_body[0]
+        assert isinstance(value_break, BreakNode)
+        assert value_break.value == "7"
+
+        labeled_loop = body[1].value
+        assert isinstance(labeled_loop, LoopNode)
+        assert labeled_loop.label == "'outer"
+        labeled_break = labeled_loop.body[0]
+        assert isinstance(labeled_break, BreakNode)
+        assert labeled_break.label == "'outer"
+        assert isinstance(labeled_break.value, BinaryOpNode)
+    except Exception as e:
+        pytest.fail(f"Loop expression let parsing failed: {e}")
+
+
+def test_loop_expression_assignment_parsing():
+    code = """
+    fn test_loop_assignment() {
+        value = loop {
+            break result;
+        };
+        output.color = 'outer: loop {
+            break 'outer value + 1;
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        first_assignment = body[0]
+        assert isinstance(first_assignment, AssignmentNode)
+        assert isinstance(first_assignment.right, LoopNode)
+        first_break = first_assignment.right.body[0]
+        assert isinstance(first_break, BreakNode)
+        assert first_break.value == "result"
+
+        member_assignment = body[1]
+        assert isinstance(member_assignment, AssignmentNode)
+        assert isinstance(member_assignment.right, LoopNode)
+        assert member_assignment.right.label == "'outer"
+        labeled_break = member_assignment.right.body[0]
+        assert isinstance(labeled_break, BreakNode)
+        assert labeled_break.label == "'outer"
+        assert isinstance(labeled_break.value, BinaryOpNode)
+    except Exception as e:
+        pytest.fail(f"Loop expression assignment parsing failed: {e}")
+
+
+def test_loop_expression_return_parsing():
+    code = """
+    fn test_loop_return() -> i32 {
+        return loop {
+            break result;
+        };
+        return 'outer: loop {
+            break 'outer value + 1;
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        plain_return = body[0]
+        assert isinstance(plain_return, ReturnNode)
+        assert isinstance(plain_return.value, LoopNode)
+        plain_break = plain_return.value.body[0]
+        assert isinstance(plain_break, BreakNode)
+        assert plain_break.value == "result"
+
+        labeled_return = body[1]
+        assert isinstance(labeled_return, ReturnNode)
+        assert isinstance(labeled_return.value, LoopNode)
+        assert labeled_return.value.label == "'outer"
+        labeled_break = labeled_return.value.body[0]
+        assert isinstance(labeled_break, BreakNode)
+        assert labeled_break.label == "'outer"
+        assert isinstance(labeled_break.value, BinaryOpNode)
+    except Exception as e:
+        pytest.fail(f"Loop expression return parsing failed: {e}")
+
+
+def test_block_loop_expression_parsing():
+    code = """
+    fn test_block_loop_expression() -> i32 {
+        let value: i32 = {
+            let seed = 1;
+            loop {
+                break seed + 1;
+            }
+        };
+        output.color = {
+            'outer: loop {
+                break 'outer value + 1;
+            }
+        };
+        return {
+            loop {
+                break value;
+            }
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        let_block = body[0].value
+        assert isinstance(let_block, BlockNode)
+        assert len(let_block.statements) == 1
+        assert isinstance(let_block.expression, LoopNode)
+        assert isinstance(let_block.expression.body[0].value, BinaryOpNode)
+
+        assignment_block = body[1].right
+        assert isinstance(assignment_block, BlockNode)
+        assert isinstance(assignment_block.expression, LoopNode)
+        assert assignment_block.expression.label == "'outer"
+
+        return_block = body[2].value
+        assert isinstance(return_block, BlockNode)
+        assert isinstance(return_block.expression, LoopNode)
+        assert return_block.expression.body[0].value == "value"
+    except Exception as e:
+        pytest.fail(f"Block loop expression parsing failed: {e}")
+
+
+def test_if_expression_result_parsing():
+    code = """
+    fn test_if_expression() -> i32 {
+        let value: i32 = if ready {
+            let seed = 1;
+            seed + 1
+        } else {
+            2
+        };
+        output.color = if value > 1 {
+            value + 1
+        } else {
+            let fallback = 0;
+            fallback
+        };
+        return if done {
+            value
+        } else {
+            let next = value + 1;
+            next
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        let_if = body[0].value
+        assert isinstance(let_if, IfNode)
+        assert isinstance(let_if.if_body, BlockNode)
+        assert len(let_if.if_body.statements) == 1
+        assert isinstance(let_if.if_body.expression, BinaryOpNode)
+
+        assignment_if = body[1].right
+        assert isinstance(assignment_if, IfNode)
+        assert isinstance(assignment_if.else_body, BlockNode)
+        assert len(assignment_if.else_body.statements) == 1
+
+        return_if = body[2].value
+        assert isinstance(return_if, IfNode)
+        assert isinstance(return_if.else_body.expression, str)
+    except Exception as e:
+        pytest.fail(f"If expression result parsing failed: {e}")
+
+
+def test_match_expression_result_parsing():
+    code = """
+    fn test_match_expression() -> i32 {
+        let value: i32 = match mode {
+            0 => 1,
+            1 => {
+                let seed = 2;
+                seed + 1
+            },
+            _ => 3,
+        };
+        output.color = match value {
+            0 => 0,
+            _ => value + 1,
+        };
+        return match value {
+            0 => value,
+            _ => {
+                let next = value + 1;
+                next
+            },
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        let_match = body[0].value
+        assert isinstance(let_match, MatchNode)
+        assert let_match.expression == "mode"
+        assert let_match.arms[0].body == "1"
+        assert isinstance(let_match.arms[1].body, BlockNode)
+        assert len(let_match.arms[1].body.statements) == 1
+        assert isinstance(let_match.arms[1].body.expression, BinaryOpNode)
+
+        assignment_match = body[1].right
+        assert isinstance(assignment_match, MatchNode)
+        assert assignment_match.arms[1].pattern == "_"
+        assert isinstance(assignment_match.arms[1].body, BinaryOpNode)
+
+        return_match = body[2].value
+        assert isinstance(return_match, MatchNode)
+        assert isinstance(return_match.arms[1].body, BlockNode)
+        assert return_match.arms[1].body.expression == "next"
+    except Exception as e:
+        pytest.fail(f"Match expression result parsing failed: {e}")
+
+
+def test_block_final_if_match_expression_parsing():
+    code = """
+    fn test_block_final_expression() -> i32 {
+        let value: i32 = {
+            let seed = 1;
+            if ready {
+                seed + 1
+            } else {
+                let fallback = 2;
+                fallback
+            }
+        };
+        output.color = {
+            match value {
+                0 => 0,
+                _ => {
+                    let next = value + 1;
+                    next
+                },
+            }
+        };
+        return {
+            match value {
+                0 => value,
+                _ => value + 1,
+            }
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        let_block = body[0].value
+        assert isinstance(let_block, BlockNode)
+        assert len(let_block.statements) == 1
+        assert isinstance(let_block.expression, IfNode)
+        assert isinstance(let_block.expression.if_body, BlockNode)
+        assert isinstance(let_block.expression.if_body.expression, BinaryOpNode)
+        assert isinstance(let_block.expression.else_body, BlockNode)
+        assert len(let_block.expression.else_body.statements) == 1
+        assert let_block.expression.else_body.expression == "fallback"
+
+        assignment_block = body[1].right
+        assert isinstance(assignment_block, BlockNode)
+        assert isinstance(assignment_block.expression, MatchNode)
+        assert assignment_block.expression.arms[1].pattern == "_"
+        assert isinstance(assignment_block.expression.arms[1].body, BlockNode)
+
+        return_block = body[2].value
+        assert isinstance(return_block, BlockNode)
+        assert isinstance(return_block.expression, MatchNode)
+        assert isinstance(return_block.expression.arms[1].body, BinaryOpNode)
+    except Exception as e:
+        pytest.fail(f"Block final if/match expression parsing failed: {e}")
+
+
+def test_block_expression_semicolon_statement_parsing():
+    code = """
+    fn test_block_expression_statements() {
+        let value: i32 = {
+            compute_default();
+            fallback
+        };
+        loop {
+            break match mode {
+                _ => {
+                    compute_unit();
+                },
+            };
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        let_block = body[0].value
+        assert isinstance(let_block, BlockNode)
+        assert len(let_block.statements) == 1
+        assert isinstance(let_block.statements[0], FunctionCallNode)
+        assert let_block.expression == "fallback"
+
+        match_break = body[1].body[0]
+        assert isinstance(match_break, BreakNode)
+        assert isinstance(match_break.value, MatchNode)
+        arm_block = match_break.value.arms[0].body
+        assert isinstance(arm_block, BlockNode)
+        assert len(arm_block.statements) == 1
+        assert isinstance(arm_block.statements[0], FunctionCallNode)
+        assert arm_block.expression is None
+    except Exception as e:
+        pytest.fail(f"Block expression semicolon statement parsing failed: {e}")
+
+
+def test_block_expression_semicolon_if_match_statement_parsing():
+    code = """
+    fn test_statement_like_block_expressions() {
+        let value: i32 = {
+            if ready {
+                compute_ready();
+                1
+            } else {
+                compute_fallback();
+                2
+            };
+            match mode {
+                0 => {
+                    compute_zero();
+                    0
+                },
+                _ => {
+                    compute_default();
+                    3
+                },
+            };
+            fallback
+        };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        let_block = ast.functions[0].body[0].value
+
+        assert isinstance(let_block, BlockNode)
+        assert len(let_block.statements) == 2
+        assert let_block.expression == "fallback"
+
+        if_stmt = let_block.statements[0]
+        assert isinstance(if_stmt, IfNode)
+        assert len(if_stmt.if_body) == 1
+        assert isinstance(if_stmt.if_body[0], FunctionCallNode)
+        assert len(if_stmt.else_body) == 1
+        assert isinstance(if_stmt.else_body[0], FunctionCallNode)
+
+        match_stmt = let_block.statements[1]
+        assert isinstance(match_stmt, MatchNode)
+        assert isinstance(match_stmt.arms[0].body[0], FunctionCallNode)
+        assert isinstance(match_stmt.arms[1].body[0], FunctionCallNode)
+    except Exception as e:
+        pytest.fail(f"Block expression semicolon if/match parsing failed: {e}")
+
+
+def test_let_pattern_parsing():
+    code = """
+    fn test_let_patterns() {
+        let _ = compute_discard();
+        let (_, y) = (compute_x(), 2);
+        let (a, (b, _)) = (1, (2, compute_ignored()));
+        let (tx, ty): (f32, i32) = (1.0, 2);
+        let (_, (nz, _)): (f32, (i32, Vec3<f32>)) = (
+            compute_typed(),
+            (3, compute_typed_drop()),
+        );
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert body[0].name == "_"
+        assert isinstance(body[0].value, FunctionCallNode)
+
+        tuple_pattern = body[1].name
+        assert isinstance(tuple_pattern, TupleNode)
+        assert tuple_pattern.elements == ["_", "y"]
+        assert isinstance(body[1].value, TupleNode)
+
+        nested_pattern = body[2].name
+        assert isinstance(nested_pattern, TupleNode)
+        assert nested_pattern.elements[0] == "a"
+        assert isinstance(nested_pattern.elements[1], TupleNode)
+        assert nested_pattern.elements[1].elements == ["b", "_"]
+
+        typed_pattern = body[3].name
+        assert isinstance(typed_pattern, TupleNode)
+        assert body[3].vtype == "(f32, i32)"
+
+        typed_nested_pattern = body[4].name
+        assert isinstance(typed_nested_pattern, TupleNode)
+        assert isinstance(typed_nested_pattern.elements[1], TupleNode)
+        assert body[4].vtype == "(f32, (i32, Vec3<f32>))"
+    except Exception as e:
+        pytest.fail(f"Let pattern parsing failed: {e}")
+
+
+def test_tuple_pattern_result_expression_elements_parsing():
+    code = """
+    fn test_tuple_result_elements() {
+        let (from_if, from_loop, from_match, from_block): (i32, i32, i32, i32) = (
+            if ready {
+                prepare_if();
+                1
+            } else {
+                2
+            },
+            loop {
+                break 3;
+            },
+            match mode {
+                0 => 4,
+                _ => {
+                    prepare_match();
+                    5
+                },
+            },
+            {
+                prepare_block();
+                6
+            },
+        );
+        let (_, kept): (i32, i32) = (
+            if should_drop {
+                prepare_drop();
+                31
+            } else {
+                fallback_drop();
+                32
+            },
+            7,
+        );
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        value = body[0].value
+        assert isinstance(value, TupleNode)
+        assert isinstance(value.elements[0], IfNode)
+        assert isinstance(value.elements[1], LoopNode)
+        assert isinstance(value.elements[2], MatchNode)
+        assert isinstance(value.elements[3], BlockNode)
+
+        discarded_value = body[1].value
+        assert isinstance(discarded_value, TupleNode)
+        assert isinstance(discarded_value.elements[0], IfNode)
+        assert discarded_value.elements[1] == "7"
+    except Exception as e:
+        pytest.fail(f"Tuple pattern result expression parsing failed: {e}")
+
+
+def test_simple_if_expression_stays_ternary_parsing():
+    code = """
+    fn test_if_expression() {
+        let value = if ready { 1 } else { 2 };
+    }
+    """
+    try:
+        ast = parse_code(code)
+        value = ast.functions[0].body[0].value
+        assert isinstance(value, TernaryOpNode)
+    except Exception as e:
+        pytest.fail(f"Simple if expression parsing failed: {e}")
+
+
+def test_try_expression_parsing():
+    code = """
+    fn try_values(left: Result<i32, i32>, right: Result<i32, i32>) -> Result<i32, i32> {
+        let value = left?;
+        let wrapped = Ok(right?);
+        let field = make_result()?.field;
+        return Ok(value);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, TryNode)
+        assert body[0].value.expression == "left"
+
+        assert isinstance(body[1].value, FunctionCallNode)
+        assert body[1].value.name == "Ok"
+        assert isinstance(body[1].value.args[0], TryNode)
+        assert body[1].value.args[0].expression == "right"
+
+        assert isinstance(body[2].value, MemberAccessNode)
+        assert body[2].value.member == "field"
+        assert isinstance(body[2].value.object, TryNode)
+        assert isinstance(body[2].value.object.expression, FunctionCallNode)
+        assert body[2].value.object.expression.name == "make_result"
+    except Exception as e:
+        pytest.fail(f"Try expression parsing failed: {e}")
+
+
+def test_await_expression_parsing():
+    code = """
+    fn await_values(future: Result<i32, i32>, object: FutureObject) -> Result<i32, i32> {
+        let ready = future.await;
+        let value = future.await?;
+        let field = object.await.value;
+        return Ok(value);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0].value, AwaitNode)
+        assert body[0].value.expression == "future"
+
+        assert isinstance(body[1].value, TryNode)
+        assert isinstance(body[1].value.expression, AwaitNode)
+        assert body[1].value.expression.expression == "future"
+
+        assert isinstance(body[2].value, MemberAccessNode)
+        assert body[2].value.member == "value"
+        assert isinstance(body[2].value.object, AwaitNode)
+        assert body[2].value.object.expression == "object"
+    except Exception as e:
+        pytest.fail(f"Await expression parsing failed: {e}")
+
+
+def test_async_function_and_block_parsing():
+    code = """
+    #[vertex_shader]
+    pub async fn load(future: Result<i32, i32>) -> Result<i32, i32> {
+        return Ok(future.await?);
+    }
+
+    impl Loader {
+        pub async fn method(&self, future: Result<i32, i32>) -> Result<i32, i32> {
+            return Ok(future.await?);
+        }
+    }
+
+    trait Fetch {
+        async fn fetch(&self) -> Result<i32, i32>;
+    }
+
+    fn async_blocks(value: Result<i32, i32>) -> Result<i32, i32> {
+        let result: i32 = async {
+            let v: i32 = value.await?;
+            v + 1
+        };
+        let moved: i32 = async move {
+            value.await?
+        };
+        return Ok(result + moved);
+    }
+    """
+    try:
+        ast = parse_code(code)
+
+        load = ast.functions[0]
+        assert load.is_async is True
+        assert load.visibility == "pub"
+        assert load.attributes[0].name == "vertex_shader"
+
+        method = ast.impl_blocks[0].methods[0]
+        assert method.is_async is True
+        assert method.visibility == "pub"
+
+        trait_method = ast.traits[0].methods[0]
+        assert trait_method.is_async is True
+        assert trait_method.body == []
+
+        async_blocks = ast.functions[1]
+        result_block = async_blocks.body[0].value
+        assert isinstance(result_block, AsyncBlockNode)
+        assert result_block.is_move is False
+        assert isinstance(result_block.block, BlockNode)
+        assert isinstance(result_block.block.statements[0], LetNode)
+        assert isinstance(result_block.block.statements[0].value, TryNode)
+        assert isinstance(result_block.block.statements[0].value.expression, AwaitNode)
+
+        moved_block = async_blocks.body[1].value
+        assert isinstance(moved_block, AsyncBlockNode)
+        assert moved_block.is_move is True
+        assert isinstance(moved_block.block.expression, TryNode)
+    except Exception as e:
+        pytest.fail(f"Async function and block parsing failed: {e}")
+
+
+def test_unsafe_extern_function_and_block_parsing():
+    code = """
+    #[no_mangle]
+    pub unsafe extern "C" fn decode(value: Result<i32, i32>) -> Result<i32, i32> {
+        let result: i32 = unsafe {
+            let v: i32 = value?;
+            v + 1
+        };
+        return Ok(result);
+    }
+
+    impl Loader {
+        pub unsafe fn method(&self, value: Result<i32, i32>) -> Result<i32, i32> {
+            return unsafe {
+                value
+            };
+        }
+    }
+
+    trait Fetch {
+        unsafe fn fetch(&self) -> i32;
+    }
+
+    unsafe extern "C" {
+        fn foreign_decode(value: i32) -> i32;
+    }
+
+    fn after_extern_block() -> i32 {
+        return 1;
+    }
+    """
+    try:
+        ast = parse_code(code)
+
+        decode = ast.functions[0]
+        assert decode.is_unsafe is True
+        assert decode.abi == "C"
+        assert decode.visibility == "pub"
+        assert decode.attributes[0].name == "no_mangle"
+
+        result_block = decode.body[0].value
+        assert isinstance(result_block, UnsafeBlockNode)
+        assert isinstance(result_block.block, BlockNode)
+        assert isinstance(result_block.block.statements[0], LetNode)
+        assert isinstance(result_block.block.statements[0].value, TryNode)
+
+        method = ast.impl_blocks[0].methods[0]
+        assert method.is_unsafe is True
+        assert method.abi is None
+        assert isinstance(method.body[0].value, UnsafeBlockNode)
+
+        trait_method = ast.traits[0].methods[0]
+        assert trait_method.is_unsafe is True
+        assert trait_method.body == []
+
+        assert ast.functions[1].name == "after_extern_block"
+    except Exception as e:
+        pytest.fail(f"Unsafe extern function and block parsing failed: {e}")
+
+
+def test_const_function_and_block_parsing():
+    code = """
+    pub const SCALE: i32 = 2;
+
+    pub const unsafe extern "C" fn scale(value: i32) -> i32 {
+        let result: i32 = const {
+            let base: i32 = SCALE;
+            base + value
+        };
+        return result;
+    }
+
+    impl Loader {
+        pub const fn method(&self, value: i32) -> i32 {
+            return const {
+                value + 1
+            };
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+
+        assert len(ast.global_variables) == 1
+        assert isinstance(ast.global_variables[0], ConstNode)
+        assert ast.global_variables[0].name == "SCALE"
+
+        scale = ast.functions[0]
+        assert scale.is_const is True
+        assert scale.is_unsafe is True
+        assert scale.abi == "C"
+
+        result_block = scale.body[0].value
+        assert isinstance(result_block, ConstBlockNode)
+        assert isinstance(result_block.block, BlockNode)
+        assert isinstance(result_block.block.statements[0], LetNode)
+        assert isinstance(result_block.block.expression, BinaryOpNode)
+
+        method = ast.impl_blocks[0].methods[0]
+        assert method.is_const is True
+        assert method.is_unsafe is False
+        assert isinstance(method.body[0].value, ConstBlockNode)
+    except Exception as e:
+        pytest.fail(f"Const function and block parsing failed: {e}")
+
+
+def test_local_const_static_item_parsing():
+    code = """
+    fn local_items(value: i32) -> i32 {
+        const OFFSET: i32 = 1;
+        static mut CACHE: i32 = 2;
+        let result: i32 = {
+            const INNER: i32 = 3;
+            static ENABLED: bool = true;
+            value + OFFSET + INNER
+        };
+        return result;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        assert isinstance(body[0], ConstNode)
+        assert body[0].name == "OFFSET"
+        assert body[0].vtype == "i32"
+
+        assert isinstance(body[1], StaticNode)
+        assert body[1].name == "CACHE"
+        assert body[1].is_mutable is True
+
+        block = body[2].value
+        assert isinstance(block, BlockNode)
+        assert isinstance(block.statements[0], ConstNode)
+        assert block.statements[0].name == "INNER"
+        assert isinstance(block.statements[1], StaticNode)
+        assert block.statements[1].name == "ENABLED"
+        assert block.expression is not None
+    except Exception as e:
+        pytest.fail(f"Local const/static item parsing failed: {e}")
+
+
+def test_try_expression_host_parsing():
+    code = """
+    struct Output {
+        position: Vec3<f32>,
+        value: i32,
+    }
+
+    fn try_hosts(
+        start: Result<i32, i32>,
+        end: Result<i32, i32>,
+        value: Result<Option<i32>, i32>,
+        position: Result<Vec3<f32>, i32>,
+    ) -> Result<i32, i32> {
+        for i in start?..end? {
+            use_value(i);
+        }
+        let output = Output {
+            position: position?,
+            value: 1,
+        };
+        let mapped: i32 = match value? {
+            Some(v) => v,
+            None => 0,
+        };
+        return Ok(mapped);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        for_loop = body[0]
+        assert isinstance(for_loop, ForNode)
+        assert isinstance(for_loop.iterable, RangeNode)
+        assert isinstance(for_loop.iterable.start, TryNode)
+        assert isinstance(for_loop.iterable.end, TryNode)
+
+        output = body[1].value
+        assert isinstance(output, StructInitializationNode)
+        assert output.fields[0][0] == "position"
+        assert isinstance(output.fields[0][1], TryNode)
+
+        mapped_match = body[2].value
+        assert isinstance(mapped_match, MatchNode)
+        assert isinstance(mapped_match.expression, TryNode)
+        assert isinstance(mapped_match.expression.expression, str)
+    except Exception as e:
+        pytest.fail(f"Try expression host parsing failed: {e}")
+
+
+def test_try_block_expression_parsing():
+    code = """
+    fn try_blocks(value: Result<i32, i32>, maybe: Option<i32>) -> Result<i32, i32> {
+        let result = try {
+            let v: i32 = value?;
+            v + 1
+        };
+        let nested = Ok(try {
+            let v: i32 = value?;
+            v
+        });
+        return Ok(try {
+            let v: i32 = value?;
+            v
+        }?);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        result_block = body[0].value
+        assert isinstance(result_block, TryBlockNode)
+        assert isinstance(result_block.block, BlockNode)
+        assert len(result_block.block.statements) == 1
+        assert isinstance(result_block.block.statements[0], LetNode)
+        assert isinstance(result_block.block.statements[0].value, TryNode)
+        assert isinstance(result_block.block.expression, BinaryOpNode)
+
+        nested_call = body[1].value
+        assert isinstance(nested_call, FunctionCallNode)
+        assert isinstance(nested_call.args[0], TryBlockNode)
+
+        returned = body[2].value
+        assert isinstance(returned, FunctionCallNode)
+        assert isinstance(returned.args[0], TryNode)
+        assert isinstance(returned.args[0].expression, TryBlockNode)
+    except Exception as e:
+        pytest.fail(f"Try block expression parsing failed: {e}")
+
+
 def test_generics_parsing():
     code = """
     fn generic_function<T, U>(a: T, b: U) -> T 
@@ -420,6 +3204,8 @@ def test_generics_parsing():
         assert len(ast.functions) == 1
         func = ast.functions[0]
         assert len(func.generics) == 2
+        assert func.generics == ["T", "U"]
+        assert func.where_clauses == [("T", ["Clone"]), ("U", ["Debug"])]
     except Exception as e:
         pytest.fail(f"Generics parsing failed: {e}")
 
@@ -464,17 +3250,82 @@ def test_attributes_parsing():
 
 def test_trait_parsing():
     code = """
-    pub trait Drawable {
-        fn draw(&self);
-        fn update(&mut self, delta: f32);
+    pub trait Drawable<T: Into<Vec3<f32>> + Clone, U>
+    where
+        U: Debug,
+    {
+        type Output: Copy + Clone;
+        type Scratch: Into<Vec3<f32>> = Vec3<f32>;
+
+        fn draw(&self) -> Self::Output;
+        fn update<V: Copy>(&mut self, value: V) -> U
+        where
+            V: Clone;
     }
     """
     try:
-        parse_code(code)
-        # Note: trait parsing might be handled differently in the current implementation
-        # This test ensures the parser doesn't crash on trait syntax
+        ast = parse_code(code)
+        assert len(ast.traits) == 1
+
+        trait = ast.traits[0]
+        assert trait.name == "Drawable"
+        assert trait.visibility == "pub"
+        assert trait.generics == ["T: Into<Vec3<f32>> + Clone", "U"]
+        assert trait.where_clauses == [("U", ["Debug"])]
+        assert len(trait.associated_types) == 2
+        assert all(
+            isinstance(associated_type, AssociatedTypeNode)
+            for associated_type in trait.associated_types
+        )
+        assert trait.associated_types[0].name == "Output"
+        assert trait.associated_types[0].bounds == ["Copy", "Clone"]
+        assert trait.associated_types[0].default_type is None
+        assert trait.associated_types[1].name == "Scratch"
+        assert trait.associated_types[1].bounds == ["Into<Vec3<f32>>"]
+        assert trait.associated_types[1].default_type == "Vec3<f32>"
+        assert [method.name for method in trait.methods] == ["draw", "update"]
+        assert trait.methods[0].params[0].vtype == "&Self"
+        assert trait.methods[0].return_type == "Self::Output"
+        assert trait.methods[1].params[0].vtype == "&mut Self"
+        assert trait.methods[1].params[1].vtype == "V"
+        assert trait.methods[1].return_type == "U"
+        assert trait.methods[1].generics == ["V: Copy"]
+        assert trait.methods[1].where_clauses == [("V", ["Clone"])]
     except Exception as e:
         pytest.fail(f"Trait parsing failed: {e}")
+
+
+def test_trait_default_method_body_parsing():
+    code = """
+    trait ShaderMath {
+        fn saturate(x: f32) -> f32 {
+            clamp(x, 0.0, 1.0)
+        }
+
+        unsafe fn raw(x: f32) -> f32 {
+            x
+        }
+
+        fn passthrough(x: f32) -> f32;
+    }
+    """
+    try:
+        ast = parse_code(code)
+        trait = ast.traits[0]
+
+        assert [method.name for method in trait.methods] == [
+            "saturate",
+            "raw",
+            "passthrough",
+        ]
+        assert len(trait.methods[0].body) == 1
+        assert isinstance(trait.methods[0].body[0], FunctionCallNode)
+        assert trait.methods[0].body[0].name == "clamp"
+        assert trait.methods[1].is_unsafe is True
+        assert trait.methods[1].body == ["x"]
+        assert trait.methods[2].body == []
+    except Exception as e:
+        pytest.fail(f"Trait default method body parsing failed: {e}")
 
 
 def test_error_handling():

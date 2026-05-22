@@ -20,6 +20,7 @@ from crosstl.translator.ast import (
     ExecutionModel,
     PrimitiveType,
     BlockNode,
+    ShaderStage,
 )
 
 
@@ -526,6 +527,38 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(rf"OpFAdd {re.escape(vec4_type.group(1))}", spv_code)
         assert "WARNING" not in spv_code
 
+    def test_fmod_intrinsics_use_fmod_opcode_and_argument_result_type(self):
+        source_code = """
+        shader FmodIntrinsics {
+            fragment {
+                vec2 main() {
+                    float y = mod(5.0, 2.0);
+                    vec2 x = fmod(vec2(5.0, 7.0), vec2(2.0, 3.0));
+                    return x;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        vec2_type = re.search(r"(%\d+) = OpTypeVector %\d+ 2", spv_code)
+
+        assert float_type is not None
+        assert vec2_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ FMod ",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec2_type.group(1))} %\d+ FMod ",
+            spv_code,
+        )
+        assert " Fmod " not in spv_code
+        assert " Mod " not in spv_code
+
     def test_compute_stage_entry_point_generates_defined_function(self):
         source_code = """
         shader main {
@@ -549,6 +582,78 @@ class TestVulkanSPIRVCodeGen:
         assert '"x"' in spv_code
         assert "OpStore" in spv_code
         assert "OpExecutionMode %main" not in spv_code
+
+    def test_compute_stage_builtin_ids_emit_spirv_builtins(self):
+        source_code = """
+        shader ComputeBuiltins {
+            compute {
+                void main() {
+                    uint gx = gl_GlobalInvocationID.x;
+                    uint lx = gl_LocalInvocationID.x;
+                    uint group = gl_WorkGroupID.x;
+                    uint index = gl_LocalInvocationIndex;
+                    uint size = gl_WorkGroupSize.z;
+                    uint groups = gl_NumWorkGroups.x;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        ast.stages[ShaderStage.COMPUTE].execution_config = {"local_size": (8, 4, 2)}
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint GLCompute %(\d+) "main"(.+)', spv_code)
+        assert entry_match is not None
+        assert f"OpExecutionMode %{entry_match.group(1)} LocalSize 8 4 2" in spv_code
+
+        builtin_variables = {
+            "gl_GlobalInvocationID": "GlobalInvocationId",
+            "gl_LocalInvocationID": "LocalInvocationId",
+            "gl_WorkGroupID": "WorkgroupId",
+            "gl_LocalInvocationIndex": "LocalInvocationIndex",
+            "gl_NumWorkGroups": "NumWorkgroups",
+        }
+        for variable_name, builtin_name in builtin_variables.items():
+            variable_id = spirv_named_variable(
+                spv_code, variable_name, storage_class="Input"
+            )
+            assert f"OpDecorate {variable_id} BuiltIn {builtin_name}" in spv_code
+            assert variable_id in entry_match.group(2)
+
+        workgroup_size_id = spirv_named_id(spv_code, "gl_WorkGroupSize")
+        assert f"OpDecorate {workgroup_size_id} BuiltIn WorkgroupSize" in spv_code
+        assert re.search(
+            rf"{re.escape(workgroup_size_id)} = OpConstantComposite %\d+ "
+            r"%\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(r"%\d+ = OpCompositeExtract %\d+ %\d+ 2\b", spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_vector_member_access_extracts_spirv_component(self):
+        source_code = """
+        shader VectorMemberAccess {
+            compute {
+                void main() {
+                    vec3 position = vec3(1.0, 2.0, 3.0);
+                    float x = position.x;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        assert re.search(
+            rf"OpCompositeExtract {re.escape(float_type.group(1))} %\d+ 0\b",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
 
     def test_fragment_stage_execution_mode_uses_entry_function_id(self):
         source_code = """
@@ -2611,6 +2716,227 @@ class TestVulkanSPIRVCodeGen:
         assert "imageSize(" not in spv_code
         assert "imageLoad(" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_loop_node_emits_spirv_loop_control_and_body(self):
+        source_code = """
+        shader LoopNodeSmoke {
+            void helper() {
+                int i = 0;
+                loop {
+                    i = i + 1;
+                    if (i > 2) {
+                        break;
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpLoopMerge" in spv_code
+        assert "OpIAdd" in spv_code
+        assert "OpSGreaterThan" in spv_code
+        assert "OpSelectionMerge" in spv_code
+        loop_merges = re.findall(r"OpLoopMerge (%\d+) (%\d+) None", spv_code)
+        assert loop_merges
+        assert any(
+            f"OpBranch {merge_label}" in spv_code for merge_label, _ in loop_merges
+        )
+        assert "LoopNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_do_while_node_emits_condition_after_body_loop(self):
+        source_code = """
+        shader DoWhileSmoke {
+            void helper() {
+                int i = 0;
+                do {
+                    i = i + 1;
+                } while (i < 4);
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        loop_header = re.search(
+            r"(%\d+) = OpLabel\nOpLoopMerge (%\d+) (%\d+) None\nOpBranch (%\d+)",
+            spv_code,
+        )
+        assert loop_header
+        header_label, merge_label, continue_label, body_label = loop_header.groups()
+        assert f"{body_label} = OpLabel" in spv_code
+        assert spv_code.index("OpIAdd") < spv_code.index("OpSLessThan")
+
+        continue_block = re.search(
+            rf"{re.escape(continue_label)} = OpLabel\n"
+            rf"(?P<body>.*?OpBranchConditional %\d+ "
+            rf"{re.escape(header_label)} {re.escape(merge_label)})",
+            spv_code,
+            re.S,
+        )
+        assert continue_block
+        assert "OpSLessThan" in continue_block.group("body")
+        assert "DoWhileNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_for_in_node_emits_spirv_counted_loops(self):
+        source_code = """
+        shader ForInSmoke {
+            void helper() {
+                int total = 0;
+                for i in 4 {
+                    total = total + i;
+                }
+                for j in 2..5 {
+                    total = total + j;
+                }
+                for k in 1..=4 {
+                    total = total + k;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        loop_merges = re.findall(r"OpLoopMerge (%\d+) (%\d+) None", spv_code)
+        assert len(loop_merges) >= 3
+        assert "OpSLessThan" in spv_code
+        assert "OpSLessThanEqual" in spv_code
+        assert spv_code.count("OpIAdd") >= 6
+        assert spirv_named_ids(spv_code, "i")
+        assert spirv_named_ids(spv_code, "j")
+        assert spirv_named_ids(spv_code, "k")
+        assert "ForInNode(" not in spv_code
+        assert "RangeNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_node_emits_spirv_selection_chain(self):
+        source_code = """
+        shader MatchSmoke {
+            int helper(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert "OpIEqual" in spv_code
+        assert "OpStore" in spv_code
+        assert "MatchNode(" not in spv_code
+        assert "MatchArmNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_switch_node_emits_spirv_selection_chain_and_default(self):
+        source_code = """
+        shader SwitchSmoke {
+            int helper(int mode) {
+                int value = 0;
+                switch (mode) {
+                    case 0:
+                        value = 1;
+                        break;
+                    case 1:
+                        value = 2;
+                        break;
+                    default:
+                        value = 3;
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert spv_code.count("OpIEqual") >= 2
+        assert spv_code.count("OpStore") >= 3
+        assert "SwitchNode(" not in spv_code
+        assert "CaseNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_switch_break_uses_nearest_break_target_inside_nested_loop(self):
+        source_code = """
+        shader SwitchNestedLoopSmoke {
+            void helper(int mode) {
+                switch (mode) {
+                    case 0:
+                        loop {
+                            break;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        loop_merges = re.findall(r"OpLoopMerge (%\d+) (%\d+) None", spv_code)
+        assert len(loop_merges) == 1
+        inner_merge, inner_continue = loop_merges[0]
+        assert re.search(
+            rf"OpLoopMerge {re.escape(inner_merge)} {re.escape(inner_continue)} None\n"
+            rf"OpBranch %\d+\n"
+            rf"%\d+ = OpLabel\n"
+            rf"OpBranch {re.escape(inner_merge)}",
+            spv_code,
+        )
+        assert "OpSelectionMerge" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_guarded_arm_rejected_for_spirv_codegen(self):
+        invalid_code = """
+        shader MatchSmoke {
+            int helper(int mode) {
+                int value = 0;
+                match mode {
+                    0 if mode > 0 => {
+                        value = 1;
+                    }
+                    _ => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        ast = Parser(Lexer(invalid_code).tokens).parse()
+
+        with pytest.raises(ValueError, match="Unsupported match arm for SPIR-V"):
+            VulkanSPIRVCodeGen().generate(ast)
 
     def test_resource_calls_in_loops_use_spirv_loop_control_and_indices(self):
         source_code = """

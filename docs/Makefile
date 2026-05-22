@@ -11,7 +11,7 @@ linkcheck:
 	$(SPHINXBUILD) -M linkcheck "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS)
 
 doxygen:
-	cd .. && doxygen docs/doxygen/Doxyfile
+	./scripts/build-doxygen.sh
 
 clean:
 	rm -rf "$(BUILDDIR)" doxygen/build

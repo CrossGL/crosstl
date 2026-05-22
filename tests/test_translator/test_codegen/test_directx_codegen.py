@@ -2,7 +2,12 @@ import pytest
 import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
-from crosstl.translator.ast import ShaderStage
+from crosstl.translator.ast import (
+    PrimitiveType,
+    ShaderStage,
+    StructMemberNode,
+    StructNode,
+)
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from typing import List
 
@@ -36,6 +41,57 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_structured_buffer_dimensions_lower_to_get_dimensions():
+    code = """
+    shader StructuredBufferDimensionsHLSL {
+        RWStructuredBuffer<int> values @ binding(3);
+        RWStructuredBuffer<int> buffers[2] @ binding(4);
+
+        compute {
+            void main(uint index) {
+                uint len;
+                uint arrayLen;
+                buffer_dimensions(values, len);
+                buffer_dimensions(buffers[index], arrayLen);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "values.GetDimensions(len);" in generated
+    assert "buffers[index].GetDimensions(arrayLen);" in generated
+    assert "buffer_dimensions" not in generated
+
+
+def test_structured_buffer_append_consume_lower_to_native_methods():
+    code = """
+    shader StructuredBufferAppendConsumeHLSL {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        compute {
+            void main(uint value) {
+                buffer_append(appendValues, int(value));
+                int consumed = buffer_consume(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "AppendStructuredBuffer<int> appendValues : register(u1);" in generated
+    assert "ConsumeStructuredBuffer<int> consumeValues : register(u2);" in generated
+    assert "appendValues.Append(int(value));" in generated
+    assert "int consumed = consumeValues.Consume();" in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
 def test_hlsl_unsigned_integer_literal_suffix_codegen():
     code = """
     shader UIntLiteralCodegen {
@@ -55,6 +111,86 @@ def test_hlsl_unsigned_integer_literal_suffix_codegen():
     assert "uint b = 15u;" in generated_code
     assert "uint c = 5u;" in generated_code
     assert "7, u" not in generated_code
+
+
+def test_hlsl_resource_binding_attributes_are_not_parameter_semantics():
+    code = """
+    shader BindingAttributes {
+        vec4 sampleBound(sampler2D tex @texture(1), sampler samp @sampler(2), sampler2D registered @register(t3), vec2 uv) {
+            return texture(tex, samp, uv) + texture(registered, uv);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 sampleBound(Texture2D tex, SamplerState samp, Texture2D registered, SamplerState registeredSampler, float2 uv)"
+        in generated_code
+    )
+    assert "tex.Sample(samp, uv)" in generated_code
+    assert "registered.Sample(registeredSampler, uv)" in generated_code
+    assert ": texture" not in generated_code
+    assert ": sampler" not in generated_code
+    assert ": register" not in generated_code
+
+
+def test_hlsl_global_resource_binding_attributes_drive_registers():
+    code = """
+    shader ExplicitGlobalBindings {
+        sampler samp @sampler(5);
+        sampler2D explicitTex @texture(3);
+        image2D storageImage @binding(7);
+        sampler2D registerTex @register(t8);
+        sampler2D autoTex;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(storageImage, ivec2(0, 0));
+                return texture(explicitTex, samp, uv) + texture(registerTex, samp, uv) + texture(autoTex, samp, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "SamplerState samp : register(s5);" in generated_code
+    assert "Texture2D explicitTex : register(t3);" in generated_code
+    assert "RWTexture2D<float4> storageImage : register(u7);" in generated_code
+    assert "Texture2D registerTex : register(t8);" in generated_code
+    assert "Texture2D autoTex : register(t9);" in generated_code
+
+
+def test_hlsl_cbuffer_binding_attributes_drive_registers():
+    code = """
+    shader CBufferBindings {
+        cbuffer Camera @register(b2) {
+            mat4 viewProj;
+            mat4 bones[2];
+            vec4 viewRow;
+        };
+
+        uniform Material @binding(4) {
+            vec4 tint;
+        };
+
+        cbuffer AutoBlock {
+            vec4 color;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer Camera : register(b2)" in generated_code
+    assert "float4x4 viewProj;" in generated_code
+    assert "float4x4 bones[2];" in generated_code
+    assert "cbuffer Material : register(b4)" in generated_code
+    assert "cbuffer AutoBlock : register(b5)" in generated_code
+    assert "MatrixType(" not in generated_code
 
 
 def test_hlsl_default_float_image_scalar_and_vector_load_store():
@@ -1129,6 +1265,129 @@ def test_directx_array_handling(array_test_data):
         pytest.fail(f"DirectX array codegen failed: {e}")
 
 
+def test_directx_cbuffer_members_are_not_global_variables():
+    code = """
+    shader CBufferScope {
+        cbuffer Constants {
+            float weights[8];
+            vec3 colors[2];
+        };
+
+        compute {
+            void main() {
+                float value = weights[2];
+                vec3 color = colors[1];
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = HLSLCodeGen().generate_stage(ast, "compute")
+
+    assert [buffer.name for buffer in getattr(ast, "cbuffers", [])] == ["Constants"]
+    assert [var.name for var in ast.global_variables] == []
+    assert "cbuffer Constants : register(b0)" in generated_code
+    assert "float weights[8];" in generated_code
+    assert "float3 colors[2];" in generated_code
+    assert "float value = weights[2];" in generated_code
+    assert "float3 color = colors[1];" in generated_code
+    assert "\nfloat weights[8];" not in generated_code
+
+
+def test_directx_duplicate_cbuffer_members_error():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float value;
+        };
+
+        compute {
+            void main() {
+                float x = value;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers.append(
+        StructNode(
+            name="Lighting",
+            members=[
+                StructMemberNode(name="value", member_type=PrimitiveType("float"))
+            ],
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Ambiguous cbuffer member name\\(s\\) in DirectX output: value",
+    ):
+        HLSLCodeGen().generate_stage(ast, "compute")
+
+
+def test_directx_duplicate_cbuffer_names_error():
+    code = """
+    shader CBufferScope {
+        cbuffer Camera {
+            float exposure;
+        };
+
+        compute {
+            void main() {
+                float x = exposure;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers.append(
+        StructNode(
+            name="Camera",
+            members=[
+                StructMemberNode(name="gamma", member_type=PrimitiveType("float"))
+            ],
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate cbuffer name\\(s\\) in DirectX output: Camera",
+    ):
+        HLSLCodeGen().generate_stage(ast, "compute")
+
+
+def test_directx_cbuffer_name_conflicts_with_struct_error():
+    code = """
+    shader CBufferScope {
+        struct Camera {
+            float exposure;
+        };
+
+        cbuffer Lighting {
+            float gamma;
+        };
+
+        compute {
+            void main() {
+                float x = gamma;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    ast.cbuffers[0].name = "Camera"
+
+    with pytest.raises(
+        ValueError,
+        match="Cbuffer name\\(s\\) conflict with existing DirectX declaration\\(s\\): Camera",
+    ):
+        HLSLCodeGen().generate_stage(ast, "compute")
+
+
 def test_directx_local_array_declarations_use_hlsl_order():
     shader = """
     shader TestShader {
@@ -1229,6 +1488,1281 @@ def test_directx_texture_resources_and_sampling():
     assert "sampler2D colorMap" not in generated_code
     assert "VectorType(" not in generated_code
     assert generated_code.count("// Fragment Shader") == 1
+
+
+def test_directx_rejects_non_resource_shadow_of_global_resource():
+    shader = """
+    shader ResourceShadow {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv;
+        };
+
+        vec4 shade(float colorMap, FSInput input) {
+            float linearSampler = 1.0;
+            return vec4(colorMap + linearSampler);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return shade(1.0, input);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Non-resource local declaration\\(s\\) shadow DirectX global "
+            "resource\\(s\\): colorMap, linearSampler"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_rejects_texture_call_with_non_resource_argument():
+    shader = """
+    shader InvalidTextureArgument {
+        struct FSInput {
+            vec2 uv;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float value = 1.0;
+                return texture(value, input.uv);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX texture operation 'texture' requires a declared texture "
+            "or image resource argument: value"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "texture(colorMap)",
+            "DirectX texture operation 'texture' requires at least 2 "
+            "argument\\(s\\), got 1",
+        ),
+        (
+            "textureLod(colorMap, input.uv)",
+            "DirectX texture operation 'textureLod' requires at least 3 "
+            "argument\\(s\\), got 2",
+        ),
+        (
+            "textureGrad(colorMap, input.uv, input.uv)",
+            "DirectX texture operation 'textureGrad' requires at least 4 "
+            "argument\\(s\\), got 3",
+        ),
+        (
+            "texture(colorMap, linearSampler)",
+            "DirectX texture operation 'texture' requires at least 3 "
+            "argument\\(s\\), got 2",
+        ),
+    ],
+)
+def test_directx_rejects_texture_call_with_too_few_arguments(call, match):
+    shader = f"""
+    shader InvalidTextureArity {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expression", "operation", "max_count", "arg_count"),
+    [
+        (
+            "vec4(float(textureSamples(msTex, input.layer)))",
+            "textureSamples",
+            1,
+            2,
+        ),
+        (
+            "vec4(float(imageSamples(msTex, input.layer)))",
+            "imageSamples",
+            1,
+            2,
+        ),
+        (
+            "vec4(float(textureQueryLevels(colorMap, input.layer)))",
+            "textureQueryLevels",
+            1,
+            2,
+        ),
+        (
+            "vec4(vec2(imageSize(colorImage, input.layer)), 0.0, 1.0)",
+            "imageSize",
+            1,
+            2,
+        ),
+        (
+            "vec4(textureSize(colorMap, input.layer, input.layer), 0.0, 1.0)",
+            "textureSize",
+            2,
+            3,
+        ),
+    ],
+)
+def test_directx_rejects_resource_query_call_with_too_many_arguments(
+    return_expression, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidTextureQueryArity {{
+        sampler2D colorMap;
+        sampler2DMS msTex;
+        image2D colorImage;
+
+        struct FSInput {{
+            ivec2 pixel;
+            int layer;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expression};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("statement", "operation", "max_count", "arg_count"),
+    [
+        (
+            "vec4 fetched = texelFetch(colorMap, input.pixel, input.layer, input.layer);",
+            "texelFetch",
+            3,
+            4,
+        ),
+        (
+            "vec4 fetched = texelFetchOffset(colorMap, input.pixel, input.layer, input.offset, input.layer);",
+            "texelFetchOffset",
+            4,
+            5,
+        ),
+        (
+            "vec4 color = imageLoad(colorImage, input.pixel, input.layer);",
+            "imageLoad",
+            2,
+            3,
+        ),
+        (
+            "imageStore(colorImage, input.pixel, vec4(1.0), input.layer);",
+            "imageStore",
+            3,
+            4,
+        ),
+        (
+            "uint oldValue = imageAtomicAdd(counterImage, input.pixel, input.amount, input.amount);",
+            "imageAtomicAdd",
+            3,
+            4,
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap(counterImage, input.pixel, input.amount, input.amount, input.amount);",
+            "imageAtomicCompSwap",
+            4,
+            5,
+        ),
+    ],
+)
+def test_directx_rejects_fixed_resource_call_with_too_many_arguments(
+    statement, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidFixedResourceArity {{
+        sampler2D colorMap;
+        image2D colorImage;
+        uimage2D counterImage;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec2 offset;
+            int layer;
+            uint amount;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                {statement}
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expression", "operation", "max_count", "arg_count"),
+    [
+        (
+            "texture(colorMap, input.uv, input.bias, input.bias)",
+            "texture",
+            3,
+            4,
+        ),
+        (
+            "textureLod(colorMap, input.uv, input.bias, input.bias)",
+            "textureLod",
+            3,
+            4,
+        ),
+        (
+            "textureGrad(colorMap, input.uv, input.ddx, input.ddy, input.bias)",
+            "textureGrad",
+            4,
+            5,
+        ),
+        (
+            "textureOffset(colorMap, input.uv, input.offset, input.bias, input.bias)",
+            "textureOffset",
+            4,
+            5,
+        ),
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "textureCompare",
+            4,
+            5,
+        ),
+        (
+            "textureGather(colorMap, input.uv, input.component, input.component)",
+            "textureGather",
+            3,
+            4,
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset",
+            5,
+            6,
+        ),
+    ],
+)
+def test_directx_rejects_texture_sampling_call_with_too_many_arguments(
+    return_expression, operation, max_count, arg_count
+):
+    shader = f"""
+    shader InvalidTextureSamplingArity {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec2 ddx;
+            vec2 ddy;
+            ivec2 offset;
+            float bias;
+            float depth;
+            int component;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expression};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX texture operation '{operation}' accepts at most "
+            f"{max_count} argument\\(s\\), got {arg_count}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_rejects_texture_gather_offsets_with_ambiguous_argument_count():
+    shader = """
+    shader InvalidTextureGatherOffsetsArity {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 offset;
+            int component;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureGatherOffsets(
+                    colorMap,
+                    input.uv,
+                    input.offset,
+                    input.offset,
+                    input.component
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX texture operation 'textureGatherOffsets' accepts "
+            "3, 4, 6, 7 argument\\(s\\), got 5"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("statement", "operation"),
+    [
+        ("vec4 color = imageLoad(colorMap, input.pixel);", "imageLoad"),
+        ("imageStore(colorMap, input.pixel, vec4(1.0));", "imageStore"),
+        ("ivec2 size = imageSize(colorMap);", "imageSize"),
+        (
+            "uint oldValue = imageAtomicAdd(colorMap, input.pixel, input.amount);",
+            "imageAtomicAdd",
+        ),
+    ],
+)
+def test_directx_rejects_image_call_with_sampled_texture_argument(statement, operation):
+    shader = f"""
+    shader InvalidImageResource {{
+        sampler2D colorMap;
+
+        struct FSInput {{
+            ivec2 pixel;
+            uint amount;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                {statement}
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX image operation '{operation}' requires a storage "
+            "image resource argument: colorMap"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("helper", "helper_call", "match"),
+    [
+        (
+            "vec4 misuse(sampler sampleState, vec2 uv) { return texture(sampleState, uv); }",
+            "misuse(linearSampler, input.uv)",
+            "DirectX texture operation 'texture' requires a declared texture "
+            "or image resource argument: sampleState",
+        ),
+        (
+            "vec4 misuse(sampler sampleState, ivec2 pixel) { return imageLoad(sampleState, pixel); }",
+            "misuse(linearSampler, input.pixel)",
+            "DirectX image operation 'imageLoad' requires a storage image "
+            "resource argument: sampleState",
+        ),
+    ],
+)
+def test_directx_rejects_sampler_parameter_as_texture_or_image_operand(
+    helper, helper_call, match
+):
+    shader = f"""
+    shader InvalidSamplerOperand {{
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            ivec2 pixel;
+        }};
+
+        {helper}
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {helper_call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        ("texelFetch(colorMap, input.uv, 0)", "texelFetch"),
+        ("imageLoad(colorImage, input.uv)", "imageLoad"),
+    ],
+)
+def test_directx_rejects_float_coordinate_for_integer_resource_operation(
+    call, operation
+):
+    shader = f"""
+    shader InvalidResourceCoordinate {{
+        sampler2D colorMap;
+        image2D colorImage;
+
+        struct FSInput {{
+            vec2 uv;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX resource operation '{operation}' requires an integer "
+            "coordinate argument: input.uv has type float2"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "dimension"),
+    [
+        ("texelFetch(arrayMap, input.pixel2, 0)", "texelFetch", 3),
+        ("imageLoad(volumeImage, input.pixel2)", "imageLoad", 3),
+        ("imageLoad(colorImage, input.pixel3)", "imageLoad", 2),
+    ],
+)
+def test_directx_rejects_wrong_coordinate_dimension_for_resource_operation(
+    call, operation, dimension
+):
+    shader = f"""
+    shader InvalidResourceCoordinateDimension {{
+        sampler2DArray arrayMap;
+        image2D colorImage;
+        image3D volumeImage;
+
+        struct FSInput {{
+            ivec2 pixel2;
+            ivec3 pixel3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX resource operation '{operation}' requires a "
+            f"{dimension}D integer coordinate"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        ("textureOffset(arrayMap, input.uvLayer, input.offset3)", "textureOffset"),
+        (
+            "texelFetchOffset(arrayMap, input.pixelLayer, 0, input.offset3)",
+            "texelFetchOffset",
+        ),
+    ],
+)
+def test_directx_rejects_wrong_offset_dimension_for_resource_operation(call, operation):
+    shader = f"""
+    shader InvalidResourceOffsetDimension {{
+        sampler2DArray arrayMap;
+
+        struct FSInput {{
+            vec3 uvLayer;
+            ivec3 pixelLayer;
+            ivec3 offset3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX resource operation '{operation}' requires a " "2D integer offset"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        (
+            "textureProjOffset(arrayMap, input.projLayer, input.offset3)",
+            "textureProjOffset",
+        ),
+        (
+            "textureGatherOffset(arrayMap, input.uvLayer, input.offset3)",
+            "textureGatherOffset",
+        ),
+        (
+            "textureGatherOffsets(arrayMap, input.uvLayer, input.offset3, input.offset3, input.offset3, input.offset3)",
+            "textureGatherOffsets",
+        ),
+        (
+            "vec4(textureCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3))",
+            "textureCompareOffset",
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.ddx, input.ddy, input.offset3))",
+            "textureCompareProjGradOffset",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3)",
+            "textureGatherCompareOffset",
+        ),
+    ],
+)
+def test_directx_rejects_wrong_offset_dimension_for_extended_resource_operation(
+    call, operation
+):
+    shader = f"""
+    shader InvalidExtendedResourceOffsetDimension {{
+        sampler2DArray arrayMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 uvLayer;
+            vec3 projCoord;
+            vec4 projLayer;
+            vec2 ddx;
+            vec2 ddy;
+            float depth;
+            ivec3 offset3;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX resource operation '{operation}' requires a " "2D integer offset"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_rejects_float_offset_for_resource_operation():
+    shader = """
+    shader InvalidResourceOffsetType {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            vec2 offset;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureOffset(colorMap, input.uv, input.offset);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX resource operation 'textureOffset' requires an integer "
+            "offset argument"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation"),
+    [
+        (
+            "textureGatherOffset(colorMap, input.uv, input.offset)",
+            "textureGatherOffset",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset)",
+            "textureGatherCompareOffset",
+        ),
+    ],
+)
+def test_directx_rejects_float_offset_for_extended_resource_operation(call, operation):
+    shader = f"""
+    shader InvalidExtendedResourceOffsetType {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec2 offset;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX resource operation '{operation}' requires an integer "
+            "offset argument"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "dimension"),
+    [
+        ("textureGrad(colorMap, input.uv, input.ddx3, input.ddy3)", "textureGrad", 2),
+        (
+            "textureGrad(cubeMap, input.direction, input.ddx2, input.ddy2)",
+            "textureGrad",
+            3,
+        ),
+        (
+            "textureGradOffset(colorMap, input.uv, input.ddx3, input.ddy3, input.offset2)",
+            "textureGradOffset",
+            2,
+        ),
+        (
+            "textureProjGrad(colorMap, input.projCoord, input.ddx3, input.ddy3)",
+            "textureProjGrad",
+            2,
+        ),
+        (
+            "vec4(textureCompareGrad(shadowMap, compareSampler, input.uv, input.depth, input.ddx3, input.ddy3))",
+            "textureCompareGrad",
+            2,
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.ddx3, input.ddy3, input.offset2))",
+            "textureCompareProjGradOffset",
+            2,
+        ),
+    ],
+)
+def test_directx_rejects_wrong_gradient_dimension_for_resource_operation(
+    call, operation, dimension
+):
+    shader = f"""
+    shader InvalidResourceGradientDimension {{
+        sampler2D colorMap;
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 direction;
+            vec3 projCoord;
+            vec2 ddx2;
+            vec2 ddy2;
+            vec3 ddx3;
+            vec3 ddy3;
+            ivec2 offset2;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX resource operation '{operation}' requires a "
+            f"{dimension}D floating gradient"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_rejects_integer_gradient_for_resource_operation():
+    shader = """
+    shader InvalidResourceGradientType {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 pixel;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return textureGrad(colorMap, input.uv, input.pixel, input.pixel);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX resource operation 'textureGrad' requires a floating "
+            "gradient argument"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "type_name"),
+    [
+        (
+            "textureLod(colorMap, linearSampler, input.uv, input.lodVec)",
+            "textureLod",
+            "float2",
+        ),
+        (
+            "textureLodOffset(colorMap, linearSampler, input.uv, input.lodVec, input.offset)",
+            "textureLodOffset",
+            "float2",
+        ),
+        (
+            "textureProjLod(colorMap, linearSampler, input.projCoord, input.lodVec)",
+            "textureProjLod",
+            "float2",
+        ),
+        (
+            "vec4(textureCompareLod(shadowMap, compareSampler, input.uv, input.depth, input.lodVec))",
+            "textureCompareLod",
+            "float2",
+        ),
+        (
+            "vec4(textureCompareProjLodOffset(shadowMap, compareSampler, input.projCoord, input.depth, input.lodVec, input.offset))",
+            "textureCompareProjLodOffset",
+            "float2",
+        ),
+        (
+            "textureLod(colorMap, linearSampler, input.uv, colorMap)",
+            "textureLod",
+            "Texture2D",
+        ),
+    ],
+)
+def test_directx_rejects_non_scalar_numeric_lod_argument(call, operation, type_name):
+    shader = f"""
+    shader InvalidTextureLodArgument {{
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler linearSampler;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 lodVec;
+            ivec2 offset;
+            float depth;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX texture LOD operation '{operation}' requires a scalar "
+            f"numeric lod argument: .* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "operation", "type_name"),
+    [
+        (
+            "texelFetch(colorMap, input.pixel, input.floatLevel)",
+            "texelFetch",
+            "float",
+        ),
+        (
+            "texelFetchOffset(colorMap, input.pixel, input.levelVec, input.offset)",
+            "texelFetchOffset",
+            "int2",
+        ),
+        (
+            "vec4(textureSize(colorMap, input.floatLevel), 0.0, 1.0)",
+            "textureSize",
+            "float",
+        ),
+        (
+            "texelFetch(colorMap, input.pixel, colorMap)",
+            "texelFetch",
+            "Texture2D",
+        ),
+    ],
+)
+def test_directx_rejects_non_scalar_integer_mip_level_argument(
+    return_expr, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureMipLevelArgument {{
+        sampler2D colorMap;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec2 offset;
+            ivec2 levelVec;
+            float floatLevel;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX resource operation '{operation}' requires a scalar integer "
+            f"mip/sample level argument: .* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "type_name"),
+    [
+        ("texelFetch(msTex, input.pixel, input.floatSample)", "float"),
+        ("texelFetch(msArray, input.pixelLayer, input.sampleVec)", "int2"),
+        ("texelFetch(msTex, input.pixel, msTex)", "Texture2DMS<float4>"),
+    ],
+)
+def test_directx_rejects_non_scalar_integer_multisample_sample_index(
+    return_expr, type_name
+):
+    shader = f"""
+    shader InvalidMultisampleTexelFetchSampleIndex {{
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+
+        struct FSInput {{
+            ivec2 pixel;
+            ivec3 pixelLayer;
+            ivec2 sampleVec;
+            float floatSample;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX multisample texel fetch operation 'texelFetch' requires a "
+            f"scalar integer sample index argument: .* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "helper", "operation", "type_name"),
+    [
+        (
+            "textureGather(colorMap, linearSampler, input.uv, input.floatComponent)",
+            "",
+            "textureGather",
+            "float",
+        ),
+        (
+            "textureGatherOffset(colorMap, linearSampler, input.uv, input.offset, input.componentVec)",
+            "",
+            "textureGatherOffset",
+            "int2",
+        ),
+        (
+            "textureGatherOffsets(colorMap, linearSampler, input.uv, input.offset, input.offset, input.offset, input.offset, colorMap)",
+            "",
+            "textureGatherOffsets",
+            "Texture2D",
+        ),
+        (
+            "vec4(1.0)",
+            "vec4 invalidArrayGather(sampler2D tex, sampler s, vec2 uv, ivec2 offsets[4], float component) { return textureGatherOffsets(tex, s, uv, offsets, component); }",
+            "textureGatherOffsets",
+            "float",
+        ),
+    ],
+)
+def test_directx_rejects_non_scalar_integer_gather_component_argument(
+    return_expr, helper, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureGatherComponentArgument {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            ivec2 offset;
+            ivec2 componentVec;
+            float floatComponent;
+        }};
+
+        {helper}
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX texture gather operation '{operation}' requires a scalar "
+            f"integer component argument: .* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "operation", "type_name"),
+    [
+        (
+            "texture(colorMap, linearSampler, input.uv, input.biasVec)",
+            "texture",
+            "float2",
+        ),
+        (
+            "textureOffset(colorMap, linearSampler, input.uv, input.offset, input.biasVec)",
+            "textureOffset",
+            "float2",
+        ),
+        (
+            "textureProj(colorMap, linearSampler, input.projCoord, input.biasVec)",
+            "textureProj",
+            "float2",
+        ),
+        (
+            "textureProjOffset(colorMap, linearSampler, input.projCoord, input.offset, colorMap)",
+            "textureProjOffset",
+            "Texture2D",
+        ),
+    ],
+)
+def test_directx_rejects_non_scalar_numeric_bias_argument(
+    return_expr, operation, type_name
+):
+    shader = f"""
+    shader InvalidTextureBiasArgument {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 biasVec;
+            ivec2 offset;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX texture bias operation '{operation}' requires a scalar "
+            f"numeric bias argument: .* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_texture_bias_variants_use_sample_bias():
+    shader = """
+    shader TextureBiasVariants {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 offset;
+            float bias;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 biased = texture(colorMap, linearSampler, input.uv, input.bias);
+                vec4 offsetBiased = textureOffset(
+                    colorMap,
+                    linearSampler,
+                    input.uv,
+                    input.offset,
+                    input.bias
+                );
+                return biased + offsetBiased;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "colorMap.SampleBias(linearSampler, input.uv, input.bias)" in generated_code
+    assert (
+        "colorMap.SampleBias(linearSampler, input.uv, input.bias, input.offset)"
+        in generated_code
+    )
+    assert "colorMap.Sample(linearSampler, input.uv, input.bias)" not in generated_code
+
+
+def test_directx_rejects_non_floating_query_lod_coordinate():
+    shader = """
+    shader InvalidTextureQueryLodCoordinate {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            ivec2 pixel;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(textureQueryLod(colorMap, linearSampler, input.pixel), 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX texture query operation 'textureQueryLod' requires a "
+            "floating coordinate argument: .* has type int2"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("query_call", "dimension", "resource_type", "type_name"),
+    [
+        (
+            "textureQueryLod(layerMap, linearSampler, input.uv)",
+            3,
+            "Texture2DArray",
+            "float2",
+        ),
+        (
+            "textureQueryLod(cubeMap, linearSampler, input.uv)",
+            3,
+            "TextureCube",
+            "float2",
+        ),
+        (
+            "textureQueryLod(cubeArray, linearSampler, input.direction)",
+            4,
+            "TextureCubeArray",
+            "float3",
+        ),
+    ],
+)
+def test_directx_rejects_wrong_query_lod_coordinate_dimension(
+    query_call, dimension, resource_type, type_name
+):
+    shader = f"""
+    shader InvalidTextureQueryLodCoordinateDimension {{
+        sampler2DArray layerMap;
+        samplerCube cubeMap;
+        samplerCubeArray cubeArray;
+        sampler linearSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 direction;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return vec4({query_call}, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX texture query operation 'textureQueryLod' requires a "
+            f"{dimension}D floating coordinate for {resource_type}: "
+            f".* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("call", "operation", "type_name"),
+    [
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depthVec))",
+            "textureCompare",
+            "float2",
+        ),
+        (
+            "vec4(textureCompareProjGradOffset(shadowMap, compareSampler, input.projCoord, input.depthVec, input.ddx, input.ddy, input.offset))",
+            "textureCompareProjGradOffset",
+            "float2",
+        ),
+        (
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depthVec, input.offset)",
+            "textureGatherCompareOffset",
+            "float2",
+        ),
+        (
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.layer))",
+            "textureCompare",
+            "int",
+        ),
+    ],
+)
+def test_directx_rejects_non_scalar_float_compare_argument(call, operation, type_name):
+    shader = f"""
+    shader InvalidTextureCompareArgument {{
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {{
+            vec2 uv;
+            vec3 projCoord;
+            vec2 depthVec;
+            vec2 ddx;
+            vec2 ddy;
+            ivec2 offset;
+            int layer;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX texture compare operation '{operation}' requires a scalar "
+            f"floating compare argument: .* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_directx_storage_image_load_store():
@@ -1343,6 +2877,41 @@ def test_directx_direct_stage_image_load_store_and_atomics_use_input_members():
     assert "imageStore(" not in generated_code
     assert "imageAtomicAdd(counters" not in generated_code
     assert "imageAtomicMin(signedLayers" not in generated_code
+
+
+def test_directx_image_atomic_helper_descriptor_for_integer_storage_textures():
+    codegen = HLSLCodeGen()
+
+    uint_descriptor = codegen.image_atomic_helper_descriptor(
+        "imageAtomicAdd", "RWTexture1DArray<uint>"
+    )
+    assert uint_descriptor == {
+        "helper_name": "imageAtomicAdd_uimage1DArray",
+        "return_type": "uint",
+        "coord_type": "int2",
+        "intrinsic": "InterlockedAdd",
+    }
+
+    int_descriptor = codegen.image_atomic_helper_descriptor(
+        "imageAtomicCompSwap", "RWTexture2DArray<int>"
+    )
+    assert int_descriptor == {
+        "helper_name": "imageAtomicCompSwap_iimage2DArray",
+        "return_type": "int",
+        "coord_type": "int3",
+        "intrinsic": "InterlockedCompareExchange",
+    }
+
+    assert (
+        codegen.image_atomic_helper_descriptor("imageAtomicAdd", "RWTexture2D<float4>")
+        is None
+    )
+    assert (
+        codegen.image_atomic_helper_descriptor(
+            "imageAtomicUnsupported", "RWTexture2D<uint>"
+        )
+        is None
+    )
 
 
 def test_directx_direct_stage_explicit_image_formats_use_input_members():
@@ -4900,6 +6469,96 @@ def test_directx_cube_array_texture_grad_gather_keep_sampler_arguments():
     assert "cubeArraysSampler" not in generated_code
 
 
+def test_directx_texture_sampling_capability_descriptors():
+    codegen = HLSLCodeGen()
+
+    assert codegen.texture_sampling_capabilities("Texture2D") == {
+        "texture_type": "Texture2D",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "compare_offset": True,
+        "gather_compare_offset": True,
+    }
+    assert codegen.texture_sampling_capabilities("TextureCube") == {
+        "texture_type": "TextureCube",
+        "gather": True,
+        "gather_offset": False,
+        "sample_offset": False,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+    assert codegen.texture_sampling_capabilities("Texture2DArray[4]") == {
+        "texture_type": "Texture2DArray",
+        "gather": True,
+        "gather_offset": True,
+        "sample_offset": True,
+        "compare_offset": True,
+        "gather_compare_offset": True,
+    }
+    assert codegen.texture_sampling_capabilities("Texture3D") == {
+        "texture_type": "Texture3D",
+        "gather": False,
+        "gather_offset": False,
+        "sample_offset": True,
+        "compare_offset": False,
+        "gather_compare_offset": False,
+    }
+
+
+def test_directx_texture_dimension_descriptors():
+    codegen = HLSLCodeGen()
+
+    def expect(texture_type, **overrides):
+        expected = {
+            "texture_type": codegen.resource_base_type(texture_type),
+            "coordinate_dimension": None,
+            "offset_dimension": None,
+            "sample_offset_dimension": None,
+            "texel_fetch_offset_dimension": None,
+            "gather_offset_dimension": None,
+            "compare_offset_dimension": None,
+            "compare_lod_offset_dimension": None,
+            "compare_grad_offset_dimension": None,
+            "gather_compare_offset_dimension": None,
+            "gradient_dimension": None,
+            "query_lod_coordinate_dimension": None,
+        }
+        expected.update(overrides)
+        assert codegen.texture_dimension_descriptor(texture_type) == expected
+
+    expect(
+        "Texture2DArray[4]",
+        coordinate_dimension=3,
+        offset_dimension=2,
+        sample_offset_dimension=2,
+        texel_fetch_offset_dimension=2,
+        gather_offset_dimension=2,
+        compare_offset_dimension=2,
+        compare_lod_offset_dimension=2,
+        compare_grad_offset_dimension=2,
+        gather_compare_offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=3,
+    )
+    expect(
+        "Texture1DArray",
+        coordinate_dimension=2,
+        offset_dimension=1,
+        sample_offset_dimension=1,
+        texel_fetch_offset_dimension=1,
+        gradient_dimension=1,
+        query_lod_coordinate_dimension=2,
+    )
+    expect(
+        "TextureCubeArray",
+        gradient_dimension=3,
+        query_lod_coordinate_dimension=4,
+    )
+    expect("Texture2DMSArray<float4>", coordinate_dimension=3)
+    expect("RWTexture3D<float4>", coordinate_dimension=3)
+
+
 def test_directx_texture_gather_offset_variants_keep_sampler_arguments():
     shader = """
     shader GatherOffsetVariants {
@@ -7059,13 +8718,14 @@ def test_directx_projected_cube_shadow_compare_reports_unsupported():
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
-    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert "SamplerState compareSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState compareSampler" not in generated_code
     assert (
-        "float cubeProjected(TextureCube tex, SamplerComparisonState s, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeProjected(TextureCube tex, SamplerState s, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float cubeArrayProjected(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeArrayProjected(TextureCubeArray tex, SamplerState s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     reasons = {
@@ -7486,6 +9146,381 @@ def test_directx_projected_cube_texture_parameters_do_not_forward_implicit_sampl
     assert "SamplerState cubeArraySampler" not in generated_code
     assert "SamplerState texSampler" not in generated_code
     assert "texSampler" not in generated_code
+
+
+def test_directx_projected_cube_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader DiagnosticRegularSamplerRoleConflict {
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = textureProj(cubeMap, sharedSampler, input.cubeProj);
+                float ok = textureCompare(shadowMap, sharedSampler, input.uv, input.depth);
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+    parameter_diagnostic_shader = """
+    shader DiagnosticSamplerParamRoleConflict {
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        float inspect(sampler s, vec4 cubeProj, vec2 uv, float depth) {
+            vec4 bad = textureProj(cubeMap, s, cubeProj);
+            float ok = textureCompare(shadowMap, s, uv, depth);
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(sharedSampler, input.cubeProj, input.uv, input.depth);
+            }
+        }
+    }
+    """
+    comparison_diagnostic_shader = """
+    shader DiagnosticCompareSamplerRoleConflict {
+        samplerCubeShadow cubeShadow;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float bad = textureCompareProj(
+                    cubeShadow,
+                    sharedSampler,
+                    input.cubeProj,
+                    input.depth
+                );
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + vec4(bad);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    parameter_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
+    )
+    comparison_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+    )
+
+    projected_diagnostic = (
+        "/* unsupported DirectX projected texture: textureProj "
+        "requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+    )
+    compare_projected_diagnostic = (
+        "/* unsupported DirectX texture compare: textureCompareProj requires "
+        "Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
+    )
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert "SamplerState sharedSampler" not in regular_code
+    assert projected_diagnostic in regular_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in regular_code
+    )
+    assert ".Sample(sharedSampler" not in regular_code
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in parameter_code
+    assert (
+        "float inspect(SamplerComparisonState s, float4 cubeProj, float2 uv, float depth)"
+        in parameter_code
+    )
+    assert projected_diagnostic in parameter_code
+    assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in parameter_code
+    assert (
+        "return inspect(sharedSampler, input.cubeProj, input.uv, input.depth);"
+        in parameter_code
+    )
+
+    assert "SamplerState sharedSampler : register(s0);" in comparison_code
+    assert "SamplerComparisonState sharedSampler" not in comparison_code
+    assert compare_projected_diagnostic in comparison_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in comparison_code
+    assert "SampleCmp(sharedSampler" not in comparison_code
+
+
+def test_directx_projected_cube_diagnostic_struct_sampler_member_keeps_real_role():
+    shader = """
+    shader DiagnosticStructSamplerRoleConflict {
+        samplerCube cubeMap;
+        sampler2DShadow shadowMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        struct FSInput {
+            vec4 cubeProj @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+            int index;
+        };
+
+        float inspect(SamplerPack pack, FSInput input) {
+            vec4 bad = textureProj(cubeMap, pack.samplers[input.index], input.cubeProj);
+            float ok = textureCompare(
+                shadowMap,
+                pack.samplers[input.index],
+                input.uv,
+                input.depth
+            );
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                SamplerPack pack;
+                return inspect(pack, input);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "SamplerComparisonState samplers[2];" in generated_code
+    assert "SamplerState samplers[2];" not in generated_code
+    assert (
+        "/* unsupported DirectX projected texture: textureProj requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+        in generated_code
+    )
+    assert (
+        "float ok = shadowMap.SampleCmp(pack.samplers[input.index], input.uv, input.depth);"
+        in generated_code
+    )
+    assert ".Sample(pack.samplers" not in generated_code
+
+
+def test_directx_unsupported_gather_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader UnsupportedGatherSamplerRoleConflict {
+        sampler1D lineMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = textureGather(lineMap, sharedSampler, input.u);
+                float ok = textureCompare(shadowMap, sharedSampler, input.uv, input.depth);
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+    compare_diagnostic_shader = """
+    shader UnsupportedGatherCompareSamplerRoleConflict {
+        samplerCubeShadow cubeShadow;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+            ivec2 offset @ TEXCOORD2;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 bad = textureGatherCompareOffset(
+                    cubeShadow,
+                    sharedSampler,
+                    input.cubeLayer,
+                    input.depth,
+                    input.offset
+                );
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + bad;
+            }
+        }
+    }
+    """
+    parameter_diagnostic_shader = """
+    shader UnsupportedGatherParamRoleConflict {
+        sampler1D lineMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        float inspect(sampler s, float u, vec2 uv, float depth) {
+            vec4 bad = textureGather(lineMap, s, u);
+            float ok = textureCompare(shadowMap, s, uv, depth);
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(sharedSampler, input.u, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    compare_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(compare_diagnostic_shader), "fragment"
+    )
+    parameter_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
+    )
+
+    gather_diagnostic = (
+        "/* unsupported DirectX texture gather: textureGather requires 2D, "
+        "2D-array, cube, or cube-array textures */ float4(0.0)"
+    )
+    gather_compare_offset_diagnostic = (
+        "/* unsupported DirectX texture gather compare: "
+        "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
+        "float4(0.0)"
+    )
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert "SamplerState sharedSampler" not in regular_code
+    assert gather_diagnostic in regular_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in regular_code
+    )
+    assert ".Gather(sharedSampler" not in regular_code
+
+    assert "SamplerState sharedSampler : register(s0);" in compare_code
+    assert "SamplerComparisonState sharedSampler" not in compare_code
+    assert gather_compare_offset_diagnostic in compare_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in compare_code
+    assert "GatherCmp(sharedSampler" not in compare_code
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in parameter_code
+    assert (
+        "float inspect(SamplerComparisonState s, float u, float2 uv, float depth)"
+        in parameter_code
+    )
+    assert gather_diagnostic in parameter_code
+    assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in parameter_code
+    assert (
+        "return inspect(sharedSampler, input.u, input.uv, input.depth);"
+        in parameter_code
+    )
+
+
+def test_directx_storage_image_texture_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader StorageRegularSamplerRoleConflict {
+        image2D colorImage;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = texture(colorImage, sharedSampler, input.uv);
+                float ok = textureCompare(shadowMap, sharedSampler, input.uv, input.depth);
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+    comparison_diagnostic_shader = """
+    shader StorageCompareSamplerRoleConflict {
+        image2D colorImage;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float bad = textureCompare(colorImage, sharedSampler, input.uv, input.depth);
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + vec4(bad);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    comparison_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+    )
+
+    storage_texture_diagnostic = (
+        "/* unsupported DirectX storage image texture operation: "
+        "texture on RWTexture2D<float4> */ float4(0.0)"
+    )
+    storage_compare_diagnostic = (
+        "/* unsupported DirectX storage image texture comparison: "
+        "textureCompare on RWTexture2D<float4> */ 0.0"
+    )
+
+    assert "RWTexture2D<float4> colorImage : register(u0);" in regular_code
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert "SamplerState sharedSampler" not in regular_code
+    assert storage_texture_diagnostic in regular_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in regular_code
+    )
+    assert ".Sample(sharedSampler, input.uv)" not in regular_code
+
+    assert "RWTexture2D<float4> colorImage : register(u0);" in comparison_code
+    assert "SamplerState sharedSampler : register(s0);" in comparison_code
+    assert "SamplerComparisonState sharedSampler" not in comparison_code
+    assert storage_compare_diagnostic in comparison_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in comparison_code
+    assert "SampleCmp(sharedSampler" not in comparison_code
 
 
 def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
@@ -8416,13 +10451,14 @@ def test_directx_cube_shadow_compare_offsets_report_unsupported():
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
-    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert "SamplerState compareSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState compareSampler" not in generated_code
     assert (
-        "float cubeOffsets(TextureCube tex, SamplerComparisonState s, float3 direction, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeOffsets(TextureCube tex, SamplerState s, float3 direction, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float cubeArrayOffsets(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeArrayOffsets(TextureCubeArray tex, SamplerState s, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
@@ -8719,6 +10755,154 @@ def test_directx_array_shadow_texture_resource_arrays_reject_mismatched_fixed_he
         match="Conflicting fixed resource array sizes for 'shadowArrays': 4 and 3",
     ):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_image_size_helper_descriptor_for_storage_images():
+    codegen = HLSLCodeGen()
+
+    assert codegen.image_size_helper_descriptor("RWTexture1D<float4>") == {
+        "return_type": "int",
+        "dimensions": ("width",),
+        "return_expr": "int(width)",
+    }
+    assert codegen.image_size_helper_descriptor("RWTexture2DArray<int>") == {
+        "return_type": "int3",
+        "dimensions": ("width", "height", "elements"),
+        "return_expr": "int3(width, height, elements)",
+    }
+    assert codegen.image_size_helper_descriptor("RWTexture3D<uint>") == {
+        "return_type": "int3",
+        "dimensions": ("width", "height", "depth"),
+        "return_expr": "int3(width, height, depth)",
+    }
+    assert codegen.image_size_helper_descriptor("Texture2D") is None
+
+
+def test_directx_texture_query_helper_descriptors():
+    codegen = HLSLCodeGen()
+
+    assert codegen.texture_size_helper_descriptor("Texture1D") == {
+        "return_type": "int",
+        "function_params": "int lod",
+        "dimensions": ("width", "levels"),
+        "get_dimensions_args": ("lod", "width", "levels"),
+        "return_expr": "int(width)",
+    }
+    assert codegen.texture_size_helper_descriptor("Texture2DMSArray<float4>") == {
+        "return_type": "int3",
+        "function_params": "",
+        "dimensions": ("width", "height", "elements", "samples"),
+        "get_dimensions_args": ("width", "height", "elements", "samples"),
+        "return_expr": "int3(width, height, elements)",
+    }
+    assert codegen.texture_query_levels_helper_descriptor("Texture3D") == {
+        "return_type": "int",
+        "function_params": "",
+        "dimensions": ("width", "height", "depth", "levels"),
+        "get_dimensions_args": ("0", "width", "height", "depth", "levels"),
+        "return_expr": "int(levels)",
+    }
+    assert codegen.texture_query_levels_helper_descriptor("Texture2DMS<float4>") == {
+        "return_type": "int",
+        "function_params": "",
+        "dimensions": (),
+        "get_dimensions_args": (),
+        "return_expr": "1",
+    }
+    assert codegen.texture_samples_helper_descriptor("Texture2DMSArray<float4>") == {
+        "return_type": "int",
+        "function_params": "",
+        "dimensions": ("width", "height", "elements", "samples"),
+        "get_dimensions_args": ("width", "height", "elements", "samples"),
+        "return_expr": "int(samples)",
+    }
+    assert codegen.texture_samples_helper_descriptor("Texture2D") is None
+
+
+def test_directx_texture_query_resource_descriptors():
+    codegen = HLSLCodeGen()
+    codegen.texture_variable_types = {
+        "colorImage": "RWTexture2D<float4>",
+        "colorMap": "Texture2D",
+        "msTex": "Texture2DMS<float4>",
+        "msArray": "Texture2DMSArray<float4>",
+    }
+
+    assert codegen.texture_query_resource_descriptor("colorImage") == {
+        "texture_type": "RWTexture2D<float4>",
+        "storage_image": True,
+        "multisample": False,
+        "size_descriptor": {
+            "return_type": "int2",
+            "dimensions": ("width", "height"),
+            "return_expr": "int2(width, height)",
+        },
+        "levels_descriptor": None,
+        "samples_descriptor": None,
+    }
+    assert codegen.texture_query_resource_descriptor("msArray") == {
+        "texture_type": "Texture2DMSArray<float4>",
+        "storage_image": False,
+        "multisample": True,
+        "size_descriptor": {
+            "return_type": "int3",
+            "function_params": "",
+            "dimensions": ("width", "height", "elements", "samples"),
+            "get_dimensions_args": ("width", "height", "elements", "samples"),
+            "return_expr": "int3(width, height, elements)",
+        },
+        "levels_descriptor": {
+            "return_type": "int",
+            "function_params": "",
+            "dimensions": (),
+            "get_dimensions_args": (),
+            "return_expr": "1",
+        },
+        "samples_descriptor": {
+            "return_type": "int",
+            "function_params": "",
+            "dimensions": ("width", "height", "elements", "samples"),
+            "get_dimensions_args": ("width", "height", "elements", "samples"),
+            "return_expr": "int(samples)",
+        },
+    }
+    assert (
+        codegen.texture_query_size_expression("colorImage") == "imageSize(colorImage)"
+    )
+    assert codegen.texture_query_size_expression("msTex") == "textureSize(msTex)"
+    assert (
+        codegen.texture_query_size_expression("colorMap") == "textureSize(colorMap, 0)"
+    )
+    assert (
+        codegen.texture_query_levels_expression("colorImage")
+        == "/* unsupported DirectX texture query: textureQueryLevels on RWTexture2D<float4> */ 0"
+    )
+    assert (
+        codegen.texture_query_levels_expression("colorMap")
+        == "textureQueryLevels(colorMap)"
+    )
+    assert (
+        codegen.texture_samples_expression("colorMap")
+        == "/* unsupported DirectX texture samples query: requires multisample texture */ 0"
+    )
+    assert codegen.texture_samples_expression("msArray") == "textureSamples(msArray)"
+    assert (
+        "imageSize",
+        "RWTexture2D<float4>",
+    ) in codegen.required_texture_query_helpers
+    assert ("textureSize", "Texture2D") in codegen.required_texture_query_helpers
+    assert (
+        "textureSize",
+        "Texture2DMS<float4>",
+    ) in codegen.required_texture_query_helpers
+    assert (
+        "textureQueryLevels",
+        "Texture2D",
+    ) in codegen.required_texture_query_helpers
+    assert (
+        "textureSamples",
+        "Texture2DMSArray<float4>",
+    ) in codegen.required_texture_query_helpers
 
 
 def test_directx_storage_image_size_queries_use_get_dimensions_helpers():
@@ -9580,6 +11764,204 @@ def test_directx_multisample_texture_query_lod_emits_diagnostics_without_sampler
     )
 
 
+def test_directx_multisample_compare_operations_emit_diagnostics():
+    shader = """
+    shader UnsupportedMultisampleCompare {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD2;
+            vec2 ddy @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float cmp = textureCompare(msTex, sharedSampler, input.uv, input.depth)
+                    + textureCompareOffset(msTex, sharedSampler, input.uv, input.depth, input.offset)
+                    + textureCompareLod(msTex, sharedSampler, input.uv, input.depth, input.lod)
+                    + textureCompareLodOffset(msTex, sharedSampler, input.uv, input.depth, input.lod, input.offset)
+                    + textureCompareGrad(msTex, sharedSampler, input.uv, input.depth, input.ddx, input.ddy)
+                    + textureCompareGradOffset(msTex, sharedSampler, input.uv, input.depth, input.ddx, input.ddy, input.offset);
+                vec4 gathered = textureGatherCompare(msArray, sharedSampler, input.uvLayer, input.depth)
+                    + textureGatherCompareOffset(msArray, sharedSampler, input.uvLayer, input.depth, input.offset);
+                return gathered + vec4(cmp);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
+    assert "Texture2DMSArray<float4> msArray : register(t1);" in generated_code
+    assert "SamplerState sharedSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState sharedSampler" not in generated_code
+    for func_name in {
+        "textureCompare",
+        "textureCompareOffset",
+        "textureCompareLod",
+        "textureCompareLodOffset",
+        "textureCompareGrad",
+        "textureCompareGradOffset",
+    }:
+        assert (
+            f"unsupported DirectX multisample texture comparison: {func_name} on Texture2DMS<float4>"
+            in generated_code
+        )
+    for func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
+        assert (
+            f"unsupported DirectX multisample texture gather comparison: {func_name} on Texture2DMSArray<float4>"
+            in generated_code
+        )
+    assert "SampleCmp" not in generated_code
+    assert "GatherCmp" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+
+
+def test_directx_multisample_diagnostics_do_not_create_sampler_role_conflicts():
+    regular_diagnostic_shader = """
+    shader MultisampleSamplerRoleConflict {
+        sampler2DMS msTex;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+            vec2 ddx @ TEXCOORD1;
+            vec2 ddy @ TEXCOORD2;
+        };
+
+        float inspect(sampler s, vec2 uv, float depth, vec2 ddx, vec2 ddy) {
+            vec4 bad = textureGrad(msTex, s, uv, ddx, ddy);
+            float ok = textureCompare(shadowMap, s, uv, depth);
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(sharedSampler, input.uv, input.depth, input.ddx, input.ddy);
+            }
+        }
+    }
+    """
+    compare_diagnostic_shader = """
+    shader MultisampleCompareSamplerRoleConflict {
+        sampler2DMS msTex;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float bad = textureCompare(msTex, sharedSampler, input.uv, input.depth);
+                vec4 ok = texture(colorMap, sharedSampler, input.uv);
+                return ok + vec4(bad);
+            }
+        }
+    }
+    """
+    struct_diagnostic_shader = """
+    shader MultisampleStructSamplerRoleConflict {
+        sampler2DMS msTex;
+        sampler2DShadow shadowMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+            int index;
+        };
+
+        float inspect(SamplerPack pack, FSInput input) {
+            vec4 bad = texture(msTex, pack.samplers[input.index], input.uv);
+            float ok = textureCompare(
+                shadowMap,
+                pack.samplers[input.index],
+                input.uv,
+                input.depth
+            );
+            return ok + bad.x;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                SamplerPack pack;
+                return inspect(pack, input);
+            }
+        }
+    }
+    """
+
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    compare_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(compare_diagnostic_shader), "fragment"
+    )
+    struct_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(struct_diagnostic_shader), "fragment"
+    )
+
+    regular_diagnostic = (
+        "/* unsupported DirectX multisample texture call: "
+        "textureGrad on Texture2DMS<float4> */ float4(0.0)"
+    )
+    compare_diagnostic = (
+        "/* unsupported DirectX multisample texture comparison: "
+        "textureCompare on Texture2DMS<float4> */ 0.0"
+    )
+    sample_diagnostic = (
+        "/* unsupported DirectX multisample texture call: "
+        "texture on Texture2DMS<float4> */ float4(0.0)"
+    )
+
+    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
+    assert (
+        "float inspect(SamplerComparisonState s, float2 uv, float depth, float2 ddx, float2 ddy)"
+        in regular_code
+    )
+    assert regular_diagnostic in regular_code
+    assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in regular_code
+    assert (
+        "return inspect(sharedSampler, input.uv, input.depth, input.ddx, input.ddy);"
+        in regular_code
+    )
+
+    assert "SamplerState sharedSampler : register(s0);" in compare_code
+    assert "SamplerComparisonState sharedSampler" not in compare_code
+    assert compare_diagnostic in compare_code
+    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in compare_code
+    assert "SampleCmp(sharedSampler" not in compare_code
+
+    assert "SamplerComparisonState samplers[2];" in struct_code
+    assert "SamplerState samplers[2];" not in struct_code
+    assert sample_diagnostic in struct_code
+    assert (
+        "float ok = shadowMap.SampleCmp(pack.samplers[input.index], input.uv, input.depth);"
+        in struct_code
+    )
+    assert ".Sample(pack.samplers" not in struct_code
+
+
 def test_directx_multisample_texel_fetch_offsets_emit_diagnostics():
     shader = """
     shader UnsupportedMultisampleTexelFetchOffset {
@@ -9899,6 +12281,116 @@ def test_directx_mixed_explicit_and_implicit_texture_sampling_keeps_synthetic_sa
     assert "colorMap.Sample(colorMapSampler, uv)" in generated_code
 
 
+def test_directx_rejects_global_sampler_used_for_regular_and_shadow_compare():
+    shader = """
+    shader MixedSamplerUse {
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 color = texture(colorMap, sharedSampler, input.uv);
+                float shadow = textureCompare(
+                    shadowMap,
+                    sharedSampler,
+                    input.uv,
+                    input.depth
+                );
+                return color * shadow;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX sampler\\(s\\) used for both regular sampling and "
+            "shadow comparison: sharedSampler"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_rejects_sampler_parameter_used_for_regular_and_shadow_compare():
+    shader = """
+    shader MixedSamplerParameter {
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        vec4 shade(sampler sampleState, FSInput input) {
+            vec4 color = texture(colorMap, sampleState, input.uv);
+            float shadow = textureCompare(
+                shadowMap,
+                sampleState,
+                input.uv,
+                input.depth
+            );
+            return color * shadow;
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX sampler\\(s\\) used for both regular sampling and "
+            "shadow comparison: shade.sampleState"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_rejects_struct_sampler_member_used_for_regular_and_shadow_compare():
+    shader = """
+    shader MixedStructSamplerUse {
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+            int index;
+        };
+
+        vec4 shade(SamplerPack pack, FSInput input) {
+            vec4 color = texture(colorMap, pack.samplers[input.index], input.uv);
+            float shadow = textureCompare(
+                shadowMap,
+                pack.samplers[input.index],
+                input.uv,
+                input.depth
+            );
+            return color * shadow;
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX sampler\\(s\\) used for both regular sampling and "
+            "shadow comparison: SamplerPack.samplers"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_directx_array_texture_query_lod_uses_non_layer_coordinates():
     shader = """
     shader ArrayTextureQueryLod {
@@ -10137,6 +12629,249 @@ def test_directx_implicit_array_texture_query_lod_synthesizes_regular_samplers()
     )
 
 
+def test_directx_nested_array_texture_query_lod_threads_resource_arrays():
+    shader = """
+    shader NestedArrayTextureQueryLod {
+        sampler2DArray layerMaps[4];
+        samplerCubeArray cubeArrays[4];
+        sampler linearSamplers[4];
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+        };
+
+        vec2 explicitLeaf(sampler2DArray layerMaps[], sampler linearSamplers[], vec3 uvLayer) {
+            return textureQueryLod(layerMaps[2], linearSamplers[2], uvLayer);
+        }
+
+        vec2 explicitMid(sampler2DArray layerMaps[], sampler linearSamplers[], vec3 uvLayer) {
+            return explicitLeaf(layerMaps, linearSamplers, uvLayer);
+        }
+
+        vec2 implicitLeaf(samplerCubeArray cubeArrays[], vec4 cubeLayer) {
+            return textureQueryLod(cubeArrays[3], cubeLayer);
+        }
+
+        vec2 implicitMid(samplerCubeArray cubeArrays[], vec4 cubeLayer) {
+            return implicitLeaf(cubeArrays, cubeLayer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 a = explicitMid(layerMaps, linearSamplers, input.uvLayer);
+                vec2 b = implicitMid(cubeArrays, input.cubeLayer);
+                return vec4(a.x, a.y, b.x, b.y);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DArray layerMaps[4] : register(t0);" in generated_code
+    assert "TextureCubeArray cubeArrays[4] : register(t4);" in generated_code
+    assert "SamplerState cubeArraysSampler : register(s0);" in generated_code
+    assert "SamplerState linearSamplers[4] : register(s1);" in generated_code
+    assert (
+        "float2 explicitLeaf(Texture2DArray layerMaps[4], SamplerState linearSamplers[4], float3 uvLayer)"
+        in generated_code
+    )
+    assert (
+        "float2 explicitMid(Texture2DArray layerMaps[4], SamplerState linearSamplers[4], float3 uvLayer)"
+        in generated_code
+    )
+    assert "return explicitLeaf(layerMaps, linearSamplers, uvLayer);" in generated_code
+    assert (
+        "layerMaps[2].CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer.xy)"
+        in generated_code
+    )
+    assert (
+        "layerMaps[2].CalculateLevelOfDetail(linearSamplers[2], uvLayer.xy)"
+        in generated_code
+    )
+    assert (
+        "float2 implicitLeaf(TextureCubeArray cubeArrays[4], SamplerState cubeArraysSampler, float4 cubeLayer)"
+        in generated_code
+    )
+    assert (
+        "float2 implicitMid(TextureCubeArray cubeArrays[4], SamplerState cubeArraysSampler, float4 cubeLayer)"
+        in generated_code
+    )
+    assert (
+        "return implicitLeaf(cubeArrays, cubeArraysSampler, cubeLayer);"
+        in generated_code
+    )
+    assert (
+        "cubeArrays[3].CalculateLevelOfDetailUnclamped(cubeArraysSampler, cubeLayer.xyz)"
+        in generated_code
+    )
+    assert (
+        "cubeArrays[3].CalculateLevelOfDetail(cubeArraysSampler, cubeLayer.xyz)"
+        in generated_code
+    )
+    assert (
+        "float2 a = explicitMid(layerMaps, linearSamplers, input.uvLayer);"
+        in generated_code
+    )
+    assert (
+        "float2 b = implicitMid(cubeArrays, cubeArraysSampler, input.cubeLayer);"
+        in generated_code
+    )
+    assert (
+        "CalculateLevelOfDetailUnclamped(linearSamplers[2], uvLayer)"
+        not in generated_code
+    )
+    assert (
+        "CalculateLevelOfDetailUnclamped(cubeArraysSampler, cubeLayer)"
+        not in generated_code
+    )
+    assert "textureQueryLod(" not in generated_code
+
+
+def test_directx_nested_shadow_array_query_lod_and_compare_split_samplers():
+    shader = """
+    shader NestedShadowArrayQueryCompare {
+        sampler2DArrayShadow shadowArrays[4];
+        samplerCubeArrayShadow cubeShadowArrays[4];
+
+        struct FSInput {
+            vec3 uvLayer @ TEXCOORD0;
+            vec4 cubeLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            vec2 ddxLayer @ TEXCOORD2;
+            vec2 ddyLayer @ TEXCOORD3;
+            vec3 ddxCube @ TEXCOORD4;
+            vec3 ddyCube @ TEXCOORD5;
+        };
+
+        float layerLeaf(sampler2DArrayShadow shadowArrays[], vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy) {
+            vec2 query = textureQueryLod(shadowArrays[2], uvLayer);
+            float cmp = textureCompare(shadowArrays[2], uvLayer, depth);
+            float cmpLod = textureCompareLod(shadowArrays[1], uvLayer, depth, lod);
+            float cmpGrad = textureCompareGrad(shadowArrays[3], uvLayer, depth, ddx, ddy);
+            return query.x + cmp + cmpLod + cmpGrad;
+        }
+
+        float layerMid(sampler2DArrayShadow shadowArrays[], vec3 uvLayer, float depth, float lod, vec2 ddx, vec2 ddy) {
+            return layerLeaf(shadowArrays, uvLayer, depth, lod, ddx, ddy);
+        }
+
+        float cubeLeaf(samplerCubeArrayShadow cubeShadowArrays[], vec4 cubeLayer, float depth, float lod, vec3 ddx, vec3 ddy) {
+            vec2 query = textureQueryLod(cubeShadowArrays[2], cubeLayer);
+            float cmp = textureCompare(cubeShadowArrays[2], cubeLayer, depth);
+            float cmpLod = textureCompareLod(cubeShadowArrays[1], cubeLayer, depth, lod);
+            float cmpGrad = textureCompareGrad(cubeShadowArrays[3], cubeLayer, depth, ddx, ddy);
+            return query.y + cmp + cmpLod + cmpGrad;
+        }
+
+        float cubeMid(samplerCubeArrayShadow cubeShadowArrays[], vec4 cubeLayer, float depth, float lod, vec3 ddx, vec3 ddy) {
+            return cubeLeaf(cubeShadowArrays, cubeLayer, depth, lod, ddx, ddy);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return layerMid(shadowArrays, input.uvLayer, input.depth, input.lod, input.ddxLayer, input.ddyLayer)
+                    + cubeMid(cubeShadowArrays, input.cubeLayer, input.depth, input.lod, input.ddxCube, input.ddyCube);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DArray shadowArrays[4] : register(t0);" in generated_code
+    assert (
+        "SamplerComparisonState shadowArraysSampler : register(s0);" in generated_code
+    )
+    assert "SamplerState shadowArraysQuerySampler : register(s1);" in generated_code
+    assert "TextureCubeArray cubeShadowArrays[4] : register(t4);" in generated_code
+    assert (
+        "SamplerComparisonState cubeShadowArraysSampler : register(s2);"
+        in generated_code
+    )
+    assert "SamplerState cubeShadowArraysQuerySampler : register(s3);" in generated_code
+    assert (
+        "float layerLeaf(Texture2DArray shadowArrays[4], SamplerComparisonState shadowArraysSampler, SamplerState shadowArraysQuerySampler, float3 uvLayer, float depth, float lod, float2 ddx, float2 ddy)"
+        in generated_code
+    )
+    assert (
+        "float2 query = float2(shadowArrays[2].CalculateLevelOfDetailUnclamped(shadowArraysQuerySampler, uvLayer.xy), shadowArrays[2].CalculateLevelOfDetail(shadowArraysQuerySampler, uvLayer.xy));"
+        in generated_code
+    )
+    assert (
+        "float cmp = shadowArrays[2].SampleCmp(shadowArraysSampler, uvLayer, depth);"
+        in generated_code
+    )
+    assert (
+        "float cmpLod = shadowArrays[1].SampleCmpLevel(shadowArraysSampler, uvLayer, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float cmpGrad = shadowArrays[3].SampleCmpGrad(shadowArraysSampler, uvLayer, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float layerMid(Texture2DArray shadowArrays[4], SamplerComparisonState shadowArraysSampler, SamplerState shadowArraysQuerySampler, float3 uvLayer, float depth, float lod, float2 ddx, float2 ddy)"
+        in generated_code
+    )
+    assert (
+        "return layerLeaf(shadowArrays, shadowArraysSampler, shadowArraysQuerySampler, uvLayer, depth, lod, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float cubeLeaf(TextureCubeArray cubeShadowArrays[4], SamplerComparisonState cubeShadowArraysSampler, SamplerState cubeShadowArraysQuerySampler, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert (
+        "float2 query = float2(cubeShadowArrays[2].CalculateLevelOfDetailUnclamped(cubeShadowArraysQuerySampler, cubeLayer.xyz), cubeShadowArrays[2].CalculateLevelOfDetail(cubeShadowArraysQuerySampler, cubeLayer.xyz));"
+        in generated_code
+    )
+    assert (
+        "float cmp = cubeShadowArrays[2].SampleCmp(cubeShadowArraysSampler, cubeLayer, depth);"
+        in generated_code
+    )
+    assert (
+        "float cmpLod = cubeShadowArrays[1].SampleCmpLevel(cubeShadowArraysSampler, cubeLayer, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float cmpGrad = cubeShadowArrays[3].SampleCmpGrad(cubeShadowArraysSampler, cubeLayer, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "float cubeMid(TextureCubeArray cubeShadowArrays[4], SamplerComparisonState cubeShadowArraysSampler, SamplerState cubeShadowArraysQuerySampler, float4 cubeLayer, float depth, float lod, float3 ddx, float3 ddy)"
+        in generated_code
+    )
+    assert (
+        "return cubeLeaf(cubeShadowArrays, cubeShadowArraysSampler, cubeShadowArraysQuerySampler, cubeLayer, depth, lod, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "layerMid(shadowArrays, shadowArraysSampler, shadowArraysQuerySampler, input.uvLayer, input.depth, input.lod, input.ddxLayer, input.ddyLayer)"
+        in generated_code
+    )
+    assert (
+        "cubeMid(cubeShadowArrays, cubeShadowArraysSampler, cubeShadowArraysQuerySampler, input.cubeLayer, input.depth, input.lod, input.ddxCube, input.ddyCube)"
+        in generated_code
+    )
+    assert "CalculateLevelOfDetailUnclamped(shadowArraysSampler" not in generated_code
+    assert (
+        "CalculateLevelOfDetailUnclamped(cubeShadowArraysSampler" not in generated_code
+    )
+    assert "SampleCmp(shadowArraysQuerySampler" not in generated_code
+    assert "SampleCmp(cubeShadowArraysQuerySampler" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGrad(" not in generated_code
+
+
 def test_directx_implicit_texture_query_lod_parameter_threads_regular_sampler():
     shader = """
     shader ImplicitQueryLodParameter {
@@ -10175,6 +12910,432 @@ def test_directx_implicit_texture_query_lod_parameter_threads_regular_sampler():
     assert "tex.CalculateLevelOfDetail(texSampler, cubeLayer.xyz)" in generated_code
     assert (
         "queryCubeShadow(cubeShadowArray, cubeShadowArraySampler, input.cubeLayer)"
+        in generated_code
+    )
+
+
+def test_directx_mixed_implicit_shadow_regular_sample_and_compare_split_samplers():
+    shader = """
+    shader MixedImplicitShadowSampler {
+        sampler2DShadow shadowMap;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 raw = texture(shadowMap, input.uv);
+                float shadow = textureCompare(shadowMap, input.uv, input.depth);
+                return raw * shadow;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMap : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapRegularSampler : register(s1);" in generated_code
+    assert (
+        "float4 raw = shadowMap.Sample(shadowMapRegularSampler, input.uv);"
+        in generated_code
+    )
+    assert (
+        "float shadow = shadowMap.SampleCmp(shadowMapSampler, input.uv, input.depth);"
+        in generated_code
+    )
+
+
+def test_directx_mixed_implicit_shadow_parameter_regular_sample_and_compare_threads_split_samplers():
+    shader = """
+    shader MixedImplicitShadowSamplerParameter {
+        sampler2DShadow shadowMap;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        vec4 inspect(sampler2DShadow tex, vec2 uv, float depth) {
+            vec4 raw = texture(tex, uv);
+            float shadow = textureCompare(tex, uv, depth);
+            return raw * shadow;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return inspect(shadowMap, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapRegularSampler : register(s1);" in generated_code
+    assert (
+        "float4 inspect(Texture2D tex, SamplerComparisonState texSampler, SamplerState texRegularSampler, float2 uv, float depth)"
+        in generated_code
+    )
+    assert "float4 raw = tex.Sample(texRegularSampler, uv);" in generated_code
+    assert "float shadow = tex.SampleCmp(texSampler, uv, depth);" in generated_code
+    assert (
+        "inspect(shadowMap, shadowMapSampler, shadowMapRegularSampler, input.uv, input.depth)"
+        in generated_code
+    )
+
+
+def test_directx_declared_implicit_shadow_sampler_name_is_comparison_sampler():
+    shader = """
+    shader DeclaredImplicitShadowSamplerName {
+        sampler2DShadow shadowMap;
+        sampler shadowMapSampler;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return textureCompare(shadowMap, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMap : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapSampler" not in generated_code
+    assert (
+        "return shadowMap.SampleCmp(shadowMapSampler, input.uv, input.depth);"
+        in generated_code
+    )
+
+
+def test_directx_declared_implicit_shadow_sampler_names_split_mixed_regular_and_compare():
+    shader = """
+    shader DeclaredImplicitMixedShadowSamplerNames {
+        sampler2DShadow shadowMap;
+        sampler shadowMapSampler;
+        sampler shadowMapRegularSampler;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 raw = texture(shadowMap, input.uv);
+                float shadow = textureCompare(shadowMap, input.uv, input.depth);
+                return raw * shadow;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapRegularSampler : register(s1);" in generated_code
+    assert generated_code.count("shadowMapSampler : register") == 1
+    assert generated_code.count("shadowMapRegularSampler : register") == 1
+    assert (
+        "float4 raw = shadowMap.Sample(shadowMapRegularSampler, input.uv);"
+        in generated_code
+    )
+    assert (
+        "float shadow = shadowMap.SampleCmp(shadowMapSampler, input.uv, input.depth);"
+        in generated_code
+    )
+
+
+def test_directx_existing_implicit_sampler_parameter_is_not_inserted_twice():
+    shader = """
+    shader ExistingImplicitSamplerParameter {
+        sampler2D colorMap;
+        sampler colorMapSampler;
+
+        struct FSInput {
+            vec2 uv;
+        };
+
+        vec4 inspect(sampler2D tex, sampler texSampler, vec2 uv) {
+            return texture(tex, uv);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return inspect(colorMap, colorMapSampler, input.uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerState colorMapSampler : register(s0);" in generated_code
+    assert (
+        "float4 inspect(Texture2D tex, SamplerState texSampler, float2 uv)"
+        in generated_code
+    )
+    assert "return tex.Sample(texSampler, uv);" in generated_code
+    assert "return inspect(colorMap, colorMapSampler, input.uv);" in generated_code
+    assert "inspect(colorMap, colorMapSampler, colorMapSampler" not in generated_code
+
+
+def test_directx_existing_implicit_comparison_sampler_parameter_is_not_inserted_twice():
+    shader = """
+    shader ExistingImplicitComparisonSamplerParameter {
+        sampler2DShadow shadowMap;
+        sampler shadowMapSampler;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        float inspect(sampler2DShadow tex, sampler texSampler, vec2 uv, float depth) {
+            return textureCompare(tex, uv, depth);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(shadowMap, shadowMapSampler, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerComparisonState shadowMapSampler : register(s0);" in generated_code
+    assert (
+        "float inspect(Texture2D tex, SamplerComparisonState texSampler, float2 uv, float depth)"
+        in generated_code
+    )
+    assert "return tex.SampleCmp(texSampler, uv, depth);" in generated_code
+    assert (
+        "return inspect(shadowMap, shadowMapSampler, input.uv, input.depth);"
+        in generated_code
+    )
+    assert "inspect(shadowMap, shadowMapSampler, shadowMapSampler" not in generated_code
+
+
+def test_directx_declared_implicit_shadow_array_sampler_name_is_comparison_sampler():
+    shader = """
+    shader DeclaredImplicitShadowArraySamplerName {
+        sampler2DShadow shadowMaps[4];
+        sampler shadowMapsSampler;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+            int layer;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return textureCompare(shadowMaps[input.layer], input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMaps[4] : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapsSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapsSampler" not in generated_code
+    assert generated_code.count("shadowMapsSampler : register") == 1
+    assert (
+        "return shadowMaps[input.layer].SampleCmp(shadowMapsSampler, input.uv, input.depth);"
+        in generated_code
+    )
+    assert "shadowMaps[input.layer]Sampler" not in generated_code
+
+
+def test_directx_existing_implicit_shadow_array_sampler_parameter_is_not_inserted_twice():
+    shader = """
+    shader ExistingImplicitShadowArraySamplerParameter {
+        sampler2DShadow shadowMaps[4];
+        sampler shadowMapsSampler;
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+            int layer;
+        };
+
+        float inspect(sampler2DShadow maps[4], sampler mapsSampler, int layer, vec2 uv, float depth) {
+            return textureCompare(maps[layer], uv, depth);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(shadowMaps, shadowMapsSampler, input.layer, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerComparisonState shadowMapsSampler : register(s0);" in generated_code
+    assert (
+        "float inspect(Texture2D maps[4], SamplerComparisonState mapsSampler, int layer, float2 uv, float depth)"
+        in generated_code
+    )
+    assert "return maps[layer].SampleCmp(mapsSampler, uv, depth);" in generated_code
+    assert (
+        "return inspect(shadowMaps, shadowMapsSampler, input.layer, input.uv, input.depth);"
+        in generated_code
+    )
+    assert (
+        "inspect(shadowMaps, shadowMapsSampler, shadowMapsSampler" not in generated_code
+    )
+
+
+def test_directx_unsized_implicit_shadow_array_helper_threads_synthetic_sampler_once():
+    shader = """
+    shader ImplicitUnsizedShadowArrayHelper {
+        sampler2DShadow shadowMaps[];
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        float inspect(sampler2DShadow maps[], vec2 uv, float depth) {
+            return textureCompare(maps[3], uv, depth);
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return inspect(shadowMaps, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMaps[4] : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapsSampler : register(s0);" in generated_code
+    assert (
+        "float inspect(Texture2D maps[4], SamplerComparisonState mapsSampler, float2 uv, float depth)"
+        in generated_code
+    )
+    assert "return maps[3].SampleCmp(mapsSampler, uv, depth);" in generated_code
+    assert (
+        "return inspect(shadowMaps, shadowMapsSampler, input.uv, input.depth);"
+        in generated_code
+    )
+    assert (
+        "inspect(shadowMaps, shadowMapsSampler, shadowMapsSampler" not in generated_code
+    )
+
+
+def test_directx_mixed_unsized_implicit_shadow_array_helper_splits_regular_and_compare_samplers():
+    shader = """
+    shader MixedImplicitUnsizedShadowArrayHelper {
+        sampler2DShadow shadowMaps[];
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+            int layer;
+        };
+
+        vec4 inspect(sampler2DShadow maps[], int layer, vec2 uv, float depth) {
+            vec4 raw = texture(maps[layer], uv);
+            float shadow = textureCompare(maps[3], uv, depth);
+            return raw * shadow;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return inspect(shadowMaps, input.layer, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D shadowMaps[4] : register(t0);" in generated_code
+    assert "SamplerComparisonState shadowMapsSampler : register(s0);" in generated_code
+    assert "SamplerState shadowMapsRegularSampler : register(s1);" in generated_code
+    assert (
+        "float4 inspect(Texture2D maps[4], SamplerComparisonState mapsSampler, SamplerState mapsRegularSampler, int layer, float2 uv, float depth)"
+        in generated_code
+    )
+    assert "float4 raw = maps[layer].Sample(mapsRegularSampler, uv);" in generated_code
+    assert "float shadow = maps[3].SampleCmp(mapsSampler, uv, depth);" in generated_code
+    assert (
+        "return inspect(shadowMaps, shadowMapsSampler, shadowMapsRegularSampler, input.layer, input.uv, input.depth);"
+        in generated_code
+    )
+
+
+def test_directx_mixed_implicit_cube_shadow_regular_sample_and_compare_split_samplers():
+    shader = """
+    shader MixedImplicitCubeShadowSampler {
+        samplerCubeShadow cubeShadow;
+        samplerCubeArrayShadow cubeArrayShadow;
+
+        struct FSInput {
+            vec3 direction;
+            vec4 cubeLayer;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 rawCube = texture(cubeShadow, input.direction);
+                float cmpCube = textureCompare(cubeShadow, input.direction, input.depth);
+                vec4 rawArray = texture(cubeArrayShadow, input.cubeLayer);
+                float cmpArray = textureCompare(cubeArrayShadow, input.cubeLayer, input.depth);
+                return rawCube * cmpCube + rawArray * cmpArray;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "TextureCube cubeShadow : register(t0);" in generated_code
+    assert "SamplerComparisonState cubeShadowSampler : register(s0);" in generated_code
+    assert "SamplerState cubeShadowRegularSampler : register(s1);" in generated_code
+    assert "TextureCubeArray cubeArrayShadow : register(t1);" in generated_code
+    assert (
+        "SamplerComparisonState cubeArrayShadowSampler : register(s2);"
+        in generated_code
+    )
+    assert (
+        "SamplerState cubeArrayShadowRegularSampler : register(s3);" in generated_code
+    )
+    assert (
+        "float4 rawCube = cubeShadow.Sample(cubeShadowRegularSampler, input.direction);"
+        in generated_code
+    )
+    assert (
+        "float cmpCube = cubeShadow.SampleCmp(cubeShadowSampler, input.direction, input.depth);"
+        in generated_code
+    )
+    assert (
+        "float4 rawArray = cubeArrayShadow.Sample(cubeArrayShadowRegularSampler, input.cubeLayer);"
+        in generated_code
+    )
+    assert (
+        "float cmpArray = cubeArrayShadow.SampleCmp(cubeArrayShadowSampler, input.cubeLayer, input.depth);"
         in generated_code
     )
 
@@ -10573,6 +13734,124 @@ def test_directx_texture_and_sampler_parameters():
     assert "tex.Sample(sampleState, uv)" in generated_code
     assert "sampleColor(colorMap, linearSampler, input.uv)" in generated_code
     assert "colorMapSampler" not in generated_code
+
+
+def test_directx_struct_member_sampler_expression_is_explicit_sampler():
+    shader = """
+    shader StructSamplerExpression {
+        sampler2D colorMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        vec4 samplePacked(sampler2D tex, SamplerPack pack, int index, vec2 uv) {
+            return texture(tex, pack.samplers[index], uv);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                SamplerPack pack;
+                return samplePacked(colorMap, pack, 0, vec2(0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct SamplerPack" in generated_code
+    assert "SamplerState samplers[2];" in generated_code
+    assert (
+        "float4 samplePacked(Texture2D tex, SamplerPack pack, int index, float2 uv)"
+        in generated_code
+    )
+    assert "return tex.Sample(pack.samplers[index], uv);" in generated_code
+    assert "return samplePacked(colorMap, pack, 0, float2(0.5));" in generated_code
+    assert "texSampler" not in generated_code
+    assert "SampleBias(tex" not in generated_code
+
+
+def test_directx_struct_member_sampler_expression_used_for_compare_is_comparison_sampler():
+    shader = """
+    shader StructCompareSamplerExpression {
+        sampler2DShadow shadowMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        float samplePacked(sampler2DShadow tex, SamplerPack pack, int index, vec2 uv, float depth) {
+            return textureCompare(tex, pack.samplers[index], uv, depth);
+        }
+
+        fragment {
+            float main() @ gl_FragDepth {
+                SamplerPack pack;
+                return samplePacked(shadowMap, pack, 0, vec2(0.5), 0.5);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct SamplerPack" in generated_code
+    assert "SamplerComparisonState samplers[2];" in generated_code
+    assert "SamplerState samplers[2];" not in generated_code
+    assert (
+        "float samplePacked(Texture2D tex, SamplerPack pack, int index, float2 uv, float depth)"
+        in generated_code
+    )
+    assert "return tex.SampleCmp(pack.samplers[index], uv, depth);" in generated_code
+    assert (
+        "return samplePacked(shadowMap, pack, 0, float2(0.5), 0.5);" in generated_code
+    )
+    assert "texSampler" not in generated_code
+
+
+def test_directx_struct_member_sampler_forwarded_to_compare_helper_is_comparison_sampler():
+    shader = """
+    shader StructCompareSamplerForwarded {
+        sampler2DShadow shadowMap;
+
+        struct SamplerPack {
+            sampler samplers[2];
+        };
+
+        float compareWithSampler(
+            sampler2DShadow tex,
+            sampler compareSampler,
+            vec2 uv,
+            float depth
+        ) {
+            return textureCompare(tex, compareSampler, uv, depth);
+        }
+
+        float samplePacked(SamplerPack pack, int index, vec2 uv, float depth) {
+            return compareWithSampler(
+                shadowMap,
+                pack.samplers[index],
+                uv,
+                depth
+            );
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerComparisonState samplers[2];" in generated_code
+    assert "SamplerState samplers[2];" not in generated_code
+    assert (
+        "float compareWithSampler(Texture2D tex, SamplerComparisonState compareSampler, float2 uv, float depth)"
+        in generated_code
+    )
+    assert "return tex.SampleCmp(compareSampler, uv, depth);" in generated_code
+    assert (
+        "return compareWithSampler(shadowMap, pack.samplers[index], uv, depth);"
+        in generated_code
+    )
 
 
 def test_directx_texture_and_sampler_parameters_transitive():
@@ -11664,6 +14943,381 @@ def test_directx_shadow_compare_sampler_parameter_transitive():
     )
     assert "compareShadow(compareSampler, input.uv, input.depth)" in generated_code
     assert "sampleShadow(shadowSampler, input)" in generated_code
+
+
+def test_directx_sampler_1d_array_sampling_and_queries():
+    shader = """
+    shader OneDArrayTexture {
+        sampler1DArray lineArray;
+        sampler linearSampler;
+
+        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+            ivec2 dims = textureSize(tex, lod);
+            int levels = textureQueryLevels(tex);
+            return texture(tex, samp, uvLayer)
+                + textureLod(tex, samp, uvLayer, lod)
+                + vec4(dims.x, dims.y, levels, 0.0);
+        }
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "Texture1DArray lineArray : register(t0);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "int2 textureSize(Texture1DArray tex, int lod)" in generated_code
+    assert "tex.GetDimensions(lod, width, elements, levels);" in generated_code
+    assert "int textureQueryLevels(Texture1DArray tex)" in generated_code
+    assert (
+        "float4 sampleLineArray(Texture1DArray tex, SamplerState samp, float2 uvLayer, int lod)"
+        in generated_code
+    )
+    assert "tex.Sample(samp, uvLayer)" in generated_code
+    assert "tex.SampleLevel(samp, uvLayer, lod)" in generated_code
+
+
+def test_directx_image_1d_and_1d_array_storage_operations():
+    shader = """
+    shader OneDStorageImages {
+        image1D line;
+        image1DArray layers;
+        uimage1D counters @r32ui;
+        uimage1DArray layerCounters @r32ui;
+
+        float touchLine(image1D image, int x, float value) {
+            float oldValue = imageLoad(image, x);
+            imageStore(image, x, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchLayer(image1DArray image, ivec2 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        uint addCounter(uimage1D image @r32ui, int x, uint value) {
+            return imageAtomicAdd(image, x, value);
+        }
+
+        uint exchangeLayer(uimage1DArray image @r32ui, ivec2 coord, uint value) {
+            return imageAtomicExchange(image, coord, value);
+        }
+
+        compute {
+            void main() {
+                int sizeLine = imageSize(line);
+                ivec2 sizeLayer = imageSize(layers);
+                float a = touchLine(line, 1, 0.25);
+                vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
+                uint c = addCounter(counters, 4, 7u);
+                uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "RWTexture1D<float4> line : register(u0);" in generated_code
+    assert "RWTexture1DArray<float4> layers : register(u1);" in generated_code
+    assert "RWTexture1D<uint> counters : register(u2);" in generated_code
+    assert "RWTexture1DArray<uint> layerCounters : register(u3);" in generated_code
+    assert "int imageSize(RWTexture1D<float4> image)" in generated_code
+    assert "int2 imageSize(RWTexture1DArray<float4> image)" in generated_code
+    assert "float oldValue = image[x].x;" in generated_code
+    assert "image[x] = float4((oldValue + value));" in generated_code
+    assert "float4 oldValue = image[coord];" in generated_code
+    assert "image[coord] = (oldValue + value);" in generated_code
+    assert (
+        "uint imageAtomicAdd_uimage1D(RWTexture1D<uint> image, int coord, uint value)"
+        in generated_code
+    )
+    assert (
+        "uint imageAtomicExchange_uimage1DArray(RWTexture1DArray<uint> image, int2 coord, uint value)"
+        in generated_code
+    )
+
+
+def test_directx_uav_metadata_attributes_emit_coherency_and_register_space():
+    shader = """
+    shader UavMetadata {
+        uimage2D counters @r32ui @globallycoherent @register(u4, space2);
+        image2D outImage @register(u5, space2);
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert (
+        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
+        in generated_code
+    )
+    assert "RWTexture2D<float4> outImage : register(u5, space2);" in generated_code
+
+
+def test_directx_generic_image_memory_attributes_do_not_become_semantics():
+    shader = """
+    shader UavMemoryAttrs {
+        uimage2D counters @r32ui @coherent @register(u4, space2);
+
+        uint readCounter(uimage2D image @r32ui @coherent, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert (
+        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
+        in generated_code
+    )
+    assert "uint readCounter(RWTexture2D<uint> image, int2 pixel)" in generated_code
+    assert ": coherent" not in generated_code
+
+
+def test_directx_storage_image_access_attributes_validate_without_semantics():
+    shader = """
+    shader UavAccessAttrs {
+        image2D outImage @writeonly;
+
+        float readPixel(image2D image @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image @writeonly, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                imageStore(outImage, ivec2(0, 0), vec4(1.0));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "RWTexture2D<float4> outImage : register(u0);" in generated_code
+    assert "float readPixel(RWTexture2D<float4> image, int2 pixel)" in generated_code
+    assert (
+        "void writePixel(RWTexture2D<float4> image, int2 pixel, float4 value)"
+        in generated_code
+    )
+    assert ": readonly" not in generated_code
+    assert ": writeonly" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader UavAccessInvalidLoad {
+                float readPixel(image2D image @writeonly, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessInvalidStore {
+                void writePixel(image2D image @readonly, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires write-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessInvalidAtomic {
+                uint addCounter(uimage2D image @r32ui @readonly, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires read-write storage image access",
+        ),
+        (
+            """
+            shader UavAccessInvalidGlobal {
+                image2D outImage @writeonly;
+
+                compute {
+                    void main() {
+                        float value = imageLoad(outImage, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires read-capable storage image access",
+        ),
+    ],
+)
+def test_directx_storage_image_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(ast)
+
+
+def test_directx_storage_image_access_allows_compatible_helper_calls():
+    shader = """
+    shader UavAccessHelperValid {
+        image2D source @readonly;
+        image2D target @writeonly;
+
+        float readPixel(image2D image, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "float value = readPixel(source, int2(0, 0));" in generated_code
+    assert "writePixel(target, int2(0, 0), float4(value));" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader UavAccessHelperInvalidRead {
+                image2D target @writeonly;
+
+                float readPixel(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = readPixel(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'readPixel' requires read-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessHelperInvalidWrite {
+                image2D source @readonly;
+
+                void writePixel(image2D image, ivec2 pixel, vec4 value) {
+                    imageStore(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        writePixel(source, ivec2(0, 0), vec4(1.0));
+                    }
+                }
+            }
+            """,
+            "function call 'writePixel' requires write-capable storage image access",
+        ),
+        (
+            """
+            shader UavAccessHelperInvalidAtomic {
+                uimage2D source @r32ui @readonly;
+
+                uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                        uint value = addCounter(source, ivec2(0, 0), 1u);
+                    }
+                }
+            }
+            """,
+            "function call 'addCounter' requires read-write storage image access",
+        ),
+        (
+            """
+            shader UavAccessHelperInvalidTransitive {
+                image2D target @writeonly;
+
+                float leaf(image2D image, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                float mid(image2D image, ivec2 pixel) {
+                    return leaf(image, pixel);
+                }
+
+                compute {
+                    void main() {
+                        float value = mid(target, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "function call 'mid' requires read-capable storage image access",
+        ),
+    ],
+)
+def test_directx_storage_image_access_rejects_incompatible_helper_calls(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(ast)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,33 @@
 """Reverse code generator that emits CrossGL from Rust AST nodes."""
 
+import re
+
 from .RustAst import *
 from .RustParser import *
 from .RustLexer import *
 
+RUST_NUMERIC_LITERAL_RE = re.compile(
+    r"^(?P<body>"
+    r"0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|"
+    r"0[bB][01](?:_?[01])*|"
+    r"0[oO][0-7](?:_?[0-7])*|"
+    r"\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?"
+    r")(?P<suffix>(?:[iu](?:8|16|32|64|128|size))|f(?:32|64))?$"
+)
+RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
+RUST_BYTE_RAW_STRING_RE = re.compile(r'^br(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
+RUST_BYTE_STRING_RE = re.compile(r'^b"((?:[^"\\]|\\.)*)"$', re.DOTALL)
+RUST_BYTE_CHAR_RE = re.compile(r"^b'((?:[^'\\]|\\.)*)'$", re.DOTALL)
+
+TRANSPARENT_BLOCK_NODE_TYPES = (AsyncBlockNode, UnsafeBlockNode, ConstBlockNode)
+BLOCK_EXPRESSION_NODE_TYPES = (BlockNode,) + TRANSPARENT_BLOCK_NODE_TYPES
+
 
 class RustToCrossGLConverter:
+    """Serialize Rust backend AST nodes back into CrossGL source."""
+
     def __init__(self):
+        """Initialize Rust-to-CrossGL type and semantic mappings."""
         self.type_map = {
             # Rust primitive types to CrossGL
             "()": "void",
@@ -152,11 +173,35 @@ class RustToCrossGLConverter:
 
         self.indentation = 0
         self.code = []
+        self.type_aliases = {}
+        self.imported_type_aliases = {}
+        self.imported_module_aliases = {}
+        self.return_result_target = object()
+        self.labeled_control_counter = 0
+        self.switch_break_counter = 0
+        self.for_loop_index_counter = 0
+        self.for_loop_step_counter = 0
+        self.for_loop_bound_counter = 0
+        self.match_chain_counter = 0
+        self.match_subject_counter = 0
+        self.match_payload_counter = 0
+        self.match_or_counter = 0
+        self.match_tuple_counter = 0
+        self.match_array_counter = 0
+        self.matches_result_counter = 0
+        self.closure_param_counter = 0
+        self.try_subject_counter = 0
+        self.try_value_counter = 0
+        self.try_block_value_counter = 0
+        self.transparent_block_value_counter = 0
+        self.current_function_return_type = None
 
     def get_indent(self):
+        """Return whitespace for the current indentation level."""
         return "    " * self.indentation
 
     def visit(self, node):
+        """Dispatch a Rust AST node to a visitor method when available."""
         if isinstance(node, StructNode):
             return self.visit_StructNode(node)
         elif isinstance(node, FunctionNode):
@@ -181,10 +226,41 @@ class RustToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
+        """Generate complete CrossGL source from a parsed Rust AST."""
+        self.type_aliases = {}
+        self.imported_type_aliases = {}
+        self.imported_module_aliases = {}
+        self.labeled_control_counter = 0
+        self.switch_break_counter = 0
+        self.for_loop_index_counter = 0
+        self.for_loop_step_counter = 0
+        self.for_loop_bound_counter = 0
+        self.match_chain_counter = 0
+        self.match_subject_counter = 0
+        self.match_payload_counter = 0
+        self.match_or_counter = 0
+        self.match_tuple_counter = 0
+        self.match_array_counter = 0
+        self.matches_result_counter = 0
+        self.closure_param_counter = 0
+        self.try_subject_counter = 0
+        self.try_value_counter = 0
+        self.try_block_value_counter = 0
+        self.transparent_block_value_counter = 0
+        self.current_function_return_type = None
         code = "shader main {\n"
 
         for use_stmt in ast.use_statements:
+            self.register_use_alias(use_stmt)
             code += f"    // use {use_stmt.path}\n"
+
+        for alias in getattr(ast, "type_aliases", []):
+            self.register_type_alias(alias)
+
+        for alias in getattr(ast, "type_aliases", []):
+            alias_code = self.generate_type_alias(alias)
+            if alias_code:
+                code += alias_code
 
         for global_var in ast.global_variables:
             if isinstance(global_var, ConstNode):
@@ -215,7 +291,12 @@ class RustToCrossGLConverter:
             if shader_type:
                 code += f"    // {shader_type.title()} Shader\n"
                 code += f"    {shader_type} {{\n"
-                code += self.generate_function_body(func.body, indent=2)
+                previous_return_type = self.current_function_return_type
+                self.current_function_return_type = func.return_type
+                try:
+                    code += self.generate_function_body(func.body, indent=2)
+                finally:
+                    self.current_function_return_type = previous_return_type
                 code += "    }\n\n"
             else:
                 code += self.generate_function(func, indent=1)
@@ -230,7 +311,77 @@ class RustToCrossGLConverter:
         code += "}\n"
         return code
 
+    def is_block_expression_node(self, node):
+        return isinstance(node, BLOCK_EXPRESSION_NODE_TYPES)
+
+    def is_transparent_block_expression_node(self, node):
+        return isinstance(node, TRANSPARENT_BLOCK_NODE_TYPES)
+
+    def get_block_expression_node(self, node):
+        if isinstance(node, BlockNode):
+            return node
+        if self.is_transparent_block_expression_node(node):
+            return node.block
+        return None
+
+    def register_type_alias(self, alias):
+        if getattr(alias, "name", None):
+            self.type_aliases[alias.name] = alias
+
+    def register_use_alias(self, use_stmt):
+        path = getattr(use_stmt, "path", None)
+        items = getattr(use_stmt, "items", None)
+        if items:
+            self.register_grouped_use_aliases(path, items)
+            return
+
+        alias = getattr(use_stmt, "alias", None)
+        if not alias or not path or "*" in path or "{" in path:
+            return
+
+        self.register_import_alias(alias, path)
+
+    def register_grouped_use_aliases(self, path, items):
+        if not path:
+            return
+
+        base_path = path.split("::{", 1)[0]
+        if not base_path:
+            return
+
+        for item in items:
+            alias = item.get("alias")
+            item_path = item.get("path")
+            if not alias or not item_path or "*" in item_path or "{" in item_path:
+                continue
+
+            self.register_import_alias(alias, f"{base_path}::{item_path}")
+
+    def register_import_alias(self, alias, path):
+        if self.is_imported_type_path(path):
+            self.imported_type_aliases[alias] = path
+        else:
+            self.imported_module_aliases[alias] = path
+
+    def is_imported_type_path(self, path):
+        if self.map_builtin_type(path) is not None:
+            return True
+
+        type_name = path.rsplit("::", 1)[-1]
+        if not type_name:
+            return False
+
+        return type_name[0].isupper() or type_name in self.type_map
+
+    def generate_type_alias(self, alias):
+        if getattr(alias, "generics", None) or not getattr(alias, "alias_type", None):
+            return ""
+
+        declarator = self.format_typed_declarator(alias.alias_type, alias.name)
+        return f"    typedef {declarator};\n"
+
     def generate_function(self, func, indent=1, struct_name=None):
+        """Render one Rust function node as a CrossGL function."""
         code = ""
         indent_str = "    " * indent
 
@@ -246,58 +397,175 @@ class RustToCrossGLConverter:
         else:
             func_name = func.name
 
-        code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
-        code += self.generate_function_body(func.body, indent=indent + 1)
-        code += f"{indent_str}}}\n\n"
+        previous_return_type = self.current_function_return_type
+        self.current_function_return_type = func.return_type
+        try:
+            code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
+            code += self.generate_function_body(func.body, indent=indent + 1)
+            code += f"{indent_str}}}\n\n"
+        finally:
+            self.current_function_return_type = previous_return_type
 
         return code
 
-    def generate_function_body(self, body, indent=1):
+    def generate_function_body(self, body, indent=1, loop_contexts=None):
         code = ""
         indent_str = "    " * indent
+        loop_contexts = loop_contexts or []
 
         for stmt in body:
-            if isinstance(stmt, LetNode):
-                code += self.generate_let_statement(stmt, indent)
+            if isinstance(stmt, ConstNode):
+                code += self.generate_const_statement(stmt, indent)
+            elif isinstance(stmt, StaticNode):
+                code += self.generate_static_statement(stmt, indent)
+            elif isinstance(stmt, LetNode):
+                code += self.generate_let_statement(stmt, indent, loop_contexts)
             elif isinstance(stmt, AssignmentNode):
-                code += f"{indent_str}{self.generate_assignment(stmt)};\n"
+                code += self.generate_assignment_statement(stmt, indent, loop_contexts)
             elif isinstance(stmt, ReturnNode):
-                if stmt.value:
+                if isinstance(stmt.value, LoopNode):
+                    code += self.generate_loop_expression_return(
+                        stmt.value, indent, loop_contexts
+                    )
+                elif self.is_block_expression_node(stmt.value):
+                    code += self.generate_block_expression_return(
+                        stmt.value, indent, loop_contexts
+                    )
+                elif isinstance(stmt.value, IfNode):
+                    code += self.generate_if_expression_return(
+                        stmt.value, indent, loop_contexts
+                    )
+                elif isinstance(stmt.value, MatchNode):
+                    code += self.generate_match_expression_return(
+                        stmt.value, indent, loop_contexts
+                    )
+                elif isinstance(stmt.value, MatchesMacroNode):
+                    code += self.generate_matches_expression_return(
+                        stmt.value, indent, loop_contexts
+                    )
+                elif isinstance(stmt.value, AssignmentNode):
+                    code += self.generate_assignment_expression_result(
+                        stmt.value,
+                        indent,
+                        self.return_result_target,
+                        loop_contexts,
+                    )
+                elif self.expression_contains_try(stmt.value):
+                    code += self.generate_expression_result(
+                        stmt.value,
+                        indent,
+                        self.return_result_target,
+                        loop_contexts,
+                    )
+                elif stmt.value:
                     code += (
                         f"{indent_str}return {self.generate_expression(stmt.value)};\n"
                     )
                 else:
                     code += f"{indent_str}return;\n"
             elif isinstance(stmt, IfNode):
-                code += self.generate_if_statement(stmt, indent)
+                code += self.generate_if_statement(stmt, indent, loop_contexts)
             elif isinstance(stmt, ForNode):
-                code += self.generate_for_loop(stmt, indent)
+                code += self.generate_for_loop(stmt, indent, loop_contexts)
             elif isinstance(stmt, WhileNode):
-                code += self.generate_while_loop(stmt, indent)
+                code += self.generate_while_loop(stmt, indent, loop_contexts)
             elif isinstance(stmt, LoopNode):
-                code += self.generate_loop(stmt, indent)
+                code += self.generate_loop(stmt, indent, loop_contexts=loop_contexts)
             elif isinstance(stmt, MatchNode):
-                code += self.generate_match_statement(stmt, indent)
+                code += self.generate_match_statement(stmt, indent, loop_contexts)
             elif isinstance(stmt, BreakNode):
-                code += f"{indent_str}break;\n"
+                code += self.generate_break_statement(stmt, indent, loop_contexts)
             elif isinstance(stmt, ContinueNode):
-                code += f"{indent_str}continue;\n"
+                code += self.generate_continue_statement(stmt, indent, loop_contexts)
             elif isinstance(stmt, FunctionCallNode):
-                code += f"{indent_str}{self.generate_expression(stmt)};\n"
+                code += self.generate_expression_result(
+                    stmt,
+                    indent,
+                    None,
+                    loop_contexts,
+                )
             elif isinstance(stmt, BinaryOpNode):
-                code += f"{indent_str}{self.generate_expression(stmt)};\n"
+                code += self.generate_expression_result(
+                    stmt,
+                    indent,
+                    None,
+                    loop_contexts,
+                )
             elif isinstance(stmt, str):
                 code += f"{indent_str}{stmt};\n"
             else:
-                expr = self.generate_expression(stmt)
-                if expr:
-                    code += f"{indent_str}{expr};\n"
+                code += self.generate_expression_result(
+                    stmt,
+                    indent,
+                    None,
+                    loop_contexts,
+                )
+
+            if self.statement_needs_labeled_control_propagation(
+                stmt,
+                loop_contexts,
+            ):
+                code += self.generate_labeled_control_propagation(
+                    loop_contexts,
+                    indent,
+                )
 
         return code
 
-    def generate_let_statement(self, stmt, indent):
+    def generate_const_statement(self, node, indent):
+        indent_str = "    " * indent
+        declarator = self.format_typed_declarator(node.vtype, node.name)
+        value = self.generate_expression(node.value)
+        return f"{indent_str}const {declarator} = {value};\n"
+
+    def generate_static_statement(self, node, indent):
+        indent_str = "    " * indent
+        mutability = "mut " if node.is_mutable else ""
+        declarator = self.format_typed_declarator(node.vtype, node.name)
+        value = self.generate_expression(node.value)
+        return f"{indent_str}static {mutability}{declarator} = {value};\n"
+
+    def generate_let_statement(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         type_str = ""
+
+        if getattr(stmt, "else_body", None) is not None:
+            return self.generate_let_else_statement(stmt, indent, loop_contexts)
+
+        if self.is_nontrivial_let_pattern(stmt.name):
+            return self.generate_pattern_let_statement(stmt, indent, loop_contexts)
+
+        if self.is_discard_pattern(stmt.name):
+            return self.generate_discard_let_statement(stmt, indent, loop_contexts)
+        if self.is_tuple_pattern(stmt.name):
+            return self.generate_tuple_pattern_let_statement(
+                stmt,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(stmt.value, LoopNode):
+            return self.generate_loop_expression_let(stmt, indent, loop_contexts)
+        if self.is_block_expression_node(stmt.value):
+            return self.generate_block_expression_let(stmt, indent, loop_contexts)
+        if isinstance(stmt.value, IfNode):
+            return self.generate_if_expression_let(stmt, indent, loop_contexts)
+        if isinstance(stmt.value, MatchNode):
+            return self.generate_match_expression_let(stmt, indent, loop_contexts)
+        if isinstance(stmt.value, MatchesMacroNode):
+            return self.generate_matches_expression_let(stmt, indent, loop_contexts)
+        if isinstance(stmt.value, AssignmentNode):
+            code = ""
+            if stmt.vtype:
+                code += f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+            return code + self.generate_assignment_expression_result(
+                stmt.value,
+                indent,
+                stmt.name,
+                loop_contexts,
+            )
+        if self.expression_contains_try(stmt.value):
+            return self.generate_try_let_statement(stmt, indent, loop_contexts)
 
         if stmt.vtype:
             type_str = self.format_typed_declarator(stmt.vtype, stmt.name)
@@ -308,23 +576,1596 @@ class RustToCrossGLConverter:
             value_str = self.generate_expression(stmt.value)
             if stmt.vtype:
                 return f"{indent_str}{type_str} = {value_str};\n"
-            return f"{indent_str}{stmt.name} = {value_str};\n"
+            mutability = "mut " if stmt.is_mutable else ""
+            return f"{indent_str}let {mutability}{stmt.name} = {value_str};\n"
         else:
             if stmt.vtype:
                 return f"{indent_str}{type_str};\n"
             return f"{indent_str}{stmt.name};\n"
+
+    def generate_let_else_statement(self, stmt, indent, loop_contexts=None):
+        if stmt.value is None:
+            return ""
+
+        indent_str = "    " * indent
+        subject, code = self.generate_let_else_subject(
+            stmt.value,
+            indent,
+            loop_contexts,
+        )
+        binding_names = self.collect_pattern_binding_names(stmt.name)
+        code += self.generate_let_else_binding_declarations(
+            stmt,
+            binding_names,
+            indent,
+        )
+
+        matched_flag = self.next_match_chain_flag_name()
+        code += f"{indent_str}bool {matched_flag} = false;\n"
+
+        def success(success_indent):
+            success_indent_str = "    " * success_indent
+            return f"{success_indent_str}{matched_flag} = true;\n"
+
+        match_code = self.generate_nested_pattern_match(
+            subject,
+            stmt.name,
+            indent + 1,
+            success,
+        )
+        match_code = self.rewrite_pattern_binding_declarations_as_assignments(
+            match_code,
+            binding_names,
+        )
+
+        code += f"{indent_str}if (!{matched_flag}) {{\n"
+        code += match_code
+        code += f"{indent_str}}}\n"
+        code += f"{indent_str}if (!{matched_flag}) {{\n"
+        code += self.generate_function_body(
+            stmt.else_body,
+            indent + 1,
+            loop_contexts,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_let_else_subject(self, expression, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        subject, code = self.generate_match_subject(
+            expression,
+            indent,
+            loop_contexts,
+        )
+
+        if isinstance(subject, str) and not code:
+            subject_name = self.next_match_subject_name()
+            code += f"{indent_str}auto {subject_name} = {subject};\n"
+            subject = subject_name
+
+        return subject, code
+
+    def generate_let_else_binding_declarations(self, stmt, binding_names, indent):
+        indent_str = "    " * indent
+        code = ""
+
+        for name in binding_names:
+            if (
+                isinstance(stmt.name, str)
+                and stmt.name == name
+                and stmt.vtype is not None
+            ):
+                code += (
+                    f"{indent_str}{self.format_typed_declarator(stmt.vtype, name)};\n"
+                )
+            else:
+                code += f"{indent_str}{name};\n"
+
+        return code
+
+    def rewrite_pattern_binding_declarations_as_assignments(self, code, binding_names):
+        for name in sorted(binding_names, key=len, reverse=True):
+            pattern = rf"(?m)^(\s*)auto {re.escape(name)} ="
+            code = re.sub(pattern, rf"\1{name} =", code)
+        return code
+
+    def collect_pattern_binding_names(self, pattern):
+        names = []
+
+        def add_name(name):
+            if not self.is_discard_pattern(name) and name not in names:
+                names.append(name)
+
+        def visit(node):
+            if isinstance(node, MatchBindingPatternNode):
+                add_name(node.name)
+                visit(node.pattern)
+                return
+
+            if isinstance(node, ReferenceNode):
+                visit(node.expression)
+                return
+
+            if isinstance(node, MatchOrPatternNode):
+                for alternative in node.patterns:
+                    visit(alternative)
+                return
+
+            if isinstance(node, TupleNode):
+                for element in node.elements:
+                    visit(element)
+                return
+
+            if isinstance(node, ArrayNode):
+                for element in node.elements:
+                    visit(element)
+                return
+
+            if isinstance(node, MatchStructPatternNode):
+                for _, field_pattern in node.fields:
+                    visit(field_pattern)
+                return
+
+            if isinstance(node, FunctionCallNode):
+                for arg in node.args:
+                    visit(arg)
+                return
+
+            if isinstance(node, str) and self.is_simple_pattern_binding(node):
+                add_name(node)
+
+        visit(pattern)
+        return names
+
+    def is_nontrivial_let_pattern(self, pattern):
+        return isinstance(
+            pattern,
+            (
+                ArrayNode,
+                FunctionCallNode,
+                MatchBindingPatternNode,
+                MatchOrPatternNode,
+                MatchStructPatternNode,
+                ReferenceNode,
+            ),
+        )
+
+    def generate_pattern_let_statement(self, stmt, indent, loop_contexts=None):
+        if stmt.value is None:
+            return ""
+
+        subject, code = self.generate_let_else_subject(
+            stmt.value,
+            indent,
+            loop_contexts,
+        )
+        binding_names = self.collect_pattern_binding_names(stmt.name)
+        code += self.generate_let_else_binding_declarations(
+            stmt,
+            binding_names,
+            indent,
+        )
+
+        match_code = self.generate_nested_pattern_match(
+            subject,
+            stmt.name,
+            indent,
+            lambda success_indent: "",
+        )
+        match_code = self.rewrite_pattern_binding_declarations_as_assignments(
+            match_code,
+            binding_names,
+        )
+        return code + match_code
+
+    def is_discard_pattern(self, pattern):
+        return pattern == "_"
+
+    def is_tuple_pattern(self, pattern):
+        return isinstance(pattern, TupleNode)
+
+    def generate_discard_let_statement(self, stmt, indent, loop_contexts=None):
+        if stmt.value is None:
+            return ""
+        return self.generate_discarded_expression(stmt.value, indent, loop_contexts)
+
+    def generate_tuple_pattern_let_statement(self, stmt, indent, loop_contexts=None):
+        if not isinstance(stmt.value, TupleNode):
+            if stmt.value is None:
+                return ""
+            return self.generate_discarded_expression(
+                stmt.value,
+                indent,
+                loop_contexts,
+            )
+
+        type_elements = self.get_tuple_pattern_type_elements(
+            stmt.vtype,
+            len(stmt.name.elements),
+        )
+        return self.generate_tuple_pattern_bindings(
+            stmt.name,
+            stmt.value,
+            indent,
+            loop_contexts,
+            type_elements,
+        )
+
+    def generate_tuple_pattern_bindings(
+        self, pattern, value, indent, loop_contexts=None, type_elements=None
+    ):
+        if len(pattern.elements) != len(value.elements):
+            return self.generate_discarded_expression(value, indent, loop_contexts)
+
+        if type_elements is not None and len(type_elements) != len(pattern.elements):
+            type_elements = None
+
+        code = ""
+        for index, (pattern_element, value_element) in enumerate(
+            zip(pattern.elements, value.elements)
+        ):
+            type_element = type_elements[index] if type_elements is not None else None
+            code += self.generate_pattern_binding(
+                pattern_element,
+                value_element,
+                indent,
+                loop_contexts,
+                type_element,
+            )
+        return code
+
+    def generate_pattern_binding(
+        self, pattern, value, indent, loop_contexts=None, type_name=None
+    ):
+        if self.is_discard_pattern(pattern):
+            return self.generate_discarded_expression(value, indent, loop_contexts)
+
+        if self.is_tuple_pattern(pattern):
+            if isinstance(value, TupleNode):
+                type_elements = self.get_tuple_pattern_type_elements(
+                    type_name,
+                    len(pattern.elements),
+                )
+                return self.generate_tuple_pattern_bindings(
+                    pattern,
+                    value,
+                    indent,
+                    loop_contexts,
+                    type_elements,
+                )
+            return self.generate_discarded_expression(value, indent, loop_contexts)
+
+        if isinstance(pattern, str):
+            if type_name:
+                return self.generate_typed_pattern_binding(
+                    pattern,
+                    value,
+                    type_name,
+                    indent,
+                    loop_contexts,
+                )
+            return self.generate_expression_result(
+                value,
+                indent,
+                pattern,
+                loop_contexts,
+            )
+
+        return self.generate_discarded_expression(value, indent, loop_contexts)
+
+    def get_tuple_pattern_type_elements(self, type_name, expected_count):
+        elements = self.split_tuple_type(type_name)
+        if elements is None or len(elements) != expected_count:
+            return None
+        return elements
+
+    def split_tuple_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+
+        text = type_name.strip()
+        if not (text.startswith("(") and text.endswith(")")):
+            return None
+
+        inner = text[1:-1].strip()
+        if not inner:
+            return []
+
+        return self.split_generic_arguments(inner)
+
+    def generate_typed_pattern_binding(
+        self, name, value, type_name, indent, loop_contexts=None
+    ):
+        indent_str = "    " * indent
+        declarator = self.format_typed_declarator(type_name, name)
+
+        if isinstance(
+            value,
+            (
+                LoopNode,
+                IfNode,
+                MatchNode,
+            )
+            + BLOCK_EXPRESSION_NODE_TYPES,
+        ):
+            code = f"{indent_str}{declarator};\n"
+            code += self.generate_expression_result(
+                value,
+                indent,
+                name,
+                loop_contexts,
+            )
+            return code
+
+        if self.expression_contains_try(value):
+            code = f"{indent_str}{declarator};\n"
+            code += self.generate_expression_result(
+                value,
+                indent,
+                name,
+                loop_contexts,
+            )
+            return code
+
+        return f"{indent_str}{declarator} = {self.generate_expression(value)};\n"
+
+    def generate_loop_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+            )
+        else:
+            code += f"{indent_str}{stmt.name};\n"
+
+        code += self.generate_loop(
+            stmt.value,
+            indent,
+            result_target=stmt.name,
+            loop_contexts=loop_contexts,
+        )
+        return code
+
+    def generate_loop_expression_assignment(self, stmt, indent, loop_contexts=None):
+        target = self.generate_expression(stmt.left)
+        return self.generate_loop(
+            stmt.right,
+            indent,
+            result_target=target,
+            loop_contexts=loop_contexts,
+        )
+
+    def generate_loop_expression_return(self, loop_node, indent, loop_contexts=None):
+        return self.generate_loop(
+            loop_node,
+            indent,
+            result_target=self.return_result_target,
+            loop_contexts=loop_contexts,
+        )
+
+    def generate_block_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+            )
+        else:
+            code += f"{indent_str}{stmt.name};\n"
+
+        code += self.generate_block_expression_result(
+            stmt.value,
+            indent,
+            stmt.name,
+            loop_contexts,
+        )
+        return code
+
+    def generate_block_expression_assignment(self, stmt, indent, loop_contexts=None):
+        target = self.generate_expression(stmt.left)
+        return self.generate_block_expression_result(
+            stmt.right,
+            indent,
+            target,
+            loop_contexts,
+        )
+
+    def generate_block_expression_return(self, block_node, indent, loop_contexts=None):
+        return self.generate_block_expression_result(
+            block_node,
+            indent,
+            self.return_result_target,
+            loop_contexts,
+        )
+
+    def generate_if_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+            )
+        else:
+            code += f"{indent_str}{stmt.name};\n"
+
+        code += self.generate_if_expression_result(
+            stmt.value,
+            indent,
+            stmt.name,
+            loop_contexts,
+        )
+        return code
+
+    def generate_if_expression_assignment(self, stmt, indent, loop_contexts=None):
+        target = self.generate_expression(stmt.left)
+        return self.generate_if_expression_result(
+            stmt.right,
+            indent,
+            target,
+            loop_contexts,
+        )
+
+    def generate_if_expression_return(self, if_node, indent, loop_contexts=None):
+        return self.generate_if_expression_result(
+            if_node,
+            indent,
+            self.return_result_target,
+            loop_contexts,
+        )
+
+    def generate_match_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+            )
+        else:
+            code += f"{indent_str}{stmt.name};\n"
+
+        code += self.generate_match_expression_result(
+            stmt.value,
+            indent,
+            stmt.name,
+            loop_contexts,
+        )
+        return code
+
+    def generate_match_expression_assignment(self, stmt, indent, loop_contexts=None):
+        target = self.generate_expression(stmt.left)
+        return self.generate_match_expression_result(
+            stmt.right,
+            indent,
+            target,
+            loop_contexts,
+        )
+
+    def generate_match_expression_return(self, match_node, indent, loop_contexts=None):
+        return self.generate_match_expression_result(
+            match_node,
+            indent,
+            self.return_result_target,
+            loop_contexts,
+        )
+
+    def generate_matches_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+            )
+        else:
+            code += f"{indent_str}{stmt.name};\n"
+
+        code += self.generate_matches_expression_result(
+            stmt.value,
+            indent,
+            stmt.name,
+            loop_contexts,
+        )
+        return code
+
+    def generate_matches_expression_assignment(self, stmt, indent, loop_contexts=None):
+        target = self.generate_expression(stmt.left)
+        return self.generate_matches_expression_result(
+            stmt.right,
+            indent,
+            target,
+            loop_contexts,
+        )
+
+    def generate_matches_expression_return(
+        self, matches_node, indent, loop_contexts=None
+    ):
+        return self.generate_matches_expression_result(
+            matches_node,
+            indent,
+            self.return_result_target,
+            loop_contexts,
+        )
+
+    def generate_matches_expression_result(
+        self,
+        matches_node,
+        indent,
+        result_target,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+
+        if result_target is self.return_result_target:
+            result_name = self.next_matches_result_name()
+            code = f"{indent_str}bool {result_name} = false;\n"
+            code += self.generate_matches_pattern_assignment(
+                matches_node,
+                indent,
+                result_name,
+                loop_contexts,
+            )
+            code += f"{indent_str}return {result_name};\n"
+            return code
+
+        code = f"{indent_str}{result_target} = false;\n"
+        code += self.generate_matches_pattern_assignment(
+            matches_node,
+            indent,
+            result_target,
+            loop_contexts,
+        )
+        return code
+
+    def generate_matches_pattern_assignment(
+        self,
+        matches_node,
+        indent,
+        result_target,
+        loop_contexts=None,
+    ):
+        subject, code = self.generate_let_else_subject(
+            matches_node.expression,
+            indent,
+            loop_contexts,
+        )
+
+        def success(success_indent):
+            success_indent_str = "    " * success_indent
+            if matches_node.guard is None:
+                return f"{success_indent_str}{result_target} = true;\n"
+
+            guard_code, guard = self.generate_try_expression(
+                matches_node.guard,
+                success_indent,
+                loop_contexts,
+            )
+            return (
+                guard_code + f"{success_indent_str}if ({guard}) {{\n"
+                f"{success_indent_str}    {result_target} = true;\n"
+                f"{success_indent_str}}}\n"
+            )
+
+        code += self.generate_nested_pattern_match(
+            subject,
+            matches_node.pattern,
+            indent,
+            success,
+        )
+        return code
+
+    def generate_matches_condition_flag(
+        self,
+        matches_node,
+        indent,
+        loop_contexts=None,
+    ):
+        result_name = self.next_matches_result_name()
+        indent_str = "    " * indent
+        code = f"{indent_str}bool {result_name} = false;\n"
+        code += self.generate_matches_pattern_assignment(
+            matches_node,
+            indent,
+            result_name,
+            loop_contexts,
+        )
+        return result_name, code
+
+    def generate_if_expression_result(
+        self, if_node, indent, result_target, loop_contexts=None
+    ):
+        if isinstance(if_node.condition, ConditionChainNode):
+            return self.generate_condition_chain_if_expression_result(
+                if_node,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+
+        if isinstance(if_node.condition, MatchesMacroNode):
+            return self.generate_matches_if_expression_result(
+                if_node,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+
+        if isinstance(if_node.condition, LetPatternConditionNode):
+            return self.generate_if_let_expression_result(
+                if_node,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+
+        indent_str = "    " * indent
+        condition_code, condition = self.generate_try_expression(
+            if_node.condition,
+            indent,
+            loop_contexts,
+        )
+
+        code = condition_code
+        code += f"{indent_str}if ({condition}) {{\n"
+        code += self.generate_result_branch(
+            if_node.if_body, indent + 1, result_target, loop_contexts
+        )
+        code += f"{indent_str}}}"
+
+        if if_node.else_body is not None:
+            code += " else {\n"
+            code += self.generate_result_branch(
+                if_node.else_body, indent + 1, result_target, loop_contexts
+            )
+            code += f"{indent_str}}}"
+
+        code += "\n"
+        return code
+
+    def generate_condition_chain_if_expression_result(
+        self,
+        if_node,
+        indent,
+        result_target,
+        loop_contexts=None,
+    ):
+        def success(success_indent):
+            return self.generate_result_branch(
+                if_node.if_body,
+                success_indent,
+                result_target,
+                loop_contexts,
+            )
+
+        def failure(failure_indent):
+            return self.generate_result_branch(
+                if_node.else_body,
+                failure_indent,
+                result_target,
+                loop_contexts,
+            )
+
+        return self.generate_condition_chain_branch(
+            if_node.condition,
+            indent,
+            success,
+            failure,
+            loop_contexts,
+        )
+
+    def generate_if_let_expression_result(
+        self,
+        if_node,
+        indent,
+        result_target,
+        loop_contexts=None,
+    ):
+        def success(success_indent):
+            return self.generate_result_branch(
+                if_node.if_body,
+                success_indent,
+                result_target,
+                loop_contexts,
+            )
+
+        def failure(failure_indent):
+            return self.generate_result_branch(
+                if_node.else_body,
+                failure_indent,
+                result_target,
+                loop_contexts,
+            )
+
+        return self.generate_let_pattern_condition_branch(
+            if_node.condition,
+            indent,
+            success,
+            failure,
+            loop_contexts,
+        )
+
+    def generate_matches_if_expression_result(
+        self,
+        if_node,
+        indent,
+        result_target,
+        loop_contexts=None,
+    ):
+        condition, code = self.generate_matches_condition_flag(
+            if_node.condition,
+            indent,
+            loop_contexts,
+        )
+        indent_str = "    " * indent
+
+        code += f"{indent_str}if ({condition}) {{\n"
+        code += self.generate_result_branch(
+            if_node.if_body,
+            indent + 1,
+            result_target,
+            loop_contexts,
+        )
+        code += f"{indent_str}}}"
+
+        if if_node.else_body is not None:
+            code += " else {\n"
+            code += self.generate_result_branch(
+                if_node.else_body,
+                indent + 1,
+                result_target,
+                loop_contexts,
+            )
+            code += f"{indent_str}}}"
+
+        code += "\n"
+        return code
+
+    def generate_result_branch(self, branch, indent, result_target, loop_contexts=None):
+        if self.is_block_expression_node(branch):
+            return self.generate_block_expression_result(
+                branch, indent, result_target, loop_contexts
+            )
+        if isinstance(branch, list):
+            return self.generate_function_body(branch, indent, loop_contexts)
+        if branch is not None:
+            return self.generate_expression_result(
+                branch, indent, result_target, loop_contexts
+            )
+        return ""
+
+    def generate_match_expression_result(
+        self, match_node, indent, result_target, loop_contexts=None
+    ):
+        if self.match_requires_if_chain(match_node):
+            return self.generate_match_if_chain(
+                match_node,
+                indent,
+                lambda body, branch_indent, contexts: self.generate_result_branch(
+                    body,
+                    branch_indent,
+                    result_target,
+                    contexts,
+                ),
+                loop_contexts,
+            )
+
+        indent_str = "    " * indent
+        subject, code = self.generate_match_subject(
+            match_node.expression,
+            indent,
+            loop_contexts,
+        )
+        expression = self.generate_match_subject_expression(subject)
+        switch_break_flag = self.create_switch_break_flag(match_node, loop_contexts)
+        arm_loop_contexts = self.with_switch_break_flag(
+            loop_contexts,
+            switch_break_flag,
+        )
+
+        code += self.generate_switch_break_declaration(switch_break_flag, indent)
+        code += f"{indent_str}switch ({expression}) {{\n"
+
+        for arm in match_node.arms:
+            code += self.generate_match_case_label(arm.pattern, indent + 1)
+            code += self.generate_result_branch(
+                arm.body,
+                indent + 2,
+                result_target,
+                arm_loop_contexts,
+            )
+            if self.match_arm_needs_switch_terminator(arm.body):
+                code += f"{indent_str}        break;\n"
+
+        code += f"{indent_str}}}\n"
+        code += self.generate_switch_break_propagation(
+            switch_break_flag,
+            loop_contexts,
+            indent,
+        )
+        return code
+
+    def generate_block_expression_result(
+        self, block_node, indent, result_target, loop_contexts=None
+    ):
+        block_node = self.get_block_expression_node(block_node)
+        indent_str = "    " * indent
+        code = self.generate_function_body(block_node.statements, indent, loop_contexts)
+        expression = self.get_block_expression(block_node)
+
+        if isinstance(expression, LoopNode):
+            code += self.generate_loop(
+                expression,
+                indent,
+                result_target=result_target,
+                loop_contexts=loop_contexts,
+            )
+        elif isinstance(expression, IfNode):
+            code += self.generate_if_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+        elif isinstance(expression, MatchNode):
+            code += self.generate_match_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+        elif expression is not None:
+            code += self.generate_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+        elif (
+            result_target is self.return_result_target
+            and not self.branch_guarantees_control_transfer(block_node)
+        ):
+            code += f"{indent_str}return;\n"
+
+        return code
+
+    def generate_expression_result(
+        self, expression, indent, result_target, loop_contexts=None
+    ):
+        indent_str = "    " * indent
+
+        if isinstance(expression, LoopNode):
+            return self.generate_loop(
+                expression,
+                indent,
+                result_target=result_target,
+                loop_contexts=loop_contexts,
+            )
+        if isinstance(expression, IfNode):
+            return self.generate_if_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+        if isinstance(expression, MatchNode):
+            return self.generate_match_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+        if self.is_block_expression_node(expression):
+            return self.generate_block_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+        if isinstance(expression, AssignmentNode):
+            return self.generate_assignment_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
+
+        if self.expression_contains_try(expression):
+            prelude, value = self.generate_try_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+            if result_target is self.return_result_target:
+                return prelude + f"{indent_str}return {value};\n"
+            if result_target:
+                return prelude + f"{indent_str}{result_target} = {value};\n"
+            if value:
+                return prelude + f"{indent_str}{value};\n"
+            return prelude
+
+        value = self.generate_expression(expression)
+        if result_target is self.return_result_target:
+            return f"{indent_str}return {value};\n"
+        if result_target:
+            return f"{indent_str}{result_target} = {value};\n"
+        if value:
+            return f"{indent_str}{value};\n"
+        return ""
+
+    def generate_try_let_statement(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+            )
+        else:
+            code += f"{indent_str}{stmt.name};\n"
+
+        code += self.generate_expression_result(
+            stmt.value,
+            indent,
+            stmt.name,
+            loop_contexts,
+        )
+        return code
+
+    def generate_assignment_statement(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+
+        if stmt.operator == "=" and isinstance(stmt.right, LoopNode):
+            return self.generate_loop_expression_assignment(stmt, indent, loop_contexts)
+        if stmt.operator == "=" and self.is_block_expression_node(stmt.right):
+            return self.generate_block_expression_assignment(
+                stmt, indent, loop_contexts
+            )
+        if stmt.operator == "=" and isinstance(stmt.right, IfNode):
+            return self.generate_if_expression_assignment(stmt, indent, loop_contexts)
+        if stmt.operator == "=" and isinstance(stmt.right, MatchNode):
+            return self.generate_match_expression_assignment(
+                stmt, indent, loop_contexts
+            )
+        if stmt.operator == "=" and isinstance(stmt.right, MatchesMacroNode):
+            return self.generate_matches_expression_assignment(
+                stmt, indent, loop_contexts
+            )
+        if self.expression_contains_try(stmt.right):
+            return self.generate_try_assignment_statement(stmt, indent, loop_contexts)
+        return f"{indent_str}{self.generate_assignment(stmt)};\n"
+
+    def generate_assignment_expression_result(
+        self, stmt, indent, result_target, loop_contexts=None
+    ):
+        indent_str = "    " * indent
+        code = self.generate_assignment_statement(stmt, indent, loop_contexts)
+
+        if result_target is self.return_result_target:
+            return code + f"{indent_str}return;\n"
+        if result_target:
+            return code + f"{indent_str}{result_target} = ();\n"
+        return code
+
+    def generate_try_assignment_statement(self, stmt, indent, loop_contexts=None):
+        target = self.generate_expression(stmt.left)
+        if stmt.operator != "=":
+            prelude, value = self.generate_try_expression(
+                stmt.right,
+                indent,
+                loop_contexts,
+            )
+            indent_str = "    " * indent
+            return prelude + f"{indent_str}{target} {stmt.operator} {value};\n"
+        return self.generate_expression_result(
+            stmt.right,
+            indent,
+            target,
+            loop_contexts,
+        )
+
+    def generate_try_expression(self, expression, indent, loop_contexts=None):
+        indent_str = "    " * indent
+
+        if isinstance(expression, TryNode):
+            return self.generate_try_node_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if self.is_transparent_block_expression_node(expression):
+            value_name = self.next_transparent_block_value_name()
+            code = f"{indent_str}auto {value_name};\n"
+            code += self.generate_block_expression_result(
+                expression,
+                indent,
+                value_name,
+                loop_contexts,
+            )
+            return code, value_name
+
+        if not self.expression_contains_try(expression):
+            return "", self.generate_expression(expression)
+
+        if isinstance(expression, BinaryOpNode):
+            left_code, left = self.generate_try_expression(
+                expression.left,
+                indent,
+                loop_contexts,
+            )
+            right_code, right = self.generate_try_expression(
+                expression.right,
+                indent,
+                loop_contexts,
+            )
+            return left_code + right_code, f"({left} {expression.op} {right})"
+
+        if isinstance(expression, UnaryOpNode):
+            code, operand = self.generate_try_expression(
+                expression.operand,
+                indent,
+                loop_contexts,
+            )
+            return code, f"({expression.op}{operand})"
+
+        if isinstance(expression, FunctionCallNode):
+            return self.generate_try_function_call_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, MemberAccessNode):
+            code, obj = self.generate_try_expression(
+                expression.object,
+                indent,
+                loop_contexts,
+            )
+            return code, f"{obj}.{expression.member}"
+
+        if isinstance(expression, AwaitNode):
+            return self.generate_try_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, ArrayAccessNode):
+            array_code, array = self.generate_try_expression(
+                expression.array,
+                indent,
+                loop_contexts,
+            )
+            index_code, index = self.generate_try_expression(
+                expression.index,
+                indent,
+                loop_contexts,
+            )
+            return array_code + index_code, f"{array}[{index}]"
+
+        if isinstance(expression, VectorConstructorNode):
+            code, args = self.generate_try_argument_list(
+                expression.args,
+                indent,
+                loop_contexts,
+            )
+            type_name = self.map_type(expression.type_name)
+            return code, f"{type_name}({', '.join(args)})"
+
+        if isinstance(expression, TernaryOpNode):
+            return self.generate_try_ternary_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, CastNode):
+            code, value = self.generate_try_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+            target_type = self.map_type(expression.target_type)
+            return code, f"({target_type}){value}"
+
+        if isinstance(expression, ReferenceNode):
+            return self.generate_try_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, DereferenceNode):
+            return self.generate_try_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, TupleNode):
+            code, elements = self.generate_try_argument_list(
+                expression.elements,
+                indent,
+                loop_contexts,
+            )
+            return code, f"({', '.join(elements)})"
+
+        if isinstance(expression, ArrayNode):
+            code, elements = self.generate_try_argument_list(
+                expression.elements,
+                indent,
+                loop_contexts,
+            )
+            if expression.size is not None and len(elements) == 1:
+                size_code, size = self.generate_try_expression(
+                    expression.size,
+                    indent,
+                    loop_contexts,
+                )
+                return code + size_code, f"_rust_repeat({elements[0]}, {size})"
+            return code, "{" + ", ".join(elements) + "}"
+
+        if isinstance(expression, RangeNode):
+            start_code, start = self.generate_try_range_bound(
+                expression.start,
+                indent,
+                loop_contexts,
+            )
+            end_code, end = self.generate_try_range_bound(
+                expression.end,
+                indent,
+                loop_contexts,
+            )
+            return start_code + end_code, self.format_range_expression(
+                start,
+                end,
+                expression.inclusive,
+            )
+
+        if isinstance(expression, StructInitializationNode):
+            return self.generate_try_struct_initialization_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+        if isinstance(expression, TryBlockNode):
+            return "", self.generate_try_block_expression(expression)
+
+        return "", self.generate_expression(expression)
+
+    def generate_try_range_bound(self, bound, indent, loop_contexts=None):
+        if bound is None:
+            return "", ""
+        return self.generate_try_expression(bound, indent, loop_contexts)
+
+    def format_range_expression(self, start, end, inclusive=False):
+        operator = "..=" if inclusive else ".."
+        return f"{start or ''}{operator}{end or ''}"
+
+    def generate_try_node_expression(self, try_node, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        subject, code = self.generate_try_subject(
+            try_node.expression,
+            indent,
+            loop_contexts,
+        )
+        code += self.generate_try_propagation(subject, indent)
+
+        value_name = self.next_try_value_name()
+        code += (
+            f"{indent_str}auto {value_name} = {self.generate_try_unwrap(subject)};\n"
+        )
+        return code, value_name
+
+    def generate_try_subject(self, expression, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        subject_name = self.next_try_subject_name()
+
+        if isinstance(
+            expression,
+            (
+                LoopNode,
+                IfNode,
+                MatchNode,
+                MatchesMacroNode,
+            )
+            + BLOCK_EXPRESSION_NODE_TYPES,
+        ):
+            code = f"{indent_str}auto {subject_name};\n"
+            code += self.generate_expression_result(
+                expression,
+                indent,
+                subject_name,
+                loop_contexts,
+            )
+            return subject_name, code
+
+        prelude, value = self.generate_try_expression(
+            expression,
+            indent,
+            loop_contexts,
+        )
+        code = prelude + f"{indent_str}auto {subject_name} = {value};\n"
+        return subject_name, code
+
+    def generate_try_propagation(self, subject, indent):
+        indent_str = "    " * indent
+        if self.current_try_kind() == "option":
+            return (
+                f"{indent_str}if (is_None({subject})) {{\n"
+                f"{indent_str}    return None;\n"
+                f"{indent_str}}}\n"
+            )
+
+        return (
+            f"{indent_str}if (is_Err({subject})) {{\n"
+            f"{indent_str}    return Err(unwrap_Err({subject}));\n"
+            f"{indent_str}}}\n"
+        )
+
+    def generate_try_unwrap(self, subject):
+        if self.current_try_kind() == "option":
+            return f"unwrap_Some({subject})"
+        return f"unwrap_Ok({subject})"
+
+    def current_try_kind(self):
+        return_type = self.current_function_return_type or ""
+        return_type = self.strip_reference_type(return_type)
+        generic = self.parse_generic_type(return_type)
+        base_name = generic[0] if generic is not None else return_type
+        base_name = base_name.rsplit("::", 1)[-1]
+
+        if base_name == "Option":
+            return "option"
+        return "result"
+
+    def generate_try_argument_list(self, args, indent, loop_contexts=None):
+        code = ""
+        values = []
+
+        for arg in args:
+            arg_code, arg_value = self.generate_try_expression(
+                arg,
+                indent,
+                loop_contexts,
+            )
+            code += arg_code
+            values.append(arg_value)
+
+        return code, values
+
+    def generate_try_function_call_expression(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        if isinstance(expression.name, MemberAccessNode):
+            object_code, obj = self.generate_try_expression(
+                expression.name.object,
+                indent,
+                loop_contexts,
+            )
+            args_code, args = self.generate_try_argument_list(
+                expression.args,
+                indent,
+                loop_contexts,
+            )
+            method_call = self.format_method_call_parts(
+                expression.name.member,
+                obj,
+                args,
+                expression.args,
+            )
+            if method_call is not None:
+                return object_code + args_code, method_call
+            return (
+                object_code + args_code,
+                f"{obj}.{expression.name.member}({', '.join(args)})",
+            )
+
+        args_code, args = self.generate_try_argument_list(
+            expression.args,
+            indent,
+            loop_contexts,
+        )
+
+        if isinstance(expression.name, str):
+            constructor = self.format_path_constructor_call_parts(
+                expression.name,
+                args,
+            )
+            if constructor is not None:
+                return args_code, constructor
+            return args_code, f"{self.map_function(expression.name)}({', '.join(args)})"
+
+        name_code, name = self.generate_try_expression(
+            expression.name,
+            indent,
+            loop_contexts,
+        )
+        return name_code + args_code, f"{name}({', '.join(args)})"
+
+    def format_method_call_parts(self, method_name, obj, args, arg_nodes):
+        if method_name == "len" and not args:
+            return f"{obj}.length"
+
+        if method_name == "length" and not args:
+            return f"length({obj})"
+
+        if method_name == "normalize" and not args:
+            return f"normalize({obj})"
+
+        if method_name in {"dot", "cross"} and len(args) == 1:
+            return f"{method_name}({obj}, {args[0]})"
+
+        if (
+            method_name in {"map", "filter", "for_each", "any", "all"}
+            and len(args) == 1
+            and isinstance(arg_nodes[0], ClosureNode)
+        ):
+            return f"{method_name}({obj}, {args[0]})"
+
+        if (
+            method_name == "fold"
+            and len(args) == 2
+            and isinstance(arg_nodes[1], ClosureNode)
+        ):
+            return f"fold({obj}, {args[0]}, {args[1]})"
+
+        if self.is_swizzle_member(method_name) and not args:
+            return f"{obj}.{method_name}"
+
+        return None
+
+    def format_path_constructor_call_parts(self, function_name, args):
+        if not function_name.endswith("::new"):
+            return None
+
+        type_name = function_name[: -len("::new")]
+        mapped_type = self.map_type(type_name)
+        if mapped_type == type_name:
+            return None
+
+        return f"{mapped_type}({', '.join(args)})"
+
+    def generate_try_ternary_expression(self, expression, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        condition_code, condition = self.generate_try_expression(
+            expression.condition,
+            indent,
+            loop_contexts,
+        )
+        result_name = self.next_try_value_name()
+        code = condition_code
+        code += f"{indent_str}auto {result_name};\n"
+        code += f"{indent_str}if ({condition}) {{\n"
+        true_code, true_value = self.generate_try_expression(
+            expression.true_expr,
+            indent + 1,
+            loop_contexts,
+        )
+        code += true_code
+        code += f"{indent_str}    {result_name} = {true_value};\n"
+        code += f"{indent_str}}} else {{\n"
+        false_code, false_value = self.generate_try_expression(
+            expression.false_expr,
+            indent + 1,
+            loop_contexts,
+        )
+        code += false_code
+        code += f"{indent_str}    {result_name} = {false_value};\n"
+        code += f"{indent_str}}}\n"
+        return code, result_name
+
+    def generate_try_struct_initialization_expression(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        code = ""
+        fields = []
+
+        for field_name, field_expression in expression.fields:
+            field_code, field_value = self.generate_try_expression(
+                field_expression,
+                indent,
+                loop_contexts,
+            )
+            code += field_code
+            fields.append(f"{field_name}: {field_value}")
+
+        return code, f"{expression.struct_name} {{ {', '.join(fields)} }}"
+
+    def generate_try_block_expression(self, try_block):
+        previous_return_type = self.current_function_return_type
+        self.current_function_return_type = previous_return_type or "Result"
+        try:
+            code = self.generate_try_block_body_code(try_block.block, indent=0)
+        finally:
+            self.current_function_return_type = previous_return_type
+
+        return f"lambda({{ {self.compact_generated_block(code)} }})()"
+
+    def generate_try_block_body_code(self, block_node, indent=0):
+        code = self.generate_function_body(block_node.statements, indent=indent)
+        expression = self.get_block_expression(block_node)
+        code += self.generate_try_block_success_return(expression, indent)
+        return code
+
+    def generate_try_block_success_return(self, expression, indent):
+        indent_str = "    " * indent
+
+        if expression is None:
+            return f"{indent_str}return {self.generate_try_success_value('()')};\n"
+
+        if isinstance(
+            expression,
+            (
+                LoopNode,
+                IfNode,
+                MatchNode,
+            )
+            + BLOCK_EXPRESSION_NODE_TYPES,
+        ):
+            value_name = self.next_try_block_value_name()
+            code = f"{indent_str}auto {value_name};\n"
+            code += self.generate_expression_result(
+                expression,
+                indent,
+                value_name,
+            )
+            code += (
+                f"{indent_str}return "
+                f"{self.generate_try_success_value(value_name)};\n"
+            )
+            return code
+
+        prelude, value = self.generate_try_expression(expression, indent)
+        return (
+            prelude + f"{indent_str}return {self.generate_try_success_value(value)};\n"
+        )
+
+    def generate_try_success_value(self, value):
+        if self.current_try_kind() == "option":
+            return f"Some({value})"
+        return f"Ok({value})"
+
+    def expression_contains_try(self, expression):
+        if expression is None:
+            return False
+        if isinstance(expression, TryNode):
+            return True
+        if isinstance(expression, BinaryOpNode):
+            return self.expression_contains_try(
+                expression.left
+            ) or self.expression_contains_try(expression.right)
+        if isinstance(expression, UnaryOpNode):
+            return self.expression_contains_try(expression.operand)
+        if isinstance(expression, FunctionCallNode):
+            return self.expression_contains_try(expression.name) or any(
+                self.expression_contains_try(arg) for arg in expression.args
+            )
+        if isinstance(expression, MemberAccessNode):
+            return self.expression_contains_try(expression.object)
+        if isinstance(expression, AwaitNode):
+            return self.expression_contains_try(expression.expression)
+        if isinstance(expression, ArrayAccessNode):
+            return self.expression_contains_try(
+                expression.array
+            ) or self.expression_contains_try(expression.index)
+        if isinstance(expression, VectorConstructorNode):
+            return any(self.expression_contains_try(arg) for arg in expression.args)
+        if isinstance(expression, TernaryOpNode):
+            return (
+                self.expression_contains_try(expression.condition)
+                or self.expression_contains_try(expression.true_expr)
+                or self.expression_contains_try(expression.false_expr)
+            )
+        if isinstance(expression, CastNode):
+            return self.expression_contains_try(expression.expression)
+        if isinstance(expression, ReferenceNode):
+            return self.expression_contains_try(expression.expression)
+        if isinstance(expression, DereferenceNode):
+            return self.expression_contains_try(expression.expression)
+        if isinstance(expression, TupleNode):
+            return any(
+                self.expression_contains_try(elem) for elem in expression.elements
+            )
+        if isinstance(expression, ArrayNode):
+            return any(
+                self.expression_contains_try(elem) for elem in expression.elements
+            ) or self.expression_contains_try(expression.size)
+        if isinstance(expression, RangeNode):
+            return self.expression_contains_try(
+                expression.start
+            ) or self.expression_contains_try(expression.end)
+        if isinstance(expression, StructInitializationNode):
+            return any(
+                self.expression_contains_try(field_expression)
+                for _, field_expression in expression.fields
+            )
+        if isinstance(expression, MatchesMacroNode):
+            return self.expression_contains_try(
+                expression.expression
+            ) or self.expression_contains_try(expression.guard)
+        if isinstance(expression, LetPatternConditionNode):
+            return self.expression_contains_try(expression.expression)
+        if isinstance(expression, ConditionChainNode):
+            return any(
+                self.expression_contains_try(operand) for operand in expression.operands
+            )
+        if isinstance(expression, ClosureNode):
+            return False
+        if self.is_block_expression_node(expression):
+            block_node = self.get_block_expression_node(expression)
+            return any(
+                self.expression_contains_try(statement)
+                for statement in block_node.statements
+            ) or self.expression_contains_try(self.get_block_expression(block_node))
+        if isinstance(expression, IfNode):
+            return (
+                self.expression_contains_try(expression.condition)
+                or self.expression_contains_try(expression.if_body)
+                or self.expression_contains_try(expression.else_body)
+            )
+        if isinstance(expression, MatchNode):
+            return self.expression_contains_try(expression.expression) or any(
+                self.expression_contains_try(arm.guard)
+                or self.expression_contains_try(arm.body)
+                for arm in expression.arms
+            )
+        if isinstance(expression, list):
+            return any(self.expression_contains_try(item) for item in expression)
+        if isinstance(expression, ReturnNode):
+            return self.expression_contains_try(expression.value)
+        if isinstance(expression, AssignmentNode):
+            return self.expression_contains_try(
+                expression.left
+            ) or self.expression_contains_try(expression.right)
+        if isinstance(expression, LetNode):
+            return self.expression_contains_try(expression.value)
+        return False
+
+    def get_block_expression(self, block_node):
+        return getattr(
+            block_node, "expression", getattr(block_node, "returns_value", None)
+        )
 
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
         right = self.generate_expression(node.right)
         return f"{left} {node.operator} {right}"
 
-    def generate_if_statement(self, node, indent):
-        indent_str = "    " * indent
-        condition = self.generate_expression(node.condition)
+    def generate_if_statement(self, node, indent, loop_contexts=None):
+        if isinstance(node.condition, ConditionChainNode):
+            return self.generate_condition_chain_if_statement(
+                node,
+                indent,
+                loop_contexts,
+            )
 
-        code = f"{indent_str}if ({condition}) {{\n"
-        code += self.generate_function_body(node.if_body, indent + 1)
+        if isinstance(node.condition, MatchesMacroNode):
+            return self.generate_matches_if_statement(node, indent, loop_contexts)
+
+        if isinstance(node.condition, LetPatternConditionNode):
+            return self.generate_if_let_statement(node, indent, loop_contexts)
+
+        indent_str = "    " * indent
+        condition_code, condition = self.generate_try_expression(
+            node.condition,
+            indent,
+            loop_contexts,
+        )
+
+        code = condition_code
+        code += f"{indent_str}if ({condition}) {{\n"
+        code += self.generate_function_body(node.if_body, indent + 1, loop_contexts)
         code += f"{indent_str}}}"
 
         if node.else_body:
@@ -334,69 +2175,2608 @@ class RustToCrossGLConverter:
                 and isinstance(node.else_body[0], IfNode)
             ):
                 code += " else "
-                code += self.generate_if_statement(node.else_body[0], 0).lstrip()
+                code += self.generate_if_statement(
+                    node.else_body[0], 0, loop_contexts
+                ).lstrip()
             else:
                 code += " else {\n"
                 if isinstance(node.else_body, list):
-                    code += self.generate_function_body(node.else_body, indent + 1)
+                    code += self.generate_function_body(
+                        node.else_body, indent + 1, loop_contexts
+                    )
                 else:
-                    code += self.generate_function_body([node.else_body], indent + 1)
+                    code += self.generate_function_body(
+                        [node.else_body], indent + 1, loop_contexts
+                    )
                 code += f"{indent_str}}}"
 
         code += "\n"
         return code
 
-    def generate_for_loop(self, node, indent):
+    def generate_condition_chain_if_statement(self, node, indent, loop_contexts=None):
+        def success(success_indent):
+            return self.generate_function_body(
+                node.if_body,
+                success_indent,
+                loop_contexts,
+            )
+
+        failure = None
+        if node.else_body is not None:
+
+            def failure(failure_indent):
+                if isinstance(node.else_body, list):
+                    return self.generate_function_body(
+                        node.else_body,
+                        failure_indent,
+                        loop_contexts,
+                    )
+                return self.generate_function_body(
+                    [node.else_body],
+                    failure_indent,
+                    loop_contexts,
+                )
+
+        return self.generate_condition_chain_branch(
+            node.condition,
+            indent,
+            success,
+            failure,
+            loop_contexts,
+        )
+
+    def generate_matches_if_statement(self, node, indent, loop_contexts=None):
+        condition, code = self.generate_matches_condition_flag(
+            node.condition,
+            indent,
+            loop_contexts,
+        )
         indent_str = "    " * indent
-        pattern = node.pattern
-        iterable = self.generate_expression(node.iterable)
+
+        code += f"{indent_str}if ({condition}) {{\n"
+        code += self.generate_function_body(node.if_body, indent + 1, loop_contexts)
+        code += f"{indent_str}}}"
+
+        if node.else_body is not None:
+            code += " else {\n"
+            if isinstance(node.else_body, list):
+                code += self.generate_function_body(
+                    node.else_body,
+                    indent + 1,
+                    loop_contexts,
+                )
+            else:
+                code += self.generate_function_body(
+                    [node.else_body],
+                    indent + 1,
+                    loop_contexts,
+                )
+            code += f"{indent_str}}}"
+
+        code += "\n"
+        return code
+
+    def generate_if_let_statement(self, node, indent, loop_contexts=None):
+        def success(success_indent):
+            return self.generate_function_body(
+                node.if_body,
+                success_indent,
+                loop_contexts,
+            )
+
+        failure = None
+        if node.else_body is not None:
+
+            def failure(failure_indent):
+                if isinstance(node.else_body, list):
+                    return self.generate_function_body(
+                        node.else_body,
+                        failure_indent,
+                        loop_contexts,
+                    )
+                return self.generate_function_body(
+                    [node.else_body],
+                    failure_indent,
+                    loop_contexts,
+                )
+
+        return self.generate_let_pattern_condition_branch(
+            node.condition,
+            indent,
+            success,
+            failure,
+            loop_contexts,
+        )
+
+    def generate_let_pattern_condition_branch(
+        self,
+        condition,
+        indent,
+        success,
+        failure=None,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+        subject, code = self.generate_match_subject(
+            condition.expression,
+            indent,
+            loop_contexts,
+        )
+
+        if failure is None:
+            code += self.generate_nested_pattern_match(
+                subject,
+                condition.pattern,
+                indent,
+                success,
+            )
+            return code
+
+        matched_flag = self.next_match_chain_flag_name()
+        code += f"{indent_str}bool {matched_flag} = false;\n"
+
+        def matched_success(success_indent):
+            success_indent_str = "    " * success_indent
+            return f"{success_indent_str}{matched_flag} = true;\n" + success(
+                success_indent
+            )
+
+        code += f"{indent_str}if (!{matched_flag}) {{\n"
+        code += self.generate_nested_pattern_match(
+            subject,
+            condition.pattern,
+            indent + 1,
+            matched_success,
+        )
+        code += f"{indent_str}}}\n"
+        code += f"{indent_str}if (!{matched_flag}) {{\n"
+        code += failure(indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_condition_chain_branch(
+        self,
+        chain,
+        indent,
+        success,
+        failure=None,
+        loop_contexts=None,
+    ):
+        if failure is None:
+            return self.generate_condition_chain_operands(
+                chain.operands,
+                0,
+                indent,
+                success,
+                loop_contexts,
+            )
+
+        matched_flag = self.next_match_chain_flag_name()
+        indent_str = "    " * indent
+        code = f"{indent_str}bool {matched_flag} = false;\n"
+
+        def matched_success(success_indent):
+            success_indent_str = "    " * success_indent
+            return f"{success_indent_str}{matched_flag} = true;\n" + success(
+                success_indent
+            )
+
+        code += self.generate_condition_chain_operands(
+            chain.operands,
+            0,
+            indent,
+            matched_success,
+            loop_contexts,
+        )
+        code += f"{indent_str}if (!{matched_flag}) {{\n"
+        code += failure(indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_condition_chain_operands(
+        self,
+        operands,
+        index,
+        indent,
+        success,
+        loop_contexts=None,
+    ):
+        if index >= len(operands):
+            return success(indent)
+
+        operand = operands[index]
+
+        def continue_chain(next_indent):
+            return self.generate_condition_chain_operands(
+                operands,
+                index + 1,
+                next_indent,
+                success,
+                loop_contexts,
+            )
+
+        return self.generate_condition_chain_operand(
+            operand,
+            indent,
+            continue_chain,
+            loop_contexts,
+        )
+
+    def generate_condition_chain_operand(
+        self,
+        operand,
+        indent,
+        success,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+
+        if isinstance(operand, LetPatternConditionNode):
+            subject, code = self.generate_match_subject(
+                operand.expression,
+                indent,
+                loop_contexts,
+            )
+            code += self.generate_nested_pattern_match(
+                subject,
+                operand.pattern,
+                indent,
+                success,
+            )
+            return code
+
+        if isinstance(operand, MatchesMacroNode):
+            condition, code = self.generate_matches_condition_flag(
+                operand,
+                indent,
+                loop_contexts,
+            )
+            code += f"{indent_str}if ({condition}) {{\n"
+            code += success(indent + 1)
+            code += f"{indent_str}}}\n"
+            return code
+
+        condition_code, condition = self.generate_try_expression(
+            operand,
+            indent,
+            loop_contexts,
+        )
+        code = condition_code
+        code += f"{indent_str}if ({condition}) {{\n"
+        code += success(indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_for_loop(self, node, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        pattern = self.generate_for_loop_pattern(node.pattern)
+        nested_contexts = self.extend_loop_contexts(loop_contexts, node)
+        loop_context = nested_contexts[-1]
 
         # Convert Rust for-in loop to C-style for loop
-        code = f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; {pattern}++) {{\n"
-        code += self.generate_function_body(node.body, indent + 1)
+        code = self.generate_labeled_control_declarations(loop_context, indent)
+        code += self.generate_for_loop_header(
+            pattern,
+            node.iterable,
+            indent,
+            loop_contexts,
+        )
+        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
         code += f"{indent_str}}}\n"
 
         return code
 
-    def generate_while_loop(self, node, indent):
+    def generate_for_loop_pattern(self, pattern):
+        if isinstance(pattern, str) and not self.is_discard_pattern(pattern):
+            return pattern
+        return self.next_for_loop_index_name()
+
+    def next_for_loop_index_name(self):
+        name = f"_for_index_{self.for_loop_index_counter}"
+        self.for_loop_index_counter += 1
+        return name
+
+    def next_for_loop_step_name(self):
+        name = f"_for_step_{self.for_loop_step_counter}"
+        self.for_loop_step_counter += 1
+        return name
+
+    def next_for_loop_bound_name(self):
+        name = f"_for_bound_{self.for_loop_bound_counter}"
+        self.for_loop_bound_counter += 1
+        return name
+
+    def generate_for_loop_header(self, pattern, iterable, indent, loop_contexts=None):
         indent_str = "    " * indent
+        range_node, step_expression = self.parse_for_range_iterable(iterable)
+
+        if range_node is not None:
+            start_setup, start = self.generate_for_loop_setup_expression(
+                range_node.start if range_node.start is not None else "0",
+                indent,
+                self.next_for_loop_bound_name,
+                loop_contexts,
+            )
+            setup = start_setup
+            condition = ""
+            if range_node.end is not None:
+                end_setup, end = self.generate_for_loop_setup_expression(
+                    range_node.end,
+                    indent,
+                    self.next_for_loop_bound_name,
+                    loop_contexts,
+                )
+                setup += end_setup
+                comparison = "<=" if range_node.inclusive else "<"
+                condition = f"{pattern} {comparison} {end}"
+
+            if step_expression is None:
+                increment = f"{pattern}++"
+            else:
+                step_setup, step = self.generate_for_loop_setup_expression(
+                    step_expression,
+                    indent,
+                    self.next_for_loop_step_name,
+                    loop_contexts,
+                )
+                setup += step_setup
+                increment = f"{pattern} += {step}"
+
+            return (
+                setup + f"{indent_str}for (int {pattern} = {start}; "
+                f"{condition}; {increment}) {{\n"
+            )
+
+        setup, iterable_expr = self.generate_for_loop_setup_expression(
+            iterable,
+            indent,
+            self.next_for_loop_bound_name,
+            loop_contexts,
+        )
+
+        return (
+            setup + f"{indent_str}for (int {pattern} = 0; "
+            f"{pattern} < {iterable_expr}; {pattern}++) {{\n"
+        )
+
+    def generate_for_loop_setup_expression(
+        self,
+        expression,
+        indent,
+        name_factory,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+        setup, value = self.generate_try_expression(
+            expression,
+            indent,
+            loop_contexts,
+        )
+
+        if setup:
+            if not isinstance(expression, TryNode):
+                name = name_factory()
+                setup += f"{indent_str}int {name} = {value};\n"
+                return setup, name
+            return setup, value
+
+        if self.expression_has_side_effects(expression):
+            name = name_factory()
+            return f"{indent_str}int {name} = {value};\n", name
+
+        return "", value
+
+    def parse_for_range_iterable(self, iterable):
+        if isinstance(iterable, RangeNode):
+            return iterable, None
+
+        if not isinstance(iterable, FunctionCallNode):
+            return None, None
+
+        callee = iterable.name
+        if not (
+            isinstance(callee, MemberAccessNode)
+            and callee.member == "step_by"
+            and isinstance(callee.object, RangeNode)
+            and len(iterable.args) == 1
+        ):
+            return None, None
+
+        return callee.object, iterable.args[0]
+
+    def generate_while_loop(self, node, indent, loop_contexts=None):
+        if isinstance(node.condition, ConditionChainNode):
+            return self.generate_condition_chain_while_loop(
+                node,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(node.condition, MatchesMacroNode):
+            return self.generate_matches_while_loop(node, indent, loop_contexts)
+
+        if isinstance(node.condition, LetPatternConditionNode):
+            return self.generate_while_let_loop(node, indent, loop_contexts)
+
+        indent_str = "    " * indent
+        nested_contexts = self.extend_loop_contexts(loop_contexts, node)
+        loop_context = nested_contexts[-1]
+
+        code = self.generate_labeled_control_declarations(loop_context, indent)
+        if self.expression_contains_try(node.condition):
+            code += f"{indent_str}while (true) {{\n"
+            condition_code, condition = self.generate_try_expression(
+                node.condition,
+                indent + 1,
+                nested_contexts,
+            )
+            code += condition_code
+            code += f"{indent_str}    if (!{condition}) {{\n"
+            code += f"{indent_str}        break;\n"
+            code += f"{indent_str}    }}\n"
+            code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+            code += f"{indent_str}}}\n"
+            return code
+
         condition = self.generate_expression(node.condition)
-
-        code = f"{indent_str}while ({condition}) {{\n"
-        code += self.generate_function_body(node.body, indent + 1)
+        code += f"{indent_str}while ({condition}) {{\n"
+        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
         code += f"{indent_str}}}\n"
 
         return code
 
-    def generate_loop(self, node, indent):
+    def generate_condition_chain_while_loop(self, node, indent, loop_contexts=None):
         indent_str = "    " * indent
+        nested_contexts = self.extend_loop_contexts(loop_contexts, node)
+        loop_context = nested_contexts[-1]
+
+        code = self.generate_labeled_control_declarations(loop_context, indent)
+        code += f"{indent_str}while (true) {{\n"
+
+        def success(success_indent):
+            return self.generate_function_body(
+                node.body,
+                success_indent,
+                nested_contexts,
+            )
+
+        def failure(failure_indent):
+            failure_indent_str = "    " * failure_indent
+            return f"{failure_indent_str}break;\n"
+
+        code += self.generate_condition_chain_branch(
+            node.condition,
+            indent + 1,
+            success,
+            failure,
+            nested_contexts,
+        )
+        code += f"{indent_str}}}\n"
+
+        return code
+
+    def generate_matches_while_loop(self, node, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        nested_contexts = self.extend_loop_contexts(loop_contexts, node)
+        loop_context = nested_contexts[-1]
+
+        code = self.generate_labeled_control_declarations(loop_context, indent)
+        code += f"{indent_str}while (true) {{\n"
+        condition, condition_code = self.generate_matches_condition_flag(
+            node.condition,
+            indent + 1,
+            nested_contexts,
+        )
+        code += condition_code
+        code += f"{indent_str}    if (!{condition}) {{\n"
+        code += f"{indent_str}        break;\n"
+        code += f"{indent_str}    }}\n"
+        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += f"{indent_str}}}\n"
+
+        return code
+
+    def generate_while_let_loop(self, node, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        nested_contexts = self.extend_loop_contexts(loop_contexts, node)
+        loop_context = nested_contexts[-1]
+
+        code = self.generate_labeled_control_declarations(loop_context, indent)
+        code += f"{indent_str}while (true) {{\n"
+
+        def success(success_indent):
+            return self.generate_function_body(
+                node.body,
+                success_indent,
+                nested_contexts,
+            )
+
+        def failure(failure_indent):
+            failure_indent_str = "    " * failure_indent
+            return f"{failure_indent_str}break;\n"
+
+        code += self.generate_let_pattern_condition_branch(
+            node.condition,
+            indent + 1,
+            success,
+            failure,
+            nested_contexts,
+        )
+        code += f"{indent_str}}}\n"
+
+        return code
+
+    def generate_loop(self, node, indent, result_target=None, loop_contexts=None):
+        indent_str = "    " * indent
+        nested_contexts = self.extend_loop_contexts(
+            loop_contexts, node, result_target=result_target
+        )
+        loop_context = nested_contexts[-1]
 
         # Convert Rust infinite loop to while(true)
-        code = f"{indent_str}while (true) {{\n"
-        code += self.generate_function_body(node.body, indent + 1)
+        code = self.generate_labeled_control_declarations(loop_context, indent)
+        code += f"{indent_str}while (true) {{\n"
+        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
         code += f"{indent_str}}}\n"
 
         return code
 
-    def generate_match_statement(self, node, indent):
+    def generate_match_statement(self, node, indent, loop_contexts=None):
+        if self.match_requires_if_chain(node):
+            return self.generate_match_if_chain(
+                node,
+                indent,
+                self.generate_function_body,
+                loop_contexts,
+            )
+
         indent_str = "    " * indent
-        expression = self.generate_expression(node.expression)
+        subject, code = self.generate_match_subject(
+            node.expression,
+            indent,
+            loop_contexts,
+        )
+        expression = self.generate_match_subject_expression(subject)
+        switch_break_flag = self.create_switch_break_flag(node, loop_contexts)
+        arm_loop_contexts = self.with_switch_break_flag(
+            loop_contexts,
+            switch_break_flag,
+        )
 
         # Convert Rust match to switch statement
-        code = f"{indent_str}switch ({expression}) {{\n"
+        code += self.generate_switch_break_declaration(switch_break_flag, indent)
+        code += f"{indent_str}switch ({expression}) {{\n"
 
         for arm in node.arms:
-            pattern = self.generate_expression(arm.pattern)
-            code += f"{indent_str}    case {pattern}:\n"
-            code += self.generate_function_body(arm.body, indent + 2)
-            code += f"{indent_str}        break;\n"
+            code += self.generate_match_case_label(arm.pattern, indent + 1)
+            code += self.generate_function_body(
+                arm.body,
+                indent + 2,
+                arm_loop_contexts,
+            )
+            if self.match_arm_needs_switch_terminator(arm.body):
+                code += f"{indent_str}        break;\n"
+
+        code += f"{indent_str}}}\n"
+        code += self.generate_switch_break_propagation(
+            switch_break_flag,
+            loop_contexts,
+            indent,
+        )
+        return code
+
+    def generate_match_case_label(self, pattern, indent):
+        indent_str = "    " * indent
+        if pattern == "_":
+            return f"{indent_str}default:\n"
+
+        return f"{indent_str}case {self.generate_expression(pattern)}:\n"
+
+    def match_requires_if_chain(self, match_node):
+        return any(
+            isinstance(arm.pattern, MatchOrPatternNode)
+            or arm.guard is not None
+            or not self.is_switch_case_pattern(arm.pattern)
+            for arm in match_node.arms
+        )
+
+    def is_switch_case_pattern(self, pattern):
+        return pattern == "_" or isinstance(pattern, str)
+
+    def next_match_chain_flag_name(self):
+        name = f"_rust_match_matched_{self.match_chain_counter}"
+        self.match_chain_counter += 1
+        return name
+
+    def next_match_subject_name(self):
+        name = f"_rust_match_subject_{self.match_subject_counter}"
+        self.match_subject_counter += 1
+        return name
+
+    def next_match_payload_name(self):
+        name = f"_rust_match_payload_{self.match_payload_counter}"
+        self.match_payload_counter += 1
+        return name
+
+    def next_match_or_flag_name(self):
+        name = f"_rust_match_or_matched_{self.match_or_counter}"
+        self.match_or_counter += 1
+        return name
+
+    def next_match_tuple_name(self):
+        name = f"_rust_match_tuple_{self.match_tuple_counter}"
+        self.match_tuple_counter += 1
+        return name
+
+    def next_match_array_name(self):
+        name = f"_rust_match_array_{self.match_array_counter}"
+        self.match_array_counter += 1
+        return name
+
+    def next_matches_result_name(self):
+        name = f"_rust_matches_result_{self.matches_result_counter}"
+        self.matches_result_counter += 1
+        return name
+
+    def next_closure_param_name(self):
+        name = f"_rust_closure_arg_{self.closure_param_counter}"
+        self.closure_param_counter += 1
+        return name
+
+    def next_try_subject_name(self):
+        name = f"_rust_try_subject_{self.try_subject_counter}"
+        self.try_subject_counter += 1
+        return name
+
+    def next_try_value_name(self):
+        name = f"_rust_try_value_{self.try_value_counter}"
+        self.try_value_counter += 1
+        return name
+
+    def next_try_block_value_name(self):
+        name = f"_rust_try_block_value_{self.try_block_value_counter}"
+        self.try_block_value_counter += 1
+        return name
+
+    def next_transparent_block_value_name(self):
+        name = f"_rust_block_value_{self.transparent_block_value_counter}"
+        self.transparent_block_value_counter += 1
+        return name
+
+    def generate_match_if_chain(
+        self,
+        match_node,
+        indent,
+        branch_generator,
+        loop_contexts=None,
+    ):
+        subject, code = self.generate_match_subject(
+            match_node.expression,
+            indent,
+            loop_contexts,
+        )
+
+        matched_flag = self.next_match_chain_flag_name()
+        indent_str = "    " * indent
+        code += f"{indent_str}bool {matched_flag} = false;\n"
+
+        for arm in match_node.arms:
+            code += self.generate_match_if_chain_arm(
+                subject,
+                arm,
+                matched_flag,
+                indent,
+                branch_generator,
+                loop_contexts,
+            )
+
+        return code
+
+    def generate_match_subject(self, expression, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+
+        if isinstance(expression, TupleNode):
+            return self.generate_match_tuple_subject(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, ArrayNode):
+            return self.generate_match_array_subject(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if self.match_subject_needs_statement_result(expression):
+            subject_name = self.next_match_subject_name()
+            code += f"{indent_str}auto {subject_name};\n"
+            code += self.generate_expression_result(
+                expression,
+                indent,
+                subject_name,
+                loop_contexts,
+            )
+            return subject_name, code
+
+        if self.expression_contains_try(expression):
+            try_code, subject = self.generate_try_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+            if not isinstance(expression, TryNode) and self.expression_has_side_effects(
+                expression
+            ):
+                subject_name = self.next_match_subject_name()
+                try_code += f"{indent_str}auto {subject_name} = {subject};\n"
+                subject = subject_name
+            return subject, try_code
+
+        subject = self.generate_expression(expression)
+        if self.expression_has_side_effects(expression):
+            subject_name = self.next_match_subject_name()
+            code += f"{indent_str}auto {subject_name} = {subject};\n"
+            subject = subject_name
+
+        return subject, code
+
+    def match_subject_needs_statement_result(self, expression):
+        return self.is_block_expression_node(expression) and (
+            self.expression_contains_try(expression)
+            or self.expression_has_side_effects(expression)
+        )
+
+    def generate_match_tuple_subject(self, expression, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        elements = []
+        code = ""
+
+        for element in expression.elements:
+            if isinstance(element, TupleNode):
+                nested_subject, nested_code = self.generate_match_tuple_subject(
+                    element,
+                    indent,
+                    loop_contexts,
+                )
+                code += nested_code
+                elements.append(nested_subject)
+                continue
+
+            element_name = self.next_match_tuple_name()
+            element_code, element_value = self.generate_try_expression(
+                element,
+                indent,
+                loop_contexts,
+            )
+            code += element_code
+            code += f"{indent_str}auto {element_name} = " f"{element_value};\n"
+            elements.append(element_name)
+
+        return TupleNode(elements), code
+
+    def generate_match_array_subject(self, expression, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        elements = []
+        code = ""
+
+        if expression.size is not None:
+            subject_code, subject = self.generate_try_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+            subject_name = self.next_match_array_name()
+            code += subject_code
+            code += f"{indent_str}auto {subject_name} = {subject};\n"
+            return subject_name, code
+
+        for element in expression.elements:
+            if isinstance(element, ArrayNode):
+                nested_subject, nested_code = self.generate_match_array_subject(
+                    element,
+                    indent,
+                )
+                code += nested_code
+                elements.append(nested_subject)
+                continue
+
+            element_name = self.next_match_array_name()
+            element_code, element_value = self.generate_try_expression(
+                element,
+                indent,
+                loop_contexts,
+            )
+            code += element_code
+            code += f"{indent_str}auto {element_name} = " f"{element_value};\n"
+            elements.append(element_name)
+
+        return ArrayNode(elements), code
+
+    def generate_match_if_chain_arm(
+        self,
+        subject,
+        arm,
+        matched_flag,
+        indent,
+        branch_generator,
+        loop_contexts=None,
+    ):
+        if isinstance(arm.pattern, ReferenceNode):
+            return self.generate_match_if_chain_arm(
+                subject,
+                MatchArmNode(arm.pattern.expression, arm.guard, arm.body),
+                matched_flag,
+                indent,
+                branch_generator,
+                loop_contexts,
+            )
+
+        if isinstance(arm.pattern, MatchBindingPatternNode) and isinstance(
+            arm.pattern.pattern, MatchOrPatternNode
+        ):
+            code = ""
+            for pattern in arm.pattern.pattern.patterns:
+                code += self.generate_match_if_chain_arm(
+                    subject,
+                    MatchArmNode(
+                        MatchBindingPatternNode(arm.pattern.name, pattern),
+                        arm.guard,
+                        arm.body,
+                    ),
+                    matched_flag,
+                    indent,
+                    branch_generator,
+                    loop_contexts,
+                )
+            return code
+
+        if isinstance(arm.pattern, MatchOrPatternNode):
+            code = ""
+            for pattern in arm.pattern.patterns:
+                code += self.generate_match_if_chain_arm(
+                    subject,
+                    MatchArmNode(pattern, arm.guard, arm.body),
+                    matched_flag,
+                    indent,
+                    branch_generator,
+                    loop_contexts,
+                )
+            return code
+
+        if self.pattern_has_nested_constructor(arm.pattern):
+            return self.generate_nested_constructor_match_arm(
+                subject,
+                arm,
+                matched_flag,
+                indent,
+                branch_generator,
+                loop_contexts,
+            )
+
+        indent_str = "    " * indent
+        pattern_condition = self.generate_match_pattern_condition(
+            subject,
+            arm.pattern,
+        )
+        if pattern_condition is None:
+            arm_condition = f"!{matched_flag}"
+        else:
+            arm_condition = f"!{matched_flag} && {pattern_condition}"
+
+        code = f"{indent_str}if ({arm_condition}) {{\n"
+        code += self.generate_match_pattern_bindings(
+            subject,
+            arm.pattern,
+            indent + 1,
+        )
+
+        if arm.guard is not None:
+            guard_code, guard = self.generate_try_expression(
+                arm.guard,
+                indent + 1,
+                loop_contexts,
+            )
+            code += guard_code
+            code += f"{indent_str}    if ({guard}) {{\n"
+            code += f"{indent_str}        {matched_flag} = true;\n"
+            code += branch_generator(arm.body, indent + 2, loop_contexts)
+            code += f"{indent_str}    }}\n"
+        else:
+            code += f"{indent_str}    {matched_flag} = true;\n"
+            code += branch_generator(arm.body, indent + 1, loop_contexts)
 
         code += f"{indent_str}}}\n"
         return code
 
+    def pattern_has_nested_constructor(self, pattern):
+        if isinstance(pattern, MatchBindingPatternNode):
+            return self.pattern_has_nested_constructor(pattern.pattern)
+
+        if isinstance(pattern, ReferenceNode):
+            return self.pattern_has_nested_constructor(pattern.expression)
+
+        if isinstance(pattern, TupleNode):
+            return True
+
+        if isinstance(pattern, ArrayNode):
+            return True
+
+        if isinstance(pattern, MatchStructPatternNode):
+            return True
+
+        if isinstance(pattern, MatchOrPatternNode):
+            return any(
+                isinstance(alternative, FunctionCallNode)
+                or self.pattern_has_nested_constructor(alternative)
+                or isinstance(alternative, TupleNode)
+                or isinstance(alternative, ArrayNode)
+                or isinstance(alternative, MatchStructPatternNode)
+                for alternative in pattern.patterns
+            )
+
+        if not isinstance(pattern, FunctionCallNode):
+            return False
+
+        return any(
+            isinstance(arg, FunctionCallNode)
+            or self.pattern_has_nested_constructor(arg)
+            for arg in pattern.args
+        )
+
+    def generate_nested_constructor_match_arm(
+        self,
+        subject,
+        arm,
+        matched_flag,
+        indent,
+        branch_generator,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+
+        def success(success_indent):
+            return self.generate_match_arm_success(
+                arm,
+                matched_flag,
+                success_indent,
+                branch_generator,
+                loop_contexts,
+            )
+
+        code = f"{indent_str}if (!{matched_flag}) {{\n"
+        code += self.generate_nested_pattern_match(
+            subject,
+            arm.pattern,
+            indent + 1,
+            success,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_nested_pattern_match(self, subject, pattern, indent, success):
+        indent_str = "    " * indent
+        if isinstance(pattern, MatchBindingPatternNode):
+
+            def binding_success(success_indent):
+                success_indent_str = "    " * success_indent
+                binding = ""
+                if not self.is_discard_pattern(pattern.name):
+                    binding = (
+                        f"{success_indent_str}auto {pattern.name} = "
+                        f"{self.generate_match_subject_expression(subject)};\n"
+                    )
+                return binding + success(success_indent)
+
+            return self.generate_nested_pattern_match(
+                subject,
+                pattern.pattern,
+                indent,
+                binding_success,
+            )
+
+        if isinstance(pattern, TupleNode):
+            return self.generate_nested_tuple_pattern_match(
+                subject,
+                pattern,
+                0,
+                indent,
+                success,
+            )
+
+        if isinstance(pattern, ArrayNode):
+            return self.generate_nested_array_pattern_match(
+                subject,
+                pattern,
+                indent,
+                success,
+            )
+
+        if isinstance(pattern, MatchStructPatternNode):
+            return self.generate_nested_struct_pattern_match(
+                subject,
+                pattern,
+                indent,
+                success,
+            )
+
+        if isinstance(pattern, ReferenceNode):
+            return self.generate_nested_pattern_match(
+                subject,
+                pattern.expression,
+                indent,
+                success,
+            )
+
+        if isinstance(pattern, MatchOrPatternNode):
+            matched_flag = self.next_match_or_flag_name()
+            code = f"{indent_str}bool {matched_flag} = false;\n"
+            for alternative in pattern.patterns:
+
+                def alternative_success(success_indent, matched_flag=matched_flag):
+                    success_indent_str = "    " * success_indent
+                    return f"{success_indent_str}{matched_flag} = true;\n" + success(
+                        success_indent
+                    )
+
+                code += f"{indent_str}if (!{matched_flag}) {{\n"
+                code += self.generate_nested_pattern_match(
+                    subject,
+                    alternative,
+                    indent + 1,
+                    alternative_success,
+                )
+                code += f"{indent_str}}}\n"
+            return code
+
+        if not isinstance(pattern, FunctionCallNode):
+            condition = self.generate_match_pattern_condition(subject, pattern)
+            if condition is None:
+                code = self.generate_match_pattern_bindings(subject, pattern, indent)
+                code += success(indent)
+                return code
+
+            code = f"{indent_str}if ({condition}) {{\n"
+            code += self.generate_match_pattern_bindings(subject, pattern, indent + 1)
+            code += success(indent + 1)
+            code += f"{indent_str}}}\n"
+            return code
+
+        if isinstance(pattern, MatchRestPatternNode):
+            return success(indent)
+
+        subject_expr = self.generate_match_subject_expression(subject)
+        constructor = self.generate_constructor_helper_name(pattern.name)
+        code = f"{indent_str}if (is_{constructor}({subject_expr})) {{\n"
+        code += self.generate_nested_constructor_args(
+            subject_expr,
+            constructor,
+            pattern.args,
+            0,
+            indent + 1,
+            success,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_nested_struct_pattern_match(self, subject, pattern, indent, success):
+        indent_str = "    " * indent
+        subject_expr = self.generate_match_subject_expression(subject)
+
+        def fields_success(success_indent):
+            return self.generate_nested_struct_pattern_fields(
+                subject_expr,
+                pattern,
+                0,
+                success_indent,
+                success,
+            )
+
+        if self.is_record_variant_pattern(pattern):
+            helper = self.generate_constructor_helper_name(pattern.name)
+            code = f"{indent_str}if (is_{helper}({subject_expr})) {{\n"
+            code += fields_success(indent + 1)
+            code += f"{indent_str}}}\n"
+            return code
+
+        return fields_success(indent)
+
+    def generate_nested_struct_pattern_fields(
+        self,
+        subject,
+        pattern,
+        index,
+        indent,
+        success,
+    ):
+        if index >= len(pattern.fields):
+            return success(indent)
+
+        field_name, field_pattern = pattern.fields[index]
+        field_subject = self.generate_struct_field_accessor(
+            subject,
+            pattern,
+            field_name,
+        )
+
+        def continue_fields(next_indent):
+            return self.generate_nested_struct_pattern_fields(
+                subject,
+                pattern,
+                index + 1,
+                next_indent,
+                success,
+            )
+
+        return self.generate_nested_pattern_match(
+            field_subject,
+            field_pattern,
+            indent,
+            continue_fields,
+        )
+
+    def generate_nested_tuple_pattern_match(
+        self,
+        subject,
+        pattern,
+        index,
+        indent,
+        success,
+    ):
+        if index >= len(pattern.elements):
+            return success(indent)
+
+        if isinstance(subject, TupleNode) and index >= len(subject.elements):
+            return ""
+
+        element_subject = self.generate_tuple_element_accessor(subject, index)
+
+        def continue_elements(next_indent):
+            return self.generate_nested_tuple_pattern_match(
+                subject,
+                pattern,
+                index + 1,
+                next_indent,
+                success,
+            )
+
+        return self.generate_nested_pattern_match(
+            element_subject,
+            pattern.elements[index],
+            indent,
+            continue_elements,
+        )
+
+    def generate_nested_array_pattern_match(self, subject, pattern, indent, success):
+        indent_str = "    " * indent
+        rest_index = self.find_array_rest_index(pattern)
+        length_condition = self.generate_array_length_condition(
+            subject,
+            pattern,
+            rest_index,
+        )
+
+        def length_success(success_indent):
+            return self.generate_nested_array_elements(
+                subject,
+                pattern,
+                rest_index,
+                success_indent,
+                success,
+            )
+
+        if length_condition is None:
+            return length_success(indent)
+
+        code = f"{indent_str}if ({length_condition}) {{\n"
+        code += length_success(indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_nested_array_elements(
+        self,
+        subject,
+        pattern,
+        rest_index,
+        indent,
+        success,
+    ):
+        entries = self.get_array_pattern_entries(subject, pattern, rest_index)
+
+        def rest_success(success_indent):
+            code = self.generate_array_rest_binding(
+                subject,
+                pattern,
+                rest_index,
+                success_indent,
+            )
+            code += success(success_indent)
+            return code
+
+        return self.generate_nested_array_element_entries(
+            entries,
+            0,
+            indent,
+            rest_success,
+        )
+
+    def generate_nested_array_element_entries(
+        self,
+        entries,
+        index,
+        indent,
+        success,
+    ):
+        if index >= len(entries):
+            return success(indent)
+
+        element_pattern, element_subject = entries[index]
+
+        def continue_entries(next_indent):
+            return self.generate_nested_array_element_entries(
+                entries,
+                index + 1,
+                next_indent,
+                success,
+            )
+
+        return self.generate_nested_pattern_match(
+            element_subject,
+            element_pattern,
+            indent,
+            continue_entries,
+        )
+
+    def find_array_rest_index(self, pattern):
+        for index, element in enumerate(pattern.elements):
+            if self.is_array_rest_pattern(element):
+                return index
+        return None
+
+    def is_array_rest_pattern(self, pattern):
+        if isinstance(pattern, MatchRestPatternNode):
+            return True
+        return isinstance(pattern, MatchBindingPatternNode) and isinstance(
+            pattern.pattern, MatchRestPatternNode
+        )
+
+    def generate_array_length_condition(self, subject, pattern, rest_index):
+        fixed_count = len(pattern.elements) - (1 if rest_index is not None else 0)
+        subject_len = self.get_static_array_subject_length(subject)
+
+        if rest_index is None:
+            if subject_len is not None:
+                return None if subject_len == fixed_count else "false"
+            return (
+                f"({self.generate_array_length_expression(subject)} == {fixed_count})"
+            )
+
+        if subject_len is not None:
+            return None if subject_len >= fixed_count else "false"
+        return f"({self.generate_array_length_expression(subject)} >= {fixed_count})"
+
+    def get_static_array_subject_length(self, subject):
+        if isinstance(subject, ArrayNode):
+            return len(subject.elements)
+        return None
+
+    def get_array_pattern_entries(self, subject, pattern, rest_index):
+        entries = []
+        elements = pattern.elements
+
+        if rest_index is None:
+            for index, element in enumerate(elements):
+                entries.append(
+                    (element, self.generate_array_element_accessor(subject, index))
+                )
+            return entries
+
+        for index, element in enumerate(elements[:rest_index]):
+            entries.append(
+                (element, self.generate_array_element_accessor(subject, index))
+            )
+
+        suffix = elements[rest_index + 1 :]
+        for offset, element in enumerate(suffix):
+            entries.append(
+                (
+                    element,
+                    self.generate_array_suffix_element_accessor(
+                        subject,
+                        len(suffix) - offset,
+                    ),
+                )
+            )
+
+        return entries
+
+    def generate_array_rest_binding(self, subject, pattern, rest_index, indent):
+        if rest_index is None:
+            return ""
+
+        rest_pattern = pattern.elements[rest_index]
+        if not isinstance(rest_pattern, MatchBindingPatternNode):
+            return ""
+        if self.is_discard_pattern(rest_pattern.name):
+            return ""
+
+        indent_str = "    " * indent
+        suffix_count = len(pattern.elements) - rest_index - 1
+        rest_length = self.generate_array_rest_length_expression(
+            subject,
+            rest_index,
+            suffix_count,
+        )
+        rest_slice = self.generate_array_slice_expression(
+            subject,
+            rest_index,
+            rest_length,
+        )
+        return f"{indent_str}auto {rest_pattern.name} = {rest_slice};\n"
+
+    def generate_array_rest_length_expression(self, subject, rest_index, suffix_count):
+        subject_len = self.get_static_array_subject_length(subject)
+        fixed_count = rest_index + suffix_count
+        if subject_len is not None:
+            return str(subject_len - fixed_count)
+
+        length_expr = self.generate_array_length_expression(subject)
+        if fixed_count == 0:
+            return length_expr
+        return f"({length_expr} - {fixed_count})"
+
+    def generate_array_length_expression(self, subject):
+        subject_len = self.get_static_array_subject_length(subject)
+        if subject_len is not None:
+            return str(subject_len)
+        return f"length({self.generate_match_subject_expression(subject)})"
+
+    def generate_array_slice_expression(self, subject, start, length):
+        return (
+            f"_rust_slice({self.generate_match_subject_expression(subject)}, "
+            f"{start}, {length})"
+        )
+
+    def generate_nested_constructor_args(
+        self,
+        subject,
+        constructor,
+        args,
+        index,
+        indent,
+        success,
+    ):
+        if index >= len(args):
+            return success(indent)
+
+        indent_str = "    " * indent
+        arg = args[index]
+        payload = self.generate_constructor_payload_accessor(
+            subject,
+            constructor,
+            index,
+            len(args),
+        )
+
+        def continue_args(next_indent):
+            return self.generate_nested_constructor_args(
+                subject,
+                constructor,
+                args,
+                index + 1,
+                next_indent,
+                success,
+            )
+
+        if isinstance(arg, MatchOrPatternNode):
+            payload_name = self.next_match_payload_name()
+            code = f"{indent_str}auto {payload_name} = {payload};\n"
+            code += self.generate_nested_pattern_match(
+                payload_name,
+                arg,
+                indent,
+                continue_args,
+            )
+            return code
+
+        if isinstance(arg, MatchBindingPatternNode):
+            return self.generate_nested_pattern_match(
+                payload,
+                arg,
+                indent,
+                continue_args,
+            )
+
+        if isinstance(arg, TupleNode):
+            return self.generate_nested_pattern_match(
+                payload,
+                arg,
+                indent,
+                continue_args,
+            )
+
+        if isinstance(arg, ArrayNode):
+            return self.generate_nested_pattern_match(
+                payload,
+                arg,
+                indent,
+                continue_args,
+            )
+
+        if isinstance(arg, MatchStructPatternNode):
+            return self.generate_nested_pattern_match(
+                payload,
+                arg,
+                indent,
+                continue_args,
+            )
+
+        if isinstance(arg, ReferenceNode):
+            return self.generate_nested_pattern_match(
+                payload,
+                arg.expression,
+                indent,
+                continue_args,
+            )
+
+        if self.is_discard_pattern(arg):
+            return continue_args(indent)
+
+        if self.is_simple_pattern_binding(arg):
+            code = f"{indent_str}auto {arg} = {payload};\n"
+            code += continue_args(indent)
+            return code
+
+        if isinstance(arg, FunctionCallNode):
+            payload_name = self.next_match_payload_name()
+            code = f"{indent_str}auto {payload_name} = {payload};\n"
+            code += self.generate_nested_pattern_match(
+                payload_name,
+                arg,
+                indent,
+                continue_args,
+            )
+            return code
+
+        if isinstance(arg, RangeNode):
+            condition = self.generate_match_pattern_condition(payload, arg)
+            code = f"{indent_str}if ({condition}) {{\n"
+            code += continue_args(indent + 1)
+            code += f"{indent_str}}}\n"
+            return code
+
+        condition = f"({payload} == {self.generate_expression(arg)})"
+        code = f"{indent_str}if ({condition}) {{\n"
+        code += continue_args(indent + 1)
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_match_arm_success(
+        self,
+        arm,
+        matched_flag,
+        indent,
+        branch_generator,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+        if arm.guard is not None:
+            guard = self.generate_expression(arm.guard)
+            code = f"{indent_str}if ({guard}) {{\n"
+            code += f"{indent_str}    {matched_flag} = true;\n"
+            code += branch_generator(arm.body, indent + 1, loop_contexts)
+            code += f"{indent_str}}}\n"
+            return code
+
+        code = f"{indent_str}{matched_flag} = true;\n"
+        code += branch_generator(arm.body, indent, loop_contexts)
+        return code
+
+    def generate_match_pattern_condition(self, subject, pattern):
+        if isinstance(pattern, MatchBindingPatternNode):
+            return self.generate_match_pattern_condition(subject, pattern.pattern)
+
+        if isinstance(pattern, ReferenceNode):
+            return self.generate_match_pattern_condition(subject, pattern.expression)
+
+        if isinstance(pattern, MatchOrPatternNode):
+            alternatives = []
+            for alternative in pattern.patterns:
+                condition = self.generate_match_pattern_condition(subject, alternative)
+                alternatives.append(condition or "true")
+            return " || ".join(f"({condition})" for condition in alternatives)
+
+        conditions = self.generate_pattern_conditions(subject, pattern)
+        if not conditions:
+            return None
+
+        return " && ".join(conditions)
+
+    def generate_pattern_conditions(self, subject, pattern):
+        if isinstance(pattern, MatchBindingPatternNode):
+            return self.generate_pattern_conditions(subject, pattern.pattern)
+
+        if isinstance(pattern, ReferenceNode):
+            return self.generate_pattern_conditions(subject, pattern.expression)
+
+        if isinstance(pattern, TupleNode):
+            if isinstance(subject, TupleNode) and len(pattern.elements) != len(
+                subject.elements
+            ):
+                return ["false"]
+
+            conditions = []
+            for index, element in enumerate(pattern.elements):
+                conditions.extend(
+                    self.generate_pattern_conditions(
+                        self.generate_tuple_element_accessor(subject, index),
+                        element,
+                    )
+                )
+            return conditions
+
+        if isinstance(pattern, ArrayNode):
+            rest_index = self.find_array_rest_index(pattern)
+            length_condition = self.generate_array_length_condition(
+                subject,
+                pattern,
+                rest_index,
+            )
+            conditions = [length_condition] if length_condition is not None else []
+            for element, element_subject in self.get_array_pattern_entries(
+                subject,
+                pattern,
+                rest_index,
+            ):
+                conditions.extend(
+                    self.generate_pattern_conditions(element_subject, element)
+                )
+            return conditions
+
+        if isinstance(pattern, MatchStructPatternNode):
+            subject_expr = self.generate_match_subject_expression(subject)
+            conditions = []
+            if self.is_record_variant_pattern(pattern):
+                helper = self.generate_constructor_helper_name(pattern.name)
+                conditions.append(f"is_{helper}({subject_expr})")
+
+            for field_name, field_pattern in pattern.fields:
+                conditions.extend(
+                    self.generate_pattern_conditions(
+                        self.generate_struct_field_accessor(
+                            subject_expr,
+                            pattern,
+                            field_name,
+                        ),
+                        field_pattern,
+                    )
+                )
+            return conditions
+
+        if isinstance(pattern, MatchRestPatternNode):
+            return []
+
+        if isinstance(pattern, MatchOrPatternNode):
+            condition = self.generate_match_pattern_condition(subject, pattern)
+            return [f"({condition})"] if condition else []
+
+        if isinstance(pattern, RangeNode):
+            subject_expr = self.generate_match_subject_expression(subject)
+            start = self.generate_expression(pattern.start)
+            end = self.generate_expression(pattern.end)
+            end_operator = "<=" if pattern.inclusive else "<"
+            return [
+                f"({subject_expr} >= {start})",
+                f"({subject_expr} {end_operator} {end})",
+            ]
+
+        if self.is_discard_pattern(pattern) or self.is_simple_pattern_binding(pattern):
+            return []
+
+        if isinstance(pattern, FunctionCallNode):
+            subject_expr = self.generate_match_subject_expression(subject)
+            constructor = self.generate_constructor_helper_name(pattern.name)
+            conditions = [f"is_{constructor}({subject_expr})"]
+            arg_count = len(pattern.args)
+            for index, arg in enumerate(pattern.args):
+                payload = self.generate_constructor_payload_accessor(
+                    subject_expr,
+                    constructor,
+                    index,
+                    arg_count,
+                )
+                conditions.extend(self.generate_pattern_conditions(payload, arg))
+            return conditions
+
+        return [
+            f"({self.generate_match_subject_expression(subject)} == "
+            f"{self.generate_expression(pattern)})"
+        ]
+
+    def generate_match_pattern_bindings(self, subject, pattern, indent):
+        if isinstance(pattern, MatchBindingPatternNode):
+            indent_str = "    " * indent
+            binding = ""
+            if not self.is_discard_pattern(pattern.name):
+                binding += (
+                    f"{indent_str}auto {pattern.name} = "
+                    f"{self.generate_match_subject_expression(subject)};\n"
+                )
+            binding += self.generate_match_pattern_bindings(
+                subject,
+                pattern.pattern,
+                indent,
+            )
+            return binding
+
+        if isinstance(pattern, ReferenceNode):
+            return self.generate_match_pattern_bindings(
+                subject,
+                pattern.expression,
+                indent,
+            )
+
+        if isinstance(pattern, MatchOrPatternNode):
+            return ""
+
+        indent_str = "    " * indent
+        if self.is_simple_pattern_binding(pattern):
+            return (
+                f"{indent_str}auto {pattern} = "
+                f"{self.generate_match_subject_expression(subject)};\n"
+            )
+
+        if isinstance(pattern, TupleNode):
+            code = ""
+            for index, element in enumerate(pattern.elements):
+                code += self.generate_match_pattern_bindings(
+                    self.generate_tuple_element_accessor(subject, index),
+                    element,
+                    indent,
+                )
+            return code
+
+        if isinstance(pattern, ArrayNode):
+            code = ""
+            rest_index = self.find_array_rest_index(pattern)
+            for element, element_subject in self.get_array_pattern_entries(
+                subject,
+                pattern,
+                rest_index,
+            ):
+                code += self.generate_match_pattern_bindings(
+                    element_subject,
+                    element,
+                    indent,
+                )
+            code += self.generate_array_rest_binding(
+                subject,
+                pattern,
+                rest_index,
+                indent,
+            )
+            return code
+
+        if isinstance(pattern, MatchStructPatternNode):
+            subject_expr = self.generate_match_subject_expression(subject)
+            code = ""
+            for field_name, field_pattern in pattern.fields:
+                code += self.generate_match_pattern_bindings(
+                    self.generate_struct_field_accessor(
+                        subject_expr,
+                        pattern,
+                        field_name,
+                    ),
+                    field_pattern,
+                    indent,
+                )
+            return code
+
+        if isinstance(pattern, MatchRestPatternNode):
+            return ""
+
+        if not isinstance(pattern, FunctionCallNode):
+            return ""
+
+        subject_expr = self.generate_match_subject_expression(subject)
+        constructor = self.generate_constructor_helper_name(pattern.name)
+        arg_count = len(pattern.args)
+        code = ""
+        for index, arg in enumerate(pattern.args):
+            payload = self.generate_constructor_payload_accessor(
+                subject_expr,
+                constructor,
+                index,
+                arg_count,
+            )
+            code += self.generate_match_pattern_bindings(payload, arg, indent)
+        return code
+
+    def generate_match_subject_expression(self, subject):
+        if isinstance(subject, TupleNode):
+            return self.generate_expression(subject)
+        if isinstance(subject, ArrayNode):
+            return self.generate_expression(subject)
+        return str(subject)
+
+    def generate_tuple_element_accessor(self, subject, index):
+        if isinstance(subject, TupleNode):
+            element = subject.elements[index]
+            if isinstance(element, TupleNode):
+                return element
+            return self.generate_expression(element)
+
+        return f"_rust_tuple_{index}({self.generate_match_subject_expression(subject)})"
+
+    def generate_array_element_accessor(self, subject, index):
+        if isinstance(subject, ArrayNode):
+            element = subject.elements[index]
+            if isinstance(element, ArrayNode):
+                return element
+            return self.generate_expression(element)
+
+        return f"{self.generate_match_subject_expression(subject)}[{index}]"
+
+    def generate_array_suffix_element_accessor(self, subject, reverse_index):
+        subject_len = self.get_static_array_subject_length(subject)
+        if subject_len is not None:
+            return self.generate_array_element_accessor(
+                subject,
+                subject_len - reverse_index,
+            )
+
+        length_expr = self.generate_array_length_expression(subject)
+        if reverse_index == 1:
+            index_expr = f"({length_expr} - 1)"
+        else:
+            index_expr = f"({length_expr} - {reverse_index})"
+        return f"{self.generate_match_subject_expression(subject)}[{index_expr}]"
+
+    def is_record_variant_pattern(self, pattern):
+        return isinstance(pattern.name, str) and "::" in pattern.name
+
+    def generate_struct_field_accessor(self, subject, pattern, field_name):
+        subject_expr = self.generate_match_subject_expression(subject)
+        if self.is_record_variant_pattern(pattern):
+            helper = self.generate_constructor_helper_name(pattern.name)
+            return f"unwrap_{helper}_{field_name}({subject_expr})"
+
+        return f"{subject_expr}.{field_name}"
+
+    def generate_constructor_payload_accessor(
+        self,
+        subject,
+        constructor,
+        index,
+        arg_count,
+    ):
+        if arg_count == 1:
+            return f"unwrap_{constructor}({subject})"
+        return f"unwrap_{constructor}_{index}({subject})"
+
+    def generate_constructor_helper_name(self, constructor):
+        if isinstance(constructor, str):
+            name = constructor
+        else:
+            name = self.generate_expression(constructor)
+
+        helper_name = re.sub(r"[^0-9a-zA-Z_]+", "_", name).strip("_")
+        return helper_name or "variant"
+
+    def is_simple_pattern_binding(self, pattern):
+        if not isinstance(pattern, str):
+            return False
+        if pattern == "_" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", pattern):
+            return False
+        if pattern in {"true", "false", "None", "Some", "Ok", "Err"}:
+            return False
+        return pattern[0].islower()
+
+    def match_arm_needs_switch_terminator(self, body):
+        return not self.branch_guarantees_control_transfer(body)
+
+    def branch_guarantees_control_transfer(self, body):
+        if isinstance(body, (BreakNode, ContinueNode, ReturnNode)):
+            return True
+        if isinstance(body, list):
+            if not body:
+                return False
+            return self.branch_guarantees_control_transfer(body[-1])
+        if self.is_block_expression_node(body):
+            block_node = self.get_block_expression_node(body)
+            if block_node.statements:
+                return self.branch_guarantees_control_transfer(
+                    block_node.statements[-1]
+                )
+            return self.branch_guarantees_control_transfer(
+                self.get_block_expression(block_node)
+            )
+        if isinstance(body, IfNode):
+            if body.else_body is None:
+                return False
+            return self.branch_guarantees_control_transfer(
+                body.if_body
+            ) and self.branch_guarantees_control_transfer(body.else_body)
+        if isinstance(body, MatchNode):
+            return bool(body.arms) and all(
+                self.branch_guarantees_control_transfer(arm.body) for arm in body.arms
+            )
+        return False
+
+    def create_switch_break_flag(self, match_node, loop_contexts=None):
+        if not self.match_break_targets_current_loop(match_node, loop_contexts):
+            return None
+
+        flag = f"_rust_switch_break_{self.switch_break_counter}"
+        self.switch_break_counter += 1
+        return flag
+
+    def match_break_targets_current_loop(self, match_node, loop_contexts=None):
+        contexts = list(loop_contexts or [])
+        if not contexts:
+            return False
+
+        current_loop = contexts[-1]
+        current_label = current_loop.get("label")
+        return any(
+            self.contains_current_loop_break_in_switch(
+                arm.body,
+                current_label,
+                nested_loop_depth=0,
+            )
+            for arm in match_node.arms
+        )
+
+    def contains_current_loop_break_in_switch(
+        self, node, current_label, nested_loop_depth=0
+    ):
+        if node is None:
+            return False
+        if isinstance(node, list):
+            return any(
+                self.contains_current_loop_break_in_switch(
+                    child,
+                    current_label,
+                    nested_loop_depth,
+                )
+                for child in node
+            )
+        if isinstance(node, BreakNode):
+            if nested_loop_depth != 0:
+                return False
+            return node.label is None or node.label == current_label
+        if isinstance(node, LoopNode):
+            return self.contains_current_loop_break_in_switch(
+                node.body,
+                current_label,
+                nested_loop_depth + 1,
+            )
+        if isinstance(node, WhileNode):
+            return self.contains_current_loop_break_in_switch(
+                node.body,
+                current_label,
+                nested_loop_depth + 1,
+            )
+        if isinstance(node, ForNode):
+            return self.contains_current_loop_break_in_switch(
+                node.body,
+                current_label,
+                nested_loop_depth + 1,
+            )
+        if isinstance(node, IfNode):
+            return self.contains_current_loop_break_in_switch(
+                node.if_body,
+                current_label,
+                nested_loop_depth,
+            ) or self.contains_current_loop_break_in_switch(
+                node.else_body,
+                current_label,
+                nested_loop_depth,
+            )
+        if isinstance(node, MatchNode):
+            return any(
+                self.contains_current_loop_break_in_switch(
+                    arm.body,
+                    current_label,
+                    nested_loop_depth,
+                )
+                for arm in node.arms
+            )
+        if self.is_block_expression_node(node):
+            block_node = self.get_block_expression_node(node)
+            return self.contains_current_loop_break_in_switch(
+                block_node.statements,
+                current_label,
+                nested_loop_depth,
+            ) or self.contains_current_loop_break_in_switch(
+                self.get_block_expression(block_node),
+                current_label,
+                nested_loop_depth,
+            )
+        return False
+
+    def with_switch_break_flag(self, loop_contexts=None, switch_break_flag=None):
+        contexts = list(loop_contexts or [])
+        if not switch_break_flag or not contexts:
+            return contexts
+
+        contexts[-1] = dict(contexts[-1])
+        contexts[-1]["switch_break_flag"] = switch_break_flag
+        return contexts
+
+    def current_switch_break_flag(self, loop_contexts=None):
+        contexts = list(loop_contexts or [])
+        if not contexts:
+            return None
+        return contexts[-1].get("switch_break_flag")
+
+    def generate_switch_break_declaration(self, switch_break_flag, indent):
+        if not switch_break_flag:
+            return ""
+        indent_str = "    " * indent
+        return f"{indent_str}bool {switch_break_flag} = false;\n"
+
+    def generate_switch_break_propagation(
+        self, switch_break_flag, loop_contexts=None, indent=1
+    ):
+        if not switch_break_flag:
+            return ""
+
+        indent_str = "    " * indent
+        outer_switch_break_flag = self.current_switch_break_flag(loop_contexts)
+        if outer_switch_break_flag:
+            return (
+                f"{indent_str}if ({switch_break_flag}) {{\n"
+                f"{indent_str}    {outer_switch_break_flag} = true;\n"
+                f"{indent_str}    break;\n"
+                f"{indent_str}}}\n"
+            )
+
+        return (
+            f"{indent_str}if ({switch_break_flag}) {{\n"
+            f"{indent_str}    break;\n"
+            f"{indent_str}}}\n"
+        )
+
+    def generate_break_statement(self, node, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+        labeled_context = self.resolve_labeled_loop_context(node.label, loop_contexts)
+        if labeled_context is not None and not self.is_innermost_loop_context(
+            labeled_context,
+            loop_contexts,
+        ):
+            target = labeled_context["result_target"]
+
+            if target is self.return_result_target and node.value is not None:
+                return self.generate_expression_result(
+                    node.value,
+                    indent,
+                    self.return_result_target,
+                    loop_contexts,
+                )
+
+            if target and node.value is not None:
+                code += self.generate_expression_result(
+                    node.value,
+                    indent,
+                    target,
+                    loop_contexts,
+                )
+            elif node.value is not None:
+                code += self.generate_discarded_expression(
+                    node.value,
+                    indent,
+                    loop_contexts,
+                )
+
+            if labeled_context.get("break_flag"):
+                code += f"{indent_str}{labeled_context['break_flag']} = true;\n"
+            code += f"{indent_str}break;\n"
+            return code
+
+        switch_break_flag = self.current_switch_break_flag(loop_contexts)
+        if switch_break_flag and (
+            node.label is None
+            or self.is_innermost_loop_context(labeled_context, loop_contexts)
+        ):
+            target = self.resolve_break_value_target(node, loop_contexts)
+
+            if target is self.return_result_target and node.value is not None:
+                return self.generate_expression_result(
+                    node.value,
+                    indent,
+                    self.return_result_target,
+                    loop_contexts,
+                )
+
+            if target and node.value is not None:
+                code += self.generate_expression_result(
+                    node.value,
+                    indent,
+                    target,
+                    loop_contexts,
+                )
+            elif node.value is not None:
+                code += self.generate_discarded_expression(
+                    node.value,
+                    indent,
+                    loop_contexts,
+                )
+
+            code += f"{indent_str}{switch_break_flag} = true;\n"
+            code += f"{indent_str}break;\n"
+            return code
+
+        target = self.resolve_break_value_target(node, loop_contexts)
+
+        if target is self.return_result_target and node.value is not None:
+            return self.generate_expression_result(
+                node.value,
+                indent,
+                self.return_result_target,
+                loop_contexts,
+            )
+
+        if target and node.value is not None:
+            code += self.generate_expression_result(
+                node.value,
+                indent,
+                target,
+                loop_contexts,
+            )
+
+        if target is None and node.value is not None:
+            code += self.generate_discarded_expression(
+                node.value,
+                indent,
+                loop_contexts,
+            )
+
+        code += f"{indent_str}break;\n"
+        return code
+
+    def generate_continue_statement(self, node, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        labeled_context = self.resolve_labeled_loop_context(node.label, loop_contexts)
+
+        if labeled_context is None or self.is_innermost_loop_context(
+            labeled_context,
+            loop_contexts,
+        ):
+            return f"{indent_str}continue;\n"
+
+        code = ""
+        if labeled_context.get("continue_flag"):
+            code += f"{indent_str}{labeled_context['continue_flag']} = true;\n"
+        code += f"{indent_str}break;\n"
+        return code
+
+    def generate_discarded_expression(self, expression, indent, loop_contexts=None):
+        if isinstance(expression, IfNode):
+            return self.generate_discarded_if_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+        if isinstance(expression, MatchNode):
+            return self.generate_discarded_match_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+        if self.is_block_expression_node(expression):
+            return self.generate_discarded_block_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+        if isinstance(expression, LoopNode):
+            return self.generate_loop(
+                expression,
+                indent,
+                result_target=None,
+                loop_contexts=loop_contexts,
+            )
+        if self.expression_has_side_effects(expression):
+            return self.generate_expression_result(
+                expression,
+                indent,
+                None,
+                loop_contexts,
+            )
+        return ""
+
+    def generate_discarded_if_expression(self, if_node, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        condition_code, condition = self.generate_try_expression(
+            if_node.condition,
+            indent,
+            loop_contexts,
+        )
+
+        code = condition_code
+        code += f"{indent_str}if ({condition}) {{\n"
+        code += self.generate_discarded_result_branch(
+            if_node.if_body,
+            indent + 1,
+            loop_contexts,
+        )
+        code += f"{indent_str}}}"
+
+        if if_node.else_body is not None:
+            code += " else {\n"
+            code += self.generate_discarded_result_branch(
+                if_node.else_body,
+                indent + 1,
+                loop_contexts,
+            )
+            code += f"{indent_str}}}"
+
+        code += "\n"
+        return code
+
+    def generate_discarded_match_expression(
+        self, match_node, indent, loop_contexts=None
+    ):
+        if self.match_requires_if_chain(match_node):
+            return self.generate_match_if_chain(
+                match_node,
+                indent,
+                lambda body, branch_indent, contexts: self.generate_discarded_result_branch(
+                    body,
+                    branch_indent,
+                    contexts,
+                ),
+                loop_contexts,
+            )
+
+        indent_str = "    " * indent
+        expression = self.generate_expression(match_node.expression)
+        switch_break_flag = self.create_switch_break_flag(match_node, loop_contexts)
+        arm_loop_contexts = self.with_switch_break_flag(
+            loop_contexts,
+            switch_break_flag,
+        )
+
+        code = self.generate_switch_break_declaration(switch_break_flag, indent)
+        code += f"{indent_str}switch ({expression}) {{\n"
+
+        for arm in match_node.arms:
+            code += self.generate_match_case_label(arm.pattern, indent + 1)
+            code += self.generate_discarded_result_branch(
+                arm.body,
+                indent + 2,
+                arm_loop_contexts,
+            )
+            if self.match_arm_needs_switch_terminator(arm.body):
+                code += f"{indent_str}        break;\n"
+
+        code += f"{indent_str}}}\n"
+        code += self.generate_switch_break_propagation(
+            switch_break_flag,
+            loop_contexts,
+            indent,
+        )
+        return code
+
+    def generate_discarded_result_branch(self, branch, indent, loop_contexts=None):
+        if self.is_block_expression_node(branch):
+            return self.generate_discarded_block_expression(
+                branch,
+                indent,
+                loop_contexts,
+            )
+        if isinstance(branch, list):
+            return self.generate_function_body(branch, indent, loop_contexts)
+        if branch is not None:
+            return self.generate_discarded_expression(
+                branch,
+                indent,
+                loop_contexts,
+            )
+        return ""
+
+    def generate_discarded_block_expression(
+        self, block_node, indent, loop_contexts=None
+    ):
+        block_node = self.get_block_expression_node(block_node)
+        code = self.generate_function_body(block_node.statements, indent, loop_contexts)
+        expression = self.get_block_expression(block_node)
+        if expression is not None:
+            code += self.generate_discarded_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+        return code
+
+    def expression_has_side_effects(self, expression):
+        if isinstance(expression, FunctionCallNode):
+            if self.is_pure_method_call(expression):
+                return self.method_call_has_side_effects(expression)
+            return True
+        if isinstance(expression, TryNode):
+            return True
+        if isinstance(expression, TryBlockNode):
+            return True
+        if isinstance(expression, AwaitNode):
+            return self.expression_has_side_effects(expression.expression)
+        if self.is_block_expression_node(expression):
+            block_node = self.get_block_expression_node(expression)
+            return bool(block_node.statements) or self.expression_has_side_effects(
+                self.get_block_expression(block_node)
+            )
+        if isinstance(expression, AssignmentNode):
+            return True
+        if isinstance(expression, IfNode):
+            return True
+        if isinstance(expression, MatchNode):
+            return True
+        if isinstance(expression, MatchesMacroNode):
+            return self.expression_has_side_effects(
+                expression.expression
+            ) or self.expression_has_side_effects(expression.guard)
+        if isinstance(expression, LetPatternConditionNode):
+            return self.expression_has_side_effects(expression.expression)
+        if isinstance(expression, ConditionChainNode):
+            return any(
+                self.expression_has_side_effects(operand)
+                for operand in expression.operands
+            )
+        if isinstance(expression, ClosureNode):
+            return False
+        if isinstance(expression, LoopNode):
+            return True
+        if isinstance(expression, BinaryOpNode):
+            return self.expression_has_side_effects(
+                expression.left
+            ) or self.expression_has_side_effects(expression.right)
+        if isinstance(expression, UnaryOpNode):
+            return self.expression_has_side_effects(expression.operand)
+        if isinstance(expression, CastNode):
+            return self.expression_has_side_effects(expression.expression)
+        if isinstance(expression, ReferenceNode):
+            return self.expression_has_side_effects(expression.expression)
+        if isinstance(expression, DereferenceNode):
+            return self.expression_has_side_effects(expression.expression)
+        if isinstance(expression, TupleNode):
+            return any(
+                self.expression_has_side_effects(element)
+                for element in expression.elements
+            )
+        if isinstance(expression, ArrayNode):
+            return any(
+                self.expression_has_side_effects(element)
+                for element in expression.elements
+            ) or self.expression_has_side_effects(expression.size)
+        if isinstance(expression, ArrayAccessNode):
+            return self.expression_has_side_effects(
+                expression.array
+            ) or self.expression_has_side_effects(expression.index)
+        if isinstance(expression, MemberAccessNode):
+            return self.expression_has_side_effects(expression.object)
+        if isinstance(expression, VectorConstructorNode):
+            return any(self.expression_has_side_effects(arg) for arg in expression.args)
+        if isinstance(expression, StructInitializationNode):
+            return any(
+                self.expression_has_side_effects(field_expression)
+                for _, field_expression in expression.fields
+            )
+        if isinstance(expression, TernaryOpNode):
+            return (
+                self.expression_has_side_effects(expression.condition)
+                or self.expression_has_side_effects(expression.true_expr)
+                or self.expression_has_side_effects(expression.false_expr)
+            )
+        return False
+
+    def is_pure_method_call(self, expression):
+        if not (
+            isinstance(expression, FunctionCallNode)
+            and isinstance(expression.name, MemberAccessNode)
+        ):
+            return False
+
+        method_name = expression.name.member
+        if method_name in {"len", "length", "normalize"}:
+            return not expression.args
+        if method_name in {"dot", "cross"}:
+            return len(expression.args) == 1
+        return not expression.args and self.is_swizzle_member(method_name)
+
+    def method_call_has_side_effects(self, expression):
+        return self.expression_has_side_effects(expression.name.object) or any(
+            self.expression_has_side_effects(arg) for arg in expression.args
+        )
+
+    def is_swizzle_member(self, member):
+        if not isinstance(member, str) or not 1 <= len(member) <= 4:
+            return False
+        return (
+            all(char in "xyzw" for char in member)
+            or all(char in "rgba" for char in member)
+            or all(char in "stpq" for char in member)
+        )
+
+    def extend_loop_contexts(self, loop_contexts, node, result_target=None):
+        contexts = list(loop_contexts or [])
+        label = getattr(node, "label", None)
+        break_flag = None
+        continue_flag = None
+        if label and self.loop_uses_labeled_control_flags(node):
+            suffix = self.make_labeled_control_suffix(label)
+            break_flag = f"_rust_break_{suffix}"
+            continue_flag = f"_rust_continue_{suffix}"
+
+        contexts.append(
+            {
+                "label": label,
+                "result_target": result_target,
+                "break_flag": break_flag,
+                "continue_flag": continue_flag,
+                "switch_break_flag": None,
+            }
+        )
+        return contexts
+
+    def loop_uses_labeled_control_flags(self, loop_node):
+        label = getattr(loop_node, "label", None)
+        if not label:
+            return False
+        return self.contains_labeled_control_target(
+            getattr(loop_node, "body", []),
+            label,
+            nested_loop_depth=0,
+        )
+
+    def contains_labeled_control_target(self, node, label, nested_loop_depth=0):
+        if node is None:
+            return False
+        if isinstance(node, list):
+            return any(
+                self.contains_labeled_control_target(child, label, nested_loop_depth)
+                for child in node
+            )
+        if isinstance(node, (BreakNode, ContinueNode)):
+            return node.label == label and nested_loop_depth > 0
+        if isinstance(node, LoopNode):
+            return self.contains_labeled_control_target(
+                node.body,
+                label,
+                nested_loop_depth + 1,
+            )
+        if isinstance(node, WhileNode):
+            return self.contains_labeled_control_target(
+                node.body,
+                label,
+                nested_loop_depth + 1,
+            )
+        if isinstance(node, ForNode):
+            return self.contains_labeled_control_target(
+                node.body,
+                label,
+                nested_loop_depth + 1,
+            )
+        if isinstance(node, IfNode):
+            return self.contains_labeled_control_target(
+                node.if_body,
+                label,
+                nested_loop_depth,
+            ) or self.contains_labeled_control_target(
+                node.else_body,
+                label,
+                nested_loop_depth,
+            )
+        if isinstance(node, MatchNode):
+            return any(
+                self.contains_labeled_control_target(
+                    arm.body,
+                    label,
+                    nested_loop_depth,
+                )
+                for arm in node.arms
+            )
+        if self.is_block_expression_node(node):
+            block_node = self.get_block_expression_node(node)
+            return self.contains_labeled_control_target(
+                block_node.statements,
+                label,
+                nested_loop_depth,
+            ) or self.contains_labeled_control_target(
+                self.get_block_expression(block_node),
+                label,
+                nested_loop_depth,
+            )
+        return False
+
+    def make_labeled_control_suffix(self, label):
+        clean = "".join(ch if ch.isalnum() else "_" for ch in str(label).strip("'"))
+        clean = clean.strip("_") or "label"
+        suffix = f"{clean}_{self.labeled_control_counter}"
+        self.labeled_control_counter += 1
+        return suffix
+
+    def generate_labeled_control_declarations(self, context, indent):
+        if not context.get("break_flag"):
+            return ""
+
+        indent_str = "    " * indent
+        return (
+            f"{indent_str}bool {context['break_flag']} = false;\n"
+            f"{indent_str}bool {context['continue_flag']} = false;\n"
+        )
+
+    def generate_labeled_control_propagation(self, loop_contexts=None, indent=1):
+        contexts = list(loop_contexts or [])
+        if not contexts:
+            return ""
+
+        indent_str = "    " * indent
+        code = ""
+        innermost_index = len(contexts) - 1
+
+        for index, context in enumerate(contexts):
+            break_flag = context.get("break_flag")
+            continue_flag = context.get("continue_flag")
+            if not break_flag:
+                continue
+
+            if index == innermost_index:
+                code += (
+                    f"{indent_str}if ({continue_flag}) {{\n"
+                    f"{indent_str}    {continue_flag} = false;\n"
+                    f"{indent_str}    continue;\n"
+                    f"{indent_str}}}\n"
+                    f"{indent_str}if ({break_flag}) {{\n"
+                    f"{indent_str}    break;\n"
+                    f"{indent_str}}}\n"
+                )
+            else:
+                code += (
+                    f"{indent_str}if ({continue_flag} || {break_flag}) {{\n"
+                    f"{indent_str}    break;\n"
+                    f"{indent_str}}}\n"
+                )
+
+        return code
+
+    def statement_requires_labeled_control_propagation(self, stmt, loop_contexts=None):
+        contexts = list(loop_contexts or [])
+        innermost_index = len(contexts) - 1
+
+        for index, context in enumerate(contexts):
+            if not context.get("break_flag"):
+                continue
+
+            if index == innermost_index:
+                if self.contains_labeled_control_target(
+                    stmt,
+                    context["label"],
+                    nested_loop_depth=0,
+                ):
+                    return True
+            elif self.contains_labeled_control_reference(stmt, context["label"]):
+                return True
+
+        return False
+
+    def statement_needs_labeled_control_propagation(self, stmt, loop_contexts=None):
+        if isinstance(stmt, (BreakNode, ContinueNode, ReturnNode)):
+            return False
+
+        if not self.statement_requires_labeled_control_propagation(
+            stmt,
+            loop_contexts,
+        ):
+            return False
+
+        if (
+            self.is_block_expression_node(stmt)
+            and self.branch_guarantees_control_transfer(stmt)
+            and not self.contains_switch_match(stmt)
+        ):
+            return False
+
+        return True
+
+    def contains_switch_match(self, node):
+        if node is None:
+            return False
+        if isinstance(node, list):
+            return any(self.contains_switch_match(child) for child in node)
+        if isinstance(node, MatchNode):
+            return not self.match_requires_if_chain(node) or any(
+                self.contains_switch_match(arm.body) for arm in node.arms
+            )
+        if self.is_block_expression_node(node):
+            block_node = self.get_block_expression_node(node)
+            return self.contains_switch_match(
+                block_node.statements,
+            ) or self.contains_switch_match(self.get_block_expression(block_node))
+        if isinstance(node, IfNode):
+            return self.contains_switch_match(
+                node.if_body,
+            ) or self.contains_switch_match(node.else_body)
+        if isinstance(node, LoopNode):
+            return self.contains_switch_match(node.body)
+        if isinstance(node, WhileNode):
+            return self.contains_switch_match(node.body)
+        if isinstance(node, ForNode):
+            return self.contains_switch_match(node.body)
+        return False
+
+    def contains_labeled_control_reference(self, node, label):
+        if node is None:
+            return False
+        if isinstance(node, list):
+            return any(
+                self.contains_labeled_control_reference(child, label) for child in node
+            )
+        if isinstance(node, (BreakNode, ContinueNode)):
+            return node.label == label
+        if isinstance(node, LoopNode):
+            return self.contains_labeled_control_reference(node.body, label)
+        if isinstance(node, WhileNode):
+            return self.contains_labeled_control_reference(node.body, label)
+        if isinstance(node, ForNode):
+            return self.contains_labeled_control_reference(node.body, label)
+        if isinstance(node, IfNode):
+            return self.contains_labeled_control_reference(
+                node.if_body,
+                label,
+            ) or self.contains_labeled_control_reference(node.else_body, label)
+        if isinstance(node, MatchNode):
+            return any(
+                self.contains_labeled_control_reference(arm.body, label)
+                for arm in node.arms
+            )
+        if self.is_block_expression_node(node):
+            block_node = self.get_block_expression_node(node)
+            return self.contains_labeled_control_reference(
+                block_node.statements,
+                label,
+            ) or self.contains_labeled_control_reference(
+                self.get_block_expression(block_node),
+                label,
+            )
+        return False
+
+    def resolve_labeled_loop_context(self, label, loop_contexts=None):
+        if not label:
+            return None
+
+        for context in reversed(list(loop_contexts or [])):
+            if context["label"] == label:
+                return context
+        return None
+
+    def is_innermost_loop_context(self, context, loop_contexts=None):
+        contexts = list(loop_contexts or [])
+        return bool(contexts) and context is contexts[-1]
+
+    def resolve_break_value_target(self, node, loop_contexts=None):
+        if node.value is None:
+            return None
+
+        contexts = list(loop_contexts or [])
+        if not contexts:
+            return None
+
+        if node.label:
+            for context in reversed(contexts):
+                if context["label"] == node.label:
+                    return context["result_target"]
+            return None
+
+        return contexts[-1]["result_target"]
+
     def generate_expression(self, expr):
+        """Render a Rust backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
-            return expr
+            return self.resolve_imported_module_path(self.normalize_rust_literal(expr))
         elif isinstance(expr, VariableNode):
             return expr.name
         elif isinstance(expr, BinaryOpNode):
@@ -407,7 +4787,14 @@ class RustToCrossGLConverter:
             operand = self.generate_expression(expr.operand)
             return f"({expr.op}{operand})"
         elif isinstance(expr, FunctionCallNode):
+            method_call = self.format_method_call(expr)
+            if method_call is not None:
+                return method_call
+
             if isinstance(expr.name, str):
+                constructor = self.format_path_constructor_call(expr.name, expr.args)
+                if constructor is not None:
+                    return constructor
                 func_name = self.map_function(expr.name)
             else:
                 func_name = self.generate_expression(expr.name)
@@ -417,10 +4804,16 @@ class RustToCrossGLConverter:
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, AwaitNode):
+            return self.generate_expression(expr.expression)
         elif isinstance(expr, ArrayAccessNode):
             array = self.generate_expression(expr.array)
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
+        elif isinstance(expr, RangeNode):
+            start = "" if expr.start is None else self.generate_expression(expr.start)
+            end = "" if expr.end is None else self.generate_expression(expr.end)
+            return self.format_range_expression(start, end, expr.inclusive)
         elif isinstance(expr, VectorConstructorNode):
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             type_name = self.map_type(expr.type_name)
@@ -430,6 +4823,26 @@ class RustToCrossGLConverter:
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
+        elif isinstance(expr, MatchesMacroNode):
+            return self.generate_matches_inline_condition(expr)
+        elif isinstance(expr, ConditionChainNode):
+            return " && ".join(
+                f"({self.generate_expression(operand)})"
+                for operand in expr.operands
+                if not isinstance(operand, LetPatternConditionNode)
+            )
+        elif isinstance(expr, ClosureNode):
+            return self.generate_closure_expression(expr)
+        elif isinstance(expr, TryBlockNode):
+            return self.generate_try_block_expression(expr)
+        elif isinstance(expr, TryNode):
+            return self.generate_try_unwrap(self.generate_expression(expr.expression))
+        elif self.is_block_expression_node(expr):
+            block_node = self.get_block_expression_node(expr)
+            expression = self.get_block_expression(block_node)
+            if expression:
+                return self.generate_expression(expression)
+            return ""
         elif isinstance(expr, CastNode):
             expression = self.generate_expression(expr.expression)
             target_type = self.map_type(expr.target_type)
@@ -458,18 +4871,337 @@ class RustToCrossGLConverter:
                 self.generate_expression(elem) for elem in expr.elements
             )
             return f"{{{elements}}}"
-        elif isinstance(expr, BlockNode):
-            # Block expressions might need special handling
-            if expr.expression:
-                return self.generate_expression(expr.expression)
-            else:
-                return ""
+        elif isinstance(expr, StructInitializationNode):
+            fields = ", ".join(
+                f"{field_name}: {self.generate_expression(field_value)}"
+                for field_name, field_value in expr.fields
+            )
+            return f"{expr.struct_name} {{ {fields} }}"
         elif isinstance(expr, (int, float, bool)):
             return str(expr).lower() if isinstance(expr, bool) else str(expr)
         else:
             return str(expr)
 
+    def generate_closure_expression(self, closure):
+        parameter_infos = [
+            self.prepare_closure_parameter(param) for param in closure.params
+        ]
+        params = ", ".join(info["declarator"] for info in parameter_infos)
+        body = self.generate_closure_body(
+            closure.body,
+            [
+                (info["subject"], info["pattern"])
+                for info in parameter_infos
+                if info["pattern"] is not None
+            ],
+            closure.return_type,
+        )
+        if not params:
+            return f"lambda({body})"
+        return f"lambda({params}, {body})"
+
+    def prepare_closure_parameter(self, param):
+        if self.is_simple_closure_parameter(param):
+            name = param.pattern
+            return {
+                "declarator": self.generate_closure_parameter_declarator(
+                    name,
+                    param.param_type,
+                ),
+                "subject": name,
+                "pattern": None,
+            }
+
+        name = self.next_closure_param_name()
+        pattern = None if self.is_discard_pattern(param.pattern) else param.pattern
+        return {
+            "declarator": self.generate_closure_parameter_declarator(
+                name,
+                param.param_type,
+            ),
+            "subject": name,
+            "pattern": pattern,
+        }
+
+    def is_simple_closure_parameter(self, param):
+        return (
+            isinstance(param.pattern, str)
+            and not self.is_discard_pattern(param.pattern)
+            and self.is_simple_pattern_binding(param.pattern)
+        )
+
+    def generate_closure_parameter_declarator(self, name, param_type=None):
+        if param_type:
+            return self.format_typed_declarator(param_type, name)
+        return name
+
+    def generate_closure_body(self, body, pattern_params=None, return_type=None):
+        pattern_params = pattern_params or []
+        previous_return_type = self.current_function_return_type
+        self.current_function_return_type = self.get_closure_return_type(
+            body,
+            return_type,
+            previous_return_type,
+        )
+        try:
+            if pattern_params:
+                code = self.generate_closure_pattern_parameter_body(
+                    pattern_params,
+                    0,
+                    0,
+                    body,
+                )
+                return f"{{ {self.compact_generated_block(code)} }}"
+
+            if self.is_block_expression_node(body) or self.expression_contains_try(
+                body
+            ):
+                code = self.generate_closure_body_code(body, indent=0)
+                return f"{{ {self.compact_generated_block(code)} }}"
+            return self.generate_expression(body)
+        finally:
+            self.current_function_return_type = previous_return_type
+
+    def get_closure_return_type(self, body, return_type, fallback_return_type):
+        if return_type:
+            return return_type
+
+        inferred = self.infer_closure_return_type(body)
+        if inferred is not None:
+            return inferred
+
+        return fallback_return_type
+
+    def infer_closure_return_type(self, body):
+        if self.is_block_expression_node(body):
+            block_node = self.get_block_expression_node(body)
+            expression = self.get_block_expression(block_node)
+            inferred = self.infer_closure_return_type_from_expression(expression)
+            if inferred is not None:
+                return inferred
+
+            for statement in reversed(block_node.statements):
+                inferred = self.infer_closure_return_type_from_expression(statement)
+                if inferred is not None:
+                    return inferred
+            return None
+
+        return self.infer_closure_return_type_from_expression(body)
+
+    def infer_closure_return_type_from_expression(self, expression):
+        if expression is None:
+            return None
+
+        if isinstance(expression, ReturnNode):
+            return self.infer_closure_return_type_from_expression(expression.value)
+
+        if self.is_block_expression_node(expression):
+            return self.infer_closure_return_type(expression)
+
+        if isinstance(expression, FunctionCallNode) and isinstance(
+            expression.name,
+            str,
+        ):
+            constructor = expression.name.rsplit("::", 1)[-1]
+            if constructor in {"Ok", "Err"}:
+                return "Result"
+            if constructor == "Some":
+                return "Option"
+
+        if isinstance(expression, str) and expression.rsplit("::", 1)[-1] == "None":
+            return "Option"
+
+        if isinstance(expression, TernaryOpNode):
+            return self.common_inferred_closure_return_type(
+                self.infer_closure_return_type_from_expression(expression.true_expr),
+                self.infer_closure_return_type_from_expression(expression.false_expr),
+            )
+
+        if isinstance(expression, IfNode):
+            return self.common_inferred_closure_return_type(
+                self.infer_closure_return_type_from_expression(expression.if_body),
+                self.infer_closure_return_type_from_expression(expression.else_body),
+            )
+
+        if isinstance(expression, MatchNode):
+            inferred = None
+            has_inferred_arm = False
+            for arm in expression.arms:
+                arm_type = self.infer_closure_return_type_from_expression(arm.body)
+                if arm_type is None:
+                    continue
+                if not has_inferred_arm:
+                    inferred = arm_type
+                    has_inferred_arm = True
+                    continue
+                if inferred != arm_type:
+                    return None
+            return inferred
+
+        if isinstance(expression, list):
+            for statement in reversed(expression):
+                inferred = self.infer_closure_return_type_from_expression(statement)
+                if inferred is not None:
+                    return inferred
+
+        return None
+
+    def common_inferred_closure_return_type(self, left, right):
+        if left is None:
+            return right
+        if right is None:
+            return left
+        if left == right:
+            return left
+        return None
+
+    def generate_closure_pattern_parameter_body(
+        self,
+        pattern_params,
+        index,
+        indent,
+        body,
+    ):
+        if index >= len(pattern_params):
+            return self.generate_closure_body_code(body, indent)
+
+        subject, pattern = pattern_params[index]
+
+        def success(success_indent):
+            return self.generate_closure_pattern_parameter_body(
+                pattern_params,
+                index + 1,
+                success_indent,
+                body,
+            )
+
+        return self.generate_nested_pattern_match(
+            subject,
+            pattern,
+            indent,
+            success,
+        )
+
+    def generate_closure_body_code(self, body, indent=0):
+        if self.is_block_expression_node(body):
+            block_node = self.get_block_expression_node(body)
+            code = self.generate_function_body(block_node.statements, indent=indent)
+            expression = self.get_block_expression(block_node)
+            if expression is not None:
+                code += self.generate_expression_result(
+                    expression,
+                    indent=indent,
+                    result_target=self.return_result_target,
+                )
+            return code
+
+        return self.generate_expression_result(
+            body,
+            indent=indent,
+            result_target=self.return_result_target,
+        )
+
+    def compact_generated_block(self, code):
+        return " ".join(line.strip() for line in code.splitlines() if line.strip())
+
+    def generate_matches_inline_condition(self, matches_node):
+        condition = self.generate_match_pattern_condition(
+            matches_node.expression,
+            matches_node.pattern,
+        )
+        condition = condition or "true"
+
+        if matches_node.guard is None:
+            return f"({condition})"
+
+        if self.collect_pattern_binding_names(matches_node.pattern):
+            return f"({condition})"
+
+        guard = self.generate_expression(matches_node.guard)
+        return f"(({condition}) && ({guard}))"
+
+    def normalize_rust_literal(self, value):
+        byte_raw_string = RUST_BYTE_RAW_STRING_RE.match(value)
+        if byte_raw_string:
+            return self.normalize_raw_string_literal(byte_raw_string.group(2))
+
+        raw_string = RUST_RAW_STRING_RE.match(value)
+        if raw_string:
+            return self.normalize_raw_string_literal(raw_string.group(2))
+
+        byte_string = RUST_BYTE_STRING_RE.match(value)
+        if byte_string:
+            return self.normalize_byte_string_literal(byte_string.group(1))
+
+        byte_char = RUST_BYTE_CHAR_RE.match(value)
+        if byte_char:
+            return self.normalize_byte_char_literal(byte_char.group(1))
+
+        return self.normalize_numeric_literal(value)
+
+    def normalize_numeric_literal(self, value):
+        match = RUST_NUMERIC_LITERAL_RE.match(value)
+        if not match:
+            return value
+
+        body = match.group("body").replace("_", "")
+        if body.startswith(("0x", "0X")):
+            return str(int(body, 16))
+        if body.startswith(("0b", "0B")):
+            return str(int(body, 2))
+        if body.startswith(("0o", "0O")):
+            return str(int(body, 8))
+        return body
+
+    def normalize_raw_string_literal(self, content):
+        escaped = (
+            content.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
+        return f'"{escaped}"'
+
+    def normalize_byte_string_literal(self, content):
+        return f'"{content}"'
+
+    def normalize_byte_char_literal(self, content):
+        if len(content) == 1:
+            return str(ord(content))
+
+        escape_values = {
+            r"\0": 0,
+            r"\n": 10,
+            r"\r": 13,
+            r"\t": 9,
+            r"\\": 92,
+            r"\'": 39,
+            r"\"": 34,
+        }
+        if content in escape_values:
+            return str(escape_values[content])
+
+        if len(content) == 4 and content.startswith(r"\x"):
+            return str(int(content[2:], 16))
+
+        return f"b'{content}'"
+
+    def format_method_call(self, expr):
+        if not isinstance(expr.name, MemberAccessNode):
+            return None
+
+        method_name = expr.name.member
+        obj = self.generate_expression(expr.name.object)
+        args = [self.generate_expression(arg) for arg in expr.args]
+        return self.format_method_call_parts(method_name, obj, args, expr.args)
+
+    def format_path_constructor_call(self, function_name, args):
+        arg_values = [self.generate_expression(arg) for arg in args]
+        return self.format_path_constructor_call_parts(function_name, arg_values)
+
     def map_type(self, rust_type):
+        """Map a Rust type name to the closest CrossGL type name."""
         if not rust_type:
             return "void"
 
@@ -477,19 +5209,209 @@ class RustToCrossGLConverter:
         if referenced_type != rust_type:
             return self.map_type(referenced_type)
 
+        expanded_type = self.resolve_imported_module_path(rust_type)
+        if expanded_type != rust_type:
+            return self.map_type(expanded_type)
+
         array_parts = self.split_array_type(rust_type)
         if array_parts:
             base_type, array_suffix = array_parts
             return f"{self.map_type(base_type)}{array_suffix}"
 
-        if "<" in rust_type and ">" in rust_type:
-            base_type = rust_type.split("<")[0]
-            if base_type in ["Vec2", "Vec3", "Vec4"]:
-                return self.type_map.get(
-                    rust_type, self.type_map.get(base_type, rust_type)
-                )
+        resolved_alias = self.resolve_type_alias(rust_type)
+        if resolved_alias is not None:
+            return resolved_alias
 
-        return self.type_map.get(rust_type, rust_type)
+        imported_alias = self.resolve_imported_type_alias(rust_type)
+        if imported_alias is not None:
+            return imported_alias
+
+        builtin_type = self.map_builtin_type(rust_type)
+        if builtin_type is not None:
+            return builtin_type
+
+        return rust_type
+
+    def resolve_imported_type_alias(self, rust_type):
+        generic = self.parse_generic_type(rust_type)
+        if generic is not None:
+            base_name, args = generic
+            target = self.imported_type_aliases.get(base_name)
+            if target is None:
+                return None
+
+            target_type = f"{target}<{', '.join(args)}>"
+            return self.resolve_imported_target_type(rust_type, target_type)
+
+        target = self.imported_type_aliases.get(rust_type)
+        if target is None:
+            return None
+
+        return self.resolve_imported_target_type(rust_type, target)
+
+    def resolve_imported_target_type(self, rust_type, target_type):
+        if target_type == rust_type:
+            return None
+
+        mapped = self.map_type(target_type)
+        if mapped == target_type:
+            return None
+        return mapped
+
+    def resolve_imported_module_path(self, path):
+        if not isinstance(path, str) or "::" not in path:
+            return path
+
+        resolved = path
+        seen = set()
+        while "::" in resolved:
+            root, remainder = resolved.split("::", 1)
+            target = self.imported_module_aliases.get(root)
+            if target is None or root in seen:
+                return resolved
+
+            seen.add(root)
+            resolved = f"{target}::{remainder}"
+
+        return resolved
+
+    def map_builtin_type(self, rust_type):
+        for type_name in self.type_lookup_names(rust_type):
+            mapped = self.type_map.get(type_name)
+            if mapped is not None:
+                return mapped
+
+        generic = self.parse_generic_type(rust_type)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        for base_candidate in self.type_lookup_names(base_name):
+            candidate = f"{base_candidate}<{', '.join(args)}>"
+            mapped = self.type_map.get(candidate)
+            if mapped is not None:
+                return mapped
+
+            if base_candidate in ["Vec2", "Vec3", "Vec4"]:
+                return self.type_map.get(base_candidate)
+
+        return None
+
+    def resolve_type_alias(self, rust_type):
+        for alias_name in self.type_lookup_names(rust_type):
+            alias = self.type_aliases.get(alias_name)
+            if alias is None:
+                continue
+            if getattr(alias, "generics", None):
+                return None
+            return alias.name
+
+        generic = self.parse_generic_type(rust_type)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        alias = None
+        for alias_name in self.type_lookup_names(base_name):
+            alias = self.type_aliases.get(alias_name)
+            if alias is not None:
+                break
+        if alias is None:
+            return None
+
+        generics = getattr(alias, "generics", []) or []
+        if not generics or len(generics) != len(args):
+            return None
+
+        substituted = self.substitute_type_parameters(alias.alias_type, generics, args)
+        if substituted == rust_type:
+            return None
+        return self.map_type(substituted)
+
+    def type_lookup_names(self, type_name):
+        names = [type_name]
+        if "::" in type_name:
+            names.append(type_name.rsplit("::", 1)[-1])
+        return names
+
+    def parse_generic_type(self, rust_type):
+        if not rust_type or "<" not in rust_type or not rust_type.endswith(">"):
+            return None
+
+        base_name, remainder = rust_type.split("<", 1)
+        base_name = base_name.strip()
+        if not base_name:
+            return None
+
+        args_text = remainder[:-1]
+        args = self.split_generic_arguments(args_text)
+        if not args:
+            return None
+        return base_name, args
+
+    def split_generic_arguments(self, args_text):
+        args = []
+        current = []
+        depth = 0
+
+        for char in args_text:
+            if char == "," and depth == 0:
+                arg = "".join(current).strip()
+                if arg:
+                    args.append(arg)
+                current = []
+                continue
+
+            if char in "<[(":
+                depth += 1
+            elif char in ">])":
+                depth = max(0, depth - 1)
+
+            current.append(char)
+
+        arg = "".join(current).strip()
+        if arg:
+            args.append(arg)
+        return args
+
+    def substitute_type_parameters(self, alias_type, generics, args):
+        substitutions = {
+            self.generic_parameter_name(generic): arg
+            for generic, arg in zip(generics, args)
+        }
+        result = alias_type
+
+        for name, replacement in substitutions.items():
+            result = self.replace_type_identifier(result, name, replacement)
+
+        return result
+
+    def generic_parameter_name(self, generic):
+        return generic.split(":", 1)[0].strip()
+
+    def replace_type_identifier(self, text, name, replacement):
+        result = []
+        index = 0
+        name_len = len(name)
+
+        while index < len(text):
+            if (
+                text.startswith(name, index)
+                and self.is_type_identifier_boundary(text, index - 1)
+                and self.is_type_identifier_boundary(text, index + name_len)
+            ):
+                result.append(replacement)
+                index += name_len
+            else:
+                result.append(text[index])
+                index += 1
+
+        return "".join(result)
+
+    def is_type_identifier_boundary(self, text, index):
+        if index < 0 or index >= len(text):
+            return True
+        return not (text[index].isalnum() or text[index] == "_")
 
     def strip_reference_type(self, type_name):
         if type_name.startswith("&mut "):
@@ -529,7 +5451,42 @@ class RustToCrossGLConverter:
         return "{" + ", ".join(value for _ in range(count)) + "}"
 
     def map_function(self, rust_func):
-        return self.function_map.get(rust_func, rust_func)
+        rust_func = self.resolve_imported_module_path(rust_func)
+        mapped = self.function_map.get(rust_func)
+        if mapped is not None:
+            return mapped
+
+        if "::" not in rust_func:
+            return rust_func
+
+        segments = rust_func.split("::")
+        mapped = self.function_map.get(segments[-1])
+        if mapped is None:
+            return rust_func
+
+        if self.is_module_qualified_function_path(segments[:-1]):
+            return mapped
+        return rust_func
+
+    def is_module_qualified_function_path(self, qualifier_segments):
+        if not qualifier_segments:
+            return False
+
+        namespace_roots = {"crate", "self", "super", "std"}
+        if qualifier_segments[0] in namespace_roots:
+            qualifier_segments = qualifier_segments[1:]
+
+        if not qualifier_segments:
+            return True
+
+        return all(
+            self.is_module_path_segment(segment) for segment in qualifier_segments
+        )
+
+    def is_module_path_segment(self, segment):
+        if not segment or "<" in segment or ">" in segment:
+            return False
+        return not segment[0].isupper()
 
     def get_shader_type_from_attributes(self, attributes):
         if not attributes:

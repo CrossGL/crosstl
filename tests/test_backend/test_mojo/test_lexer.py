@@ -93,6 +93,19 @@ def test_function_call_tokenization():
         pytest.fail("Function call tokenization not implemented.")
 
 
+def test_def_function_tokenization():
+    code = """
+    def helper(x: Float32) -> Float32:
+        return x
+    """
+    try:
+        tokens = tokenize_code(code)
+        assert ("DEF", "def") in tokens
+        assert ("IDENTIFIER", "helper") in tokens
+    except SyntaxError:
+        pytest.fail("Def function tokenization not implemented.")
+
+
 def test_else_if_tokenization():
     code = """
     fn fragment_main(input: PSInput) -> PSOutput:
@@ -158,7 +171,12 @@ def test_logical_ops_tokenization():
         let val_3 = not val_0
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert ("BOOL_LITERAL", "true") in tokens
+        assert ("BOOL_LITERAL", "false") in tokens
+        assert tokens.count(("AND", "&&")) == 1
+        assert tokens.count(("OR", "||")) == 1
+        assert tokens.count(("NOT", "!")) == 1
     except SyntaxError:
         pytest.fail("Logical operators tokenization not implemented.")
 
@@ -191,7 +209,10 @@ def test_import_tokenization():
     from tensor import Tensor
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert ("FROM", "from") in tokens
+        assert ("IMPORT", "import") in tokens
+        assert ("IDENTIFIER", "Tensor") in tokens
     except SyntaxError:
         pytest.fail("Import tokenization not implemented.")
 
@@ -245,9 +266,25 @@ def test_attributes_tokenization():
         pass
     """
     try:
-        tokenize_code(code)
+        tokens = tokenize_code(code)
+        assert tokens.count(("AT", "@")) == 2
+        assert ("IDENTIFIER", "value") in tokens
+        assert ("IDENTIFIER", "compute_shader") in tokens
     except SyntaxError:
         pytest.fail("Attributes tokenization not implemented.")
+
+
+def test_bracket_attributes_tokenize_as_single_attribute():
+    code = """
+    [[compute_shader]]
+    fn compute_main():
+        pass
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("ATTRIBUTE", "[[compute_shader]]") in tokens
+    assert tokens[:2] != [("LBRACKET", "["), ("LBRACKET", "[")]
 
 
 def test_ternary_operator_tokenization():

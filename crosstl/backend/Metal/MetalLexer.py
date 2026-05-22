@@ -305,15 +305,20 @@ KEYWORDS = {
 
 
 class MetalLexer:
+    """Tokenize Metal Shading Language source for the Metal parser."""
+
     def __init__(self, code: str):
+        """Initialize the lexer with raw Metal source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
+        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
+        """Yield Metal tokens while skipping whitespace and comments."""
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -338,6 +343,7 @@ class MetalLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
+        """Match the next token at ``pos`` and return its end offset."""
         if self.code.startswith("/*", pos):
             end_pos = self.code.find("*/", pos + 2)
             if end_pos == -1:
@@ -354,5 +360,6 @@ class MetalLexer:
 
     @classmethod
     def from_file(cls, filepath: str) -> "MetalLexer":
+        """Create a lexer instance from a Metal source file."""
         with open(filepath, "r", encoding="utf-8") as f:
             return cls(f.read())
