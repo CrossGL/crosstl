@@ -898,6 +898,43 @@ class TestCudaParser:
         assert loop.update.right.right.builtin_name == "gridDim"
         assert loop.update.right.right.component == "x"
 
+    def test_assignment_expression_is_right_associative(self):
+        """Test assignments parse inside expressions and associate to the right"""
+        code = """
+        void f() {
+            int a = 0;
+            int b = 0;
+            int c = 0;
+            a = b = c;
+            int d = (a = b);
+            sink(a = 1);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        chained = body[3]
+        assert isinstance(chained, AssignmentNode)
+        assert chained.left == "a"
+        assert chained.operator == "="
+        assert isinstance(chained.right, AssignmentNode)
+        assert chained.right.left == "b"
+        assert chained.right.right == "c"
+
+        initializer = body[4].value
+        assert isinstance(initializer, AssignmentNode)
+        assert initializer.left == "a"
+        assert initializer.right == "b"
+
+        call = body[5]
+        assert isinstance(call, FunctionCallNode)
+        assert isinstance(call.args[0], AssignmentNode)
+        assert call.args[0].left == "a"
+        assert call.args[0].right == "1"
+
     def test_range_based_for_loop_parsing(self):
         """Test C++ range-based for declarations"""
         code = """
@@ -1094,6 +1131,28 @@ class TestCudaParser:
         assert body[5].left.op == "*"
         assert isinstance(body[5].right, UnaryOpNode)
         assert body[5].right.op == "*"
+
+    def test_long_long_type_parsing(self):
+        """Test scalar long long and unsigned long long declarations"""
+        code = """
+        __global__ void kernel(unsigned long long* out, long long x) {
+            unsigned long long y = 1ull;
+            long long z = (long long)x;
+            out[0] = y + z;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.kernels[0]
+        assert kernel.params[0].vtype == "unsigned long long *"
+        assert kernel.params[1].vtype == "long long"
+        assert kernel.body[0].vtype == "unsigned long long"
+        assert kernel.body[1].vtype == "long long"
+        assert isinstance(kernel.body[1].value, CastNode)
+        assert kernel.body[1].value.target_type == "long long"
 
     def test_pointer_member_access_operator_parsing(self):
         """Test pointer and value member access preserve their operators"""

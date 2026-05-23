@@ -1014,6 +1014,70 @@ def test_array_parameter_syntax():
     assert isinstance(function.parameters[1].param_type, ArrayType)
 
 
+def test_resource_parameter_syntax():
+    code = """
+    @compute
+    @workgroup_size(1, 1, 1)
+    fn kernel(
+        @group(0) @binding(0) var<storage, read_write> data: array<f32>,
+        @group(0) @binding(1) var<storage, read> indices: array<i32>,
+        f32 value
+    ) {
+        data[indices[0]] = value;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+    data, indices, value = function.parameters
+
+    assert function.name == "kernel"
+    assert isinstance(function.return_type, PrimitiveType)
+    assert function.return_type.name == "void"
+    assert [attribute.name for attribute in function.attributes] == [
+        "compute",
+        "workgroup_size",
+    ]
+
+    assert data.name == "data"
+    assert isinstance(data.param_type, ArrayType)
+    assert isinstance(data.param_type.element_type, PrimitiveType)
+    assert data.param_type.element_type.name == "f32"
+    assert data.param_type.size is None
+    assert getattr(data, "resource_qualifiers") == ["storage", "read_write"]
+    assert [attribute.name for attribute in data.attributes] == ["group", "binding"]
+
+    assert indices.name == "indices"
+    assert isinstance(indices.param_type, ArrayType)
+    assert indices.param_type.element_type.name == "i32"
+    assert getattr(indices, "resource_qualifiers") == ["storage", "read"]
+
+    assert value.name == "value"
+    assert isinstance(value.param_type, PrimitiveType)
+    assert value.param_type.name == "f32"
+
+
+def test_compute_layout_execution_config_parsing():
+    code = """
+    shader ComputeLayout {
+        compute {
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+
+    assert compute_stage.execution_config == {
+        "local_size_x": "8",
+        "local_size_y": "8",
+        "local_size_z": "1",
+    }
+
+
 def test_double_vector_type_keywords_parse():
     code = """
     shader DoubleVectors {

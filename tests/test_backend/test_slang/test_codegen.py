@@ -1,6 +1,7 @@
 from crosstl.backend.slang import SlangCrossGLCodeGen
 from crosstl.backend.slang import SlangLexer
 from crosstl.backend.slang import SlangParser
+from crosstl import translate
 import pytest
 from typing import List
 
@@ -200,6 +201,27 @@ def test_logical_not_codegen():
     assert "return !disabled;" in generated_code
 
 
+def test_binary_expression_precedence_preserves_grouping_codegen():
+    code = """
+    float grouped(float a, float b, float c) {
+        return (a + b) * c;
+    }
+
+    float divisor(float a, float b, float c) {
+        return a / (b * c);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return (a + b) * c;" in generated_code
+    assert "return a + b * c;" not in generated_code
+    assert "return a / (b * c);" in generated_code
+    assert "return a / b * c;" not in generated_code
+
+
 def test_while_codegen():
     code = """
     float countDown(float x) {
@@ -259,6 +281,10 @@ def test_top_level_attribute_list_before_shader_function_codegen():
         generated_code = generate_code(ast)
 
         assert "compute {" in generated_code
+        assert (
+            "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"
+            in generated_code
+        )
         assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
         assert "return;" in generated_code
     except SyntaxError:
@@ -281,12 +307,33 @@ def test_attribute_list_after_shader_function_codegen():
         generated_code = generate_code(ast)
 
         assert "compute {" in generated_code
+        assert (
+            "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"
+            in generated_code
+        )
         assert "void main(uvec3 tid @ SV_DispatchThreadID)" in generated_code
         assert "return;" in generated_code
     except SyntaxError:
         pytest.fail(
             "Post-shader attribute-list parsing or code generation not implemented."
         )
+
+
+def test_numthreads_roundtrip_to_spirv_local_size(tmp_path):
+    code = """
+    [numthreads(8, 8, 1)]
+    [shader("compute")]
+    void main(uint3 tid : SV_DispatchThreadID) {
+        return;
+    }
+    """
+    source_path = tmp_path / "compute.slang"
+    source_path.write_text(code)
+
+    generated_code = translate(str(source_path), backend="spirv", format_output=False)
+
+    assert "OpExecutionMode" in generated_code
+    assert "LocalSize 8 8 1" in generated_code
 
 
 def test_generic_resource_global_codegen():
@@ -397,6 +444,19 @@ def test_scalar_and_matrix_top_level_declarations_codegen():
     assert "int frameIndex;" in generated_code
 
 
+def test_local_matrix_declaration_codegen():
+    code = """
+    void main() {
+        float4x4 transform;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "mat4 transform;" in generated_code
+
+
 def test_else_codegen():
     code = """
     [shader("vertex")]
@@ -440,8 +500,100 @@ def test_function_call_codegen():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
+        assert "vec4 saturate(vec4 color)" in generated_code
+        assert (
+            "output.out_position = saturate(assembledVertex.color);" in generated_code
+        )
+        assert "clamp(assembledVertex.color" not in generated_code
     except SyntaxError:
         pytest.fail("Function call parsing or code generation not implemented.")
+
+
+def test_slang_frac_builtin_lowers_to_crossgl_fract():
+    code = """
+    void main() {
+        float wrapped = frac(1.25);
+        float2 wrappedVec = frac(float2(1.25, 2.5));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float wrapped = fract(1.25);" in generated_code
+    assert "vec2 wrappedVec = fract(vec2(1.25, 2.5));" in generated_code
+    assert "frac(" not in generated_code
+
+
+def test_slang_fmod_builtin_lowers_to_crossgl_mod():
+    code = """
+    void main() {
+        float wrapped = fmod(5.0, 2.0);
+        float2 wrappedVec = fmod(float2(5.0, 7.0), float2(2.0, 3.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float wrapped = mod(5.0, 2.0);" in generated_code
+    assert "vec2 wrappedVec = mod(vec2(5.0, 7.0), vec2(2.0, 3.0));" in generated_code
+    assert "fmod(" not in generated_code
+
+
+def test_slang_lerp_builtin_lowers_to_crossgl_mix():
+    code = """
+    void main() {
+        float blended = lerp(0.0, 1.0, 0.25);
+        float2 blendedVec = lerp(float2(0.0, 1.0), float2(1.0, 0.0), 0.5);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float blended = mix(0.0, 1.0, 0.25);" in generated_code
+    assert (
+        "vec2 blendedVec = mix(vec2(0.0, 1.0), vec2(1.0, 0.0), 0.5);" in generated_code
+    )
+    assert "lerp(" not in generated_code
+
+
+def test_slang_rsqrt_builtin_lowers_to_crossgl_inversesqrt():
+    code = """
+    void main() {
+        float inv = rsqrt(x);
+        float2 invVec = rsqrt(float2(4.0, 9.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inv = inversesqrt(x);" in generated_code
+    assert "vec2 invVec = inversesqrt(vec2(4.0, 9.0));" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_slang_saturate_builtin_lowers_to_crossgl_clamp():
+    code = """
+    void main() {
+        float saturated = saturate(1.25);
+        float2 saturatedVec = saturate(float2(-1.0, 2.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float saturated = clamp(1.25, 0.0, 1.0);" in generated_code
+    assert "vec2 saturatedVec = clamp(vec2(-1.0, 2.0), 0.0, 1.0);" in generated_code
+    assert "saturate(" not in generated_code
 
 
 def test_standalone_function_call_statement_codegen():

@@ -26,6 +26,39 @@ BLOCK_EXPRESSION_NODE_TYPES = (BlockNode,) + TRANSPARENT_BLOCK_NODE_TYPES
 class RustToCrossGLConverter:
     """Serialize Rust backend AST nodes back into CrossGL source."""
 
+    SCALAR_ZERO_ARG_METHOD_MAP = {
+        "abs": "abs",
+        "floor": "floor",
+        "ceil": "ceil",
+        "round": "round",
+        "fract": "fract",
+        "sqrt": "sqrt",
+        "exp": "exp",
+        "exp2": "exp2",
+        "ln": "log",
+        "log2": "log2",
+        "sin": "sin",
+        "cos": "cos",
+        "tan": "tan",
+        "asin": "asin",
+        "acos": "acos",
+        "atan": "atan",
+        "sinh": "sinh",
+        "cosh": "cosh",
+        "tanh": "tanh",
+        "to_degrees": "degrees",
+        "to_radians": "radians",
+    }
+    SCALAR_ONE_ARG_METHOD_MAP = {
+        "min": "min",
+        "max": "max",
+        "powf": "pow",
+        "powi": "pow",
+    }
+    SCALAR_TWO_ARG_METHOD_MAP = {
+        "clamp": "clamp",
+    }
+
     def __init__(self):
         """Initialize Rust-to-CrossGL type and semantic mappings."""
         self.type_map = {
@@ -133,6 +166,7 @@ class RustToCrossGLConverter:
             "acos": "acos",
             "atan": "atan",
             "atan2": "atan2",
+            "lerp": "mix",
             "sinh": "sinh",
             "cosh": "cosh",
             "tanh": "tanh",
@@ -1893,6 +1927,18 @@ class RustToCrossGLConverter:
     def format_method_call_parts(self, method_name, obj, args, arg_nodes):
         if method_name == "len" and not args:
             return f"{obj}.length"
+
+        if not args and method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
+            return f"{self.SCALAR_ZERO_ARG_METHOD_MAP[method_name]}({obj})"
+
+        if len(args) == 1 and method_name in self.SCALAR_ONE_ARG_METHOD_MAP:
+            return f"{self.SCALAR_ONE_ARG_METHOD_MAP[method_name]}({obj}, {args[0]})"
+
+        if len(args) == 2 and method_name in self.SCALAR_TWO_ARG_METHOD_MAP:
+            return (
+                f"{self.SCALAR_TWO_ARG_METHOD_MAP[method_name]}"
+                f"({obj}, {args[0]}, {args[1]})"
+            )
 
         if method_name == "length" and not args:
             return f"length({obj})"

@@ -326,6 +326,10 @@ def test_top_level_attribute_list_before_shader_function_parsing():
         function = find_function(ast, "main")
 
         assert function.qualifier == "compute"
+        assert function.numthreads == ("8", "8", "1")
+        assert function.attributes == [
+            {"name": "numthreads", "arguments": ["8", "8", "1"]}
+        ]
         assert function.params[0].vtype.strip() == "uint3"
         assert function.params[0].semantic == "SV_DispatchThreadID"
         assert isinstance(function.body[0], ReturnNode)
@@ -348,6 +352,10 @@ def test_attribute_list_after_shader_function_parsing():
         function = find_function(ast, "main")
 
         assert function.qualifier == "compute"
+        assert function.numthreads == ("8", "8", "1")
+        assert function.attributes == [
+            {"name": "numthreads", "arguments": ["8", "8", "1"]}
+        ]
         assert function.params[0].vtype.strip() == "uint3"
         assert function.params[0].semantic == "SV_DispatchThreadID"
         assert isinstance(function.body[0], ReturnNode)
@@ -479,6 +487,22 @@ def test_scalar_and_matrix_top_level_declarations_parsing():
         ("float4x4", "ViewProj"),
         ("int", "frameIndex"),
     ]
+
+
+def test_local_matrix_declaration_parsing():
+    code = """
+    void main() {
+        float4x4 transform;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration, VariableNode)
+    assert declaration.vtype == "float4x4"
+    assert declaration.name == "transform"
 
 
 def test_else_parsing():

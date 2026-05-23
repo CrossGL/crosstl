@@ -521,7 +521,7 @@ class CudaToCrossGLConverter:
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)
         right = self.visit(node.right)
-        self.emit(f"{left} {node.operator} {right};")
+        return f"{left} {node.operator} {right}"
 
     def visit_BinaryOpNode(self, node):
         left = self.visit(node.left)
@@ -826,9 +826,14 @@ class CudaToCrossGLConverter:
             "short": "i16",
             "unsigned short": "u16",
             "int": "i32",
+            "signed int": "i32",
             "unsigned int": "u32",
             "long": "i64",
+            "signed long": "i64",
             "unsigned long": "u64",
+            "long long": "i64",
+            "signed long long": "i64",
+            "unsigned long long": "u64",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
@@ -973,12 +978,22 @@ class CudaToCrossGLConverter:
             "sinf": "sin",
             "cosf": "cos",
             "tanf": "tan",
+            "asinf": "asin",
+            "acosf": "acos",
+            "atanf": "atan",
             "logf": "log",
+            "log2f": "log2",
             "expf": "exp",
+            "exp2f": "exp2",
             "fabsf": "abs",
+            "rsqrtf": "inversesqrt",
+            "roundf": "round",
+            "truncf": "trunc",
+            "atan2f": "atan2",
             "fmodf": "mod",
             "fminf": "min",
             "fmaxf": "max",
+            "lerp": "mix",
             "floorf": "floor",
             "ceilf": "ceil",
             "sqrt": "sqrt",
@@ -989,6 +1004,7 @@ class CudaToCrossGLConverter:
             "log": "log",
             "exp": "exp",
             "fabs": "abs",
+            "rsqrt": "inversesqrt",
             "fmod": "mod",
             "fmin": "min",
             "fmax": "max",

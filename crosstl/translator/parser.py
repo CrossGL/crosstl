@@ -435,9 +435,12 @@ class Parser:
         local_variables = []
         local_functions = []
         main_function = None
+        execution_config = {}
 
         while self.current_token[0] != "RBRACE":
-            if self.is_function_declaration():
+            if self.current_token[0] == "LAYOUT":
+                execution_config.update(self.parse_compute_layout())
+            elif self.is_function_declaration():
                 func = self.parse_function()
                 if func.name == "main":
                     main_function = func
@@ -466,6 +469,7 @@ class Parser:
             entry_point=main_function,
             local_variables=local_variables,
             local_functions=local_functions,
+            execution_config=execution_config,
         )
 
     def parse_import(self):
@@ -489,6 +493,34 @@ class Parser:
         self.eat("SEMICOLON")
 
         return ImportNode(path=path, alias=alias, items=items)
+
+    def parse_compute_layout(self):
+        """Parse compute local-size layout metadata inside a stage block."""
+        execution_config = {}
+        self.eat("LAYOUT")
+        self.eat("LPAREN")
+
+        while self.current_token[0] != "RPAREN":
+            key = self.current_token[1]
+            self.eat(self.current_token[0])
+
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                value_parts = []
+                while self.current_token[0] not in ["COMMA", "RPAREN"]:
+                    value_parts.append(str(self.current_token[1]))
+                    self.eat(self.current_token[0])
+                if key in {"local_size_x", "local_size_y", "local_size_z"}:
+                    execution_config[key] = "".join(value_parts).strip()
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+
+        self.eat("RPAREN")
+        if self.current_token[0] in ["IN", "IDENTIFIER"]:
+            self.eat(self.current_token[0])
+        self.eat("SEMICOLON")
+        return execution_config
 
     def parse_preprocessor_directive(self):
         """Parse a preprocessor token into a structured directive node."""
@@ -723,21 +755,29 @@ class Parser:
             "UNSAFE",
             "GLOBAL",
             "KERNEL",
+            "AT",
             "ATTRIBUTE",
         ]:
-            if self.current_token[0] == "ATTRIBUTE":
-                attributes = self.parse_attributes()
+            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
+                attributes.extend(self.parse_attributes())
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
 
+        saw_function_keyword = False
         if self.current_token[0] == "FUNCTION":
             self.eat("FUNCTION")
+            saw_function_keyword = True
 
-        return_type = self.parse_type()
+        if saw_function_keyword and self.current_token_starts_bare_function_name():
+            return_type = PrimitiveType("void")
+        else:
+            return_type = self.parse_type()
 
+        if self.current_token[0] not in ["IDENTIFIER", "KERNEL"]:
+            raise SyntaxError(f"Expected function name, got {self.current_token[0]}")
         name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        self.eat(self.current_token[0])
 
         generic_params = []
         if self.current_token[0] == "LESS_THAN":
@@ -787,8 +827,11 @@ class Parser:
     def parse_parameter(self):
         """Parse one function parameter declaration."""
         attributes = []
-        if self.current_token[0] == "ATTRIBUTE":
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes = self.parse_attributes()
+
+        if self.current_token[0] == "VAR":
+            return self.parse_resource_parameter(attributes)
 
         is_mutable = False
         if self.current_token[0] == "MUT":
@@ -822,6 +865,52 @@ class Parser:
             attributes=attributes,
             is_mutable=is_mutable,
         )
+
+    def parse_resource_parameter(self, attributes):
+        """Parse WGSL-style resource parameters emitted by reverse backends."""
+        self.eat("VAR")
+        resource_qualifiers = []
+
+        if self.current_token[0] == "LESS_THAN":
+            self.eat("LESS_THAN")
+            while self.current_token[0] != "GREATER_THAN":
+                if self.current_token[0] != "COMMA":
+                    resource_qualifiers.append(self.current_token[1])
+                    self.eat(self.current_token[0])
+                    continue
+                self.eat("COMMA")
+            self.eat("GREATER_THAN")
+
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("COLON")
+        param_type = self.parse_resource_parameter_type()
+
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
+            attributes.extend(self.parse_attributes())
+
+        parameter = ParameterNode(
+            name=name,
+            param_type=param_type,
+            attributes=attributes,
+        )
+        parameter.resource_qualifiers = resource_qualifiers
+        return parameter
+
+    def parse_resource_parameter_type(self):
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "array":
+            self.eat("IDENTIFIER")
+            self.eat("LESS_THAN")
+            element_type = self.parse_type()
+            size = None
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                size = self.current_token[1]
+                self.eat(self.current_token[0])
+            self.eat("GREATER_THAN")
+            return ArrayType(element_type, size)
+
+        return self.parse_type()
 
     def parse_variable_declaration(self):
         """Parse a variable declaration, including qualifiers and attributes."""
@@ -2066,22 +2155,52 @@ class Parser:
 
         return self.peek(offset)[0] == "LBRACE"
 
+    def current_token_starts_bare_function_name(self):
+        """Return whether the current token is a ``fn name`` style function name."""
+        if self.current_token[0] not in ["IDENTIFIER", "KERNEL"]:
+            return False
+
+        offset = 1
+        if self.peek(offset)[0] == "LESS_THAN":
+            depth = 1
+            offset += 1
+            while depth > 0 and self.peek(offset)[0] != "EOF":
+                if self.peek(offset)[0] == "LESS_THAN":
+                    depth += 1
+                elif self.peek(offset)[0] == "GREATER_THAN":
+                    depth -= 1
+                offset += 1
+
+        return self.peek(offset)[0] == "LPAREN"
+
     def is_function_declaration(self):
         """Return whether the current token sequence looks like a function."""
         saved_pos = self.pos
         saved_token = self.current_token
 
         try:
-            while self.current_token[0] in ["ASYNC", "UNSAFE", "GLOBAL", "KERNEL"]:
-                self.eat(self.current_token[0])
+            while self.current_token[0] in [
+                "ASYNC",
+                "UNSAFE",
+                "GLOBAL",
+                "KERNEL",
+                "AT",
+                "ATTRIBUTE",
+            ]:
+                if self.current_token[0] in ["AT", "ATTRIBUTE"]:
+                    self.parse_attributes()
+                else:
+                    self.eat(self.current_token[0])
 
             if self.current_token[0] == "FUNCTION":
                 self.eat("FUNCTION")
+                if self.current_token_starts_bare_function_name():
+                    return True
 
             if self.is_type_token():
                 self.advance_over_type()
-                if self.current_token[0] == "IDENTIFIER":
-                    self.eat("IDENTIFIER")
+                if self.current_token[0] in ["IDENTIFIER", "KERNEL"]:
+                    self.eat(self.current_token[0])
                     # Skip generic parameters if present
                     if self.current_token[0] == "LESS_THAN":
                         depth = 1

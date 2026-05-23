@@ -1,6 +1,7 @@
 """Test HIP Code Generation"""
 
 import pytest
+from crosstl import translate
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
@@ -89,6 +90,16 @@ class TestHipCodeGen:
         assert codegen.convert_hip_builtin_function("cosf") == "cos"
         assert codegen.convert_hip_builtin_function("fmodf") == "mod"
         assert codegen.convert_hip_builtin_function("fmod") == "mod"
+        assert codegen.convert_hip_builtin_function("atan2f") == "atan2"
+        assert codegen.convert_hip_builtin_function("asinf") == "asin"
+        assert codegen.convert_hip_builtin_function("acosf") == "acos"
+        assert codegen.convert_hip_builtin_function("atanf") == "atan"
+        assert codegen.convert_hip_builtin_function("rsqrtf") == "inversesqrt"
+        assert codegen.convert_hip_builtin_function("rsqrt") == "inversesqrt"
+        assert codegen.convert_hip_builtin_function("roundf") == "round"
+        assert codegen.convert_hip_builtin_function("truncf") == "trunc"
+        assert codegen.convert_hip_builtin_function("exp2f") == "exp2"
+        assert codegen.convert_hip_builtin_function("log2f") == "log2"
         assert (
             codegen.convert_hip_builtin_function("__syncthreads") == "workgroupBarrier"
         )
@@ -112,6 +123,101 @@ class TestHipCodeGen:
         assert "out[0] = mod(x, 1.0f);" in result
         assert "out[1] = mod(x, 2.0);" in result
         assert "fmod" not in result
+
+    def test_atan2_builtins_convert_to_crossgl_atan2(self):
+        """Test HIP atan2f converts back to CrossGL atan2."""
+        code = """
+        __global__ void angle(float* out, float y, float x) {
+            out[0] = atan2f(y, x);
+            out[1] = atan2(y, x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = atan2(y, x);" in result
+        assert "out[1] = atan2(y, x);" in result
+        assert "atan2f" not in result
+
+    def test_lerp_builtin_converts_to_crossgl_mix(self):
+        """Test HIP lerp converts back to CrossGL mix."""
+        code = """
+        __global__ void blend(float* out, float a, float b, float t) {
+            out[0] = lerp(a, b, t);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = mix(a, b, t);" in result
+        assert "out[0] = lerp(a, b, t);" not in result
+
+    def test_inverse_trig_builtins_convert_to_crossgl(self):
+        """Test HIP inverse trig functions convert back to CrossGL names."""
+        code = """
+        __global__ void inverse(float* out, float x) {
+            out[0] = asinf(x);
+            out[1] = acosf(x);
+            out[2] = atanf(x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = asin(x);" in result
+        assert "out[1] = acos(x);" in result
+        assert "out[2] = atan(x);" in result
+        assert "asinf" not in result
+        assert "acosf" not in result
+        assert "atanf" not in result
+
+    def test_extended_math_builtins_convert_to_crossgl(self):
+        """Test HIP extended math functions convert back to CrossGL names."""
+        code = """
+        __global__ void math(float* out, double* precise, float x, double d) {
+            out[0] = rsqrtf(x);
+            out[1] = roundf(x);
+            out[2] = truncf(x);
+            out[3] = exp2f(x);
+            out[4] = log2f(x);
+            precise[0] = rsqrt(d);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = inversesqrt(x);" in result
+        assert "out[1] = round(x);" in result
+        assert "out[2] = trunc(x);" in result
+        assert "out[3] = exp2(x);" in result
+        assert "out[4] = log2(x);" in result
+        assert "precise[0] = inversesqrt(d);" in result
+        assert "rsqrtf" not in result
+        assert "rsqrt(" not in result
+        assert "roundf" not in result
+        assert "truncf" not in result
+        assert "exp2f" not in result
+        assert "log2f" not in result
 
     def test_struct_conversion(self):
         """Test struct conversion"""
@@ -1120,6 +1226,20 @@ class TestHipCodeGen:
         assert "data: array<f32>" in result
         assert "indices: array<i32>" in result
         assert "array<ptr" not in result
+
+    def test_kernel_pointer_parameters_roundtrip_to_rust(self, tmp_path):
+        code = """
+        __global__ void kernel(float* data, const int* indices, float value) {
+            data[indices[0]] = value;
+        }
+        """
+        source_path = tmp_path / "kernel.hip"
+        source_path.write_text(code)
+
+        result = translate(str(source_path), backend="rust", format_output=False)
+
+        assert "pub fn kernel(data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+        assert "data[indices[0]] = value;" in result
 
     def test_qualified_declaration_conversion(self):
         """Test const, unsigned, and static declaration conversion"""

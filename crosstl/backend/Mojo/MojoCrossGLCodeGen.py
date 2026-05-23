@@ -123,10 +123,20 @@ class MojoToCrossGLConverter:
             "math.abs": "abs",
             "math.floor": "floor",
             "math.ceil": "ceil",
+            "math.fract": "fract",
+            "math.fmod": "mod",
+            "fmod": "mod",
+            "power": "pow",
+            "rsqrt": "inversesqrt",
+            "lerp": "mix",
+            "math.lerp": "mix",
             "math.min": "min",
             "math.max": "max",
             "math.clamp": "clamp",
             # SIMD functions
+            "dot_product": "dot",
+            "cross_product": "cross",
+            "magnitude": "length",
             "simd.dot": "dot",
             "simd.cross": "cross",
             "simd.normalize": "normalize",
@@ -573,6 +583,10 @@ class MojoToCrossGLConverter:
             operand = self.generate_expression(expr.operand)
             op = expr.op if hasattr(expr, "op") else "+"
             return f"({op}{operand})"
+        elif isinstance(expr, CastNode):
+            target_type = self.map_type(expr.target_type)
+            value = self.generate_expression(expr.expression)
+            return f"{target_type}({value})"
         elif isinstance(expr, FunctionCallNode):
             args = []
             if hasattr(expr, "args") and expr.args:

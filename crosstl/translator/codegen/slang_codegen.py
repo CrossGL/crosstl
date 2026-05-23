@@ -43,6 +43,28 @@ from .array_utils import (
 class SlangCodeGen:
     """Emit Slang shader source from the shared CrossGL AST."""
 
+    BINARY_PRECEDENCE = {
+        "||": 1,
+        "&&": 2,
+        "|": 3,
+        "^": 4,
+        "&": 5,
+        "==": 6,
+        "!=": 6,
+        "<": 7,
+        ">": 7,
+        "<=": 7,
+        ">=": 7,
+        "<<": 8,
+        ">>": 8,
+        "+": 9,
+        "-": 9,
+        "*": 10,
+        "/": 10,
+        "%": 10,
+    }
+    ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+
     def __init__(self):
         """Initialize Slang generation state and helper caches."""
         self.indent_level = 0
@@ -53,6 +75,12 @@ class SlangCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self._generating = False
+        self.function_map = {
+            "mix": "lerp",
+            "mod": "fmod",
+            "fract": "frac",
+            "inversesqrt": "rsqrt",
+        }
 
     def indent(self):
         """Return whitespace for the current indentation level."""
@@ -502,6 +530,8 @@ class SlangCodeGen:
         right = self.generate_expression_with_expected(
             node.right, self.expression_result_type(node.left)
         )
+        if node.operator == "%=" and self.modulo_requires_fmod(node.left, node.right):
+            return f"{left} = fmod({left}, {right})"
         return f"{left} {node.operator} {right}"
 
     def generate_expression_with_expected(self, expr, expected_type):
@@ -566,6 +596,19 @@ class SlangCodeGen:
         if mapped_type.startswith("bool"):
             return "bool"
         return None
+
+    def modulo_requires_fmod(self, left_expr, right_expr):
+        """Return whether scalar/vector modulo needs Slang fmod lowering."""
+        left_component = self.vector_component_type(
+            self.expression_result_type(left_expr)
+        )
+        right_component = self.vector_component_type(
+            self.expression_result_type(right_expr)
+        )
+        return left_component in {"float", "double"} or right_component in {
+            "float",
+            "double",
+        }
 
     def expression_result_type(self, expr):
         if expr is None:
@@ -695,6 +738,35 @@ class SlangCodeGen:
                 escaped.append(char)
         return "".join(escaped)
 
+    def binary_precedence(self, op):
+        return self.BINARY_PRECEDENCE.get(op, 0)
+
+    def binary_child_needs_parentheses(self, parent_op, child, is_right_child=False):
+        if not isinstance(child, BinaryOpNode):
+            return False
+
+        parent_precedence = self.binary_precedence(parent_op)
+        child_op = getattr(child, "op", getattr(child, "operator", ""))
+        child_precedence = self.binary_precedence(child_op)
+        if child_precedence < parent_precedence:
+            return True
+        if child_precedence > parent_precedence:
+            return False
+        return is_right_child and (
+            parent_op not in self.ASSOCIATIVE_BINARY_OPS or child_op != parent_op
+        )
+
+    def generate_binary_expression(self, node):
+        left = self.generate_expression(node.left)
+        right = self.generate_expression(node.right)
+        if self.binary_child_needs_parentheses(node.op, node.left):
+            left = f"({left})"
+        if self.binary_child_needs_parentheses(node.op, node.right, True):
+            right = f"({right})"
+        if node.op == "%" and self.modulo_requires_fmod(node.left, node.right):
+            return f"fmod({left}, {right})"
+        return f"{left} {node.op} {right}"
+
     def generate_expression(self, node):
         """Render a CrossGL expression as Slang expression syntax."""
         if isinstance(node, VariableNode):
@@ -724,9 +796,7 @@ class SlangCodeGen:
             obj = self.generate_expression(node.object)
             return f"{obj}.{node.member}"
         elif isinstance(node, BinaryOpNode):
-            left = self.generate_expression(node.left)
-            right = self.generate_expression(node.right)
-            return f"{left} {node.op} {right}"
+            return self.generate_binary_expression(node)
         elif isinstance(node, FunctionCallNode):
             func_expr = getattr(node, "function", None)
             if func_expr is None:
@@ -742,9 +812,12 @@ class SlangCodeGen:
                 return resource_call
             args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
+            callee = self.function_map.get(callee, callee)
             return f"{callee}({args})"
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand)
+            if isinstance(node.operand, BinaryOpNode):
+                operand = f"({operand})"
             if getattr(node, "is_postfix", False):
                 return f"{operand}{node.op}"
             return f"{node.op}{operand}"

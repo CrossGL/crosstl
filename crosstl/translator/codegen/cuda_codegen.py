@@ -19,6 +19,7 @@ from ..ast import (
     FunctionNode,
     ExpressionStatementNode,
     IdentifierNode,
+    MemberAccessNode,
     BlockNode,
     WildcardPatternNode,
 )
@@ -439,13 +440,46 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         target = self.visit(node.target)
         value = self.visit(node.value)
         operator = getattr(node, "operator", "=")
-        if operator in {"+=", "-=", "*=", "/="}:
+        compound_binary_ops = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+        }
+        if operator in compound_binary_ops:
             lowered_value = self.lower_vector_binary_operation(
                 node.target,
                 target,
                 node.value,
                 value,
-                operator[0],
+                compound_binary_ops[operator],
+            )
+            if lowered_value is not None:
+                return f"{target} = {lowered_value}"
+            if operator == "%=":
+                modulo = self.lower_scalar_modulo_operation(
+                    node.target,
+                    target,
+                    node.value,
+                    value,
+                )
+                if modulo is not None:
+                    return f"{target} = {modulo}"
+        compound_bitwise_ops = {
+            "&=": "&",
+            "|=": "|",
+            "^=": "^",
+            "<<=": "<<",
+            ">>=": ">>",
+        }
+        if operator in compound_bitwise_ops:
+            lowered_value = self.lower_vector_bitwise_operation(
+                node.target,
+                target,
+                node.value,
+                value,
+                compound_bitwise_ops[operator],
             )
             if lowered_value is not None:
                 return f"{target} = {lowered_value}"
@@ -455,6 +489,33 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
+        logical = self.lower_vector_logical_operation(
+            node.left,
+            left,
+            node.right,
+            right,
+            operator,
+        )
+        if logical is not None:
+            return logical
+        bitwise = self.lower_vector_bitwise_operation(
+            node.left,
+            left,
+            node.right,
+            right,
+            operator,
+        )
+        if bitwise is not None:
+            return bitwise
+        comparison = self.lower_vector_comparison_operation(
+            node.left,
+            left,
+            node.right,
+            right,
+            operator,
+        )
+        if comparison is not None:
+            return comparison
         lowered = self.lower_vector_binary_operation(
             node.left,
             left,
@@ -464,13 +525,27 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         if lowered is not None:
             return lowered
+        if operator == "%":
+            modulo = self.lower_scalar_modulo_operation(
+                node.left,
+                left,
+                node.right,
+                right,
+            )
+            if modulo is not None:
+                return modulo
         return f"({left} {operator} {right})"
 
     def visit_UnaryOpNode(self, node):
         operand = self.visit(node.operand)
         operator = getattr(node, "operator", getattr(node, "op", "+"))
+        if operator == "not":
+            operator = "!"
         if getattr(node, "is_postfix", getattr(node, "postfix", False)):
             return f"{operand}{operator}"
+        lowered = self.lower_vector_unary_operation(node.operand, operand, operator)
+        if lowered is not None:
+            return lowered
         return f"{operator}{operand}"
 
     def visit_FunctionCallNode(self, node):
@@ -493,30 +568,297 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return resource_call
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
-        scalar_clamp = self.generate_scalar_clamp_call(func_name, raw_args, args)
-        if scalar_clamp is not None:
-            return scalar_clamp
+        if func_name == "abs" and len(args) == 1:
+            abs_call = self.generate_abs_call(raw_args, args)
+            if abs_call is not None:
+                return abs_call
+
+        if func_name == "mod" and len(args) == 2:
+            mod_call = self.generate_mod_call(raw_args, args)
+            if mod_call is not None:
+                return mod_call
+
+        if func_name in {"fract", "frac"} and len(args) == 1:
+            fract_call = self.generate_fract_call(raw_args, args)
+            if fract_call is not None:
+                return fract_call
+
+        if func_name == "clamp" and len(args) == 3:
+            return self.generate_clamp_call(raw_args, args)
+
+        if func_name == "saturate" and len(args) == 1:
+            saturate_call = self.generate_saturate_call(raw_args, args)
+            if saturate_call is not None:
+                return saturate_call
+
+        if func_name in {"dot", "cross", "length", "normalize"}:
+            geometric_call = self.generate_vector_geometric_call(
+                func_name,
+                raw_args,
+                args,
+            )
+            if geometric_call is not None:
+                return geometric_call
 
         vector_info = self.vector_type_info(func_name)
-        if vector_info and len(args) == 1:
-            arg_type = self.expression_result_type(raw_args[0])
-            if arg_type is not None and not self.vector_type_info(arg_type):
-                args = args * len(vector_info["components"])
+        if vector_info:
+            args = self.generate_vector_constructor_args(vector_info, raw_args, args)
         args_str = ", ".join(args)
 
         # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
 
-    def generate_scalar_clamp_call(self, func_name, raw_args, args):
-        if func_name != "clamp" or len(args) != 3:
+    def generate_fract_call(self, raw_args, args):
+        arg_type = self.expression_result_type(raw_args[0])
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            helper_name = self.require_vector_fract_helper(vector_info)
+            if helper_name is not None:
+                return f"{helper_name}({args[0]})"
             return None
 
+        scalar_type = self.fract_scalar_type(arg_type)
+        if scalar_type is None:
+            return None
+        helper_name = self.require_scalar_fract_helper(scalar_type)
+        return f"{helper_name}({args[0]})"
+
+    def fract_scalar_type(self, type_name):
+        if type_name is not None and not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        mapped_type = (
+            self.convert_crossgl_type_to_cuda(type_name)
+            if type_name is not None
+            else None
+        )
+        if mapped_type == "double" or type_name in {"double", "f64"}:
+            return "double"
+        if mapped_type == "float" or type_name is None:
+            return "float"
+        return None
+
+    def require_scalar_fract_helper(self, scalar_type):
+        helper_name = f"cgl_fract_{scalar_type}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        floor_name = "floor" if scalar_type == "double" else "floorf"
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}({scalar_type} value)\n"
+            "{\n"
+            f"    return value - {floor_name}(value);\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_vector_fract_helper(self, vector_info):
+        component_type = vector_info["component_type"]
+        if component_type not in {"float", "double"}:
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_fract"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        scalar_helper_name = self.require_scalar_fract_helper(component_type)
+        components = [
+            f"{scalar_helper_name}(value.{component})"
+            for component in vector_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def generate_vector_constructor_args(self, vector_info, raw_args, args):
+        """Flatten vector arguments passed to CUDA make_* constructors."""
+        if len(args) == 1:
+            arg_type = self.expression_result_type(raw_args[0])
+            if arg_type is not None and not self.vector_type_info(arg_type):
+                return args * len(vector_info["components"])
+
+        generated_args = []
+        for raw_arg, arg_expr in zip(raw_args, args):
+            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            if arg_info is None:
+                generated_args.append(arg_expr)
+            else:
+                generated_args.extend(
+                    self.vector_argument_lane_expressions(
+                        raw_arg,
+                        arg_expr,
+                        arg_info,
+                    )
+                )
+
+            if len(generated_args) >= len(vector_info["components"]):
+                return generated_args[: len(vector_info["components"])]
+
+        return generated_args
+
+    def vector_argument_lane_expressions(self, raw_arg, arg_expr, arg_info):
+        swizzle_components = self.member_swizzle_components(raw_arg)
+        if swizzle_components is not None:
+            object_node = getattr(
+                raw_arg,
+                "object_expr",
+                getattr(raw_arg, "object", None),
+            )
+            object_expr = self.visit(object_node)
+            return [f"{object_expr}.{component}" for component in swizzle_components]
+
+        return [f"{arg_expr}.{component}" for component in arg_info["components"]]
+
+    def member_swizzle_components(self, node):
+        if not isinstance(node, MemberAccessNode):
+            return None
+
+        object_node = getattr(node, "object_expr", getattr(node, "object", None))
+        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        if vector_info is None:
+            return None
+
+        component_aliases = {
+            "x": "x",
+            "y": "y",
+            "z": "z",
+            "w": "w",
+            "r": "x",
+            "g": "y",
+            "b": "z",
+            "a": "w",
+        }
+        member = getattr(node, "member", "")
+        components = [component_aliases.get(component) for component in member]
+        if not components or any(component is None for component in components):
+            return None
+
+        available_components = vector_info["components"]
+        if any(component not in available_components for component in components):
+            return None
+
+        return components
+
+    def generate_clamp_call(self, raw_args, args):
         value_type = self.expression_result_type(raw_args[0])
-        if self.vector_type_info(value_type):
+        value_info = self.vector_type_info(value_type)
+        if not value_info:
+            return self.format_clamp_component(
+                self.clamp_scalar_type(value_type),
+                args[0],
+                args[1],
+                args[2],
+            )
+
+        min_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+        max_info = self.vector_type_info(self.expression_result_type(raw_args[2]))
+        if min_info and len(min_info["components"]) != len(value_info["components"]):
+            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+        if max_info and len(max_info["components"]) != len(value_info["components"]):
+            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+
+        helper_name = self.require_vector_clamp_helper(
+            value_info,
+            min_is_vector=min_info is not None,
+            max_is_vector=max_info is not None,
+        )
+        if helper_name is None:
+            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+        return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
+
+    def generate_saturate_call(self, raw_args, args):
+        value_type = self.expression_result_type(raw_args[0])
+        value_info = self.vector_type_info(value_type)
+        component_type = (
+            value_info["component_type"]
+            if value_info is not None
+            else self.scalar_component_type(value_type)
+        )
+        if component_type not in {"float", "double"}:
+            return None
+        return self.generate_clamp_call(
+            [raw_args[0], None, None],
+            [args[0], "0.0", "1.0"],
+        )
+
+    def clamp_scalar_type(self, type_name):
+        if type_name is None:
+            return "float"
+        mapped_type = self.convert_crossgl_type_to_cuda(type_name)
+        if mapped_type in {"float", "double"}:
+            return mapped_type
+        if mapped_type in {
+            "bool",
+            "char",
+            "unsigned char",
+            "short",
+            "unsigned short",
+            "int",
+            "unsigned int",
+            "long long",
+            "unsigned long long",
+        }:
+            return mapped_type
+        return "float"
+
+    def require_vector_clamp_helper(self, vector_info, min_is_vector, max_is_vector):
+        if vector_info["component_type"] == "bool":
             return None
 
-        return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+        vector_type = vector_info["type"]
+        scalar_type = self.vector_scalar_parameter_type(vector_info)
+        min_shape = "vector" if min_is_vector else "scalar"
+        max_shape = "vector" if max_is_vector else "scalar"
+        helper_name = f"cgl_{vector_type}_clamp"
+        if min_shape != "vector" or max_shape != "vector":
+            helper_name += f"_{min_shape}_min_{max_shape}_max"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        min_type = vector_type if min_is_vector else scalar_type
+        max_type = vector_type if max_is_vector else scalar_type
+        components = vector_info["components"]
+        constructor = vector_info["constructor"]
+        args = []
+        for component in components:
+            value_component = f"value.{component}"
+            min_component = f"min_value.{component}" if min_is_vector else "min_value"
+            max_component = f"max_value.{component}" if max_is_vector else "max_value"
+            args.append(
+                self.format_clamp_component(
+                    vector_info["component_type"],
+                    value_component,
+                    min_component,
+                    max_component,
+                )
+            )
+
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}"
+            f"({vector_type} value, {min_type} min_value, {max_type} max_value)\n"
+            "{\n"
+            f"    return {constructor}({', '.join(args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_clamp_component(self, component_type, value, min_value, max_value):
+        if component_type == "float":
+            return f"fmaxf({min_value}, fminf({max_value}, {value}))"
+        if component_type == "double":
+            return f"fmax({min_value}, fmin({max_value}, {value}))"
+        return (
+            f"(({value}) < ({min_value}) ? ({min_value}) : "
+            f"(({value}) > ({max_value}) ? ({max_value}) : ({value})))"
+        )
 
     def visit_MemberAccessNode(self, node):
         """Visit member access"""
@@ -525,7 +867,37 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         else:
             obj = self.visit(node.object)
         member_access = f"{obj}.{node.member}"
-        return self.builtin_map.get(member_access, member_access)
+        if member_access in self.builtin_map:
+            return self.builtin_map[member_access]
+
+        swizzle = self.generate_vector_swizzle(node, obj)
+        if swizzle is not None:
+            return swizzle
+
+        return member_access
+
+    def generate_vector_swizzle(self, node, object_expr):
+        object_node = getattr(node, "object_expr", getattr(node, "object", None))
+        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        if vector_info is None:
+            return None
+
+        components = self.member_swizzle_components(node)
+        if components is None:
+            return None
+
+        if len(components) == 1:
+            return f"{object_expr}.{components[0]}"
+
+        result_type = self.vector_type_for_components(
+            vector_info["component_type"], len(components)
+        )
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return None
+
+        args = [f"{object_expr}.{component}" for component in components]
+        return f"{result_info['constructor']}({', '.join(args)})"
 
     def visit_ArrayAccessNode(self, node):
         """Visit array access"""
@@ -906,6 +1278,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "round": "roundf",
             "trunc": "truncf",
             "mod": "fmodf",
+            "mix": "lerp",
             "min": "fminf",
             "max": "fmaxf",
             "floor": "floorf",
@@ -1334,6 +1707,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         condition = self.visit(node.condition)
         true_expr = self.visit(node.true_expr)
         false_expr = self.visit(node.false_expr)
+        lowered = self.lower_vector_ternary_operation(
+            node.condition,
+            condition,
+            node.true_expr,
+            true_expr,
+            node.false_expr,
+            false_expr,
+        )
+        if lowered is not None:
+            return lowered
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def visit_list(self, node_list):

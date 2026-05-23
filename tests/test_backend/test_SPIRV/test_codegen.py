@@ -412,6 +412,24 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
     assert "#[vertex_shader]" in generated_code
 
 
+def test_vulkan_bitwise_shift_precedence_codegen():
+    code = """
+    void main() {
+        int a = 1;
+        int b = 2;
+        int c = 3;
+        int value = a & b << c;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int value = (a & (b << c));" in generated_code
+    assert "int value = ((a & b) << c);" not in generated_code
+
+
 def test_struct_codegen():
     code = """
     struct VertexInput {

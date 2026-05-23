@@ -167,6 +167,7 @@ class RustCodeGen:
             "cos": "cos",
             "tan": "tan",
             "sqrt": "sqrt",
+            "inversesqrt": "rsqrt",
             "pow": "pow",
             "abs": "abs",
             "min": "min",
@@ -177,10 +178,12 @@ class RustCodeGen:
             "step": "step",
             "floor": "floor",
             "ceil": "ceil",
+            "frac": "fract",
             "fract": "fract",
             "mod": "modulo",
         }
         self.variable_types = {}
+        self.struct_member_types = {}
         self.current_return_type = None
         self.do_while_contexts = []
         self.for_contexts = []
@@ -190,6 +193,7 @@ class RustCodeGen:
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
         self.variable_types = {}
+        self.struct_member_types = {}
         self.current_return_type = None
         self.do_while_contexts = []
         self.for_contexts = []
@@ -272,14 +276,20 @@ class RustCodeGen:
         return code
 
     def generate_struct(self, node):
-        code = f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
+        code = f"#[repr(C)]\n#[derive(Debug, Clone, Copy, Default)]\n"
         code += f"pub struct {node.name} {{\n"
+        member_types = {}
 
         members = getattr(node, "members", [])
         for member in members:
             if isinstance(member, ArrayNode):
                 element_type = getattr(
                     member, "element_type", getattr(member, "vtype", "float")
+                )
+                member_types[member.name] = (
+                    f"{self.convert_type_node_to_string(element_type)}[{member.size}]"
+                    if member.size
+                    else f"{self.convert_type_node_to_string(element_type)}[]"
                 )
                 if member.size:
                     code += f"    pub {member.name}: [{self.map_type_to_rust(element_type)}; {member.size}],\n"
@@ -292,6 +302,7 @@ class RustCodeGen:
                     member_type = member.vtype
                 else:
                     member_type = "float"
+                member_types[member.name] = member_type
 
                 semantic = None
                 if hasattr(member, "semantic"):
@@ -304,6 +315,7 @@ class RustCodeGen:
                 )
                 code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
 
+        self.struct_member_types[node.name] = member_types
         code += "}\n\n"
         return code
 
@@ -567,8 +579,18 @@ class RustCodeGen:
             vtype = self.variable_declaration_type(stmt, initial_value)
             self.register_variable_type(stmt.name, vtype)
             if initial_value is not None:
+                increment_init = self.generate_increment_initializer_declaration(
+                    stmt,
+                    initial_value,
+                    vtype,
+                    indent,
+                )
+                if increment_init is not None:
+                    return increment_init
                 init_expr = self.generate_expression_with_type(initial_value, vtype)
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
+            elif self.is_generated_struct_type(vtype):
+                return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = Default::default();\n"
             else:
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)};\n"
 
@@ -661,6 +683,37 @@ class RustCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_increment_initializer_declaration(
+        self,
+        stmt,
+        initial_value,
+        vtype,
+        indent,
+    ):
+        if not isinstance(initial_value, UnaryOpNode):
+            return None
+
+        op = getattr(initial_value, "operator", getattr(initial_value, "op", ""))
+        op = self.map_operator(op)
+        if op not in {"++", "--"}:
+            return None
+
+        operand = self.generate_expression(getattr(initial_value, "operand", ""))
+        assignment_op = "+=" if op == "++" else "-="
+        update = f"{'    ' * indent}{operand} {assignment_op} 1;\n"
+        declaration = (
+            f"{'    ' * indent}let mut {stmt.name}: "
+            f"{self.map_type(vtype)} = {operand};\n"
+        )
+        is_postfix = getattr(
+            initial_value,
+            "is_postfix",
+            getattr(initial_value, "postfix", False),
+        )
+        if is_postfix:
+            return declaration + update
+        return update + declaration
 
     def generate_switch(self, node, indent):
         indent_str = "    " * indent
@@ -1105,6 +1158,9 @@ class RustCodeGen:
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
             func_name = self.function_map.get(func_name, func_name)
+            if func_name == "saturate" and len(args) == 1:
+                arg = self.generate_expression(args[0])
+                return f"clamp({arg}, 0.0, 1.0)"
 
             scalar_cast = self.generate_scalar_constructor_call(func_name, args)
             if scalar_cast is not None:
@@ -1113,11 +1169,9 @@ class RustCodeGen:
             vector_info = self.vector_type_info(func_name)
             if vector_info:
                 rust_type = self.map_type(func_name)
-                generated_args = [self.generate_expression(arg) for arg in args]
-                if len(generated_args) == 1:
-                    arg_type = self.expression_result_type(args[0])
-                    if arg_type is not None and not self.vector_type_info(arg_type):
-                        generated_args *= vector_info["size"]
+                generated_args = self.generate_vector_constructor_args(
+                    vector_info, args
+                )
                 args_str = ", ".join(generated_args)
                 return f"{self.rust_constructor_path(rust_type)}::new({args_str})"
 
@@ -1183,6 +1237,63 @@ class RustCodeGen:
 
         return f"({arg_expr} as {rust_type})"
 
+    def generate_vector_constructor_args(self, vector_info, args):
+        if len(args) == 1:
+            arg_type = self.expression_result_type(args[0])
+            if arg_type is not None and not self.vector_type_info(arg_type):
+                arg_expr = self.generate_expression(args[0])
+                return [arg_expr] * vector_info["size"]
+
+        generated_args = []
+        for arg in args:
+            arg_expr = self.generate_expression(arg)
+            arg_info = self.vector_type_info(self.expression_result_type(arg))
+            if arg_info is None:
+                generated_args.append(arg_expr)
+            else:
+                generated_args.extend(
+                    self.vector_argument_lane_expressions(arg, arg_expr, arg_info)
+                )
+
+            if len(generated_args) >= vector_info["size"]:
+                return generated_args[: vector_info["size"]]
+
+        return generated_args
+
+    def vector_argument_lane_expressions(self, arg, arg_expr, arg_info):
+        swizzle_components = self.member_swizzle_components(arg)
+        if swizzle_components is not None:
+            object_expr = getattr(arg, "object_expr", getattr(arg, "object", None))
+            object_value = self.generate_expression(object_expr)
+            return [f"{object_value}.{component}" for component in swizzle_components]
+
+        components = ("x", "y", "z", "w")[: arg_info["size"]]
+        return [f"{arg_expr}.{component}" for component in components]
+
+    def member_swizzle_components(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+
+        object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+        if not self.vector_type_info(self.expression_result_type(object_expr)):
+            return None
+
+        component_aliases = {
+            "x": "x",
+            "y": "y",
+            "z": "z",
+            "w": "w",
+            "r": "x",
+            "g": "y",
+            "b": "z",
+            "a": "w",
+        }
+        member = getattr(expr, "member", "")
+        components = [component_aliases.get(component) for component in member]
+        if not components or any(component is None for component in components):
+            return None
+        return components
+
     def scalar_constructor_type(self, func_name):
         scalar_types = {
             "bool": "bool",
@@ -1231,6 +1342,15 @@ class RustCodeGen:
         else:
             type_name = str(type_name)
         self.variable_types[name] = type_name
+
+    def is_generated_struct_type(self, type_name):
+        if type_name is None:
+            return False
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+        return type_name in self.struct_member_types
 
     def get_expression_name(self, expr):
         if isinstance(expr, IdentifierNode):
@@ -1283,10 +1403,22 @@ class RustCodeGen:
         if isinstance(expr, MemberAccessNode):
             object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
             object_type = self.expression_result_type(object_expr)
+            object_type_name = (
+                self.convert_type_node_to_string(object_type)
+                if object_type is not None
+                and (
+                    hasattr(object_type, "name") or hasattr(object_type, "element_type")
+                )
+                else object_type
+            )
+            member = getattr(expr, "member", "")
+            struct_members = self.struct_member_types.get(object_type_name, {})
+            if member in struct_members:
+                return struct_members[member]
+
             vector_info = self.vector_type_info(object_type)
             if not vector_info:
                 return None
-            member = getattr(expr, "member", "")
             if len(member) == 1:
                 return vector_info["component_type"]
             if all(component in "xyzwrgba" for component in member):

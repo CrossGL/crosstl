@@ -1943,7 +1943,7 @@ class RustParser:
     def parse_conditional_expression(self):
         if self.current_token[0] == "IF":
             return self.parse_if_expression()
-        return self.parse_logical_or_expression()
+        return self.parse_range_expression()
 
     def parse_if_expression(self):
         self.eat("IF")
@@ -2070,12 +2070,12 @@ class RustParser:
         return left
 
     def parse_additive_expression(self):
-        left = self.parse_range_expression()
+        left = self.parse_multiplicative_expression()
 
         while self.current_token[0] in ["PLUS", "MINUS"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_range_expression()
+            right = self.parse_multiplicative_expression()
             left = BinaryOpNode(left, op, right)
 
         return left
@@ -2089,11 +2089,11 @@ class RustParser:
             end = (
                 None
                 if self.is_range_expression_boundary()
-                else self.parse_multiplicative_expression()
+                else self.parse_logical_or_expression()
             )
             return RangeNode(None, end, op == "..=")
 
-        left = self.parse_multiplicative_expression()
+        left = self.parse_logical_or_expression()
 
         if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
             op = self.current_token[1]
@@ -2103,7 +2103,7 @@ class RustParser:
             right = (
                 None
                 if self.is_range_expression_boundary()
-                else self.parse_multiplicative_expression()
+                else self.parse_logical_or_expression()
             )
             return RangeNode(left, right, op == "..=")
 
@@ -2249,8 +2249,12 @@ class RustParser:
                     left = AwaitNode(left)
                     continue
 
+                if self.current_token[0] not in {"IDENTIFIER", "NUMBER"}:
+                    raise SyntaxError(
+                        f"Expected IDENTIFIER or NUMBER, got {self.current_token[0]}"
+                    )
                 member = self.current_token[1]
-                self.eat("IDENTIFIER")
+                self.eat(self.current_token[0])
                 left = MemberAccessNode(left, member)
             elif self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")

@@ -771,33 +771,33 @@ class VulkanParser:
 
         return left
 
-    def parse_bitwise_expression(self):
+    def parse_shift_expression(self):
         left = self.parse_additive()
         while self.current_token[0] in [
-            "BINARY_AND",
-            "BINARY_OR",
-            "BINARY_XOR",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_SHIFT_RIGHT",
         ]:
             op = self.current_token[0]
             self.eat(op)
             right = self.parse_additive()
+            op_symbol = "<<" if op == "BITWISE_SHIFT_LEFT" else ">>"
+            left = BinaryOpNode(left, op_symbol, right)
 
+        return left
+
+    def parse_bitwise_expression(self):
+        left = self.parse_shift_expression()
+        while self.current_token[0] in [
+            "BINARY_AND",
+            "BINARY_OR",
+            "BINARY_XOR",
+        ]:
+            op = self.current_token[0]
             op_symbol = (
-                "&"
-                if op == "BINARY_AND"
-                else (
-                    "|"
-                    if op == "BINARY_OR"
-                    else (
-                        "^"
-                        if op == "BINARY_XOR"
-                        else "<<" if op == "BITWISE_SHIFT_LEFT" else ">>"
-                    )
-                )
+                "&" if op == "BINARY_AND" else ("|" if op == "BINARY_OR" else "^")
             )
-
+            self.eat(op)
+            right = self.parse_shift_expression()
             left = BinaryOpNode(left, op_symbol, right)
 
         return left

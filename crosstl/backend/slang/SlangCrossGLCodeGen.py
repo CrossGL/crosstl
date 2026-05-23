@@ -8,6 +8,28 @@ from .SlangLexer import *
 class SlangToCrossGLConverter:
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
+    BINARY_PRECEDENCE = {
+        "||": 1,
+        "&&": 2,
+        "|": 3,
+        "^": 4,
+        "&": 5,
+        "==": 6,
+        "!=": 6,
+        "<": 7,
+        ">": 7,
+        "<=": 7,
+        ">=": 7,
+        "<<": 8,
+        ">>": 8,
+        "+": 9,
+        "-": 9,
+        "*": 10,
+        "/": 10,
+        "%": 10,
+    }
+    ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+
     def __init__(self):
         """Initialize Slang-to-CrossGL type, semantic, and resource mappings."""
         self.vertex_inputs = []
@@ -40,6 +62,13 @@ class SlangToCrossGLConverter:
             "Texture2D": "sampler2D",
             "TextureCube": "samplerCube",
         }
+        self.function_map = {
+            "frac": "fract",
+            "fmod": "mod",
+            "lerp": "mix",
+            "rsqrt": "inversesqrt",
+        }
+        self.user_function_names = set()
 
         self.semantic_map = {
             # Vertex inputs position
@@ -139,6 +168,10 @@ class SlangToCrossGLConverter:
 
     def generate(self, ast):
         """Generate complete CrossGL source from a parsed Slang AST."""
+        self.user_function_names = {
+            getattr(func, "name", None) for func in getattr(ast, "functions", [])
+        }
+        self.user_function_names.discard(None)
         code = "shader main {\n"
         if ast.imports:
             for imp in ast.imports:
@@ -179,6 +212,7 @@ class SlangToCrossGLConverter:
 
             elif func.qualifier == "compute":
                 code += "    compute {\n"
+                code += self.generate_numthreads_layout(func)
                 code += self.generate_function(func)
                 code += "    }\n\n"
             else:
@@ -186,6 +220,17 @@ class SlangToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def generate_numthreads_layout(self, func):
+        numthreads = getattr(func, "numthreads", None)
+        if not numthreads:
+            return ""
+
+        x, y, z = numthreads
+        return (
+            "        "
+            f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
+        )
 
     def generate_cbuffers(self, ast):
         code = ""
@@ -242,7 +287,7 @@ class SlangToCrossGLConverter:
             elif isinstance(stmt, (FunctionCallNode, MethodCallNode, CallNode)):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, BinaryOpNode):
-                code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
+                code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
                     if stmt.value is None:
@@ -334,6 +379,32 @@ class SlangToCrossGLConverter:
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
+    def binary_precedence(self, op):
+        return self.BINARY_PRECEDENCE.get(op, 0)
+
+    def binary_child_needs_parentheses(self, parent_op, child, is_right_child=False):
+        if not isinstance(child, BinaryOpNode):
+            return False
+
+        parent_precedence = self.binary_precedence(parent_op)
+        child_precedence = self.binary_precedence(child.op)
+        if child_precedence < parent_precedence:
+            return True
+        if child_precedence > parent_precedence:
+            return False
+        return is_right_child and (
+            parent_op not in self.ASSOCIATIVE_BINARY_OPS or child.op != parent_op
+        )
+
+    def generate_binary_expression(self, expr, is_main):
+        left = self.generate_expression(expr.left, is_main)
+        right = self.generate_expression(expr.right, is_main)
+        if self.binary_child_needs_parentheses(expr.op, expr.left):
+            left = f"({left})"
+        if self.binary_child_needs_parentheses(expr.op, expr.right, True):
+            right = f"({right})"
+        return f"{left} {expr.op} {right}"
+
     def generate_expression(self, expr, is_main=False):
         """Render a Slang backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
@@ -343,21 +414,28 @@ class SlangToCrossGLConverter:
                 return f"{self.map_type(expr.vtype)} {expr.name}"
             return expr.name
         elif isinstance(expr, BinaryOpNode):
-            left = self.generate_expression(expr.left, is_main)
-            right = self.generate_expression(expr.right, is_main)
-            return f"{left} {expr.op} {right}"
+            return self.generate_binary_expression(expr, is_main)
         elif isinstance(expr, AssignmentNode):
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
+            if isinstance(expr.operand, BinaryOpNode):
+                operand = f"({operand})"
             return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
-            return f"{expr.name}({args})"
+            if (
+                expr.name == "saturate"
+                and len(expr.args) == 1
+                and expr.name not in self.user_function_names
+            ):
+                return f"clamp({args}, 0.0, 1.0)"
+            name = self.function_map.get(expr.name, expr.name)
+            return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
             args = ", ".join(

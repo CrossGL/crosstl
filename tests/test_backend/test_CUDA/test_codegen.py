@@ -1,6 +1,7 @@
 """Test CUDA Code Generation"""
 
 import pytest
+from crosstl import translate
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
@@ -76,7 +77,12 @@ class TestCudaCodeGen:
         assert codegen.convert_cuda_type_to_crossgl("double") == "f64"
         assert codegen.convert_cuda_type_to_crossgl("bool") == "bool"
         assert codegen.convert_cuda_type_to_crossgl("void") == "void"
+        assert codegen.convert_cuda_type_to_crossgl("long long") == "i64"
+        assert codegen.convert_cuda_type_to_crossgl("unsigned long long") == "u64"
         assert codegen.convert_cuda_type_to_crossgl("float *") == "ptr<f32>"
+        assert (
+            codegen.convert_cuda_type_to_crossgl("unsigned long long *") == "ptr<u64>"
+        )
         assert codegen.convert_cuda_type_to_crossgl("void * *") == "ptr<ptr<void>>"
         assert codegen.convert_cuda_type_to_crossgl("void * []") == "array<ptr<void>>"
 
@@ -126,6 +132,101 @@ class TestCudaCodeGen:
         assert "out[0] = mod(x, 1.0f);" in result
         assert "out[1] = mod(x, 2.0);" in result
         assert "fmod" not in result
+
+    def test_atan2_builtins_convert_to_crossgl_atan2(self):
+        """Test CUDA atan2f converts back to CrossGL atan2."""
+        code = """
+        __global__ void angle(float* out, float y, float x) {
+            out[0] = atan2f(y, x);
+            out[1] = atan2(y, x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = atan2(y, x);" in result
+        assert "out[1] = atan2(y, x);" in result
+        assert "atan2f" not in result
+
+    def test_lerp_builtin_converts_to_crossgl_mix(self):
+        """Test CUDA lerp converts back to CrossGL mix."""
+        code = """
+        __global__ void blend(float* out, float a, float b, float t) {
+            out[0] = lerp(a, b, t);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = mix(a, b, t);" in result
+        assert "out[0] = lerp(a, b, t);" not in result
+
+    def test_inverse_trig_builtins_convert_to_crossgl(self):
+        """Test CUDA inverse trig functions convert back to CrossGL names."""
+        code = """
+        __global__ void inverse(float* out, float x) {
+            out[0] = asinf(x);
+            out[1] = acosf(x);
+            out[2] = atanf(x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = asin(x);" in result
+        assert "out[1] = acos(x);" in result
+        assert "out[2] = atan(x);" in result
+        assert "asinf" not in result
+        assert "acosf" not in result
+        assert "atanf" not in result
+
+    def test_extended_math_builtins_convert_to_crossgl(self):
+        """Test CUDA extended math functions convert back to CrossGL names."""
+        code = """
+        __global__ void math(float* out, double* precise, float x, double d) {
+            out[0] = rsqrtf(x);
+            out[1] = roundf(x);
+            out[2] = truncf(x);
+            out[3] = exp2f(x);
+            out[4] = log2f(x);
+            precise[0] = rsqrt(d);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = inversesqrt(x);" in result
+        assert "out[1] = round(x);" in result
+        assert "out[2] = trunc(x);" in result
+        assert "out[3] = exp2(x);" in result
+        assert "out[4] = log2(x);" in result
+        assert "precise[0] = inversesqrt(d);" in result
+        assert "rsqrtf" not in result
+        assert "rsqrt(" not in result
+        assert "roundf" not in result
+        assert "truncf" not in result
+        assert "exp2f" not in result
+        assert "log2f" not in result
 
     def test_kernel_launch_conversion(self):
         """Test CUDA kernel launch configuration conversion"""
@@ -613,6 +714,31 @@ class TestCudaCodeGen:
         ) in result
         assert "data[i] = 0.0f;" in result
 
+    def test_assignment_expression_conversion(self):
+        """Test nested CUDA assignment expressions convert without stray output"""
+        code = """
+        void f() {
+            int a = 0;
+            int b = 0;
+            int c = 0;
+            a = b = c;
+            int d = (a = b);
+            sink(a = 1);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "a = b = c;" in result
+        assert "var d: i32 = a = b;" in result
+        assert "sink(a = 1);" in result
+        assert "None" not in result
+
     def test_auto_pointer_reference_local_declarations_conversion(self):
         """Test auto pointer and reference declarations convert"""
         code = """
@@ -1034,6 +1160,20 @@ class TestCudaCodeGen:
         assert "indices: array<i32>" in result
         assert "array<ptr" not in result
 
+    def test_kernel_pointer_parameters_roundtrip_to_rust(self, tmp_path):
+        code = """
+        __global__ void kernel(float* data, const int* indices, float value) {
+            data[indices[0]] = value;
+        }
+        """
+        source_path = tmp_path / "kernel.cu"
+        source_path.write_text(code)
+
+        result = translate(str(source_path), backend="rust", format_output=False)
+
+        assert "pub fn kernel(data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+        assert "data[indices[0]] = value;" in result
+
     def test_qualified_declaration_conversion(self):
         """Test const, unsigned, and static declaration conversion"""
         code = """
@@ -1219,6 +1359,31 @@ class TestCudaCodeGen:
         assert "var x: f32 = 1e-3f;" in result
         assert "var y: f32 = .5f;" in result
         assert "return ((mask | bits) | oct);" in result
+
+    def test_long_long_type_conversion(self):
+        """Test scalar long long CUDA types convert to 64-bit CrossGL types"""
+        code = """
+        __global__ void kernel(unsigned long long* out, long long x) {
+            unsigned long long y = 1ull;
+            long long z = (long long)x;
+            out[0] = y + z;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> out: array<u64>" in result
+        )
+        assert "i64 x" in result
+        assert "var y: u64 = 1ull;" in result
+        assert "var z: i64 = i64(x);" in result
+        assert "out[0] = (y + z);" in result
 
     def test_control_flow_and_cast_expression_conversion(self):
         """Test do-while, switch, ternary, and casts are emitted"""

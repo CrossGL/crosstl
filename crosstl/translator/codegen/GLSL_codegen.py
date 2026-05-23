@@ -75,24 +75,68 @@ from .stage_utils import (
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
+    IMAGE_ATOMIC_INTRINSIC_NAMES,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
-    explicit_image_access,
+    default_storage_image_channel_count,
     explicit_image_format,
+    image_atomic_explicit_format_component_kind,
+    image_atomic_format_error,
+    image_atomic_result_kind_error,
+    image_atomic_result_kind_mismatch,
+    image_atomic_value_arguments as shared_image_atomic_value_arguments,
+    image_atomic_value_kind_error,
+    image_atomic_value_kind_mismatch,
+    image_load_result_kind_error,
+    image_load_result_kind_mismatch,
+    image_load_result_shape_error,
+    image_load_result_shape_mismatch,
+    image_format_or_default_channel_count,
+    image_format_component_kind,
+    image_format_result_type,
     image_access_satisfies_requirement,
+    image_multisample_sample_argument_index,
+    image_multisample_sample_type_error,
+    image_multisample_sample_type_mismatch,
+    image_store_value_kind_error,
+    image_store_value_kind_mismatch,
+    image_store_value_shape_error,
+    image_store_value_shape_mismatch,
     is_image_format_attribute,
     is_glsl_float_image_resource,
     is_glsl_integer_image_type,
     is_glsl_storage_image_type,
     is_resource_access_attribute,
     is_scalar_image_format,
+    is_storage_image_texture_comparison_operation,
+    is_storage_image_texture_operation,
     is_two_component_image_format,
+    numeric_component_count_from_type,
+    numeric_component_kind_from_type,
+    numeric_expression_component_count,
+    numeric_expression_component_kind,
+    numeric_scalar_expression_kind,
+    numeric_scalar_type_kind,
+    image_resource_metadata,
+    record_explicit_image_metadata,
+    should_validate_image_load_result_shape,
     storage_image_format_store_constructor,
     storage_image_load_component_suffix,
+    storage_image_store_constructors,
     storage_image_store_value_expression,
     storage_image_two_component_store_expression,
+    storage_image_zero_values,
     supported_image_formats,
+    unsupported_multisample_texture_call_expression,
+    unsupported_multisample_texture_compare_expression,
+    unsupported_multisample_texture_gather_compare_expression,
+    unsupported_multisample_texture_query_expression,
+    unsupported_storage_image_texture_comparison_expression,
+    unsupported_storage_image_texture_operation_expression,
+    unsupported_texture_query_expression,
+    unsupported_texture_samples_query_expression,
 )
 
 
@@ -111,6 +155,7 @@ class GLSLCodeGen:
         self.current_image_access_parameters = {}
         self.function_sampler_parameter_indices = {}
         self.function_parameter_names = {}
+        self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
@@ -211,17 +256,23 @@ class GLSLCodeGen:
             "iimage2D": "iimage2D",
             "iimage3D": "iimage3D",
             "iimage2DArray": "iimage2DArray",
+            "iimage2DMS": "iimage2DMS",
+            "iimage2DMSArray": "iimage2DMSArray",
             "uimage1D": "uimage1D",
             "uimage1DArray": "uimage1DArray",
             "uimage2D": "uimage2D",
             "uimage3D": "uimage3D",
             "uimage2DArray": "uimage2DArray",
+            "uimage2DMS": "uimage2DMS",
+            "uimage2DMSArray": "uimage2DMSArray",
             "image1D": "image1D",
             "image1DArray": "image1DArray",
             "image2D": "image2D",
             "image3D": "image3D",
             "imageCube": "imageCube",
             "image2DArray": "image2DArray",
+            "image2DMS": "image2DMS",
+            "image2DMSArray": "image2DMSArray",
         }
 
         self.function_map = {
@@ -324,6 +375,11 @@ class GLSLCodeGen:
             self.collect_function_sampler_parameter_indices(ast)
         )
         functions = self.collect_functions(ast)
+        self.function_return_types = {
+            func.name: self.type_name_string(getattr(func, "return_type", "void"))
+            for func in functions
+            if getattr(func, "name", None)
+        }
         self.function_parameter_names = collect_function_parameter_names(functions)
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
@@ -548,16 +604,13 @@ class GLSLCodeGen:
                 continue
             if self.is_opaque_resource_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
-                explicit_format = explicit_image_format(
-                    node, self.attribute_value_to_string
+                record_explicit_image_metadata(
+                    var_name,
+                    node,
+                    self.attribute_value_to_string,
+                    image_formats=self.image_variable_formats,
+                    image_accesses=self.image_variable_accesses,
                 )
-                if explicit_format:
-                    self.image_variable_formats[var_name] = explicit_format
-                explicit_access = explicit_image_access(
-                    node, self.attribute_value_to_string
-                )
-                if explicit_access:
-                    self.image_variable_accesses[var_name] = explicit_access
             declaration = format_c_style_array_declaration(
                 f"{mapped_type}{array_suffix}", var_name
             )
@@ -799,16 +852,13 @@ class GLSLCodeGen:
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
                 )
-                explicit_format = explicit_image_format(
-                    p, self.attribute_value_to_string
+                record_explicit_image_metadata(
+                    p.name,
+                    p,
+                    self.attribute_value_to_string,
+                    image_formats=image_format_parameters,
+                    image_accesses=image_access_parameters,
                 )
-                if explicit_format:
-                    image_format_parameters[p.name] = explicit_format
-                explicit_access = explicit_image_access(
-                    p, self.attribute_value_to_string
-                )
-                if explicit_access:
-                    image_access_parameters[p.name] = explicit_access
 
             semantic = self.semantic_from_node(p)
 
@@ -1309,6 +1359,11 @@ class GLSLCodeGen:
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in self.function_return_types:
+                return self.function_return_types[func_name]
+            if func_name == "imageLoad" and args:
+                return self.image_load_result_type(args[0])
             if func_name in {
                 "float",
                 "double",
@@ -1581,6 +1636,8 @@ class GLSLCodeGen:
                 and not isinstance(expr.value, bool)
             ):
                 return f"{expr.value}u"
+            if isinstance(expr.value, bool):
+                return "true" if expr.value else "false"
             return str(expr.value)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
             left = self.generate_expression(expr.left)
@@ -1588,15 +1645,7 @@ class GLSLCodeGen:
             op = self.map_operator(expr.op)
             return f"({left} {op} {right})"
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
-            left = self.generate_expression(
-                expr.target if hasattr(expr, "target") else expr.left
-            )
-            right = self.generate_expression(
-                expr.value if hasattr(expr, "value") else expr.right
-            )
-            op = expr.operator if hasattr(expr, "operator") else expr.op
-            op = self.map_operator(op)
-            return f"{left} {op} {right}"
+            return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
@@ -1646,6 +1695,11 @@ class GLSLCodeGen:
                 return buffer_call
 
             if func_name in [
+                "float",
+                "double",
+                "int",
+                "uint",
+                "bool",
                 "vec2",
                 "vec3",
                 "vec4",
@@ -1659,11 +1713,17 @@ class GLSLCodeGen:
                 "bvec3",
                 "bvec4",
             ]:
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                args = ", ".join(
+                    self.generate_expression_with_expected(arg, None)
+                    for arg in expr.args
+                )
                 return f"{func_name}({args})"
 
             if func_name in ["mat2", "mat3", "mat4"]:
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                args = ", ".join(
+                    self.generate_expression_with_expected(arg, None)
+                    for arg in expr.args
+                )
                 return f"{func_name}({args})"
 
             self.validate_function_image_access_arguments(func_name, expr.args)
@@ -1852,6 +1912,87 @@ class GLSLCodeGen:
                 f"storage image access for {texture_name}: got {access_name}"
             )
 
+    def image_atomic_value_arguments(self, func_name, args):
+        image_type = self.texture_argument_resource_type(args[0])
+        has_sample = self.is_multisample_storage_image_type(image_type)
+        return shared_image_atomic_value_arguments(func_name, args, has_sample)
+
+    def scalar_expression_kind(self, expr):
+        return numeric_scalar_expression_kind(
+            expr,
+            self.expression_result_type,
+            self.type_name_string,
+            self.map_type,
+        )
+
+    def validate_image_atomic_value_argument_types(
+        self, func_name, args, component_kind, image_format
+    ):
+        mismatch = image_atomic_value_kind_mismatch(
+            func_name,
+            self.image_atomic_value_arguments(func_name, args),
+            component_kind,
+            self.scalar_expression_kind,
+        )
+        if mismatch is None:
+            return
+        value_arg, value_kind = mismatch
+        raise ValueError(
+            image_atomic_value_kind_error(
+                "OpenGL",
+                func_name,
+                image_format,
+                component_kind,
+                expression_debug_name(value_arg),
+                value_kind,
+            )
+        )
+
+    def scalar_expected_kind(self):
+        return numeric_scalar_type_kind(
+            self.current_expression_expected_type,
+            self.type_name_string,
+            self.map_type,
+        )
+
+    def validate_image_atomic_result_type(
+        self, func_name, component_kind, image_format
+    ):
+        expected_kind = image_atomic_result_kind_mismatch(
+            self.scalar_expected_kind(), component_kind
+        )
+        if expected_kind is None:
+            return
+        raise ValueError(
+            image_atomic_result_kind_error(
+                "OpenGL", func_name, image_format, component_kind, expected_kind
+            )
+        )
+
+    def validate_image_atomic_format_argument(self, func_name, args):
+        if func_name not in IMAGE_ATOMIC_INTRINSIC_NAMES or not args:
+            return
+        image_format = self.image_resource_format(args[0])
+        if image_format is None:
+            return
+        component_kind = image_atomic_explicit_format_component_kind(
+            func_name, image_format
+        )
+        if component_kind is not None:
+            self.validate_image_atomic_value_argument_types(
+                func_name,
+                args,
+                component_kind,
+                image_format,
+            )
+            self.validate_image_atomic_result_type(
+                func_name,
+                component_kind,
+                image_format,
+            )
+            return
+        raise ValueError(image_atomic_format_error("OpenGL", func_name, image_format))
+
     def image_access_requirement_label(self, required_access):
         return {
             "read": "read-capable",
@@ -1926,6 +2067,12 @@ class GLSLCodeGen:
         coordinate_dimension = None
         if texture_type and "Cube" not in texture_type:
             for prefix in ("iimage", "uimage", "image"):
+                if texture_type.startswith(f"{prefix}2DMSArray"):
+                    coordinate_dimension = 3
+                    break
+                if texture_type.startswith(f"{prefix}2DMS"):
+                    coordinate_dimension = 2
+                    break
                 if texture_type.startswith(f"{prefix}2DArray"):
                     coordinate_dimension = 3
                     break
@@ -2360,6 +2507,33 @@ class GLSLCodeGen:
             f"{self.type_name_string(sample_type)}"
         )
 
+    def validate_image_multisample_arguments(self, func_name, args):
+        if not args:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        sample_index = image_multisample_sample_argument_index(
+            func_name,
+            len(args),
+            self.is_multisample_storage_image_type(texture_type),
+            "OpenGL",
+        )
+        if sample_index is None:
+            return
+        sample_type = self.texture_argument_diagnostic_type(args[sample_index])
+        sample_type = image_multisample_sample_type_mismatch(
+            sample_type, self.is_scalar_integer_type
+        )
+        if sample_type is None:
+            return
+        raise ValueError(
+            image_multisample_sample_type_error(
+                "OpenGL",
+                func_name,
+                expression_debug_name(args[sample_index]),
+                self.type_name_string(sample_type),
+            )
+        )
+
     def validate_gather_component_argument(self, func_name, args):
         component_index = texture_gather_component_argument_index(
             func_name,
@@ -2596,50 +2770,60 @@ class GLSLCodeGen:
         return self.resource_base_type(texture_type) in {
             "sampler2DMS",
             "sampler2DMSArray",
+            "image2DMS",
+            "image2DMSArray",
+            "iimage2DMS",
+            "iimage2DMSArray",
+            "uimage2DMS",
+            "uimage2DMSArray",
+        }
+
+    def is_multisample_storage_image_type(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "image2DMS",
+            "image2DMSArray",
+            "iimage2DMS",
+            "iimage2DMSArray",
+            "uimage2DMS",
+            "uimage2DMSArray",
         }
 
     def unsupported_multisample_texture_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            f"/* unsupported GLSL multisample texture call: "
-            f"{func_name} on {texture_type} */ vec4(0.0)"
+        return unsupported_multisample_texture_call_expression(
+            "GLSL", func_name, texture_type, "vec4(0.0)"
         )
 
     def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            f"/* unsupported GLSL multisample texture comparison: "
-            f"{func_name} on {texture_type} */ 0.0"
+        return unsupported_multisample_texture_compare_expression(
+            "GLSL", func_name, texture_type, "0.0"
         )
 
     def unsupported_multisample_texture_gather_compare_call(
         self, func_name, texture_type
     ):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            f"/* unsupported GLSL multisample texture gather comparison: "
-            f"{func_name} on {texture_type} */ vec4(0.0)"
+        return unsupported_multisample_texture_gather_compare_expression(
+            "GLSL", func_name, texture_type, "vec4(0.0)"
         )
 
     def unsupported_multisample_texture_query_lod_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            "/* unsupported GLSL multisample texture query: "
-            f"textureQueryLod on {texture_type} */ vec2(0.0)"
+        return unsupported_multisample_texture_query_expression(
+            "GLSL", "textureQueryLod", texture_type, "vec2(0.0)"
         )
 
     def unsupported_texture_query_levels_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            "/* unsupported GLSL texture query: "
-            f"textureQueryLevels on {texture_type} */ 0"
+        return unsupported_texture_query_expression(
+            "GLSL", "textureQueryLevels", texture_type, "0"
         )
 
     def unsupported_texture_query_lod_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return (
-            "/* unsupported GLSL texture query: "
-            f"textureQueryLod on {texture_type} */ vec2(0.0)"
+        return unsupported_texture_query_expression(
+            "GLSL", "textureQueryLod", texture_type, "vec2(0.0)"
         )
 
     def storage_image_texture_operation_expression(self, func_name, texture_type):
@@ -2647,55 +2831,20 @@ class GLSLCodeGen:
             return None
 
         texture_type = self.resource_base_type(texture_type)
-        if func_name in {
-            "textureCompare",
-            "textureCompareOffset",
-            "textureCompareLod",
-            "textureCompareLodOffset",
-            "textureCompareGrad",
-            "textureCompareGradOffset",
-            "textureCompareProj",
-            "textureCompareProjOffset",
-            "textureCompareProjLod",
-            "textureCompareProjLodOffset",
-            "textureCompareProjGrad",
-            "textureCompareProjGradOffset",
-        }:
-            return (
-                "/* unsupported GLSL storage image texture comparison: "
-                f"{func_name} on {texture_type} */ 0.0"
+        if is_storage_image_texture_comparison_operation(func_name):
+            return unsupported_storage_image_texture_comparison_expression(
+                "GLSL", func_name, texture_type, "0.0"
             )
 
-        if func_name in {
-            "texture",
-            "textureLod",
-            "textureGrad",
-            "textureOffset",
-            "textureLodOffset",
-            "textureGradOffset",
-            "textureProj",
-            "textureProjOffset",
-            "textureProjLod",
-            "textureProjLodOffset",
-            "textureProjGrad",
-            "textureProjGradOffset",
-            "textureGather",
-            "textureGatherOffset",
-            "textureGatherOffsets",
-            "textureGatherCompare",
-            "textureGatherCompareOffset",
-            "texelFetch",
-            "texelFetchOffset",
-        }:
-            return (
-                "/* unsupported GLSL storage image texture operation: "
-                f"{func_name} on {texture_type} */ vec4(0.0)"
+        if is_storage_image_texture_operation(func_name):
+            return unsupported_storage_image_texture_operation_expression(
+                "GLSL", func_name, texture_type, "vec4(0.0)"
             )
 
         return None
 
     def unsupported_texture_samples_query_call(self):
-        return "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
+        return unsupported_texture_samples_query_expression("GLSL", "sampler")
 
     def image_size_expression(self, image_arg):
         image_name = self.generate_expression(image_arg)
@@ -3216,19 +3365,19 @@ class GLSLCodeGen:
         return f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
 
     def image_resource_format(self, texture_arg):
-        texture_name = self.expression_name(texture_arg)
-        if not texture_name:
-            return None
-        return self.current_image_format_parameters.get(
-            texture_name, self.image_variable_formats.get(texture_name)
+        return image_resource_metadata(
+            texture_arg,
+            self.expression_name,
+            self.current_image_format_parameters,
+            self.image_variable_formats,
         )
 
     def image_resource_access(self, texture_arg):
-        texture_name = self.expression_name(texture_arg)
-        if not texture_name:
-            return None
-        return self.current_image_access_parameters.get(
-            texture_name, self.image_variable_accesses.get(texture_name)
+        return image_resource_metadata(
+            texture_arg,
+            self.expression_name,
+            self.current_image_access_parameters,
+            self.image_variable_accesses,
         )
 
     def is_integer_image_type(self, texture_type):
@@ -3249,18 +3398,10 @@ class GLSLCodeGen:
         return is_glsl_float_image_resource(texture_type)
 
     def image_store_constructors_by_kind(self):
-        return {
-            "float": "vec4",
-            "int": "ivec4",
-            "uint": "uvec4",
-        }
+        return storage_image_store_constructors("vec4", "ivec4", "uvec4")
 
     def image_store_zero_values_by_kind(self):
-        return {
-            "float": "0.0",
-            "int": "0",
-            "uint": "0u",
-        }
+        return storage_image_zero_values()
 
     def image_load_component_suffix(self, texture_type, image_format):
         return storage_image_load_component_suffix(
@@ -3286,6 +3427,8 @@ class GLSLCodeGen:
             "iimage2D",
             "iimage3D",
             "iimage2DArray",
+            "iimage2DMS",
+            "iimage2DMSArray",
         }:
             return "ivec4"
         if texture_type in {
@@ -3294,6 +3437,8 @@ class GLSLCodeGen:
             "uimage2D",
             "uimage3D",
             "uimage2DArray",
+            "uimage2DMS",
+            "uimage2DMSArray",
         }:
             return "uvec4"
         return None
@@ -3326,6 +3471,173 @@ class GLSLCodeGen:
             zero_values_by_kind=self.image_store_zero_values_by_kind(),
         )
 
+    def glsl_storage_image_component_kind(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("uimage"):
+            return "uint"
+        if texture_type.startswith("iimage"):
+            return "int"
+        if texture_type.startswith("image"):
+            return "float"
+        return None
+
+    def image_store_expected_value_type(
+        self, texture_type, image_format, value_arg=None
+    ):
+        if value_arg is not None and self.is_vector_value_type(
+            self.expression_result_type(value_arg)
+        ):
+            return None
+        if image_format:
+            return image_format_component_kind(image_format)
+        component_kind = self.glsl_storage_image_component_kind(texture_type)
+        if component_kind in {"float", "int", "uint"}:
+            return component_kind
+        return None
+
+    def image_load_result_type(self, image_arg):
+        image_format = self.image_resource_format(image_arg)
+        if image_format:
+            return image_format_result_type(
+                image_format,
+                vector_prefixes={"float": "vec", "int": "ivec", "uint": "uvec"},
+            )
+        image_type = self.texture_argument_resource_type(image_arg)
+        component_kind = self.glsl_storage_image_component_kind(image_type)
+        if component_kind == "float":
+            return "vec4"
+        if component_kind == "int":
+            return "ivec4"
+        if component_kind == "uint":
+            return "uvec4"
+        return None
+
+    def image_load_component_kind(self, texture_type, image_format):
+        if image_format:
+            return image_format_component_kind(image_format)
+        return self.glsl_storage_image_component_kind(texture_type)
+
+    def image_load_channel_count(self, texture_type, image_format):
+        return image_format_or_default_channel_count(
+            image_format,
+            default_storage_image_channel_count(
+                self.glsl_storage_image_component_kind(texture_type)
+            ),
+        )
+
+    def expected_component_kind(self):
+        return numeric_component_kind_from_type(
+            self.current_expression_expected_type,
+            self.type_name_string,
+            self.map_type,
+            self.vector_component_type,
+        )
+
+    def expected_component_count(self):
+        return self.value_component_count(self.current_expression_expected_type)
+
+    def expression_component_kind(self, expr):
+        return numeric_expression_component_kind(
+            expr,
+            self.expression_result_type,
+            self.type_name_string,
+            self.map_type,
+            self.vector_component_type,
+        )
+
+    def value_component_count(self, vtype):
+        return numeric_component_count_from_type(
+            vtype,
+            self.type_name_string,
+            self.map_type,
+            self.vector_component_type,
+            scalar_types={"float", "double", "int", "uint", "bool"},
+            excluded_type_markers=("mat",),
+        )
+
+    def expression_component_count(self, expr):
+        return numeric_expression_component_count(
+            expr,
+            self.expression_result_type,
+            self.type_name_string,
+            self.map_type,
+            self.vector_component_type,
+            scalar_types={"float", "double", "int", "uint", "bool"},
+            excluded_type_markers=("mat",),
+        )
+
+    def image_store_channel_count(self, texture_type, image_format):
+        return image_format_or_default_channel_count(
+            image_format,
+            default_storage_image_channel_count(
+                self.glsl_storage_image_component_kind(texture_type)
+            ),
+        )
+
+    def validate_image_store_value_shape(self, texture_type, image_format, value_arg):
+        expected_channels = self.image_store_channel_count(texture_type, image_format)
+        value_channels = image_store_value_shape_mismatch(
+            expected_channels, self.expression_component_count(value_arg)
+        )
+        if value_channels is None:
+            return
+        format_label = image_format or self.resource_base_type(texture_type)
+        raise ValueError(
+            image_store_value_shape_error(
+                "OpenGL",
+                format_label,
+                expression_debug_name(value_arg),
+                expected_channels,
+                value_channels,
+            )
+        )
+
+    def validate_image_store_value_type(self, texture_type, image_format, value_arg):
+        self.validate_image_store_value_shape(texture_type, image_format, value_arg)
+        expected_kind = self.image_store_expected_value_type(texture_type, image_format)
+        value_kind = image_store_value_kind_mismatch(
+            expected_kind, self.expression_component_kind(value_arg)
+        )
+        if value_kind is None:
+            return
+        format_label = image_format or self.resource_base_type(texture_type)
+        raise ValueError(
+            image_store_value_kind_error(
+                "OpenGL",
+                format_label,
+                expression_debug_name(value_arg),
+                expected_kind,
+                value_kind,
+            )
+        )
+
+    def validate_image_load_result_type(self, texture_type, image_format):
+        expected_kind = self.expected_component_kind()
+        component_kind = self.image_load_component_kind(texture_type, image_format)
+        format_label = image_format or self.resource_base_type(texture_type)
+        if not should_validate_image_load_result_shape(expected_kind, component_kind):
+            return
+        expected_kind = image_load_result_kind_mismatch(expected_kind, component_kind)
+        if expected_kind is not None:
+            raise ValueError(
+                image_load_result_kind_error(
+                    "OpenGL", format_label, component_kind, expected_kind
+                )
+            )
+        expected_channels = self.expected_component_count()
+        loaded_channels = self.image_load_channel_count(texture_type, image_format)
+        expected_channels = image_load_result_shape_mismatch(
+            loaded_channels,
+            expected_channels,
+        )
+        if expected_channels is None:
+            return
+        raise ValueError(
+            image_load_result_shape_error(
+                "OpenGL", format_label, loaded_channels, expected_channels
+            )
+        )
+
     def generate_texture_call(self, func_name, args):
         if not func_name:
             return None
@@ -3334,6 +3646,8 @@ class GLSLCodeGen:
         self.validate_image_resource_argument(func_name, args)
         self.validate_image_access_argument(func_name, args)
         self.validate_texture_resource_argument(func_name, args)
+        self.validate_image_multisample_arguments(func_name, args)
+        self.validate_image_atomic_format_argument(func_name, args)
         self.validate_integer_coordinate_argument(func_name, args)
         self.validate_coordinate_dimension_argument(func_name, args)
         self.validate_query_lod_coordinate_argument(func_name, args)
@@ -3362,19 +3676,41 @@ class GLSLCodeGen:
             image_name = self.generate_expression(args[0])
             coord = self.generate_expression(args[1])
             texture_type = self.texture_resource_type(args[0])
-            load_expr = f"imageLoad({image_name}, {coord})"
+            if len(args) >= 3 and self.is_multisample_storage_image_type(texture_type):
+                sample = self.generate_expression(args[2])
+                load_expr = f"imageLoad({image_name}, {coord}, {sample})"
+            else:
+                load_expr = f"imageLoad({image_name}, {coord})"
             image_format = self.image_resource_format(args[0])
+            self.validate_image_load_result_type(texture_type, image_format)
             return f"{load_expr}{self.image_load_component_suffix(texture_type, image_format)}"
 
         if func_name == "imageStore" and len(args) >= 3:
             image_name = self.generate_expression(args[0])
             coord = self.generate_expression(args[1])
-            value = self.generate_expression(args[2])
             texture_type = self.texture_resource_type(args[0])
+            if len(args) >= 4 and self.is_multisample_storage_image_type(texture_type):
+                sample = self.generate_expression(args[2])
+                value_arg = args[3]
+            else:
+                sample = None
+                value_arg = args[2]
             image_format = self.image_resource_format(args[0])
-            value = self.image_store_value_expression(
-                texture_type, image_format, value, self.expression_result_type(args[2])
+            self.validate_image_store_value_type(texture_type, image_format, value_arg)
+            value = self.generate_expression_with_expected(
+                value_arg,
+                self.image_store_expected_value_type(
+                    texture_type, image_format, value_arg
+                ),
             )
+            value = self.image_store_value_expression(
+                texture_type,
+                image_format,
+                value,
+                self.expression_result_type(value_arg),
+            )
+            if sample is not None:
+                return f"imageStore({image_name}, {coord}, {sample}, {value})"
             return f"imageStore({image_name}, {coord}, {value})"
 
         texture_type = self.texture_resource_type(args[0])
@@ -3758,15 +4094,16 @@ class GLSLCodeGen:
     def is_glsl_buffer_block_variable(self, node, vtype=None):
         if self.glsl_buffer_block_attribute(node) is None:
             return False
-        type_name = self.resource_base_type(vtype or getattr(node, "var_type", None))
+        type_name = self.resource_base_type(vtype or glsl_buffer_block_node_type(node))
         return str(type_name) in self.structs_by_name
 
     def collect_glsl_buffer_block_struct_names(self, global_vars):
         names = set()
         for node in global_vars:
-            if not self.is_glsl_buffer_block_variable(node):
+            node_type = glsl_buffer_block_node_type(node)
+            if not self.is_glsl_buffer_block_variable(node, node_type):
                 continue
-            type_name = self.resource_base_type(getattr(node, "var_type", None))
+            type_name = self.resource_base_type(node_type)
             names.add(str(type_name))
         return names
 
@@ -4094,6 +4431,36 @@ class GLSLCodeGen:
                     "r32i": "iimage2DArray",
                     "r32ui": "uimage2DArray",
                 },
+                "image2DMS": {
+                    "r32f": "image2DMS",
+                    "r32i": "iimage2DMS",
+                    "r32ui": "uimage2DMS",
+                },
+                "iimage2DMS": {
+                    "r32f": "image2DMS",
+                    "r32i": "iimage2DMS",
+                    "r32ui": "uimage2DMS",
+                },
+                "uimage2DMS": {
+                    "r32f": "image2DMS",
+                    "r32i": "iimage2DMS",
+                    "r32ui": "uimage2DMS",
+                },
+                "image2DMSArray": {
+                    "r32f": "image2DMSArray",
+                    "r32i": "iimage2DMSArray",
+                    "r32ui": "uimage2DMSArray",
+                },
+                "iimage2DMSArray": {
+                    "r32f": "image2DMSArray",
+                    "r32i": "iimage2DMSArray",
+                    "r32ui": "uimage2DMSArray",
+                },
+                "uimage2DMSArray": {
+                    "r32f": "image2DMSArray",
+                    "r32i": "iimage2DMSArray",
+                    "r32ui": "uimage2DMSArray",
+                },
                 "imageCube": {"r32f": "imageCube"},
             }
             mapped_type = format_type_map.get(base_type, {}).get(format_class)
@@ -4127,17 +4494,23 @@ class GLSLCodeGen:
             "image3D",
             "imageCube",
             "image2DArray",
+            "image2DMS",
+            "image2DMSArray",
             "imageBuffer",
             "iimage1D",
             "iimage1DArray",
             "iimage2D",
             "iimage3D",
             "iimage2DArray",
+            "iimage2DMS",
+            "iimage2DMSArray",
             "uimage1D",
             "uimage1DArray",
             "uimage2D",
             "uimage3D",
             "uimage2DArray",
+            "uimage2DMS",
+            "uimage2DMSArray",
             "atomic_uint",
         }
 
@@ -4230,6 +4603,10 @@ class GLSLCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or (
+                    getattr(attr, "name", None)
+                    and str(getattr(attr, "name")).lower() == "glsl_buffer_block"
+                )
             ):
                 continue
             if hasattr(attr, "name"):

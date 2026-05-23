@@ -10775,6 +10775,16 @@ def test_directx_image_size_helper_descriptor_for_storage_images():
         "dimensions": ("width", "height", "depth"),
         "return_expr": "int3(width, height, depth)",
     }
+    assert codegen.image_size_helper_descriptor("RWTexture2DMS<float4>") == {
+        "return_type": "int2",
+        "dimensions": ("width", "height", "samples"),
+        "return_expr": "int2(width, height)",
+    }
+    assert codegen.image_size_helper_descriptor("RWTexture2DMSArray<uint>") == {
+        "return_type": "int3",
+        "dimensions": ("width", "height", "elements", "samples"),
+        "return_expr": "int3(width, height, elements)",
+    }
     assert codegen.image_size_helper_descriptor("Texture2D") is None
 
 
@@ -15045,6 +15055,60 @@ def test_directx_image_1d_and_1d_array_storage_operations():
         "uint imageAtomicExchange_uimage1DArray(RWTexture1DArray<uint> image, int2 coord, uint value)"
         in generated_code
     )
+
+
+def test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics():
+    shader = """
+    shader DirectXMultisampleStorageImages {
+        image2DMS colorImage @rgba16f;
+        uimage2DMS counters @r32ui;
+
+        vec4 touch(image2DMS image @rgba16f, uimage2DMS counterImage @r32ui, ivec2 pixel, int sampleIndex, vec4 value, uint count) {
+            vec4 oldColor = imageLoad(image, pixel, sampleIndex);
+            uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
+            imageStore(image, pixel, sampleIndex, oldColor + value);
+            imageStore(counterImage, pixel, sampleIndex, oldCount + count);
+            uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
+            return oldColor + vec4(float(oldCount + atomicOld));
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return touch(colorImage, counters, ivec2(0), 1, vec4(1.0), 2u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "Texture2DMS<float4> colorImage : register(t0);" in generated_code
+    assert "Texture2DMS<uint> counters : register(t1);" in generated_code
+    assert (
+        "float4 touch(Texture2DMS<float4> image, Texture2DMS<uint> "
+        "counterImage, int2 pixel, int sampleIndex, float4 value, uint count)"
+        in generated_code
+    )
+    assert "float4 oldColor = image.Load(pixel, sampleIndex);" in generated_code
+    assert "uint oldCount = counterImage.Load(pixel, sampleIndex);" in generated_code
+    assert (
+        "unsupported DirectX multisample image store: imageStore on "
+        "RWTexture2DMS<float4>" in generated_code
+    )
+    assert (
+        "unsupported DirectX multisample image store: imageStore on "
+        "RWTexture2DMS<uint>" in generated_code
+    )
+    assert (
+        "uint atomicOld = /* unsupported DirectX multisample image atomic: "
+        "imageAtomicAdd on RWTexture2DMS<uint> */ 0u;" in generated_code
+    )
+    assert "RWTexture2DMS<float4> colorImage" not in generated_code
+    assert "RWTexture2DMS<uint> counters" not in generated_code
+    assert "RWTexture2DMS<float4> image" not in generated_code
+    assert "RWTexture2DMS<uint> counterImage" not in generated_code
+    assert "InterlockedAdd" not in generated_code
 
 
 def test_directx_uav_metadata_attributes_emit_coherency_and_register_space():

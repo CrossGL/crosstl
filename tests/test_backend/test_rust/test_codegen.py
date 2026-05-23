@@ -498,6 +498,22 @@ def test_for_loop_step_by_range_conversion():
         pytest.fail(f"For loop step_by range conversion failed: {e}")
 
 
+def test_for_loop_range_bound_additive_precedence_conversion():
+    code = """
+    fn test_for_range_bounds(count: i32) {
+        for i in 0..count + 1 {
+            use_index(i);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "for (int i = 0; i < (count + 1); i++)" in result
+    assert "RangeNode" not in result
+    assert "0..count" not in result
+
+
 def test_for_loop_range_side_effect_bound_conversion():
     code = """
     fn test_for_bound_effects() {
@@ -620,6 +636,70 @@ def test_vector_method_conversion():
         assert ".cross(" not in result
     except Exception as e:
         pytest.fail(f"Vector method conversion failed: {e}")
+
+
+def test_scalar_math_method_conversion():
+    code = """
+    fn scalar_methods(x: f32, y: f32, angle: f32, n: i32) -> f32 {
+        let a = x.abs();
+        let b = y.sqrt();
+        let c = angle.sin();
+        let d = y.ln();
+        let e = angle.to_degrees();
+        let f = x.powf(y);
+        let g = x.powi(n);
+        let h = x.fract();
+        let i = x.clamp(0.0, 1.0);
+        let j = x.clamp(y, angle);
+        let k = x.min(y);
+        let l = x.max(y);
+        return a + b + c + d + e + f + g + h + i + j + k + l;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "a = abs(x);" in result
+        assert "b = sqrt(y);" in result
+        assert "c = sin(angle);" in result
+        assert "d = log(y);" in result
+        assert "e = degrees(angle);" in result
+        assert "f = pow(x, y);" in result
+        assert "g = pow(x, n);" in result
+        assert "h = fract(x);" in result
+        assert "i = clamp(x, 0.0, 1.0);" in result
+        assert "j = clamp(x, y, angle);" in result
+        assert "k = min(x, y);" in result
+        assert "l = max(x, y);" in result
+        assert ".abs()" not in result
+        assert ".sqrt()" not in result
+        assert ".sin()" not in result
+        assert ".ln()" not in result
+        assert ".to_degrees()" not in result
+        assert ".powf(" not in result
+        assert ".powi(" not in result
+        assert ".fract()" not in result
+        assert ".clamp(" not in result
+        assert ".min(" not in result
+        assert ".max(" not in result
+    except Exception as e:
+        pytest.fail(f"Scalar math method conversion failed: {e}")
+
+
+def test_lerp_function_converts_to_crossgl_mix():
+    code = """
+    fn blend(a: f32, b: f32, t: f32) -> f32 {
+        let x = lerp(a, b, t);
+        x
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "x = mix(a, b, t);" in result
+        assert "lerp(a, b, t)" not in result
+    except Exception as e:
+        pytest.fail(f"Lerp function conversion failed: {e}")
 
 
 def test_swizzle_and_index_assignment_return_conversion():
@@ -2738,6 +2818,26 @@ def test_member_access_conversion():
         assert "vertex.position.z" in result
     except Exception as e:
         pytest.fail(f"Member access conversion failed: {e}")
+
+
+def test_tuple_field_access_conversion():
+    code = """
+    fn test_tuple_field(a: i32, b: i32) -> i32 {
+        let pair = (a, b);
+        let first = pair.0;
+        let second = (a, b).1;
+        return first + second;
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "let pair = (a, b);" in result
+        assert "let first = pair.0;" in result
+        assert "let second = (a, b).1;" in result
+        assert "return (first + second);" in result
+    except Exception as e:
+        pytest.fail(f"Tuple field access conversion failed: {e}")
 
 
 def test_array_access_conversion():

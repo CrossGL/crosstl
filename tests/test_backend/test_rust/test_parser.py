@@ -633,6 +633,42 @@ def test_for_loop_step_by_range_parsing():
         pytest.fail(f"For loop step_by range parsing failed: {e}")
 
 
+def test_for_loop_range_bounds_parse_additive_expressions():
+    code = """
+    fn test_for_range_bounds(count: i32, start: i32, end: i32) {
+        for i in 0..count + 1 {
+            use_index(i);
+        }
+        for j in start + 1..=end - 1 {
+            use_index(j);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    first_iterable = body[0].iterable
+    assert isinstance(first_iterable, RangeNode)
+    assert first_iterable.start == "0"
+    assert isinstance(first_iterable.end, BinaryOpNode)
+    assert first_iterable.end.op == "+"
+    assert first_iterable.end.left == "count"
+    assert first_iterable.end.right == "1"
+
+    second_iterable = body[1].iterable
+    assert isinstance(second_iterable, RangeNode)
+    assert second_iterable.inclusive is True
+    assert isinstance(second_iterable.start, BinaryOpNode)
+    assert second_iterable.start.op == "+"
+    assert second_iterable.start.left == "start"
+    assert second_iterable.start.right == "1"
+    assert isinstance(second_iterable.end, BinaryOpNode)
+    assert second_iterable.end.op == "-"
+    assert second_iterable.end.left == "end"
+    assert second_iterable.end.right == "1"
+
+
 def test_while_loop_parsing():
     code = """
     fn test_while() {
@@ -2080,6 +2116,31 @@ def test_member_access_parsing():
         assert len(func.body) >= 3
     except Exception as e:
         pytest.fail(f"Member access parsing failed: {e}")
+
+
+def test_tuple_field_access_parsing():
+    code = """
+    fn test_tuple_field(a: i32, b: i32) -> i32 {
+        let pair = (a, b);
+        let first = pair.0;
+        let second = (a, b).1;
+        first + second
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+        first = body[1].value
+        second = body[2].value
+
+        assert isinstance(first, MemberAccessNode)
+        assert first.object == "pair"
+        assert first.member == "0"
+        assert isinstance(second, MemberAccessNode)
+        assert isinstance(second.object, TupleNode)
+        assert second.member == "1"
+    except Exception as e:
+        pytest.fail(f"Tuple field access parsing failed: {e}")
 
 
 def test_type_casting_parsing():

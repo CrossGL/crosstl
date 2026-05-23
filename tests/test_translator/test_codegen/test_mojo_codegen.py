@@ -471,6 +471,41 @@ def test_increment_and_decrement_emit_mojo_assignment_updates():
     assert "++j" not in generated_code
 
 
+def test_increment_and_decrement_initializers_preserve_mojo_value_order():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int i = 0;
+                int pre = ++i;
+                int post = i++;
+                int pre_dec = --i;
+                int post_dec = i--;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    lines = [line.strip() for line in generated_code.splitlines()]
+
+    def contains_adjacent(first, second):
+        return any(
+            current == first and following == second
+            for current, following in zip(lines, lines[1:])
+        )
+
+    assert contains_adjacent("i += 1", "var pre: Int32 = i")
+    assert contains_adjacent("var post: Int32 = i", "i += 1")
+    assert contains_adjacent("i -= 1", "var pre_dec: Int32 = i")
+    assert contains_adjacent("var post_dec: Int32 = i", "i -= 1")
+    assert "var pre: Int32 = i += 1" not in generated_code
+    assert "var post: Int32 = i += 1" not in generated_code
+    assert "var pre_dec: Int32 = i -= 1" not in generated_code
+    assert "var post_dec: Int32 = i -= 1" not in generated_code
+
+
 def test_do_while_statement_lowers_to_mojo_loop_with_condition_after_body():
     code = """
     shader main {
@@ -516,6 +551,7 @@ def test_bool_string_and_char_literals_emit_mojo_syntax():
             void main() {
                 bool enabled = true;
                 bool disabled = false;
+                bool inverted = !disabled;
                 string label = "debug";
                 char marker = 'x';
                 if (enabled && !disabled) {
@@ -537,8 +573,11 @@ def test_bool_string_and_char_literals_emit_mojo_syntax():
 
     assert "var enabled: Bool = True" in generated_code
     assert "var disabled: Bool = False" in generated_code
+    assert "var inverted: Bool = (not disabled)" in generated_code
     assert 'var label: String = "debug"' in generated_code
     assert 'var marker: String = "x"' in generated_code
+    assert "if (enabled and (not disabled)):" in generated_code
+    assert "!disabled" not in generated_code
     assert 'label = "active"' in generated_code
     assert 'marker = "y"' in generated_code
 
@@ -664,6 +703,15 @@ def test_builtin_function_call_names_are_mapped():
                 float x = mix(0.0, 1.0, 0.25);
                 float y = dot(vec3(1.0), vec3(2.0));
                 float z = pow(2.0, 3.0);
+                float w = mod(5.0, 2.0);
+                float sat = saturate(1.25);
+                float satNested = saturate(frac(1.75));
+                float inv = inversesqrt(x);
+                vec2 invVec = inversesqrt(vec2(4.0, 9.0));
+                vec3 v = vec3(5.0, 7.0, 9.0);
+                vec3 wrappedVec = mod(v, vec3(2.0));
+                int n = 5;
+                int i = mod(n, 2);
             }
         }
     }
@@ -676,9 +724,30 @@ def test_builtin_function_call_names_are_mapped():
     assert "lerp(0.0, 1.0, 0.25)" in generated_code
     assert "dot_product(" in generated_code
     assert "power(2.0, 3.0)" in generated_code
+    assert "var sat: Float32 = clamp(1.25, 0.0, 1.0)" in generated_code
+    assert (
+        "var satNested: Float32 = "
+        "clamp(_crossgl_fract_f32(1.75), 0.0, 1.0)" in generated_code
+    )
+    assert "var inv: Float32 = rsqrt(x)" in generated_code
+    assert (
+        "var invVec: SIMD[DType.float32, 2] = "
+        "rsqrt(SIMD[DType.float32, 2](4.0, 9.0))" in generated_code
+    )
+    assert "var w: Float32 = fmod(5.0, 2.0)" in generated_code
+    assert (
+        "var wrappedVec: SIMD[DType.float32, 4] = "
+        "fmod(v, SIMD[DType.float32, 4](2.0, 2.0, 2.0, 0.0))" in generated_code
+    )
+    assert "var i: Int32 = (n % 2)" in generated_code
     assert "mix(0.0, 1.0, 0.25)" not in generated_code
     assert "dot(" not in generated_code
     assert "pow(2.0, 3.0)" not in generated_code
+    assert "saturate(" not in generated_code
+    assert "frac(" not in generated_code
+    assert "inversesqrt(" not in generated_code
+    assert "var w: Float32 = mod(" not in generated_code
+    assert "var i: Int32 = fmod(" not in generated_code
 
 
 def test_fract_scalar_builtin_lowers_to_helper():
@@ -700,6 +769,47 @@ def test_fract_scalar_builtin_lowers_to_helper():
     assert "return x - floor(x)" in generated_code
     assert "var x: Float32 = _crossgl_fract_f32(1.25)" in generated_code
     assert "fract(" not in generated_code
+
+
+def test_frac_scalar_builtin_alias_lowers_to_fract_helper():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float x = frac(1.25);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_fract_f32(x: Float32) -> Float32:" in generated_code
+    assert "return x - floor(x)" in generated_code
+    assert "var x: Float32 = _crossgl_fract_f32(1.25)" in generated_code
+    assert "frac(" not in generated_code
+
+
+def test_saturate_integer_input_is_left_unmapped():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int n = 5;
+                int x = saturate(n);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var x: Int32 = saturate(n)" in generated_code
+    assert "clamp(n, 0.0, 1.0)" not in generated_code
 
 
 def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():

@@ -5,6 +5,7 @@ from crosstl.backend.Mojo.MojoAst import (
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
+    CastNode,
     ClassNode,
     ConstantBufferNode,
     ContinueNode,
@@ -329,6 +330,27 @@ def test_parenthesized_method_call_chain_parsing():
     assert expression.object.object.name == "texture"
 
 
+def test_as_cast_expression_parsing():
+    code = """
+    fn main():
+        let i: Int = 2
+        let x: Float = i as Float
+        let y = (i + 1) as Float
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    x_init = function.body[1].initial_value
+    y_init = function.body[2].initial_value
+
+    assert isinstance(x_init, CastNode)
+    assert x_init.target_type == "Float"
+    assert isinstance(x_init.expression, VariableNode)
+    assert x_init.expression.name == "i"
+    assert isinstance(y_init, CastNode)
+    assert y_init.target_type == "Float"
+    assert isinstance(y_init.expression, BinaryOpNode)
+
+
 def test_def_function_parsing():
     code = """
     def helper(x: Float32) -> Float32:
@@ -585,17 +607,23 @@ def test_ternary_operator_parsing():
         let x: Float32 = 0.5
         let result = x > 0.0 ? 1.0 : 0.0
         let variable_result = flag ? yes : no
+        let native_result = yes if flag else no
     """
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         function = find_function(ast, "main")
         ternary = function.body[2].initial_value
+        native_ternary = function.body[3].initial_value
 
         assert isinstance(ternary, TernaryOpNode)
         assert ternary.condition.name == "flag"
         assert ternary.true_expr.name == "yes"
         assert ternary.false_expr.name == "no"
+        assert isinstance(native_ternary, TernaryOpNode)
+        assert native_ternary.condition.name == "flag"
+        assert native_ternary.true_expr.name == "yes"
+        assert native_ternary.false_expr.name == "no"
     except SyntaxError:
         pytest.fail("Ternary operator parsing not implemented.")
 

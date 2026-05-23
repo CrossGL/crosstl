@@ -413,6 +413,120 @@ class TestVulkanSPIRVCodeGen:
         assert "OpReturnValue" in spv_code
         assert "WARNING" not in spv_code
 
+    def test_vector_comparisons_return_bool_vector_type(self):
+        source_code = """
+        shader VecCompareBug {
+            compute {
+                vec2<bool> compareFloat(vec2 a, vec2 b) {
+                    return a < b;
+                }
+
+                vec2<bool> compareInt(ivec2 a, ivec2 b) {
+                    return a < b;
+                }
+
+                void main() {
+                    vec2<bool> mask = compareFloat(vec2(0.0, 1.0), vec2(1.0, 0.0));
+                    vec2<bool> imask = compareInt(ivec2(0, 1), ivec2(1, 0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        assert bool_type is not None
+        bool_type_id = bool_type.group(1)
+        bool_vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(bool_type_id)} 2", spv_code
+        )
+        assert bool_vec2_type is not None
+        bool_vec2_id = bool_vec2_type.group(1)
+
+        assert re.search(
+            rf"OpFOrdLessThan {re.escape(bool_vec2_id)} %\d+ %\d+\b", spv_code
+        )
+        assert re.search(
+            rf"OpSLessThan {re.escape(bool_vec2_id)} %\d+ %\d+\b", spv_code
+        )
+        assert not re.search(rf"OpFOrdLessThan {re.escape(bool_type_id)}\b", spv_code)
+        assert not re.search(rf"OpSLessThan {re.escape(bool_type_id)}\b", spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_bool_vector_logical_ops_return_bool_vector_type(self):
+        source_code = """
+        shader BoolVectorLogic {
+            compute {
+                void main() {
+                    bvec2 a = bvec2(true, false);
+                    bvec2 b = bvec2(false, true);
+                    bvec2 c = a && b;
+                    bvec2 d = a || b;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        assert bool_type is not None
+        bool_type_id = bool_type.group(1)
+        bool_vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(bool_type_id)} 2", spv_code
+        )
+        assert bool_vec2_type is not None
+        bool_vec2_id = bool_vec2_type.group(1)
+
+        assert re.search(
+            rf"OpLogicalAnd {re.escape(bool_vec2_id)} %\d+ %\d+\b", spv_code
+        )
+        assert re.search(
+            rf"OpLogicalOr {re.escape(bool_vec2_id)} %\d+ %\d+\b", spv_code
+        )
+        assert not re.search(
+            rf"OpLogicalAnd {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
+        )
+        assert not re.search(
+            rf"OpLogicalOr {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
+        )
+        assert "WARNING" not in spv_code
+
+    def test_scalar_logical_ops_still_return_bool_type(self):
+        source_code = """
+        shader ScalarLogic {
+            compute {
+                void main() {
+                    bool a = true;
+                    bool b = false;
+                    bool c = a && b;
+                    bool d = a || b;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        assert bool_type is not None
+        bool_type_id = bool_type.group(1)
+
+        assert re.search(
+            rf"OpLogicalAnd {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
+        )
+        assert re.search(
+            rf"OpLogicalOr {re.escape(bool_type_id)} %\d+ %\d+\b", spv_code
+        )
+        assert "WARNING" not in spv_code
+
     def test_scalar_vector_constructors_splat_spirv_components(self):
         source_code = """
         shader VectorSplat {
@@ -527,14 +641,13 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(rf"OpFAdd {re.escape(vec4_type.group(1))}", spv_code)
         assert "WARNING" not in spv_code
 
-    def test_fmod_intrinsics_use_fmod_opcode_and_argument_result_type(self):
+    def test_fmod_intrinsics_use_core_fmod_and_argument_result_type(self):
         source_code = """
         shader FmodIntrinsics {
-            fragment {
-                vec2 main() {
+            compute {
+                void main() {
                     float y = mod(5.0, 2.0);
                     vec2 x = fmod(vec2(5.0, 7.0), vec2(2.0, 3.0));
-                    return x;
                 }
             }
         }
@@ -549,15 +662,54 @@ class TestVulkanSPIRVCodeGen:
         assert float_type is not None
         assert vec2_type is not None
         assert re.search(
-            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ FMod ",
+            rf"%\d+ = OpFMod {re.escape(float_type.group(1))} %\d+ %\d+",
             spv_code,
         )
         assert re.search(
-            rf"%\d+ = OpExtInst {re.escape(vec2_type.group(1))} %\d+ FMod ",
+            rf"%\d+ = OpFMod {re.escape(vec2_type.group(1))} %\d+ %\d+",
             spv_code,
         )
         assert " Fmod " not in spv_code
-        assert " Mod " not in spv_code
+
+    def test_frac_and_scalar_saturate_builtins_lower_to_spirv_extinst(self):
+        source_code = """
+        shader BuiltinAliases {
+            compute {
+                void main() {
+                    float f = frac(1.25);
+                    float x = 2.0;
+                    float s = saturate(x);
+                    double d;
+                    double ds = saturate(d);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ Fract %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"FClamp %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ "
+            r"FClamp %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert " Frac " not in spv_code
+        assert " Saturate " not in spv_code
 
     def test_compute_stage_entry_point_generates_defined_function(self):
         source_code = """

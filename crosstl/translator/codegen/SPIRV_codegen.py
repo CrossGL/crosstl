@@ -680,15 +680,20 @@ class VulkanSPIRVCodeGen:
         }
 
         if op in {"&&", "||"}:
-            result_type = self.register_primitive_type("bool")
+            result_type, left, right = self.logical_result_type_and_operands(
+                left, right
+            )
             spv_op = "OpLogicalAnd" if op == "&&" else "OpLogicalOr"
         elif op in comparison_ops:
-            result_type = self.register_primitive_type("bool")
+            result_type, left, right = self.comparison_result_type_and_operands(
+                left, right
+            )
             float_op, signed_op, unsigned_op = comparison_ops[op]
+            component_type = self.scalar_or_vector_component_type(left.type)
             spv_op = (
                 unsigned_op
-                if self.is_unsigned_type(left.type)
-                else signed_op if self.is_integer_type(left.type) else float_op
+                if component_type == "uint"
+                else signed_op if component_type == "int" else float_op
             )
         elif op in arithmetic_ops:
             result_type, left, right = self.align_binary_arithmetic_operands(
@@ -716,6 +721,55 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
         return spirv_id
+
+    def logical_result_type_and_operands(
+        self, left: SpirvId, right: SpirvId
+    ) -> Tuple[SpirvId, SpirvId, SpirvId]:
+        bool_type = self.register_primitive_type("bool")
+        left_vector = self.vector_component_type_and_count(left.type.base_type)
+        right_vector = self.vector_component_type_and_count(right.type.base_type)
+        if left_vector is None and right_vector is None:
+            return bool_type, left, right
+
+        component_type, component_count = left_vector or right_vector
+        if component_type != "bool":
+            return bool_type, left, right
+
+        vector_operand_type = self.ensure_registered_type(
+            left.type if left_vector is not None else right.type
+        )
+
+        if left_vector is not None and right_vector is None:
+            if self.scalar_or_vector_component_type(right.type) == "bool":
+                right = self.splat_scalar_to_vector(right, vector_operand_type)
+        elif right_vector is not None and left_vector is None:
+            if self.scalar_or_vector_component_type(left.type) == "bool":
+                left = self.splat_scalar_to_vector(left, vector_operand_type)
+
+        return self.register_vector_type(bool_type, component_count), left, right
+
+    def comparison_result_type_and_operands(
+        self, left: SpirvId, right: SpirvId
+    ) -> Tuple[SpirvId, SpirvId, SpirvId]:
+        bool_type = self.register_primitive_type("bool")
+        left_vector = self.vector_component_type_and_count(left.type.base_type)
+        right_vector = self.vector_component_type_and_count(right.type.base_type)
+        if left_vector is None and right_vector is None:
+            return bool_type, left, right
+
+        component_type, component_count = left_vector or right_vector
+        vector_operand_type = self.ensure_registered_type(
+            left.type if left_vector is not None else right.type
+        )
+
+        if left_vector is not None and right_vector is None:
+            if self.scalar_or_vector_component_type(right.type) == component_type:
+                right = self.splat_scalar_to_vector(right, vector_operand_type)
+        elif right_vector is not None and left_vector is None:
+            if self.scalar_or_vector_component_type(left.type) == component_type:
+                left = self.splat_scalar_to_vector(left, vector_operand_type)
+
+        return self.register_vector_type(bool_type, component_count), left, right
 
     def align_binary_arithmetic_operands(
         self, result_type: SpirvId, left: SpirvId, right: SpirvId
@@ -1710,6 +1764,12 @@ class VulkanSPIRVCodeGen:
             self.glsl_std450_id = self.get_id()
             self.emit(f'%{self.glsl_std450_id} = OpExtInstImport "GLSL.std.450"')
 
+        function_name = {"frac": "fract"}.get(function_name, function_name)
+        if function_name == "saturate" and len(args) == 1:
+            saturated = self.call_saturate_function(args[0])
+            if saturated is not None:
+                return saturated
+
         vector_info = self.vector_component_type_and_count(function_name)
         if vector_info:
             component_type_name, component_count = vector_info
@@ -1829,6 +1889,10 @@ class VulkanSPIRVCodeGen:
 
             return SpirvId(id_value, float_type.type)
 
+        elif function_name in {"fmod", "mod"} and len(args) == 2:
+            result_type = self.ensure_registered_type(args[0].type)
+            return self.binary_operation("%", result_type, args[0], args[1])
+
         # GLSL standard library functions
         else:
             # Determine result type based on the function name
@@ -1860,8 +1924,6 @@ class VulkanSPIRVCodeGen:
                     "floor",
                     "ceil",
                     "fract",
-                    "fmod",
-                    "mod",
                     "trunc",
                     "round",
                     "roundEven",
@@ -1904,8 +1966,6 @@ class VulkanSPIRVCodeGen:
                 "floor": "Floor",
                 "ceil": "Ceil",
                 "fract": "Fract",
-                "fmod": "FMod",
-                "mod": "FMod",
                 "trunc": "Trunc",
                 "round": "Round",
                 "roundEven": "RoundEven",
@@ -1940,6 +2000,27 @@ class VulkanSPIRVCodeGen:
             )
 
             return SpirvId(id_value, result_type)
+
+    def call_saturate_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower scalar floating saturate(x) to GLSL.std.450 FClamp."""
+        result_type = self.ensure_registered_type(value.type)
+        if self.vector_component_type_and_count(result_type.type.base_type) is not None:
+            return None
+
+        if result_type.type.base_type not in {"float", "double"}:
+            return None
+
+        zero = self.register_constant(0.0, result_type)
+        one = self.register_constant(1.0, result_type)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"FClamp %{value.id} %{zero.id} %{one.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
 
     def create_branch(self, target_label: SpirvId):
         """Create an unconditional branch."""

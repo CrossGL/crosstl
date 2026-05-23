@@ -839,6 +839,13 @@ class MojoParser:
             self.eat("COLON")
             false_expr = self.parse_expression()
             left = TernaryOpNode(left, true_expr, false_expr)
+        if self.current_token[0] == "IF":
+            true_expr = left
+            self.eat("IF")
+            condition = self.parse_expression()
+            self.eat("ELSE")
+            false_expr = self.parse_expression()
+            left = TernaryOpNode(condition, true_expr, false_expr)
         return left
 
     def parse_logical_or(self):
@@ -950,15 +957,15 @@ class MojoParser:
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
-            return value
+            return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "STRING_LITERAL":
             value = self.current_token[1]
             self.eat("STRING_LITERAL")
-            return value
+            return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "BOOL_LITERAL":
             value = self.current_token[1]
             self.eat("BOOL_LITERAL")
-            return value
+            return self.parse_postfix_suffixes(value)
         elif self.current_token[0] in ["INT", "FLOAT", "BOOL", "STRING"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
@@ -1044,6 +1051,11 @@ class MojoParser:
                     node = self.parse_vector_constructor(type_name)
                 else:
                     node = self.parse_array_access(node)
+                continue
+
+            if self.current_token[0] == "AS":
+                self.eat("AS")
+                node = CastNode(self.parse_type(), node)
                 continue
 
             return node

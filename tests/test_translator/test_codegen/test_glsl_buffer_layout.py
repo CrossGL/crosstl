@@ -4,6 +4,7 @@ from crosstl.translator.ast import (
     ArrayType,
     AttributeNode,
     MatrixType,
+    ParameterNode,
     PrimitiveType,
     StructMemberNode,
     StructNode,
@@ -14,6 +15,7 @@ from crosstl.translator.codegen.glsl_buffer_layout import (
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_compound_binary_operator,
+    glsl_buffer_block_node_type,
     matrix_column_offsets,
     std430_array_stride,
     std430_value_type_info,
@@ -138,6 +140,22 @@ def test_glsl_buffer_compound_binary_operator_is_type_aware():
     assert glsl_buffer_compound_binary_operator("%=", "int") == "%"
     assert glsl_buffer_compound_binary_operator("<<=", "uint") == "<<"
     assert glsl_buffer_compound_binary_operator("??=", "uint") is None
+
+
+def test_glsl_buffer_block_node_type_handles_variable_parameter_and_legacy_nodes():
+    variable = VariableNode("block", primitive("Block"))
+    parameter = ParameterNode("block", primitive("ParamBlock"))
+    legacy = SimpleNamespace(vtype=primitive("LegacyBlock"))
+
+    assert convert_type_node_to_string(glsl_buffer_block_node_type(variable)) == "Block"
+    assert (
+        convert_type_node_to_string(glsl_buffer_block_node_type(parameter))
+        == "ParamBlock"
+    )
+    assert (
+        convert_type_node_to_string(glsl_buffer_block_node_type(legacy))
+        == "LegacyBlock"
+    )
 
 
 def test_collect_lowered_glsl_buffer_blocks_lays_out_metadata_fixed_and_runtime_arrays():

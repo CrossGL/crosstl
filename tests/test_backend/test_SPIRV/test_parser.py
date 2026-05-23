@@ -911,6 +911,27 @@ def test_custom_type_local_declaration_preserves_type_and_name():
     assert declaration.name == "output"
 
 
+def test_bitwise_and_shift_precedence_parsing():
+    code = """
+    void main() {
+        int a = 1;
+        int b = 2;
+        int c = 3;
+        int value = a & b << c;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    assignment = ast.functions[0].body[3]
+    expression = assignment.right
+
+    assert isinstance(expression, BinaryOpNode)
+    assert expression.op == "&"
+    assert isinstance(expression.right, BinaryOpNode)
+    assert expression.right.op == "<<"
+
+
 def test_unknown_identifier_statement_is_rejected_instead_of_dropped():
     code = """
     void main() {

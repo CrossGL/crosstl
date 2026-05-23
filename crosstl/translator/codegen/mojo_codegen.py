@@ -231,6 +231,7 @@ class MojoCodeGen:
             "cos": "cos",
             "tan": "tan",
             "sqrt": "sqrt",
+            "inversesqrt": "rsqrt",
             "pow": "power",
             "abs": "abs",
             "min": "min",
@@ -752,6 +753,14 @@ class MojoCodeGen:
                         stmt.initial_value, var_type
                     )
                 else:
+                    increment_init = self.generate_increment_initializer_declaration(
+                        stmt,
+                        stmt.initial_value,
+                        var_type,
+                        indent,
+                    )
+                    if increment_init is not None:
+                        return increment_init
                     init_expr = self.generate_expression(stmt.initial_value)
                 if var_type is None:
                     return f"{indent_str}var {stmt.name} = {init_expr}\n"
@@ -830,6 +839,42 @@ class MojoCodeGen:
                 return f"{indent_str}{expr_result}\n"
             else:
                 return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_increment_initializer_declaration(
+        self,
+        stmt,
+        initial_value,
+        var_type,
+        indent,
+    ):
+        if not isinstance(initial_value, UnaryOpNode):
+            return None
+
+        op = self.map_operator(
+            getattr(initial_value, "operator", getattr(initial_value, "op", ""))
+        )
+        if op not in {"++", "--"}:
+            return None
+
+        operand = self.generate_expression(getattr(initial_value, "operand", ""))
+        assignment_op = "+=" if op == "++" else "-="
+        indent_str = "    " * indent
+        update = f"{indent_str}{operand} {assignment_op} 1\n"
+        if var_type is None:
+            declaration = f"{indent_str}var {stmt.name} = {operand}\n"
+        else:
+            declaration = (
+                f"{indent_str}var {stmt.name}: "
+                f"{self.map_type(var_type)} = {operand}\n"
+            )
+        is_postfix = getattr(
+            initial_value,
+            "is_postfix",
+            getattr(initial_value, "postfix", False),
+        )
+        if is_postfix:
+            return declaration + update
+        return update + declaration
 
     def generate_switch(self, node, indent):
         indent_str = "    " * indent
@@ -1192,6 +1237,8 @@ class MojoCodeGen:
             if op in ["++", "--"]:
                 assignment_op = "+=" if op == "++" else "-="
                 return f"{operand} {assignment_op} 1"
+            if op == "not":
+                return f"(not {operand})"
             return f"({op}{operand})"
         elif isinstance(expr, ArrayAccessNode):
             # Handle array access properly
@@ -1216,8 +1263,14 @@ class MojoCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
 
-            if func_name == "fract":
+            if func_name in {"fract", "frac"}:
                 return self.generate_fract_call(expr.args)
+            if func_name == "mod":
+                return self.generate_mod_call(expr.args)
+            if func_name == "saturate":
+                saturate_call = self.generate_saturate_call(expr.args)
+                if saturate_call is not None:
+                    return saturate_call
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -1405,6 +1458,52 @@ class MojoCodeGen:
             dtype = "DType.float32"
         self.required_fract_helpers.add(("scalar", dtype, 1, 1))
         return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"
+
+    def generate_mod_call(self, args):
+        generated_args = [self.generate_expression(arg) for arg in args]
+        if len(generated_args) != 2:
+            return f"fmod({', '.join(generated_args)})"
+
+        left_type = self.expression_result_type(args[0])
+        right_type = self.expression_result_type(args[1])
+        if self.is_scalar_integer_type(left_type) and (
+            right_type is None or self.is_scalar_integer_type(right_type)
+        ):
+            return f"({generated_args[0]} % {generated_args[1]})"
+
+        return f"fmod({generated_args[0]}, {generated_args[1]})"
+
+    def generate_saturate_call(self, args):
+        if len(args) != 1:
+            return None
+
+        arg_type = self.expression_result_type(args[0])
+        if self.vector_type_info(arg_type) is not None:
+            return None
+        arg_dtype = self.expression_mojo_dtype(args[0])
+        if arg_dtype not in {"DType.float32", "DType.float64"}:
+            return None
+
+        arg_expr = self.generate_expression(args[0])
+        return f"clamp({arg_expr}, 0.0, 1.0)"
+
+    def is_scalar_integer_type(self, type_name):
+        if type_name is None or self.vector_type_info(type_name) is not None:
+            return False
+        return str(type_name) in {
+            "int",
+            "uint",
+            "short",
+            "ushort",
+            "long",
+            "ulong",
+            "i32",
+            "u32",
+            "Int",
+            "UInt",
+            "Int32",
+            "UInt32",
+        }
 
     def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
         component_count = columns * rows
@@ -2126,7 +2225,9 @@ class MojoCodeGen:
                 return func_name
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
-            if func_name == "fract" and expr.args:
+            if func_name in {"fract", "frac"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "saturate" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             return self.function_return_types.get(func_name)
         if isinstance(expr, MemberAccessNode):
@@ -2362,6 +2463,8 @@ class MojoCodeGen:
             "NOT_EQUAL": "!=",
             "AND": "and",
             "OR": "or",
+            "&&": "and",
+            "||": "or",
             "EQUALS": "=",
             "ASSIGN_SHIFT_LEFT": "<<=",
             "ASSIGN_SHIFT_RIGHT": ">>=",
@@ -2371,6 +2474,7 @@ class MojoCodeGen:
             "BITWISE_SHIFT_LEFT": "<<",
             "MOD": "%",
             "NOT": "not",
+            "!": "not",
         }
         return op_map.get(op, op)
 

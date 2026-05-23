@@ -7,7 +7,7 @@ from .SlangAst import *
 class SlangParser:
     """Parse Slang tokens into the Slang backend AST."""
 
-    DECLARATION_TYPE_TOKENS = {"FLOAT", "FVECTOR", "INT", "UINT", "BOOL"}
+    DECLARATION_TYPE_TOKENS = {"FLOAT", "FVECTOR", "INT", "UINT", "BOOL", "MATRIX"}
 
     def __init__(self, tokens):
         """Initialize the parser with a token stream from ``SlangLexer``."""
@@ -48,8 +48,9 @@ class SlangParser:
         cbuffers = []
         global_variables = []
         while self.current_token[0] != "EOF":
+            pending_attributes = []
             while self.current_token[0] == "LBRACKET":
-                self.skip_attribute_list()
+                pending_attributes.extend(self.parse_attribute_list())
             if self.current_token[0] == "EOF":
                 break
 
@@ -66,9 +67,12 @@ class SlangParser:
             elif self.current_token[0] == "TYPE_SHADER":
                 type_shader = self.current_token[1].split('"')[1]
                 self.eat("TYPE_SHADER")
+                function_attributes = pending_attributes
                 while self.current_token[0] == "LBRACKET":
-                    self.skip_attribute_list()
-                functions.append(self.parse_function(type_shader))
+                    function_attributes.extend(self.parse_attribute_list())
+                functions.append(
+                    self.parse_function(type_shader, attributes=function_attributes)
+                )
             elif self.current_token[0] in [
                 "VOID",
                 "FLOAT",
@@ -83,7 +87,7 @@ class SlangParser:
                 "SAMPLER_STATE",
             ]:
                 if self.is_function():
-                    functions.append(self.parse_function())
+                    functions.append(self.parse_function(attributes=pending_attributes))
                 else:
                     global_variables.append(self.parse_global_variable())
             else:
@@ -129,20 +133,62 @@ class SlangParser:
             current_pos += 1
         raise SyntaxError("Unterminated generic type suffix")
 
-    def skip_attribute_list(self):
+    def parse_attribute_list(self):
+        attributes = []
         self.eat("LBRACKET")
-        depth = 1
-        while depth > 0:
+        if self.current_token[0] == "IDENTIFIER":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            arguments = []
+            if self.current_token[0] == "LPAREN":
+                arguments = self.parse_attribute_arguments()
+            attributes.append({"name": name, "arguments": arguments})
+
+        while self.current_token[0] != "RBRACKET":
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated attribute list")
+            self.eat(self.current_token[0])
 
-            token_type = self.current_token[0]
-            if token_type == "LBRACKET":
+        self.eat("RBRACKET")
+        return attributes
+
+    def parse_attribute_arguments(self):
+        arguments = []
+        current_argument = []
+        depth = 0
+
+        self.eat("LPAREN")
+        while not (self.current_token[0] == "RPAREN" and depth == 0):
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated attribute argument list")
+
+            token_type, token_value = self.current_token
+            if token_type == "COMMA" and depth == 0:
+                arguments.append("".join(current_argument).strip())
+                current_argument = []
+                self.eat("COMMA")
+                continue
+
+            if token_type in {"LPAREN", "LBRACKET"}:
                 depth += 1
-            elif token_type == "RBRACKET":
+            elif token_type in {"RPAREN", "RBRACKET"}:
                 depth -= 1
 
+            current_argument.append(str(token_value))
             self.eat(token_type)
+
+        if current_argument:
+            arguments.append("".join(current_argument).strip())
+        self.eat("RPAREN")
+        return arguments
+
+    def get_numthreads_attribute(self, attributes):
+        for attribute in attributes:
+            if attribute.get("name") == "numthreads":
+                arguments = attribute.get("arguments", [])
+                if len(arguments) >= 3:
+                    return tuple(arguments[:3])
+        return None
 
     def parse_type_name(self):
         type_name = self.current_token[1]
@@ -289,7 +335,8 @@ class SlangParser:
         self.eat("SEMICOLON")
         return TypedefNode(original_type, new_type)
 
-    def parse_function(self, shader_type=None):
+    def parse_function(self, shader_type=None, attributes=None):
+        attributes = attributes or []
         is_generic = False
         if self.current_token[0] == "GENERIC":
             is_generic = True
@@ -314,6 +361,8 @@ class SlangParser:
             qualifier=shader_type,
             semantic=semantic,
             is_generic=is_generic,
+            attributes=attributes,
+            numthreads=self.get_numthreads_attribute(attributes),
         )
 
     def parse_parameters(self):

@@ -1,5 +1,7 @@
 """Shared GLSL std430 buffer block layout helpers."""
 
+from inspect import Parameter, signature
+
 from ..ast import ArrayNode
 
 
@@ -188,12 +190,34 @@ def glsl_buffer_block_is_readonly(node):
     return "readonly" in qualifiers or "readonly" in attributes
 
 
-def variable_is_array(node):
-    var_type = getattr(node, "var_type", None)
-    return (
-        hasattr(var_type, "element_type")
-        and str(type(var_type)).find("ArrayType") != -1
+def glsl_buffer_block_node_type(node):
+    return getattr(
+        node,
+        "var_type",
+        getattr(node, "param_type", getattr(node, "vtype", None)),
     )
+
+
+def glsl_buffer_block_predicate_matches(predicate, node, node_type):
+    try:
+        parameters = signature(predicate).parameters
+    except (TypeError, ValueError):
+        return predicate(node, node_type)
+
+    accepts_two_args = any(
+        param.kind == Parameter.VAR_POSITIONAL for param in parameters.values()
+    ) or (
+        sum(
+            1
+            for param in parameters.values()
+            if param.kind
+            in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD)
+        )
+        >= 2
+    )
+    if accepts_two_args:
+        return predicate(node, node_type)
+    return predicate(node)
 
 
 def glsl_buffer_block_member_type(
@@ -256,16 +280,17 @@ def collect_lowered_glsl_buffer_blocks(
     var_failures = {}
     struct_failures = {}
     for node in global_vars:
-        if variable_is_array(node):
-            continue
         var_name = getattr(node, "name", getattr(node, "variable_name", None))
-        if not var_name or not is_glsl_buffer_block_variable(node):
+        node_type = glsl_buffer_block_node_type(node)
+        if not var_name or not glsl_buffer_block_predicate_matches(
+            is_glsl_buffer_block_variable, node, node_type
+        ):
             continue
         layout = glsl_buffer_block_layout(node)
         if str(layout).lower() != "std430":
             continue
 
-        type_name = str(resource_base_type(getattr(node, "var_type", None)))
+        type_name = str(resource_base_type(node_type))
         struct = structs_by_name.get(type_name)
         if struct is None:
             continue

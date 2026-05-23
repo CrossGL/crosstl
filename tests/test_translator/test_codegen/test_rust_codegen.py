@@ -96,6 +96,32 @@ def test_basic_shader():
         pytest.fail("Rust basic shader codegen not implemented.")
 
 
+def test_local_struct_outputs_initialize_with_default_before_field_assignment():
+    code = """
+    shader main {
+        struct Out {
+            vec4 color @ COLOR;
+        };
+        vertex {
+            Out main() {
+                Out output;
+                output.color = vec4(1.0, 0.0, 0.0, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[derive(Debug, Clone, Copy, Default)]" in generated_code
+    assert "let mut output: Out = Default::default();" in generated_code
+    assert "output.color = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "let mut output: Out;" not in generated_code
+
+
 def test_if_statement():
     code = """
     shader main {
@@ -409,6 +435,41 @@ def test_increment_and_decrement_emit_rust_assignment_updates():
     assert "++j" not in generated_code
 
 
+def test_increment_and_decrement_initializers_preserve_rust_value_order():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int i = 0;
+                int pre = ++i;
+                int post = i++;
+                int pre_dec = --i;
+                int post_dec = i--;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    lines = [line.strip() for line in generated_code.splitlines()]
+
+    def contains_adjacent(first, second):
+        return any(
+            current == first and following == second
+            for current, following in zip(lines, lines[1:])
+        )
+
+    assert contains_adjacent("i += 1;", "let mut pre: i32 = i;")
+    assert contains_adjacent("let mut post: i32 = i;", "i += 1;")
+    assert contains_adjacent("i -= 1;", "let mut pre_dec: i32 = i;")
+    assert contains_adjacent("let mut post_dec: i32 = i;", "i -= 1;")
+    assert "let mut pre: i32 = i += 1;" not in generated_code
+    assert "let mut post: i32 = i += 1;" not in generated_code
+    assert "let mut pre_dec: i32 = i -= 1;" not in generated_code
+    assert "let mut post_dec: i32 = i -= 1;" not in generated_code
+
+
 def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
     code = """
     shader main {
@@ -584,7 +645,11 @@ def test_builtin_function_call_names_are_mapped():
             float main() {
                 float a = mix(0.0, 1.0, 0.25);
                 float b = mod(5.0, 2.0);
-                return a + b;
+                float c = frac(1.25);
+                float d = saturate(2.0);
+                float e = saturate(frac(1.75));
+                float f = inversesqrt(4.0);
+                return a + b + c + d + e + f;
             }
         }
     }
@@ -596,8 +661,15 @@ def test_builtin_function_call_names_are_mapped():
 
     assert "lerp(0.0, 1.0, 0.25)" in generated_code
     assert "modulo(5.0, 2.0)" in generated_code
+    assert "fract(1.25)" in generated_code
+    assert "clamp(2.0, 0.0, 1.0)" in generated_code
+    assert "clamp(fract(1.75), 0.0, 1.0)" in generated_code
+    assert "rsqrt(4.0)" in generated_code
     assert "mix(0.0, 1.0, 0.25)" not in generated_code
     assert "mod(5.0, 2.0)" not in generated_code
+    assert "frac(1.25)" not in generated_code
+    assert "inversesqrt(" not in generated_code
+    assert "saturate(" not in generated_code
 
 
 @pytest.mark.parametrize(
@@ -1060,6 +1132,51 @@ def test_scalar_vector_constructors_splat_rust_values():
     assert "Vec3::<f32>::new(weight);" not in generated_code
     assert "Vec2::<i32>::new(index);" not in generated_code
     assert "Vec4::<bool>::new(enabled);" not in generated_code
+
+
+def test_composite_vector_constructors_flatten_rust_lanes():
+    code = """
+    shader main {
+        struct VSInput {
+            vec2 texCoord @ TEXCOORD0;
+        };
+        compute {
+            void main(VSInput input) {
+                vec2 xy = vec2(1.0, 2.0);
+                vec4 color = vec4(xy, 0.0, 1.0);
+                vec3 position = vec3(xy, 1.0);
+                vec3 rgb = vec3(color.rgb);
+                vec4 packed = vec4(input.texCoord, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "let mut color: Vec4<f32> = "
+        "Vec4::<f32>::new(xy.x, xy.y, 0.0, 1.0);" in generated_code
+    )
+    assert (
+        "let mut position: Vec3<f32> = "
+        "Vec3::<f32>::new(xy.x, xy.y, 1.0);" in generated_code
+    )
+    assert (
+        "let mut rgb: Vec3<f32> = "
+        "Vec3::<f32>::new(color.x, color.y, color.z);" in generated_code
+    )
+    assert (
+        "let mut packed: Vec4<f32> = "
+        "Vec4::<f32>::new(input.texCoord.x, input.texCoord.y, 0.0, 1.0);"
+        in generated_code
+    )
+    assert "Vec4::<f32>::new(xy, 0.0, 1.0)" not in generated_code
+    assert "Vec3::<f32>::new(xy, 1.0)" not in generated_code
+    assert "Vec3::<f32>::new(color.rgb)" not in generated_code
+    assert "Vec4::<f32>::new(input.texCoord, 0.0, 1.0)" not in generated_code
 
 
 def test_switch_statement_emits_rust_match():

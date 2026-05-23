@@ -16,8 +16,10 @@ from ..ast import (
     ForInNode,
     FunctionNode,
     IdentifierNode,
+    LiteralNode,
     LiteralPatternNode,
     MatchNode,
+    PrimitiveType,
     RangeNode,
     ReturnNode,
     ShaderNode,
@@ -178,12 +180,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "ceil": "ceilf",
             "round": "roundf",
             "trunc": "truncf",
-            "fract": "fracf",
             "mod": "fmodf",
             "min": "fminf",
             "max": "fmaxf",
             "clamp": "fmaxf(fminf",  # Special handling needed
-            "mix": "lerp",
             "step": "step",
             "smoothstep": "smoothstep",
             # Vector functions
@@ -782,13 +782,46 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         left = self.visit(node.left)
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "="))
-        if operator in {"+=", "-=", "*=", "/="}:
+        compound_binary_ops = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+        }
+        if operator in compound_binary_ops:
             lowered_right = self.lower_vector_binary_operation(
                 node.left,
                 left,
                 node.right,
                 right,
-                operator[0],
+                compound_binary_ops[operator],
+            )
+            if lowered_right is not None:
+                return f"{left} = {lowered_right}"
+            if operator == "%=":
+                modulo = self.lower_scalar_modulo_operation(
+                    node.left,
+                    left,
+                    node.right,
+                    right,
+                )
+                if modulo is not None:
+                    return f"{left} = {modulo}"
+        compound_bitwise_ops = {
+            "&=": "&",
+            "|=": "|",
+            "^=": "^",
+            "<<=": "<<",
+            ">>=": ">>",
+        }
+        if operator in compound_bitwise_ops:
+            lowered_right = self.lower_vector_bitwise_operation(
+                node.left,
+                left,
+                node.right,
+                right,
+                compound_bitwise_ops[operator],
             )
             if lowered_right is not None:
                 return f"{left} = {lowered_right}"
@@ -797,36 +830,79 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     def visit_BinaryOpNode(self, node) -> str:
         left = self.visit(node.left)
         right = self.visit(node.right)
+        operator = getattr(node, "operator", getattr(node, "op", "+"))
+
+        logical = self.lower_vector_logical_operation(
+            node.left,
+            left,
+            node.right,
+            right,
+            operator,
+        )
+        if logical is not None:
+            return logical
+
+        bitwise = self.lower_vector_bitwise_operation(
+            node.left,
+            left,
+            node.right,
+            right,
+            operator,
+        )
+        if bitwise is not None:
+            return bitwise
 
         # Handle special operators
-        if node.op == "and":
+        if operator == "and":
             return f"({left} && {right})"
-        elif node.op == "or":
+        elif operator == "or":
             return f"({left} || {right})"
+        comparison = self.lower_vector_comparison_operation(
+            node.left,
+            left,
+            node.right,
+            right,
+            operator,
+        )
+        if comparison is not None:
+            return comparison
         lowered = self.lower_vector_binary_operation(
             node.left,
             left,
             node.right,
             right,
-            node.op,
+            operator,
         )
         if lowered is not None:
             return lowered
-        else:
-            return f"({left} {node.op} {right})"
+        if operator == "%":
+            modulo = self.lower_scalar_modulo_operation(
+                node.left,
+                left,
+                node.right,
+                right,
+            )
+            if modulo is not None:
+                return modulo
+        return f"({left} {operator} {right})"
 
     def visit_UnaryOpNode(self, node) -> str:
         operand = self.visit(node.operand)
 
-        if node.op == "not":
+        if node.op in {"!", "not"}:
+            lowered = self.lower_vector_unary_operation(node.operand, operand, node.op)
+            if lowered is not None:
+                return lowered
             return f"!{operand}"
         elif node.op in ["++", "--"]:
             if getattr(node, "is_postfix", getattr(node, "postfix", False)):
                 return f"{operand}{node.op}"
             else:
                 return f"{node.op}{operand}"
-        else:
-            return f"{node.op}{operand}"
+        lowered = self.lower_vector_unary_operation(node.operand, operand, node.op)
+        if lowered is not None:
+            return lowered
+        return f"{node.op}{operand}"
 
     def visit_FunctionCallNode(self, node) -> str:
         func_expr = (
@@ -859,9 +935,45 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         mapped_name = self.function_map.get(func_name, func_name)
 
         # Handle special functions
-        if func_name == "clamp":
+        if func_name == "abs":
+            if len(args) == 1:
+                abs_call = self.generate_abs_call(raw_args, args)
+                if abs_call is not None:
+                    return abs_call
+        elif func_name == "mod":
+            if len(args) == 2:
+                mod_call = self.generate_mod_call(raw_args, args)
+                if mod_call is not None:
+                    return mod_call
+        elif func_name in {"fract", "frac"}:
+            if len(args) == 1:
+                return self.generate_fract_call(raw_args, args)
+        elif func_name in {"min", "max"}:
+            if len(args) == 2:
+                min_max_call = self.generate_min_max_call(func_name, raw_args, args)
+                if min_max_call is not None:
+                    return min_max_call
+        elif func_name in {"dot", "cross", "length", "normalize"}:
+            geometric_call = self.generate_vector_geometric_call(
+                func_name,
+                raw_args,
+                args,
+            )
+            if geometric_call is not None:
+                return geometric_call
+        elif func_name == "clamp":
             if len(args) == 3:
                 return self.generate_clamp_call(raw_args, args)
+        elif func_name == "mix":
+            if len(args) == 3:
+                mix_call = self.generate_mix_call(raw_args, args)
+                if mix_call is not None:
+                    return mix_call
+        elif func_name == "saturate":
+            if len(args) == 1:
+                saturate_call = self.generate_saturate_call(raw_args, args)
+                if saturate_call is not None:
+                    return saturate_call
         elif func_name in ["texture", "tex2D"]:
             # Handle texture sampling
             if len(args) >= 2:
@@ -875,10 +987,178 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
 
+    def generate_fract_call(self, raw_args, args):
+        arg_type = self.expression_result_type(raw_args[0])
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            helper_name = self.require_vector_fract_helper(vector_info)
+            if helper_name is not None:
+                return f"{helper_name}({args[0]})"
+
+        scalar_type = self.fract_scalar_type(arg_type)
+        helper_name = self.require_scalar_fract_helper(scalar_type)
+        return f"{helper_name}({args[0]})"
+
+    def fract_scalar_type(self, type_name):
+        if type_name is not None and not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        mapped_type = self.map_type(type_name) if type_name is not None else None
+        if mapped_type == "double" or type_name in {"double", "f64"}:
+            return "double"
+        return "float"
+
+    def require_scalar_fract_helper(self, scalar_type):
+        helper_name = f"cgl_fract_{scalar_type}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        floor_name = "floor" if scalar_type == "double" else "floorf"
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}({scalar_type} value)\n"
+            "{\n"
+            f"    return value - {floor_name}(value);\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_vector_fract_helper(self, vector_info):
+        component_type = vector_info["component_type"]
+        if component_type not in {"float", "double"}:
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_fract"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        scalar_helper_name = self.require_scalar_fract_helper(component_type)
+        components = [
+            f"{scalar_helper_name}(value.{component})"
+            for component in vector_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def generate_min_max_call(self, func_name, raw_args, args):
+        left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        right_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+        if not left_info and not right_info:
+            return None
+
+        if left_info and right_info:
+            if len(left_info["components"]) != len(right_info["components"]):
+                return None
+            helper_name = self.require_vector_min_max_helper(
+                left_info,
+                func_name,
+                "vector",
+            )
+        elif left_info:
+            helper_name = self.require_vector_min_max_helper(
+                left_info,
+                func_name,
+                "scalar_right",
+            )
+        else:
+            helper_name = self.require_vector_min_max_helper(
+                right_info,
+                func_name,
+                "scalar_left",
+            )
+
+        if helper_name is None:
+            return None
+        return f"{helper_name}({args[0]}, {args[1]})"
+
+    def require_vector_min_max_helper(self, vector_info, func_name, operand_shape):
+        component_type = vector_info["component_type"]
+        if component_type == "bool":
+            return None
+
+        vector_type = vector_info["type"]
+        scalar_type = self.vector_scalar_parameter_type(vector_info)
+        helper_name = f"cgl_{vector_type}_{func_name}"
+        if operand_shape == "scalar_right":
+            helper_name += "_scalar"
+        elif operand_shape == "scalar_left":
+            helper_name = f"cgl_scalar_{func_name}_{vector_type}"
+
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = vector_info["components"]
+        constructor = vector_info["constructor"]
+        if operand_shape == "vector":
+            params = f"{vector_type} lhs, {vector_type} rhs"
+            args = [
+                self.format_min_max_component(
+                    func_name,
+                    component_type,
+                    f"lhs.{component}",
+                    f"rhs.{component}",
+                )
+                for component in components
+            ]
+        elif operand_shape == "scalar_right":
+            params = f"{vector_type} lhs, {scalar_type} rhs"
+            args = [
+                self.format_min_max_component(
+                    func_name,
+                    component_type,
+                    f"lhs.{component}",
+                    "rhs",
+                )
+                for component in components
+            ]
+        else:
+            params = f"{scalar_type} lhs, {vector_type} rhs"
+            args = [
+                self.format_min_max_component(
+                    func_name,
+                    component_type,
+                    "lhs",
+                    f"rhs.{component}",
+                )
+                for component in components
+            ]
+
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({params})\n"
+            "{\n"
+            f"    return {constructor}({', '.join(args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_min_max_component(self, func_name, component_type, left, right):
+        if component_type == "float":
+            intrinsic = "fminf" if func_name == "min" else "fmaxf"
+            return f"{intrinsic}({left}, {right})"
+        if component_type == "double":
+            intrinsic = "fmin" if func_name == "min" else "fmax"
+            return f"{intrinsic}({left}, {right})"
+
+        operator = "<" if func_name == "min" else ">"
+        return f"(({left}) {operator} ({right}) ? ({left}) : ({right}))"
+
     def generate_clamp_call(self, raw_args, args):
-        value_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        value_type = self.expression_result_type(raw_args[0])
+        value_info = self.vector_type_info(value_type)
         if not value_info:
-            return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
+            return self.format_clamp_component(
+                self.clamp_scalar_type(value_type),
+                args[0],
+                args[1],
+                args[2],
+            )
 
         min_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
         max_info = self.vector_type_info(self.expression_result_type(raw_args[2]))
@@ -895,6 +1175,122 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if helper_name is None:
             return f"fmaxf({args[1]}, fminf({args[2]}, {args[0]}))"
         return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
+
+    def generate_saturate_call(self, raw_args, args):
+        value_type = self.expression_result_type(raw_args[0])
+        value_info = self.vector_type_info(value_type)
+        component_type = (
+            value_info["component_type"]
+            if value_info is not None
+            else self.scalar_component_type(value_type)
+        )
+        if component_type not in {"float", "double"}:
+            return None
+
+        float_type = PrimitiveType("float")
+        return self.generate_clamp_call(
+            [
+                raw_args[0],
+                LiteralNode(0.0, float_type),
+                LiteralNode(1.0, float_type),
+            ],
+            [args[0], "0.0", "1.0"],
+        )
+
+    def generate_mix_call(self, raw_args, args):
+        left_type = self.expression_result_type(raw_args[0])
+        right_type = self.expression_result_type(raw_args[1])
+        factor_type = self.expression_result_type(raw_args[2])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        factor_info = self.vector_type_info(factor_type)
+
+        if not left_info and not right_info and not factor_info:
+            return self.format_mix_component(args[0], args[1], args[2])
+
+        if left_info is None or right_info is None:
+            return None
+        if (
+            len(left_info["components"]) != len(right_info["components"])
+            or left_info["component_type"] != right_info["component_type"]
+        ):
+            return None
+
+        if factor_info is not None and (
+            len(factor_info["components"]) != len(left_info["components"])
+            or factor_info["component_type"] != left_info["component_type"]
+        ):
+            return None
+
+        helper_name = self.require_vector_mix_helper(
+            left_info,
+            factor_is_vector=factor_info is not None,
+        )
+        if helper_name is None:
+            return None
+        return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
+
+    def require_vector_mix_helper(self, vector_info, factor_is_vector):
+        component_type = vector_info["component_type"]
+        if component_type not in {"float", "double"}:
+            return None
+
+        vector_type = vector_info["type"]
+        factor_shape = "vector" if factor_is_vector else "scalar"
+        helper_name = f"cgl_{vector_type}_mix_{factor_shape}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        factor_type = (
+            vector_type
+            if factor_is_vector
+            else self.vector_scalar_parameter_type(vector_info)
+        )
+        components = []
+        for component in vector_info["components"]:
+            factor_component = f"a.{component}" if factor_is_vector else "a"
+            components.append(
+                self.format_mix_component(
+                    f"x.{component}",
+                    f"y.{component}",
+                    factor_component,
+                )
+            )
+
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}"
+            f"({vector_type} x, {vector_type} y, {factor_type} a)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_mix_component(self, left, right, factor):
+        return f"({left} + (({right} - {left}) * {factor}))"
+
+    def clamp_scalar_type(self, type_name):
+        if type_name is None:
+            return "float"
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        mapped_type = self.map_type(type_name)
+        if mapped_type in {"float", "double"}:
+            return mapped_type
+        if mapped_type in {
+            "bool",
+            "char",
+            "unsigned char",
+            "short",
+            "unsigned short",
+            "int",
+            "unsigned int",
+            "long long",
+            "unsigned long long",
+        }:
+            return mapped_type
+        return "float"
 
     def require_vector_clamp_helper(self, vector_info, min_is_vector, max_is_vector):
         if vector_info["component_type"] == "bool":
@@ -1305,19 +1701,63 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if member_access in self.builtin_map:
             return self.builtin_map[member_access]
 
-        # Handle vector swizzling
-        if node.member in ["x", "y", "z", "w", "r", "g", "b", "a"]:
-            return member_access
-        elif len(node.member) > 1 and all(c in "xyzw" for c in node.member):
-            # Multi-component swizzle - might need special handling
-            return member_access
-        else:
-            return member_access
+        swizzle = self.generate_vector_swizzle(node, object_expr)
+        if swizzle is not None:
+            return swizzle
+
+        return member_access
+
+    def generate_vector_swizzle(self, node, object_expr):
+        vector_info = self.vector_type_info(self.expression_result_type(node.object))
+        if vector_info is None:
+            return None
+
+        component_aliases = {
+            "x": "x",
+            "y": "y",
+            "z": "z",
+            "w": "w",
+            "r": "x",
+            "g": "y",
+            "b": "z",
+            "a": "w",
+        }
+        member = getattr(node, "member", "")
+        components = [component_aliases.get(component) for component in member]
+        if not components or any(component is None for component in components):
+            return None
+
+        available_components = vector_info["components"]
+        if any(component not in available_components for component in components):
+            return None
+
+        if len(components) == 1:
+            return f"{object_expr}.{components[0]}"
+
+        result_type = self.vector_type_for_components(
+            vector_info["component_type"], len(components)
+        )
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return None
+
+        args = [f"{object_expr}.{component}" for component in components]
+        return f"{result_info['constructor']}({', '.join(args)})"
 
     def visit_TernaryOpNode(self, node) -> str:
         condition = self.visit(node.condition)
         true_expr = self.visit(node.true_expr)
         false_expr = self.visit(node.false_expr)
+        lowered = self.lower_vector_ternary_operation(
+            node.condition,
+            condition,
+            node.true_expr,
+            true_expr,
+            node.false_expr,
+            false_expr,
+        )
+        if lowered is not None:
+            return lowered
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def format_literal(self, value, literal_type=None):

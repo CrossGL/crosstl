@@ -240,6 +240,7 @@ class CudaParser:
         type_value = self.tokens[index][1]
         has_qualified_suffix = False
         index += 1
+        index = self.skip_long_long_suffix_at_index(index, type_token)
 
         while (
             index + 1 < len(self.tokens)
@@ -271,6 +272,15 @@ class CudaParser:
             index = self.skip_postfix_type_qualifiers_at_index(index)
 
         return self.skip_array_suffix_at_index(index)
+
+    def skip_long_long_suffix_at_index(self, index, type_token):
+        if (
+            type_token == "LONG"
+            and index < len(self.tokens)
+            and self.tokens[index][0] == "LONG"
+        ):
+            return index + 1
+        return index
 
     def skip_postfix_type_qualifiers_at_index(self, index):
         while (
@@ -513,8 +523,12 @@ class CudaParser:
             self.eat(self.current_token[0])
 
     def parse_type_name(self):
+        token_type = self.current_token[0]
         type_name = self.current_token[1]
-        self.eat(self.current_token[0])
+        self.eat(token_type)
+        if token_type == "LONG" and self.current_token[0] == "LONG":
+            type_name += f" {self.current_token[1]}"
+            self.eat("LONG")
 
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
@@ -874,7 +888,9 @@ class CudaParser:
         if index >= len(self.tokens) or self.tokens[index][0] not in self.TYPE_TOKENS:
             return None
 
+        type_token = self.tokens[index][0]
         index += 1
+        index = self.skip_long_long_suffix_at_index(index, type_token)
         while (
             index + 1 < len(self.tokens)
             and self.tokens[index][0] == "SCOPE"
@@ -992,7 +1008,7 @@ class CudaParser:
 
     def parse_expression(self):
         """Parse expression with precedence"""
-        return self.parse_ternary_expression()
+        return self.parse_assignment_expression()
 
     def parse_ternary_expression(self):
         """Parse ternary conditional operator"""
@@ -1373,7 +1389,10 @@ class CudaParser:
             ):
                 return False
 
-            self.eat(self.current_token[0])
+            token_type = self.current_token[0]
+            self.eat(token_type)
+            if token_type == "LONG" and self.current_token[0] == "LONG":
+                self.eat("LONG")
             while self.current_token[0] == "MULTIPLY":
                 self.eat("MULTIPLY")
 
@@ -1577,7 +1596,10 @@ class CudaParser:
             ):
                 return False
 
-            self.eat(self.current_token[0])
+            token_type = self.current_token[0]
+            self.eat(token_type)
+            if token_type == "LONG" and self.current_token[0] == "LONG":
+                self.eat("LONG")
             while self.current_token[0] == "MULTIPLY":
                 self.eat("MULTIPLY")
 
@@ -1609,7 +1631,7 @@ class CudaParser:
 
     def parse_assignment_expression(self):
         """Parse assignment expression"""
-        left = self.parse_expression()
+        left = self.parse_ternary_expression()
 
         if self.current_token[0] in [
             "ASSIGN",
@@ -1626,7 +1648,7 @@ class CudaParser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_expression()
+            right = self.parse_assignment_expression()
             return AssignmentNode(left, right, op)
 
         return left

@@ -130,6 +130,140 @@ def test_stage_local_functions_and_initialized_variables_emit():
     assert "gl_Position = float4(y, y, y, 1.0);" in generated_code
 
 
+def test_mix_builtin_lowers_to_lerp_without_affecting_resources_or_constructors():
+    code = """
+    shader MixBug {
+        sampler2d tex;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                float x = mix(0.0, 1.0, 0.25);
+                vec4 c = vec4(x, x, x, 1.0);
+                vec4 sampled = texture(tex, uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float x = lerp(0.0, 1.0, 0.25);" in generated_code
+    assert "float4 c = float4(x, x, x, 1.0);" in generated_code
+    assert "float4 sampled = tex.Sample(uv);" in generated_code
+    assert "mix(" not in generated_code
+    assert "texture(" not in generated_code
+
+
+def test_mod_builtin_lowers_to_slang_fmod():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float wrapped = mod(5.0, 2.0);
+                vec2 v = vec2(5.0, 7.0);
+                vec2 wrappedVec = mod(v, vec2(2.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float wrapped = fmod(5.0, 2.0);" in generated_code
+    assert "float2 wrappedVec = fmod(v, float2(2.0));" in generated_code
+    assert "float2 v = float2(5.0, 7.0);" in generated_code
+    assert "wrapped = mod(" not in generated_code
+    assert "wrappedVec = mod(" not in generated_code
+
+
+def test_fract_builtin_lowers_to_slang_frac():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float wrapped = fract(1.25);
+                vec2 v = fract(vec2(1.25, 2.5));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float wrapped = frac(1.25);" in generated_code
+    assert "float2 v = frac(float2(1.25, 2.5));" in generated_code
+    assert "fract(" not in generated_code
+
+
+def test_inversesqrt_builtin_lowers_to_slang_rsqrt():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float inv = inversesqrt(x);
+                vec2 invVec = inversesqrt(vec2(4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inv = rsqrt(x);" in generated_code
+    assert "float2 invVec = rsqrt(float2(4.0, 9.0));" in generated_code
+    assert "inversesqrt(" not in generated_code
+
+
+def test_floating_binary_modulo_lowers_to_slang_fmod():
+    code = """
+    shader BinaryModuloGap {
+        compute {
+            void main() {
+                float a = 5.0;
+                float wrapped = a % 2.0;
+                a %= 3.0;
+                vec2 v = vec2(5.0, 7.0);
+                vec2 wrappedVec = v % vec2(2.0);
+                v %= vec2(3.0);
+                double d = 5.0;
+                double wrappedDouble = d % 2.0;
+                d %= 3.0;
+                int i = 5 % 2;
+                i %= 2;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float wrapped = fmod(a, 2.0);" in generated_code
+    assert "a = fmod(a, 3.0);" in generated_code
+    assert "float2 wrappedVec = fmod(v, float2(2.0));" in generated_code
+    assert "v = fmod(v, float2(3.0));" in generated_code
+    assert "double wrappedDouble = fmod(d, 2.0);" in generated_code
+    assert "d = fmod(d, 3.0);" in generated_code
+    assert "int i = 5 % 2;" in generated_code
+    assert "i %= 2;" in generated_code
+    assert "float wrapped = a % 2.0;" not in generated_code
+    assert "float2 wrappedVec = v % float2(2.0);" not in generated_code
+    assert "double wrappedDouble = d % 2.0;" not in generated_code
+    assert "a %= 3.0;" not in generated_code
+    assert "v %= float2(3.0);" not in generated_code
+    assert "d %= 3.0;" not in generated_code
+
+
 def test_multiple_stage_entry_points_emit():
     code = """
     shader main {
@@ -4774,6 +4908,30 @@ def test_direct_literal_nodes_emit_slang_escaping():
     assert (
         codegen.generate_expression(LiteralNode("'", PrimitiveType("char"))) == "'\\''"
     )
+
+
+def test_binary_expression_precedence_preserves_grouping_in_slang():
+    code = """
+    shader Precedence {
+        compute {
+            void main() {
+                float a = 1.0;
+                float b = 2.0;
+                float c = 3.0;
+                float grouped = (a + b) * c;
+                float divisor = a / (b * c);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float grouped = (a + b) * c;" in generated_code
+    assert "float grouped = a + b * c;" not in generated_code
+    assert "float divisor = a / (b * c);" in generated_code
+    assert "float divisor = a / b * c;" not in generated_code
 
 
 def test_prefix_and_postfix_unary_operators_preserve_position():

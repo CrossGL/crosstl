@@ -430,6 +430,24 @@ def test_method_call_chain_codegen_preserves_receiver():
     assert "let channel = texture.sample(coord).x;" in generated_code
 
 
+def test_as_cast_expression_codegen():
+    code = """
+    fn main():
+        let i: Int = 2
+        let x: Float = i as Float
+        let y = (i + 1) as Float
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int i = 2;" in generated_code
+    assert "float x = float(i);" in generated_code
+    assert "let y = float((i + 1));" in generated_code
+    assert " as " not in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_parenthesized_method_call_chain_codegen():
     code = """
     fn main():
@@ -556,6 +574,66 @@ def test_bitwise_ops_codegen():
         assert "|" in generated_code
     except SyntaxError:
         pytest.fail("Bitwise ops parsing or code generation not implemented.")
+
+
+def test_modulo_codegen():
+    code = """
+    fn main():
+        let a: Int = 10 % 3
+        let b: Float32 = 10.0 % 3.0
+        let wrapped = fmod(5.0, 2.0)
+        let wrapped_math = math.fmod(5.0, 2.0)
+        var c: Int = 10
+        c %= 3
+    """
+    try:
+        tokens = tokenize_code(code)
+        ast = parse_code(tokens)
+        generated_code = generate_code(ast)
+
+        assert "int a = (10 % 3);" in generated_code
+        assert "float b = (10.0 % 3.0);" in generated_code
+        assert "let wrapped = mod(5.0, 2.0);" in generated_code
+        assert "let wrapped_math = mod(5.0, 2.0);" in generated_code
+        assert "int c = 10;" in generated_code
+        assert "c %= 3;" in generated_code
+        assert "fmod(" not in generated_code
+        assert "math.fmod(" not in generated_code
+    except SyntaxError:
+        pytest.fail("Modulo parsing or code generation not implemented.")
+
+
+def test_mojo_generated_builtin_names_lower_to_crossgl():
+    code = """
+    fn main():
+        let x: Float32 = 4.0
+        let a = lerp(0.0, 1.0, 0.25)
+        let b = math.lerp(0.0, 1.0, 0.75)
+        let c = power(2.0, 3.0)
+        let d = rsqrt(x)
+        let e = dot_product(lhs, rhs)
+        let f = cross_product(lhs, rhs)
+        let g = magnitude(lhs)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let a = mix(0.0, 1.0, 0.25);" in generated_code
+    assert "let b = mix(0.0, 1.0, 0.75);" in generated_code
+    assert "let c = pow(2.0, 3.0);" in generated_code
+    assert "let d = inversesqrt(x);" in generated_code
+    assert "let e = dot(lhs, rhs);" in generated_code
+    assert "let f = cross(lhs, rhs);" in generated_code
+    assert "let g = length(lhs);" in generated_code
+    assert "lerp(" not in generated_code
+    assert "math.lerp(" not in generated_code
+    assert "power(" not in generated_code
+    assert "rsqrt(" not in generated_code
+    assert "dot_product(" not in generated_code
+    assert "cross_product(" not in generated_code
+    assert "magnitude(" not in generated_code
 
 
 def test_logical_ops_codegen():
@@ -863,6 +941,7 @@ def test_ternary_operator_codegen():
     fn vertex_main() -> float4:
         let x: Float32 = 0.5
         let result = x > 0.0 ? 1.0 : 0.0
+        let native_result = 1.0 if x > 0.0 else 0.0
         return float4(result, 0.0, 0.0, 1.0)
     """
     try:
@@ -871,6 +950,7 @@ def test_ternary_operator_codegen():
         generated_code = generate_code(ast)
         print(generated_code)
         assert "?" in generated_code or "if" in generated_code
+        assert "let native_result = ((x > 0.0) ? 1.0 : 0.0);" in generated_code
     except SyntaxError:
         pytest.fail("Ternary operator parsing or code generation not implemented.")
 
@@ -883,7 +963,8 @@ def test_import_codegen():
 
     fn vertex_main() -> float4:
         let result = math.sin(0.5)
-        return float4(result, 0.0, 0.0, 1.0)
+        let wrapped = math.fract(1.25)
+        return float4(result, wrapped, 0.0, 1.0)
     """
     try:
         tokens = tokenize_code(code)
@@ -894,6 +975,8 @@ def test_import_codegen():
         assert "// import simd as s" in generated_code
         assert "// from tensor import Tensor" in generated_code
         assert "let result = sin(0.5);" in generated_code
+        assert "let wrapped = fract(1.25);" in generated_code
+        assert "math.fract(" not in generated_code
     except SyntaxError:
         pytest.fail("Import parsing or code generation not implemented.")
 
