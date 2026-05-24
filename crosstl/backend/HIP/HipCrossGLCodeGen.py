@@ -88,6 +88,7 @@ class HipToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.user_function_names = set()
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed HIP AST."""
@@ -96,6 +97,7 @@ class HipToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.user_function_names = self.collect_user_function_names(ast_node)
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -121,6 +123,36 @@ class HipToCrossGLConverter:
         else:
             self.output.append("")
 
+    def collect_user_function_names(self, node):
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+
+            name = getattr(current, "name", None)
+            body = getattr(current, "body", None)
+            if name is not None and body is not None:
+                names.add(name)
+
+            for stmt in getattr(current, "statements", []):
+                collect(stmt)
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for kernel in getattr(current, "kernels", []):
+                collect(kernel)
+
+        collect(node)
+        names.discard(None)
+        return names
+
+    def is_user_defined_function(self, func_name):
+        return isinstance(func_name, str) and func_name in self.user_function_names
+
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
         if isinstance(stmt, list):
@@ -137,6 +169,8 @@ class HipToCrossGLConverter:
 
     def emit_hip_runtime_call_statement(self, stmt):
         if not isinstance(stmt, FunctionCallNode):
+            return False
+        if self.is_user_defined_function(stmt.name):
             return False
 
         comments = self.format_hip_runtime_call(stmt)
@@ -607,8 +641,17 @@ class HipToCrossGLConverter:
         if unique_ptr_init is not None:
             return unique_ptr_init
 
+        if self.is_user_defined_function(func_name):
+            return f"{func_name}({args_str})"
+
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
+        return f"{crossgl_func}({args_str})"
+
+    def visit_AtomicOperationNode(self, node):
+        args = [self.visit(arg) for arg in node.args]
+        args_str = ", ".join(args)
+        crossgl_func = self.convert_hip_builtin_function(node.operation)
         return f"{crossgl_func}({args_str})"
 
     def is_get_method_call(self, node):
@@ -621,7 +664,7 @@ class HipToCrossGLConverter:
 
     def format_make_unique_call(self, function_name, args):
         base_name, template_args = self.parse_cpp_template(function_name)
-        if base_name.split("::")[-1] != "make_unique" or not template_args:
+        if not self.is_std_make_unique_base_name(base_name) or not template_args:
             return None
 
         target_type, is_array = self.unwrap_array_template_type(template_args[0])
@@ -635,9 +678,9 @@ class HipToCrossGLConverter:
         base_name, _ = self.parse_cpp_template(function_name)
         if len(args) != 1:
             return None
-        if base_name.split("::")[
-            -1
-        ] != "unique_ptr" and not self.is_unique_ptr_type_name(function_name):
+        if not self.is_std_unique_ptr_base_name(
+            base_name
+        ) and not self.is_unique_ptr_type_name(function_name):
             return None
 
         return args[0]
@@ -704,6 +747,7 @@ class HipToCrossGLConverter:
             "blockIdx": "gl_WorkGroupID",
             "gridDim": "gl_NumWorkGroups",
             "blockDim": "gl_WorkGroupSize",
+            "warpSize": "32",
         }
 
         base_name = builtin_map.get(node.builtin_name, node.builtin_name)
@@ -928,7 +972,13 @@ class HipToCrossGLConverter:
         return self.is_unique_ptr_base_name(base_name) and bool(template_args)
 
     def is_unique_ptr_base_name(self, base_name):
-        return base_name.split("::")[-1] == "unique_ptr"
+        return self.is_std_unique_ptr_base_name(base_name)
+
+    def is_std_unique_ptr_base_name(self, base_name):
+        return base_name in {"unique_ptr", "std::unique_ptr"}
+
+    def is_std_make_unique_base_name(self, base_name):
+        return base_name in {"make_unique", "std::make_unique"}
 
     def has_array_suffix(self, type_name):
         depth = 0
@@ -1037,6 +1087,12 @@ class HipToCrossGLConverter:
             "sinf": "sin",
             "cosf": "cos",
             "tanf": "tan",
+            "sinhf": "sinh",
+            "coshf": "cosh",
+            "tanhf": "tanh",
+            "asinhf": "asinh",
+            "acoshf": "acosh",
+            "atanhf": "atanh",
             "asinf": "asin",
             "acosf": "acos",
             "atanf": "atan",
@@ -1084,6 +1140,19 @@ class HipToCrossGLConverter:
             # Sync functions
             "__syncthreads": "workgroupBarrier",
             "__threadfence": "memoryBarrier",
+            # Atomic functions
+            "atomicAdd": "atomicAdd",
+            "hipAtomicAdd": "atomicAdd",
+            "atomicSub": "atomicSub",
+            "hipAtomicSub": "atomicSub",
+            "atomicMax": "atomicMax",
+            "hipAtomicMax": "atomicMax",
+            "atomicMin": "atomicMin",
+            "hipAtomicMin": "atomicMin",
+            "atomicExch": "atomicExchange",
+            "hipAtomicExch": "atomicExchange",
+            "atomicCAS": "atomicCompareExchange",
+            "hipAtomicCAS": "atomicCompareExchange",
         }
 
         return function_mapping.get(func_name, func_name)

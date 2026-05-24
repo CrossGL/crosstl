@@ -55,16 +55,69 @@ class VulkanToCrossGLConverter:
             "bvec4": "bool4",
             "float": "float",
             "double": "double",
+            "subpassInput": "Texture2D",
+            "subpassInputMS": "Texture2DMS",
+            "sampler": "sampler",
             "sampler2D": "Texture2D",
+            "isampler1D": "isampler1D",
+            "isampler1DArray": "isampler1DArray",
+            "isampler2D": "isampler2D",
+            "isampler2DArray": "isampler2DArray",
+            "isampler2DMS": "isampler2DMS",
+            "isampler2DMSArray": "isampler2DMSArray",
+            "isampler3D": "isampler3D",
+            "isamplerBuffer": "isamplerBuffer",
+            "isamplerCube": "isamplerCube",
+            "isamplerCubeArray": "isamplerCubeArray",
+            "usampler1D": "usampler1D",
+            "usampler1DArray": "usampler1DArray",
+            "usampler2D": "usampler2D",
+            "usampler2DArray": "usampler2DArray",
+            "usampler2DMS": "usampler2DMS",
+            "usampler2DMSArray": "usampler2DMSArray",
+            "usampler3D": "usampler3D",
+            "usamplerBuffer": "usamplerBuffer",
+            "usamplerCube": "usamplerCube",
+            "usamplerCubeArray": "usamplerCubeArray",
             "samplerCube": "TextureCube",
             "sampler3D": "Texture3D",
             "sampler2DArray": "Texture2DArray",
             "samplerCubeArray": "TextureCubeArray",
             "sampler1D": "Texture1D",
             "sampler1DArray": "Texture1DArray",
+            "sampler2DMS": "Texture2DMS",
+            "sampler2DMSArray": "Texture2DMSArray",
+            "samplerBuffer": "Buffer",
+            "image1D": "RWTexture1D",
+            "image1DArray": "RWTexture1DArray",
             "image2D": "RWTexture2D",
+            "image2DArray": "RWTexture2DArray",
+            "image2DMS": "RWTexture2DMS",
+            "image2DMSArray": "RWTexture2DMSArray",
             "image3D": "RWTexture3D",
+            "imageBuffer": "RWBuffer",
             "imageCube": "RWTextureCube",
+            "imageCubeArray": "RWTextureCubeArray",
+            "iimage1D": "RWTexture1D<int>",
+            "iimage1DArray": "RWTexture1DArray<int>",
+            "iimage2D": "RWTexture2D<int>",
+            "iimage2DArray": "RWTexture2DArray<int>",
+            "iimage2DMS": "RWTexture2DMS<int>",
+            "iimage2DMSArray": "RWTexture2DMSArray<int>",
+            "iimage3D": "RWTexture3D<int>",
+            "iimageBuffer": "RWBuffer<int>",
+            "iimageCube": "RWTextureCube<int>",
+            "iimageCubeArray": "RWTextureCubeArray<int>",
+            "uimage1D": "RWTexture1D<uint>",
+            "uimage1DArray": "RWTexture1DArray<uint>",
+            "uimage2D": "RWTexture2D<uint>",
+            "uimage2DArray": "RWTexture2DArray<uint>",
+            "uimage2DMS": "RWTexture2DMS<uint>",
+            "uimage2DMSArray": "RWTexture2DMSArray<uint>",
+            "uimage3D": "RWTexture3D<uint>",
+            "uimageBuffer": "RWBuffer<uint>",
+            "uimageCube": "RWTextureCube<uint>",
+            "uimageCubeArray": "RWTextureCubeArray<uint>",
             "atomic_uint": "RWStructuredBuffer<uint>",
         }
         self.semantic_map = {
@@ -210,7 +263,10 @@ class VulkanToCrossGLConverter:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    }\n\n"
             else:
-                code += f"    {self.map_type(node.data_type)} {node.variable_name};\n"
+                code += (
+                    f"    {self.map_type(node.data_type)} {node.variable_name}"
+                    f"{self.storage_image_layout_attribute_suffix(node)};\n"
+                )
         elif layout_type == "buffer":
             if node.struct_fields:
                 block_name = node.block_name or node.variable_name or "StorageBuffer"
@@ -229,9 +285,128 @@ class VulkanToCrossGLConverter:
                 code += f"    {buffer_type}<{block_name}> {variable_name};\n\n"
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
-                code += f"    {self.map_type(node.data_type)} {node.variable_name};\n"
+                code += (
+                    f"    {self.map_type(node.data_type)} {node.variable_name}"
+                    f"{self.interface_layout_attribute_suffix(node)};\n"
+                )
 
         return code
+
+    def storage_image_layout_attribute_suffix(self, node):
+        if not self.is_storage_image_type(getattr(node, "data_type", None)):
+            return ""
+
+        attributes = []
+        binding = None
+        image_format = None
+        for name, value in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(name).lower()
+            if qualifier_name == "binding" and value is not None:
+                binding = value
+            elif qualifier_name in self.supported_image_formats():
+                image_format = qualifier_name
+
+        declaration_attributes = []
+        for qualifier in getattr(node, "declaration_qualifiers", []) or []:
+            qualifier_name = str(qualifier).lower()
+            if qualifier_name in {
+                "coherent",
+                "volatile",
+                "restrict",
+                "readonly",
+                "writeonly",
+            }:
+                declaration_attributes.append(f"@{qualifier_name}")
+
+        if image_format is None and not declaration_attributes:
+            return ""
+
+        if binding is not None:
+            attributes.append(f"@binding({binding})")
+        if image_format is not None:
+            attributes.append(f"@{image_format}")
+        attributes.extend(declaration_attributes)
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def is_storage_image_type(self, type_name):
+        return isinstance(type_name, str) and type_name.startswith(
+            ("image", "iimage", "uimage")
+        )
+
+    def supported_image_formats(self):
+        return {
+            "r8",
+            "r8_snorm",
+            "r8i",
+            "r8ui",
+            "r16",
+            "r16_snorm",
+            "r16f",
+            "r16i",
+            "r16ui",
+            "r32f",
+            "r32i",
+            "r32ui",
+            "rg8",
+            "rg8_snorm",
+            "rg8i",
+            "rg8ui",
+            "rg16",
+            "rg16_snorm",
+            "rg16f",
+            "rg16i",
+            "rg16ui",
+            "rg32f",
+            "rg32i",
+            "rg32ui",
+            "rgba8",
+            "rgba8_snorm",
+            "rgba8i",
+            "rgba8ui",
+            "rgba16",
+            "rgba16_snorm",
+            "rgba16f",
+            "rgba16i",
+            "rgba16ui",
+            "rgba32f",
+            "rgba32i",
+            "rgba32ui",
+        }
+
+    def interface_layout_attribute_suffix(self, node):
+        layout_type = node.layout_type.lower() if node.layout_type else ""
+        if layout_type not in {"in", "out"}:
+            return ""
+
+        attributes = ["@input" if layout_type == "in" else "@output"]
+        for name, value in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(name).lower()
+            if (
+                qualifier_name in {"location", "component", "index"}
+                and value is not None
+            ):
+                attributes.append(f"@{qualifier_name}({value})")
+
+        supported_qualifiers = {
+            "centroid",
+            "flat",
+            "highp",
+            "invariant",
+            "lowp",
+            "mediump",
+            "noperspective",
+            "patch",
+            "pervertexext",
+            "precise",
+            "sample",
+            "smooth",
+        }
+        for qualifier in getattr(node, "declaration_qualifiers", []) or []:
+            qualifier_text = str(qualifier)
+            if qualifier_text.lower() in supported_qualifiers:
+                attributes.append(f"@{qualifier_text}")
+
+        return f" {' '.join(attributes)}"
 
     def record_flattened_uniform_block_instance(self, node):
         if not node.variable_name:
@@ -264,13 +439,27 @@ class VulkanToCrossGLConverter:
         code = "  " * indent
         return_type = self.map_type(node.return_type)
         params = ", ".join(
-            f"{self.map_type(self.variable_type(p))} {p.name}"
-            for p in self.function_params(node)
+            self.generate_function_parameter(param)
+            for param in self.function_params(node)
         )
         code += f"    {return_type} {node.name}({params}) {{\n"
         code += self.generate_function_body(node.body, indent=indent + 1)
         code += "    }\n\n"
         return code
+
+    def generate_function_parameter(self, node):
+        return (
+            f"{self.parameter_qualifier_prefix(node)}"
+            f"{self.map_type(self.variable_type(node))} {node.name}"
+        )
+
+    def parameter_qualifier_prefix(self, node):
+        qualifiers = []
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(qualifier).lower()
+            if qualifier_name in {"in", "out", "inout"}:
+                qualifiers.append(qualifier_name)
+        return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def generate_function_body(self, body, indent=1):
         code = ""

@@ -4048,10 +4048,10 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
     assert "msImageBlock.sampleIndex" not in hlsl
 
     assert (
-        "float4 touchImages(texture2d_ms<float, access::read_write> "
-        "colorImage, texture2d_ms_array<float, access::read_write> "
-        "layerImage, texture2d_ms<uint, access::read_write> countImage, "
-        "texture2d_ms_array<int, access::read_write> signedImage, int2 "
+        "float4 touchImages(texture2d_ms<float, access::read> "
+        "colorImage, texture2d_ms_array<float, access::read> "
+        "layerImage, texture2d_ms<uint, access::read> countImage, "
+        "texture2d_ms_array<int, access::read> signedImage, int2 "
         "pixel, int3 pixelLayer, int sampleIndex, float4 colorValue, uint "
         "countValue, int signedValue)" in metal
     )
@@ -4068,20 +4068,36 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "uint(pixelLayer.z), uint(sampleIndex)).x;" in metal
     )
     assert (
+        "unsupported Metal multisample image store: imageStore on "
+        "texture2d_ms<float, access::read>" in metal
+    )
+    assert (
+        "unsupported Metal multisample image store: imageStore on "
+        "texture2d_ms_array<float, access::read>" in metal
+    )
+    assert (
+        "unsupported Metal multisample image store: imageStore on "
+        "texture2d_ms<uint, access::read>" in metal
+    )
+    assert (
+        "unsupported Metal multisample image store: imageStore on "
+        "texture2d_ms_array<int, access::read>" in metal
+    )
+    assert (
         "colorImage.write(colorValue + color, uint2(pixel), uint(sampleIndex));"
-        in metal
+        not in metal
     )
     assert (
         "layerImage.write(layer + colorValue, uint2(pixelLayer.xy), "
-        "uint(pixelLayer.z), uint(sampleIndex));" in metal
+        "uint(pixelLayer.z), uint(sampleIndex));" not in metal
     )
     assert (
         "countImage.write(uint4(oldCount + countValue), uint2(pixel), uint(sampleIndex));"
-        in metal
+        not in metal
     )
     assert (
         "signedImage.write(int4(oldSigned + signedValue), "
-        "uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));" in metal
+        "uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));" not in metal
     )
     assert (
         "int sampleCount = int(colorImage.get_num_samples()) + "
@@ -4090,11 +4106,10 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
     )
     assert (
         "fragment float4 fragment_main(VSOutput input [[stage_in]], "
-        "texture2d_ms<float, access::read_write> msColor [[texture(0)]], "
-        "texture2d_ms_array<float, access::read_write> msLayers [[texture(1)]], "
-        "texture2d_ms<uint, access::read_write> counters [[texture(2)]], "
-        "texture2d_ms_array<int, access::read_write> signedLayers [[texture(3)]])"
-        in metal
+        "texture2d_ms<float, access::read> msColor [[texture(0)]], "
+        "texture2d_ms_array<float, access::read> msLayers [[texture(1)]], "
+        "texture2d_ms<uint, access::read> counters [[texture(2)]], "
+        "texture2d_ms_array<int, access::read> signedLayers [[texture(3)]])" in metal
     )
     assert (
         "float4 direct = touchImages(msColor, msLayers, counters, signedLayers, "
@@ -4117,7 +4132,7 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "function call readCount: target function omitted */), uint2(int2(0) "
         "/* unsupported Metal GLSL buffer block function call readPixel: target "
         "function omitted */), uint(0 /* unsupported Metal GLSL buffer block "
-        "function call readSample: target function omitted */));" in metal
+        "function call readSample: target function omitted */));" not in metal
     )
     assert "imageLoad(" not in metal
     assert "imageStore(" not in metal
@@ -4220,8 +4235,8 @@ def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats():
     assert "int samples = (textureSamples(rgbaI) + textureSamples(rgbaU));" in hlsl
     assert "unsupported DirectX texture samples query" not in hlsl
 
-    assert "texture2d_ms<int, access::read_write> rgbaI [[texture(0)]]" in metal
-    assert "texture2d_ms_array<uint, access::read_write> rgbaU [[texture(1)]]" in metal
+    assert "texture2d_ms<int, access::read> rgbaI [[texture(0)]]" in metal
+    assert "texture2d_ms_array<uint, access::read> rgbaU [[texture(1)]]" in metal
     assert "int2 intSize = int2(rgbaI.get_width(), rgbaI.get_height());" in metal
     assert (
         "int3 uintArraySize = int3(rgbaU.get_width(), rgbaU.get_height(), "
@@ -4238,6 +4253,6934 @@ def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats():
     assert "ivec3 uintArraySize = imageSize(rgbaU);" in glsl
     assert "int samples = (textureSamples(rgbaI) + textureSamples(rgbaU));" in glsl
     assert "imageSamples(" not in glsl
+
+
+def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats():
+    crossgl = """
+    shader MultisampleImageResourceArrayQueries {
+        image2DMS colorImages[4] @rgba16f;
+        uimage2DMSArray counterLayers[4] @rgba32ui;
+
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        ivec2 queryColorSize(image2DMS images[] @rgba16f, int layer) {
+            return imageSize(images[layer]);
+        }
+
+        int queryCounterSamples(uimage2DMSArray images[] @rgba32ui, int layer) {
+            return imageSamples(images[layer]);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 colorSize = queryColorSize(colorImages, input.layer);
+                int samples = queryCounterSamples(counterLayers, input.layer);
+                uvec4 count = imageLoad(counterLayers[input.layer], ivec3(0, 1, 2), 3);
+                imageStore(counterLayers[input.layer], ivec3(0, 1, 2), 3, count + uvec4(1u));
+                return vec4(float(colorSize.x + samples + int(count.x)));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2DMS<float4> colorImages[4] : register(t0);" in hlsl
+    assert "Texture2DMSArray<uint4> counterLayers[4] : register(t4);" in hlsl
+    assert "int2 imageSize(Texture2DMS<float4> image)" in hlsl
+    assert "int textureSamples(Texture2DMSArray<uint4> tex)" in hlsl
+    assert "int2 queryColorSize(Texture2DMS<float4> images[4], int layer)" in hlsl
+    assert (
+        "int queryCounterSamples(Texture2DMSArray<uint4> images[4], int layer)" in hlsl
+    )
+    assert "return imageSize(images[layer]);" in hlsl
+    assert "return textureSamples(images[layer]);" in hlsl
+    assert "uint4 count = counterLayers[input.layer].Load(int3(0, 1, 2), 3);" in hlsl
+    assert (
+        "unsupported DirectX multisample image store: imageStore on "
+        "RWTexture2DMSArray<uint4>" in hlsl
+    )
+    assert "imageSamples(" not in hlsl
+    assert "imageStore(" not in hlsl
+
+    assert (
+        "array<texture2d_ms<float, access::read>, 4> colorImages [[texture(0)]]"
+        in metal
+    )
+    assert (
+        "array<texture2d_ms_array<uint, access::read>, 4> counterLayers [[texture(4)]]"
+        in metal
+    )
+    assert (
+        "int2 queryColorSize(array<texture2d_ms<float, access::read>, 4> images, int layer)"
+        in metal
+    )
+    assert (
+        "int queryCounterSamples(array<texture2d_ms_array<uint, access::read>, 4> images, int layer)"
+        in metal
+    )
+    assert (
+        "return int2(images[layer].get_width(), images[layer].get_height());" in metal
+    )
+    assert "return int(images[layer].get_num_samples());" in metal
+    assert (
+        "uint4 count = counterLayers[input.layer].read(uint2((int3(0, 1, 2)).xy), uint((int3(0, 1, 2)).z), uint(3));"
+        in metal
+    )
+    assert (
+        "unsupported Metal multisample image store: imageStore on "
+        "texture2d_ms_array<uint, access::read>" in metal
+    )
+    assert "texture2d_ms_array<uint, access::read_write>" not in metal
+    assert ".write(" not in metal
+    assert "imageSamples(" not in metal
+    assert "imageStore(" not in metal
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS colorImages[4];" in glsl
+    assert (
+        "layout(rgba32ui, binding = 4) uniform uimage2DMSArray counterLayers[4];"
+        in glsl
+    )
+    assert "ivec2 queryColorSize(image2DMS images[4], int layer)" in glsl
+    assert "int queryCounterSamples(uimage2DMSArray images[4], int layer)" in glsl
+    assert "return imageSize(images[layer]);" in glsl
+    assert "return textureSamples(images[layer]);" in glsl
+    assert "uvec4 count = imageLoad(counterLayers[layer], ivec3(0, 1, 2), 3);" in glsl
+    assert (
+        "imageStore(counterLayers[layer], ivec3(0, 1, 2), 3, (count + uvec4(1u)));"
+        in glsl
+    )
+    assert "imageSamples(" not in glsl
+
+
+def test_codegen_for_in_do_while_sampled_query_arrays_infer_size():
+    crossgl = """
+    shader ForInDoWhileTransitiveSampledQueryArrays {
+        sampler2D textures[];
+        sampler afterSampler;
+        sampler2D afterTexture;
+
+        ivec2 leaf(sampler2D textures[], int limit) {
+            ivec2 result = ivec2(0);
+            for i in 0..1 {
+                do {
+                    result = result + textureSize(textures[4], 1);
+                } while (false);
+            }
+            do {
+                for j in limit {
+                    result = result + ivec2(textureQueryLevels(textures[2]));
+                }
+            } while (false);
+            return result;
+        }
+
+        ivec2 mid(sampler2D textures[], int mode, int limit) {
+            ivec2 result = ivec2(0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(textures, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode, int limit) @ gl_FragColor {
+                ivec2 dims = mid(textures, mode, limit);
+                return texture(afterTexture, afterSampler, uv) + vec4(float(dims.x + dims.y));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert "SamplerState afterSampler : register(s0);" in hlsl
+    assert "int textureQueryLevels(Texture2D tex)" in hlsl
+    assert "int2 textureSize(Texture2D tex, int lod)" in hlsl
+    assert "int2 leaf(Texture2D textures[5], int limit)" in hlsl
+    assert "int2 mid(Texture2D textures[5], int mode, int limit)" in hlsl
+    assert "for (int i = 0; i < 1; ++i)" in hlsl
+    assert "for (int j = 0; j < limit; ++j)" in hlsl
+    assert hlsl.count("do {") == 2
+    assert hlsl.count("} while (false);") == 2
+    assert "textureSize(textures[4], 1)" in hlsl
+    assert "int2(textureQueryLevels(textures[2]))" in hlsl
+    assert "result = leaf(textures, limit);" in hlsl
+    assert "result = (result + leaf(textures, limit));" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "ForInNode(" not in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[6]" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert "sampler afterSampler [[sampler(0)]]" in metal
+    assert "int2 leaf(array<texture2d<float>, 5> textures, int limit)" in metal
+    assert "int2 mid(array<texture2d<float>, 5> textures, int mode, int limit)" in metal
+    assert "for (int i = 0; i < 1; ++i)" in metal
+    assert "for (int j = 0; j < limit; ++j)" in metal
+    assert metal.count("do {") == 2
+    assert metal.count("} while (false);") == 2
+    assert (
+        "int2(textures[4].get_width(uint(1)), textures[4].get_height(uint(1)))" in metal
+    )
+    assert "int2(int(textures[2].get_num_mip_levels()))" in metal
+    assert "result = leaf(textures, limit);" in metal
+    assert "result = result + leaf(textures, limit);" in metal
+    assert "DoWhileNode(" not in metal
+    assert "ForInNode(" not in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+    assert "array<texture2d<float>, 6> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "ivec2 leaf(sampler2D textures[5], int limit)" in glsl
+    assert "ivec2 mid(sampler2D textures[5], int mode, int limit)" in glsl
+    assert "for (int i = 0; i < 1; ++i)" in glsl
+    assert "for (int j = 0; j < limit; ++j)" in glsl
+    assert glsl.count("do {") == 2
+    assert glsl.count("} while (false);") == 2
+    assert "textureSize(textures[4], 1)" in glsl
+    assert "ivec2(textureQueryLevels(textures[2]))" in glsl
+    assert "result = leaf(textures, limit);" in glsl
+    assert "result = (result + leaf(textures, limit));" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "ForInNode(" not in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[6]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];",
+        "sampler2D textures[4];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_for_in_do_while_image_query_arrays_infer_size():
+    crossgl = """
+    shader ForInDoWhileTransitiveImageQueryArrays {
+        image2DMS colorImages @rgba16f[];
+        image2DMS afterImage @rgba16f;
+
+        ivec2 leaf(image2DMS images[] @rgba16f, int limit) {
+            ivec2 result = ivec2(0);
+            for i in 0..1 {
+                do {
+                    result = result + imageSize(images[3]);
+                } while (false);
+            }
+            do {
+                for j in limit {
+                    result = result + ivec2(imageSamples(images[1]));
+                }
+            } while (false);
+            return result;
+        }
+
+        ivec2 mid(image2DMS images[] @rgba16f, int mode, int limit) {
+            ivec2 result = ivec2(0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(images, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(int mode, int limit) @ gl_FragColor {
+                ivec2 dims = mid(colorImages, mode, limit) + imageSize(afterImage);
+                return vec4(float(dims.x + dims.y));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2DMS<float4> colorImages[4] : register(t0);" in hlsl
+    assert "Texture2DMS<float4> afterImage : register(t4);" in hlsl
+    assert "int2 imageSize(Texture2DMS<float4> image)" in hlsl
+    assert "int textureSamples(Texture2DMS<float4> tex)" in hlsl
+    assert "int2 leaf(Texture2DMS<float4> images[4], int limit)" in hlsl
+    assert "int2 mid(Texture2DMS<float4> images[4], int mode, int limit)" in hlsl
+    assert "for (int i = 0; i < 1; ++i)" in hlsl
+    assert "for (int j = 0; j < limit; ++j)" in hlsl
+    assert hlsl.count("do {") == 2
+    assert hlsl.count("} while (false);") == 2
+    assert "imageSize(images[3])" in hlsl
+    assert "int2(textureSamples(images[1]))" in hlsl
+    assert "imageSize(afterImage)" in hlsl
+    assert "result = leaf(images, limit);" in hlsl
+    assert "result = (result + leaf(images, limit));" in hlsl
+    assert "imageSamples(" not in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "ForInNode(" not in hlsl
+    assert "Texture2DMS<float4> colorImages[]" not in hlsl
+    assert "Texture2DMS<float4> colorImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d_ms<float, access::read>, 4> colorImages [[texture(0)]]"
+        in metal
+    )
+    assert "texture2d_ms<float, access::read> afterImage [[texture(4)]]" in metal
+    assert (
+        "int2 leaf(array<texture2d_ms<float, access::read>, 4> images, int limit)"
+        in metal
+    )
+    assert (
+        "int2 mid(array<texture2d_ms<float, access::read>, 4> images, int mode, int limit)"
+        in metal
+    )
+    assert "for (int i = 0; i < 1; ++i)" in metal
+    assert "for (int j = 0; j < limit; ++j)" in metal
+    assert metal.count("do {") == 2
+    assert metal.count("} while (false);") == 2
+    assert "int2(images[3].get_width(), images[3].get_height())" in metal
+    assert "int2(int(images[1].get_num_samples()))" in metal
+    assert "int2(afterImage.get_width(), afterImage.get_height())" in metal
+    assert "result = leaf(images, limit);" in metal
+    assert "result = result + leaf(images, limit);" in metal
+    assert "imageSamples(" not in metal
+    assert "DoWhileNode(" not in metal
+    assert "ForInNode(" not in metal
+    assert "array<texture2d_ms<float, access::read>, 1> colorImages" not in metal
+    assert "array<texture2d_ms<float, access::read>, 5> colorImages" not in metal
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS colorImages[4];" in glsl
+    assert "layout(rgba16f, binding = 4) uniform image2DMS afterImage;" in glsl
+    assert "ivec2 leaf(image2DMS images[4], int limit)" in glsl
+    assert "ivec2 mid(image2DMS images[4], int mode, int limit)" in glsl
+    assert "for (int i = 0; i < 1; ++i)" in glsl
+    assert "for (int j = 0; j < limit; ++j)" in glsl
+    assert glsl.count("do {") == 2
+    assert glsl.count("} while (false);") == 2
+    assert "imageSize(images[3])" in glsl
+    assert "ivec2(textureSamples(images[1]))" in glsl
+    assert "imageSize(afterImage)" in glsl
+    assert "imageSamples(" not in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "ForInNode(" not in glsl
+    assert "image2DMS colorImages[]" not in glsl
+    assert "image2DMS colorImages[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2DMS colorImages @rgba16f[];",
+        "image2DMS colorImages[3] @rgba16f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'colorImages': 3 and 4"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_cast_and_literal_swizzle_sampled_indices_infer_size():
+    crossgl = """
+    shader CastSwizzleSampledIndices {
+        const int BASE = 1;
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv) {
+            return texture(textures[int(BASE + 2)], samplers[int(BASE + 2)], uv)
+                + texture(textures[ivec2(1, 3).y], samplers[ivec2(1, 3).y], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[4] : register(t0);" in hlsl
+    assert "SamplerState samplers[4] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t4);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s4);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[4], SamplerState samplers[4], "
+        "float2 uv)" in hlsl
+    )
+    assert "textures[int((BASE + 2))].Sample(samplers[int((BASE + 2))], uv)" in hlsl
+    assert "textures[int2(1, 3).y].Sample(samplers[int2(1, 3).y], uv)" in hlsl
+    assert "sampleLayer(textures, samplers, uv)" in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[5]" not in hlsl
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(4)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> samplers, float2 uv)" in metal
+    )
+    assert "textures[int(BASE + 2)].sample(samplers[int(BASE + 2)], uv)" in metal
+    assert "textures[int2(1, 3).y].sample(samplers[int2(1, 3).y], uv)" in metal
+    assert "sampleLayer(textures, samplers, uv)" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
+    assert "layout(binding = 4) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[4], vec2 uv)" in glsl
+    assert "texture(textures[int((BASE + 2))], uv)" in glsl
+    assert "texture(textures[ivec2(1, 3).y], uv)" in glsl
+    assert "sampleLayer(textures, uv)" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[3];\n        sampler samplers[3];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 3 and 4"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_cast_and_literal_swizzle_image_indices_infer_size():
+    crossgl = """
+    shader CastSwizzleImageIndices {
+        const int BASE = 1;
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
+            return imageLoad(images[int(BASE + 2)], pixel)
+                + imageLoad(images[ivec2(1, 3).y], pixel);
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1));
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "float2 readLayer(RWTexture2D<float2> images[4], int2 pixel)" in hlsl
+    assert "images[int((BASE + 2))][pixel]" in hlsl
+    assert "images[int2(1, 3).y][pixel]" in hlsl
+    assert "readLayer(rgFloatImages, int2(0, 1))" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 4> "
+        "images, int2 pixel)" in metal
+    )
+    assert "images[int(BASE + 2)].read(uint2(pixel)).xy" in metal
+    assert "images[int2(1, 3).y].read(uint2(pixel)).xy" in metal
+    assert "readLayer(rgFloatImages, int2(0, 1))" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 readLayer(image2D images[4], ivec2 pixel)" in glsl
+    assert "imageLoad(images[int((BASE + 2))], pixel).xy" in glsl
+    assert "imageLoad(images[ivec2(1, 3).y], pixel).xy" in glsl
+    assert "readLayer(rgFloatImages, ivec2(0, 1))" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[3] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 3 and 4"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_alias_swizzle_sampled_index_infers_size():
+    crossgl = """
+    shader VectorAliasSampledIndex {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv) {
+            ivec2 layers = ivec2(2, 6);
+            return texture(textures[layers.y], samplers[layers.y], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv)" in hlsl
+    )
+    assert "int2 layers = int2(2, 6);" in hlsl
+    assert "return textures[layers.y].Sample(samplers[layers.y], uv);" in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv)" in metal
+    )
+    assert "int2 layers = int2(2, 6);" in metal
+    assert "return textures[layers.y].sample(samplers[layers.y], uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[7], vec2 uv)" in glsl
+    assert "ivec2 layers = ivec2(2, 6);" in glsl
+    assert "return texture(textures[layers.y], uv);" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_parameter_swizzle_image_index_infers_size():
+    crossgl = """
+    shader VectorParamImageIndex {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel, ivec2 layers) {
+            return imageLoad(images[layers.y], pixel);
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
+            ivec2 layers = ivec2(1, 5);
+            return leaf(images, pixel, layers);
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1));
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[6], int2 pixel, int2 layers)" in hlsl
+    assert "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel)" in hlsl
+    assert "int2 layers = int2(1, 5);" in hlsl
+    assert "return images[layers.y][pixel];" in hlsl
+    assert "return leaf(images, pixel, layers);" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, int2 layers)" in metal
+    )
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel)" in metal
+    )
+    assert "int2 layers = int2(1, 5);" in metal
+    assert "return images[layers.y].read(uint2(pixel)).xy;" in metal
+    assert "return leaf(images, pixel, layers);" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert "vec2 leaf(image2D images[6], ivec2 pixel, ivec2 layers)" in glsl
+    assert "vec2 readLayer(image2D images[6], ivec2 pixel)" in glsl
+    assert "ivec2 layers = ivec2(1, 5);" in glsl
+    assert "return imageLoad(images[layers.y], pixel).xy;" in glsl
+    assert "return leaf(images, pixel, layers);" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_component_if_assignment_infers_sampled_size():
+    crossgl = """
+    shader VectorComponentIfAssignSampledIndex {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv, bool choose) {
+            ivec2 layers = ivec2(0, 1);
+            if (choose) {
+                layers.y = 6;
+            } else {
+                layers.y = 4;
+            }
+            return texture(textures[layers.y], samplers[layers.y], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, bool choose) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, choose) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, bool choose)" in hlsl
+    )
+    assert "int2 layers = int2(0, 1);" in hlsl
+    assert "layers.y = 6;" in hlsl
+    assert "layers.y = 4;" in hlsl
+    assert "return textures[layers.y].Sample(samplers[layers.y], uv);" in hlsl
+    assert "Texture2D textures[2]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, bool choose)" in metal
+    )
+    assert "int2 layers = int2(0, 1);" in metal
+    assert "layers.y = 6;" in metal
+    assert "layers.y = 4;" in metal
+    assert "return textures[layers.y].sample(samplers[layers.y], uv);" in metal
+    assert "array<texture2d<float>, 2> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[7], vec2 uv, bool choose)" in glsl
+    assert "ivec2 layers = ivec2(0, 1);" in glsl
+    assert "layers.y = 6;" in glsl
+    assert "layers.y = 4;" in glsl
+    assert "return texture(textures[layers.y], uv);" in glsl
+    assert "sampler2D textures[2]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_component_compound_assignment_infers_sampled_size():
+    crossgl = """
+    shader VectorComponentCompoundSampled {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv) {
+            ivec2 layers = ivec2(0, 1);
+            layers.y += 5;
+            return texture(textures[layers.y + 1], samplers[layers.y + 1], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[8] : register(t0);" in hlsl
+    assert "SamplerState samplers[8] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t8);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[8], SamplerState samplers[8], "
+        "float2 uv)" in hlsl
+    )
+    assert "int2 layers = int2(0, 1);" in hlsl
+    assert "layers.y += 5;" in hlsl
+    assert (
+        "return textures[(layers.y + 1)].Sample(samplers[(layers.y + 1)], uv);" in hlsl
+    )
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 8> textures [[texture(0)]]" in metal
+    assert "array<sampler, 8> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(8)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 8> textures, "
+        "array<sampler, 8> samplers, float2 uv)" in metal
+    )
+    assert "int2 layers = int2(0, 1);" in metal
+    assert "layers.y += 5;" in metal
+    assert "return textures[layers.y + 1].sample(samplers[layers.y + 1], uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[8];" in glsl
+    assert "layout(binding = 8) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[8], vec2 uv)" in glsl
+    assert "ivec2 layers = ivec2(0, 1);" in glsl
+    assert "layers.y += 5;" in glsl
+    assert "return texture(textures[(layers.y + 1)], uv);" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[7];\n        sampler samplers[7];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 7 and 8"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_component_self_compound_helper_infers_image_size():
+    crossgl = """
+    shader VectorComponentCompoundHelperImage {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        int pickLayer(ivec2 layers, int offset) {
+            return layers.y + offset;
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
+            ivec2 layers = ivec2(0, 2);
+            layers.y += layers.y;
+            int layer = pickLayer(layers, 3);
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1));
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[8] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u8);" in hlsl
+    assert "float2 readLayer(RWTexture2D<float2> images[8], int2 pixel)" in hlsl
+    assert "int2 layers = int2(0, 2);" in hlsl
+    assert "layers.y += layers.y;" in hlsl
+    assert "int layer = pickLayer(layers, 3);" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 8> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(8)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 8> "
+        "images, int2 pixel)" in metal
+    )
+    assert "int2 layers = int2(0, 2);" in metal
+    assert "layers.y += layers.y;" in metal
+    assert "int layer = pickLayer(layers, 3);" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[8];" in glsl
+    assert "layout(rg32f, binding = 8) uniform image2D afterImage;" in glsl
+    assert "vec2 readLayer(image2D images[8], ivec2 pixel)" in glsl
+    assert "ivec2 layers = ivec2(0, 2);" in glsl
+    assert "layers.y += layers.y;" in glsl
+    assert "int layer = pickLayer(layers, 3);" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[7] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 7 and 8"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_bounded_for_component_compound_infers_sampled_size():
+    crossgl = """
+    shader ForLiteralComponentPlusAfterLoop {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv) {
+            ivec2 layers = ivec2(0, 1);
+            for (int i = 0; i < 3; i = i + 1) {
+                layers.y += 2;
+            }
+            return texture(textures[layers.y], samplers[layers.y], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[8] : register(t0);" in hlsl
+    assert "SamplerState samplers[8] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t8);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[8], SamplerState samplers[8], "
+        "float2 uv)" in hlsl
+    )
+    assert "for (int i = 0; (i < 3); i = (i + 1))" in hlsl
+    assert "layers.y += 2;" in hlsl
+    assert "return textures[layers.y].Sample(samplers[layers.y], uv);" in hlsl
+    assert "Texture2D textures[4]" not in hlsl
+
+    assert "array<texture2d<float>, 8> textures [[texture(0)]]" in metal
+    assert "array<sampler, 8> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(8)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 8> textures, "
+        "array<sampler, 8> samplers, float2 uv)" in metal
+    )
+    assert "for (int i = 0; i < 3; i = i + 1)" in metal
+    assert "layers.y += 2;" in metal
+    assert "return textures[layers.y].sample(samplers[layers.y], uv);" in metal
+    assert "array<texture2d<float>, 4> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[8];" in glsl
+    assert "layout(binding = 8) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[8], vec2 uv)" in glsl
+    assert "for (int i = 0; (i < 3); i = (i + 1))" in glsl
+    assert "layers.y += 2;" in glsl
+    assert "return texture(textures[layers.y], uv);" in glsl
+    assert "sampler2D textures[4]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[7];\n        sampler samplers[7];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 7 and 8"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_bounded_for_in_scalar_compound_infers_image_size():
+    crossgl = """
+    shader ForInLiteralScalarPlusAfterLoop {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
+            int layer = 1;
+            for i in 0..3 {
+                layer += 2;
+            }
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1));
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[8] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u8);" in hlsl
+    assert "float2 readLayer(RWTexture2D<float2> images[8], int2 pixel)" in hlsl
+    assert "for (int i = 0; i < 3; ++i)" in hlsl
+    assert "layer += 2;" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[4]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 8> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(8)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 8> "
+        "images, int2 pixel)" in metal
+    )
+    assert "for (int i = 0; i < 3; ++i)" in metal
+    assert "layer += 2;" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 4> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[8];" in glsl
+    assert "layout(rg32f, binding = 8) uniform image2D afterImage;" in glsl
+    assert "vec2 readLayer(image2D images[8], ivec2 pixel)" in glsl
+    assert "for (int i = 0; i < 3; ++i)" in glsl
+    assert "layer += 2;" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[4]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[7] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 7 and 8"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_nested_loop_induction_indices_infer_sampled_size():
+    crossgl = """
+    shader NestedForSampledDirectIndex {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv) {
+            ivec2 layers = ivec2(0, 2);
+            vec4 result = vec4(0.0);
+            for (int i = 0; i < 2; i = i + 1) {
+                for j in 0..3 {
+                    result = result + texture(
+                        textures[i + j + layers.y],
+                        samplers[i + j + layers.y],
+                        uv
+                    );
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[6] : register(t0);" in hlsl
+    assert "SamplerState samplers[6] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t6);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[6], SamplerState samplers[6], "
+        "float2 uv)" in hlsl
+    )
+    assert "for (int i = 0; (i < 2); i = (i + 1))" in hlsl
+    assert "for (int j = 0; j < 3; ++j)" in hlsl
+    assert (
+        "textures[((i + j) + layers.y)].Sample("
+        "samplers[((i + j) + layers.y)], uv)" in hlsl
+    )
+    assert "Texture2D textures[5]" not in hlsl
+
+    assert "array<texture2d<float>, 6> textures [[texture(0)]]" in metal
+    assert "array<sampler, 6> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(6)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 6> textures, "
+        "array<sampler, 6> samplers, float2 uv)" in metal
+    )
+    assert "for (int i = 0; i < 2; i = i + 1)" in metal
+    assert "for (int j = 0; j < 3; ++j)" in metal
+    assert "textures[i + j + layers.y].sample(samplers[i + j + layers.y], uv)" in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[6];" in glsl
+    assert "layout(binding = 6) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[6], vec2 uv)" in glsl
+    assert "for (int i = 0; (i < 2); i = (i + 1))" in glsl
+    assert "for (int j = 0; j < 3; ++j)" in glsl
+    assert "texture(textures[((i + j) + layers.y)], uv)" in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[5];\n        sampler samplers[5];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 5 and 6"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_nested_loop_helper_indices_infer_image_size():
+    crossgl = """
+    shader NestedForImageHelperIndex {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        int pickLayer(ivec2 layers, int outerIndex, int innerIndex) {
+            return layers.y + outerIndex + innerIndex;
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
+            ivec2 layers = ivec2(0, 2);
+            vec2 result = vec2(0.0);
+            for (int i = 0; i < 2; i = i + 1) {
+                for j in 0..3 {
+                    result = result + imageLoad(
+                        images[pickLayer(layers, i, j)],
+                        pixel
+                    );
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1));
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel)" in hlsl
+    assert "int pickLayer(int2 layers, int outerIndex, int innerIndex)" in hlsl
+    assert "for (int i = 0; (i < 2); i = (i + 1))" in hlsl
+    assert "for (int j = 0; j < 3; ++j)" in hlsl
+    assert "images[pickLayer(layers, i, j)][pixel]" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel)" in metal
+    )
+    assert "int pickLayer(int2 layers, int outerIndex, int innerIndex)" in metal
+    assert "for (int i = 0; i < 2; i = i + 1)" in metal
+    assert "for (int j = 0; j < 3; ++j)" in metal
+    assert "images[pickLayer(layers, i, j)].read(uint2(pixel)).xy" in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert "vec2 readLayer(image2D images[6], ivec2 pixel)" in glsl
+    assert "int pickLayer(ivec2 layers, int outerIndex, int innerIndex)" in glsl
+    assert "for (int i = 0; (i < 2); i = (i + 1))" in glsl
+    assert "for (int j = 0; j < 3; ++j)" in glsl
+    assert "imageLoad(images[pickLayer(layers, i, j)], pixel).xy" in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_return_helper_assignment_infers_sampled_size():
+    crossgl = """
+    shader VectorFromHelperAssignSampled {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        ivec2 bump(ivec2 layers, int i) {
+            return ivec2(layers.x + i, layers.y + 2);
+        }
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv) {
+            ivec2 layers = ivec2(0, 1);
+            for (int i = 0; i < 3; i = i + 1) {
+                layers = bump(layers, i);
+            }
+            return texture(textures[layers.x + layers.y], samplers[layers.x + layers.y], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[11] : register(t0);" in hlsl
+    assert "SamplerState samplers[11] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t11);" in hlsl
+    assert "int2 bump(int2 layers, int i)" in hlsl
+    assert "return int2((layers.x + i), (layers.y + 2));" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[11], SamplerState samplers[11], "
+        "float2 uv)" in hlsl
+    )
+    assert "layers = bump(layers, i);" in hlsl
+    assert (
+        "return textures[(layers.x + layers.y)].Sample("
+        "samplers[(layers.x + layers.y)], uv);" in hlsl
+    )
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 11> textures [[texture(0)]]" in metal
+    assert "array<sampler, 11> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(11)]]" in metal
+    assert "int2 bump(int2 layers, int i)" in metal
+    assert "return int2(layers.x + i, layers.y + 2);" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 11> textures, "
+        "array<sampler, 11> samplers, float2 uv)" in metal
+    )
+    assert "layers = bump(layers, i);" in metal
+    assert (
+        "return textures[layers.x + layers.y].sample("
+        "samplers[layers.x + layers.y], uv);" in metal
+    )
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[11];" in glsl
+    assert "layout(binding = 11) uniform sampler2D afterTexture;" in glsl
+    assert "ivec2 bump(ivec2 layers, int i)" in glsl
+    assert "return ivec2((layers.x + i), (layers.y + 2));" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[11], vec2 uv)" in glsl
+    assert "layers = bump(layers, i);" in glsl
+    assert "return texture(textures[(layers.x + layers.y)], uv);" in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[10];\n        sampler samplers[10];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 10 and 11"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_return_helper_assignment_infers_image_size():
+    crossgl = """
+    shader VectorFromNestedHelperImage {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        ivec2 bump(ivec2 layers, int i) {
+            return ivec2(layers.x + i, layers.y + 2);
+        }
+
+        int pickLayer(ivec2 layers, int extra) {
+            return layers.x + layers.y + extra;
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
+            ivec2 layers = ivec2(0, 1);
+            for (int i = 0; i < 3; i = i + 1) {
+                layers = bump(layers, i);
+            }
+            return imageLoad(images[pickLayer(layers, 1)], pixel);
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1));
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[12] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u12);" in hlsl
+    assert "int2 bump(int2 layers, int i)" in hlsl
+    assert "int pickLayer(int2 layers, int extra)" in hlsl
+    assert "float2 readLayer(RWTexture2D<float2> images[12], int2 pixel)" in hlsl
+    assert "layers = bump(layers, i);" in hlsl
+    assert "return images[pickLayer(layers, 1)][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 12> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(12)]]" in metal
+    assert "int2 bump(int2 layers, int i)" in metal
+    assert "int pickLayer(int2 layers, int extra)" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 12> "
+        "images, int2 pixel)" in metal
+    )
+    assert "layers = bump(layers, i);" in metal
+    assert "return images[pickLayer(layers, 1)].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[12];" in glsl
+    assert "layout(rg32f, binding = 12) uniform image2D afterImage;" in glsl
+    assert "ivec2 bump(ivec2 layers, int i)" in glsl
+    assert "int pickLayer(ivec2 layers, int extra)" in glsl
+    assert "vec2 readLayer(image2D images[12], ivec2 pixel)" in glsl
+    assert "layers = bump(layers, i);" in glsl
+    assert "return imageLoad(images[pickLayer(layers, 1)], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[11] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 11 and 12"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_vector_component_match_assignment_infers_image_size():
+    crossgl = """
+    shader VectorComponentMatchImageIndex {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            ivec2 layers = ivec2(0, 1);
+            match mode {
+                0 => { layers.y = 5; }
+                _ => { layers.y = 3; }
+            }
+            return imageLoad(images[layers.y], pixel);
+        }
+
+        compute {
+            void main(int mode) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel, int mode)" in hlsl
+    )
+    assert "int2 layers = int2(0, 1);" in hlsl
+    assert "layers.y = 5;" in hlsl
+    assert "layers.y = 3;" in hlsl
+    assert "return images[layers.y][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[2]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, int mode)" in metal
+    )
+    assert "int2 layers = int2(0, 1);" in metal
+    assert "layers.y = 5;" in metal
+    assert "layers.y = 3;" in metal
+    assert "return images[layers.y].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 2> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert "vec2 readLayer(image2D images[6], ivec2 pixel, int mode)" in glsl
+    assert "ivec2 layers = ivec2(0, 1);" in glsl
+    assert "layers.y = 5;" in glsl
+    assert "layers.y = 3;" in glsl
+    assert "return imageLoad(images[layers.y], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[2]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_ternary_sampled_indices_in_function_args_infer_size():
+    crossgl = """
+    shader TernarySampledFunctionArgIndices {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 blend(vec4 a, vec4 b) {
+            return a + b;
+        }
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv, bool choose) {
+            return blend(
+                texture(textures[choose ? 4 : 2], samplers[choose ? 4 : 2], uv),
+                texture(textures[1], samplers[1], uv)
+            );
+        }
+
+        fragment {
+            vec4 main(vec2 uv, bool choose) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, choose) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s5);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, bool choose)" in hlsl
+    )
+    assert (
+        "blend(textures[(choose ? 4 : 2)].Sample(samplers[(choose ? 4 : 2)], uv)"
+        in hlsl
+    )
+    assert "textures[1].Sample(samplers[1], uv)" in hlsl
+    assert "sampleLayer(textures, samplers, uv, choose)" in hlsl
+    assert "Texture2D textures[2]" not in hlsl
+    assert "Texture2D textures[6]" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, bool choose)" in metal
+    )
+    assert (
+        "blend(textures[choose ? 4 : 2].sample(samplers[choose ? 4 : 2], uv)" in metal
+    )
+    assert "textures[1].sample(samplers[1], uv)" in metal
+    assert "sampleLayer(textures, samplers, uv, choose)" in metal
+    assert "array<texture2d<float>, 2> textures" not in metal
+    assert "array<texture2d<float>, 6> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[5], vec2 uv, bool choose)" in glsl
+    assert "blend(texture(textures[(choose ? 4 : 2)], uv)" in glsl
+    assert "texture(textures[1], uv)" in glsl
+    assert "sampleLayer(textures, uv, choose)" in glsl
+    assert "sampler2D textures[2]" not in glsl
+    assert "sampler2D textures[6]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[4];\n        sampler samplers[4];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_ternary_image_indices_in_function_args_infer_size():
+    crossgl = """
+    shader TernaryImageFunctionArgIndices {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 combine(vec2 a, vec2 b) {
+            return a + b;
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel, bool choose) {
+            return combine(
+                imageLoad(images[choose ? 3 : 1], pixel),
+                imageLoad(images[1], pixel)
+            );
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), true);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[4], int2 pixel, bool choose)"
+        in hlsl
+    )
+    assert "combine(images[(choose ? 3 : 1)][pixel], images[1][pixel])" in hlsl
+    assert "readLayer(rgFloatImages, int2(0, 1), true)" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[2]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 4> "
+        "images, int2 pixel, bool choose)" in metal
+    )
+    assert (
+        "combine(images[choose ? 3 : 1].read(uint2(pixel)).xy, "
+        "images[1].read(uint2(pixel)).xy)" in metal
+    )
+    assert "readLayer(rgFloatImages, int2(0, 1), true)" in metal
+    assert "array<texture2d<float, access::read_write>, 2> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 readLayer(image2D images[4], ivec2 pixel, bool choose)" in glsl
+    assert (
+        "combine(imageLoad(images[(choose ? 3 : 1)], pixel).xy, "
+        "imageLoad(images[1], pixel).xy)" in glsl
+    )
+    assert "readLayer(rgFloatImages, ivec2(0, 1), true)" in glsl
+    assert "image2D rgFloatImages[2]" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[3] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 3 and 4"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_ternary_index_alias_initializers_infer_size():
+    crossgl = """
+    shader TernaryIndexAliasInitializers {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(
+            sampler2D textures[],
+            sampler samplers[],
+            vec2 uv,
+            bool outer,
+            bool inner,
+            int dynamicLayer
+        ) {
+            int layer = outer ? (inner ? dynamicLayer : 5) : 2;
+            return texture(textures[layer], samplers[layer], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, bool outer, bool inner, int dynamicLayer) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, outer, inner, dynamicLayer) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[6] : register(t0);" in hlsl
+    assert "SamplerState samplers[6] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t6);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s6);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[6], SamplerState samplers[6], "
+        "float2 uv, bool outer, bool inner, int dynamicLayer)" in hlsl
+    )
+    assert "int layer = (outer ? (inner ? dynamicLayer : 5) : 2);" in hlsl
+    assert "return textures[layer].Sample(samplers[layer], uv);" in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 6> textures [[texture(0)]]" in metal
+    assert "array<sampler, 6> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(6)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 6> textures, "
+        "array<sampler, 6> samplers, float2 uv, bool outer, bool inner, "
+        "int dynamicLayer)" in metal
+    )
+    assert "int layer = outer ? inner ? dynamicLayer : 5 : 2;" in metal
+    assert "return textures[layer].sample(samplers[layer], uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[6];" in glsl
+    assert "layout(binding = 6) uniform sampler2D afterTexture;" in glsl
+    assert (
+        "vec4 sampleLayer(sampler2D textures[6], vec2 uv, bool outer, "
+        "bool inner, int dynamicLayer)" in glsl
+    )
+    assert "int layer = (outer ? (inner ? dynamicLayer : 5) : 2);" in glsl
+    assert "return texture(textures[layer], uv);" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[5];\n        sampler samplers[5];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 5 and 6"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_ternary_index_alias_assignments_infer_size():
+    crossgl = """
+    shader TernaryIndexAliasAssignments {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(
+            image2D images[] @rg32f,
+            ivec2 pixel,
+            bool outer,
+            bool inner,
+            int dynamicLayer
+        ) {
+            int layer = 0;
+            layer = outer ? (inner ? dynamicLayer : 4) : 1;
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main(bool outer, bool inner, int dynamicLayer) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), outer, inner, dynamicLayer);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[5] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u5);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[5], int2 pixel, "
+        "bool outer, bool inner, int dynamicLayer)" in hlsl
+    )
+    assert "int layer = 0;" in hlsl
+    assert "layer = (outer ? (inner ? dynamicLayer : 4) : 1);" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 5> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(5)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 5> "
+        "images, int2 pixel, bool outer, bool inner, int dynamicLayer)" in metal
+    )
+    assert "int layer = 0;" in metal
+    assert "layer = outer ? inner ? dynamicLayer : 4 : 1;" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[5];" in glsl
+    assert "layout(rg32f, binding = 5) uniform image2D afterImage;" in glsl
+    assert (
+        "vec2 readLayer(image2D images[5], ivec2 pixel, bool outer, "
+        "bool inner, int dynamicLayer)" in glsl
+    )
+    assert "int layer = 0;" in glsl
+    assert "layer = (outer ? (inner ? dynamicLayer : 4) : 1);" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[4] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 4 and 5"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_branch_merged_index_aliases_infer_sampled_size():
+    crossgl = """
+    shader BranchMergedSampledIndexAliases {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(
+            sampler2D textures[],
+            sampler samplers[],
+            vec2 uv,
+            bool choose,
+            bool inner,
+            int dynamicLayer
+        ) {
+            int layer = 0;
+            if (choose) {
+                layer = inner ? dynamicLayer : 6;
+            } else {
+                layer = 3;
+            }
+            return texture(textures[layer], samplers[layer], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, bool choose, bool inner, int dynamicLayer) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, choose, inner, dynamicLayer) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s7);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, bool choose, bool inner, int dynamicLayer)" in hlsl
+    )
+    assert "layer = (inner ? dynamicLayer : 6);" in hlsl
+    assert "layer = 3;" in hlsl
+    assert "return textures[layer].Sample(samplers[layer], uv);" in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[4]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, bool choose, bool inner, "
+        "int dynamicLayer)" in metal
+    )
+    assert "layer = inner ? dynamicLayer : 6;" in metal
+    assert "layer = 3;" in metal
+    assert "return textures[layer].sample(samplers[layer], uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert (
+        "vec4 sampleLayer(sampler2D textures[7], vec2 uv, bool choose, "
+        "bool inner, int dynamicLayer)" in glsl
+    )
+    assert "layer = (inner ? dynamicLayer : 6);" in glsl
+    assert "layer = 3;" in glsl
+    assert "return texture(textures[layer], uv);" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[4]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_branch_merged_index_aliases_infer_image_size():
+    crossgl = """
+    shader BranchMergedImageIndexAliases {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(
+            image2D images[] @rg32f,
+            ivec2 pixel,
+            bool choose,
+            bool inner,
+            int dynamicLayer
+        ) {
+            int layer = 2;
+            if (choose) {
+                layer = inner ? dynamicLayer : 5;
+            }
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main(bool choose, bool inner, int dynamicLayer) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, inner, dynamicLayer);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel, "
+        "bool choose, bool inner, int dynamicLayer)" in hlsl
+    )
+    assert "int layer = 2;" in hlsl
+    assert "layer = (inner ? dynamicLayer : 5);" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[3]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, bool choose, bool inner, int dynamicLayer)" in metal
+    )
+    assert "int layer = 2;" in metal
+    assert "layer = inner ? dynamicLayer : 5;" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 3> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert (
+        "vec2 readLayer(image2D images[6], ivec2 pixel, bool choose, "
+        "bool inner, int dynamicLayer)" in glsl
+    )
+    assert "int layer = 2;" in glsl
+    assert "layer = (inner ? dynamicLayer : 5);" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[3]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_switch_merged_index_aliases_infer_sampled_size():
+    crossgl = """
+    shader SwitchMergedSampledIndexAliases {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(
+            sampler2D textures[],
+            sampler samplers[],
+            vec2 uv,
+            int mode,
+            bool choose,
+            int dynamicLayer
+        ) {
+            int layer = 1;
+            switch (mode) {
+                case 0:
+                    layer = choose ? dynamicLayer : 6;
+                    break;
+                case 1:
+                    layer = 4;
+                    break;
+                default:
+                    layer = 2;
+                    break;
+            }
+            return texture(textures[layer], samplers[layer], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode, bool choose, int dynamicLayer) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, mode, choose, dynamicLayer) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s7);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, int mode, bool choose, int dynamicLayer)" in hlsl
+    )
+    assert "layer = (choose ? dynamicLayer : 6);" in hlsl
+    assert "layer = 4;" in hlsl
+    assert "layer = 2;" in hlsl
+    assert "return textures[layer].Sample(samplers[layer], uv);" in hlsl
+    assert "Texture2D textures[2]" not in hlsl
+    assert "Texture2D textures[5]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, int mode, bool choose, "
+        "int dynamicLayer)" in metal
+    )
+    assert "layer = choose ? dynamicLayer : 6;" in metal
+    assert "layer = 4;" in metal
+    assert "layer = 2;" in metal
+    assert "return textures[layer].sample(samplers[layer], uv);" in metal
+    assert "array<texture2d<float>, 2> textures" not in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert (
+        "vec4 sampleLayer(sampler2D textures[7], vec2 uv, int mode, "
+        "bool choose, int dynamicLayer)" in glsl
+    )
+    assert "layer = (choose ? dynamicLayer : 6);" in glsl
+    assert "layer = 4;" in glsl
+    assert "layer = 2;" in glsl
+    assert "return texture(textures[layer], uv);" in glsl
+    assert "sampler2D textures[2]" not in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_match_merged_index_aliases_infer_image_size():
+    crossgl = """
+    shader MatchMergedImageIndexAliases {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(
+            image2D images[] @rg32f,
+            ivec2 pixel,
+            int mode,
+            bool choose,
+            int dynamicLayer
+        ) {
+            int layer = 1;
+            match mode {
+                0 => {
+                    layer = choose ? dynamicLayer : 5;
+                }
+                _ => {
+                    layer = 3;
+                }
+            }
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main(int mode, bool choose, int dynamicLayer) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode, choose, dynamicLayer);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel, int mode, "
+        "bool choose, int dynamicLayer)" in hlsl
+    )
+    assert "layer = (choose ? dynamicLayer : 5);" in hlsl
+    assert "layer = 3;" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[2]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[4]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, int mode, bool choose, int dynamicLayer)" in metal
+    )
+    assert "layer = choose ? dynamicLayer : 5;" in metal
+    assert "layer = 3;" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 2> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 4> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert (
+        "vec2 readLayer(image2D images[6], ivec2 pixel, int mode, "
+        "bool choose, int dynamicLayer)" in glsl
+    )
+    assert "layer = (choose ? dynamicLayer : 5);" in glsl
+    assert "layer = 3;" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[2]" not in glsl
+    assert "image2D rgFloatImages[4]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_for_loop_carried_index_aliases_infer_sampled_size():
+    crossgl = """
+    shader ForLoopCarriedSampledIndexAliases {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(
+            sampler2D textures[],
+            sampler samplers[],
+            vec2 uv,
+            int limit,
+            bool choose,
+            int dynamicLayer
+        ) {
+            int layer = 1;
+            for (int i = 0; i < limit; i = i + 1) {
+                layer = choose ? dynamicLayer : 6;
+            }
+            return texture(textures[layer], samplers[layer], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int limit, bool choose, int dynamicLayer) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, limit, choose, dynamicLayer) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s7);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, int limit, bool choose, int dynamicLayer)" in hlsl
+    )
+    assert "for (int i = 0; (i < limit); i = (i + 1))" in hlsl
+    assert "layer = (choose ? dynamicLayer : 6);" in hlsl
+    assert "return textures[layer].Sample(samplers[layer], uv);" in hlsl
+    assert "Texture2D textures[2]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, int limit, bool choose, "
+        "int dynamicLayer)" in metal
+    )
+    assert "for (int i = 0; i < limit; i = i + 1)" in metal
+    assert "layer = choose ? dynamicLayer : 6;" in metal
+    assert "return textures[layer].sample(samplers[layer], uv);" in metal
+    assert "array<texture2d<float>, 2> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert (
+        "vec4 sampleLayer(sampler2D textures[7], vec2 uv, int limit, "
+        "bool choose, int dynamicLayer)" in glsl
+    )
+    assert "for (int i = 0; (i < limit); i = (i + 1))" in glsl
+    assert "layer = (choose ? dynamicLayer : 6);" in glsl
+    assert "return texture(textures[layer], uv);" in glsl
+    assert "sampler2D textures[2]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_while_do_loop_carried_index_aliases_infer_image_size():
+    crossgl = """
+    shader WhileDoLoopCarriedImageIndexAliases {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(
+            image2D images[] @rg32f,
+            ivec2 pixel,
+            int limit,
+            bool choose,
+            int dynamicLayer
+        ) {
+            int layer = 1;
+            int i = 0;
+            while (i < limit) {
+                layer = choose ? dynamicLayer : 4;
+                i = i + 1;
+            }
+            do {
+                layer = choose ? layer : 5;
+            } while (false);
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main(int limit, bool choose, int dynamicLayer) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), limit, choose, dynamicLayer);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel, int limit, "
+        "bool choose, int dynamicLayer)" in hlsl
+    )
+    assert "while ((i < limit))" in hlsl
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert "layer = (choose ? dynamicLayer : 4);" in hlsl
+    assert "layer = (choose ? layer : 5);" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[2]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, int limit, bool choose, int dynamicLayer)" in metal
+    )
+    assert "while (i < limit)" in metal
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert "layer = choose ? dynamicLayer : 4;" in metal
+    assert "layer = choose ? layer : 5;" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 2> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert (
+        "vec2 readLayer(image2D images[6], ivec2 pixel, int limit, "
+        "bool choose, int dynamicLayer)" in glsl
+    )
+    assert "while ((i < limit))" in glsl
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert "layer = (choose ? dynamicLayer : 4);" in glsl
+    assert "layer = (choose ? layer : 5);" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[2]" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_helper_return_index_aliases_infer_sampled_size():
+    crossgl = """
+    shader HelperReturnSampledIndexAliases {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        int pickLayer(bool choose, int dynamicLayer) {
+            return choose ? dynamicLayer : 6;
+        }
+
+        vec4 sampleLayer(
+            sampler2D textures[],
+            sampler samplers[],
+            vec2 uv,
+            bool choose,
+            int dynamicLayer
+        ) {
+            int layer = pickLayer(choose, dynamicLayer);
+            return texture(textures[layer], samplers[layer], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, bool choose, int dynamicLayer) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, choose, dynamicLayer) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s7);" in hlsl
+    assert "int pickLayer(bool choose, int dynamicLayer)" in hlsl
+    assert "return (choose ? dynamicLayer : 6);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, bool choose, int dynamicLayer)" in hlsl
+    )
+    assert "int layer = pickLayer(choose, dynamicLayer);" in hlsl
+    assert "return textures[layer].Sample(samplers[layer], uv);" in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert "int pickLayer(bool choose, int dynamicLayer)" in metal
+    assert "return choose ? dynamicLayer : 6;" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, bool choose, int dynamicLayer)" in metal
+    )
+    assert "int layer = pickLayer(choose, dynamicLayer);" in metal
+    assert "return textures[layer].sample(samplers[layer], uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert "int pickLayer(bool choose, int dynamicLayer)" in glsl
+    assert "return (choose ? dynamicLayer : 6);" in glsl
+    assert (
+        "vec4 sampleLayer(sampler2D textures[7], vec2 uv, bool choose, "
+        "int dynamicLayer)" in glsl
+    )
+    assert "int layer = pickLayer(choose, dynamicLayer);" in glsl
+    assert "return texture(textures[layer], uv);" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_nested_helper_return_index_aliases_infer_image_size():
+    crossgl = """
+    shader NestedHelperReturnImageIndexAliases {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        int baseLayer(bool choose, int dynamicLayer) {
+            return choose ? dynamicLayer : 4;
+        }
+
+        int pickLayer(bool choose, int dynamicLayer) {
+            int layer = baseLayer(choose, dynamicLayer);
+            return choose ? layer : 5;
+        }
+
+        vec2 readLayer(
+            image2D images[] @rg32f,
+            ivec2 pixel,
+            bool choose,
+            int dynamicLayer
+        ) {
+            int layer = pickLayer(choose, dynamicLayer);
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main(bool choose, int dynamicLayer) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert "int baseLayer(bool choose, int dynamicLayer)" in hlsl
+    assert "return (choose ? dynamicLayer : 4);" in hlsl
+    assert "int pickLayer(bool choose, int dynamicLayer)" in hlsl
+    assert "int layer = baseLayer(choose, dynamicLayer);" in hlsl
+    assert "return (choose ? layer : 5);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel, "
+        "bool choose, int dynamicLayer)" in hlsl
+    )
+    assert "int layer = pickLayer(choose, dynamicLayer);" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert "int baseLayer(bool choose, int dynamicLayer)" in metal
+    assert "return choose ? dynamicLayer : 4;" in metal
+    assert "int pickLayer(bool choose, int dynamicLayer)" in metal
+    assert "int layer = baseLayer(choose, dynamicLayer);" in metal
+    assert "return choose ? layer : 5;" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, bool choose, int dynamicLayer)" in metal
+    )
+    assert "int layer = pickLayer(choose, dynamicLayer);" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert "int baseLayer(bool choose, int dynamicLayer)" in glsl
+    assert "return (choose ? dynamicLayer : 4);" in glsl
+    assert "int pickLayer(bool choose, int dynamicLayer)" in glsl
+    assert "int layer = baseLayer(choose, dynamicLayer);" in glsl
+    assert "return (choose ? layer : 5);" in glsl
+    assert (
+        "vec2 readLayer(image2D images[6], ivec2 pixel, bool choose, "
+        "int dynamicLayer)" in glsl
+    )
+    assert "int layer = pickLayer(choose, dynamicLayer);" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_control_flow_helper_return_literal_args_infer_sampled_size():
+    crossgl = """
+    shader ControlFlowHelperReturnLiteralArgsSampled {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        int pickLayer(int mode, int fallbackLayer) {
+            if (mode == 0) {
+                return fallbackLayer;
+            }
+            switch (mode) {
+                case 1:
+                    return 4;
+                default:
+                    return 2;
+            }
+        }
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            int layer = pickLayer(mode, 6);
+            return texture(textures[layer], samplers[layer], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, mode) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s7);" in hlsl
+    assert "int pickLayer(int mode, int fallbackLayer)" in hlsl
+    assert "return fallbackLayer;" in hlsl
+    assert "return 4;" in hlsl
+    assert "return 2;" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert "int layer = pickLayer(mode, 6);" in hlsl
+    assert "return textures[layer].Sample(samplers[layer], uv);" in hlsl
+    assert "Texture2D textures[3]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert "int pickLayer(int mode, int fallbackLayer)" in metal
+    assert "return fallbackLayer;" in metal
+    assert "return 4;" in metal
+    assert "return 2;" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, int mode)" in metal
+    )
+    assert "int layer = pickLayer(mode, 6);" in metal
+    assert "return textures[layer].sample(samplers[layer], uv);" in metal
+    assert "array<texture2d<float>, 3> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert "int pickLayer(int mode, int fallbackLayer)" in glsl
+    assert "return fallbackLayer;" in glsl
+    assert "return 4;" in glsl
+    assert "return 2;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[7], vec2 uv, int mode)" in glsl
+    assert "int layer = pickLayer(mode, 6);" in glsl
+    assert "return texture(textures[layer], uv);" in glsl
+    assert "sampler2D textures[3]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_match_helper_return_literal_args_infer_image_size():
+    crossgl = """
+    shader MatchHelperReturnLiteralArgsImage {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        int pickLayer(int mode, int fallbackLayer) {
+            match mode {
+                0 => { return fallbackLayer; }
+                1 => { return 3; }
+                _ => { return 1; }
+            }
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            int layer = pickLayer(mode, 5);
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main(int mode) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert "int pickLayer(int mode, int fallbackLayer)" in hlsl
+    assert "return fallbackLayer;" in hlsl
+    assert "return 3;" in hlsl
+    assert "return 1;" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel, int mode)" in hlsl
+    )
+    assert "int layer = pickLayer(mode, 5);" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[2]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert "int pickLayer(int mode, int fallbackLayer)" in metal
+    assert "return fallbackLayer;" in metal
+    assert "return 3;" in metal
+    assert "return 1;" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, int mode)" in metal
+    )
+    assert "int layer = pickLayer(mode, 5);" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 2> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert "int pickLayer(int mode, int fallbackLayer)" in glsl
+    assert "return fallbackLayer;" in glsl
+    assert "return 3;" in glsl
+    assert "return 1;" in glsl
+    assert "vec2 readLayer(image2D images[6], ivec2 pixel, int mode)" in glsl
+    assert "int layer = pickLayer(mode, 5);" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[2]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_call_site_arithmetic_scalar_args_infer_sampled_size():
+    crossgl = """
+    shader CallSiteArithmeticScalarArgsSampled {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        int bumpLayer(int layer) {
+            return layer + 1;
+        }
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv, int baseLayer) {
+            int shifted = bumpLayer(baseLayer);
+            return texture(textures[shifted], samplers[shifted], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, 5) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert "int bumpLayer(int layer)" in hlsl
+    assert "return (layer + 1);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, int baseLayer)" in hlsl
+    )
+    assert "int shifted = bumpLayer(baseLayer);" in hlsl
+    assert "return textures[shifted].Sample(samplers[shifted], uv);" in hlsl
+    assert "sampleLayer(textures, samplers, uv, 5)" in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert "int bumpLayer(int layer)" in metal
+    assert "return layer + 1;" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, int baseLayer)" in metal
+    )
+    assert "int shifted = bumpLayer(baseLayer);" in metal
+    assert "return textures[shifted].sample(samplers[shifted], uv);" in metal
+    assert "sampleLayer(textures, samplers, uv, 5)" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert "int bumpLayer(int layer)" in glsl
+    assert "return (layer + 1);" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[7], vec2 uv, int baseLayer)" in glsl
+    assert "int shifted = bumpLayer(baseLayer);" in glsl
+    assert "return texture(textures[shifted], uv);" in glsl
+    assert "sampleLayer(textures, uv, 5)" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_arithmetic_alias_helper_return_infers_image_size():
+    crossgl = """
+    shader ArithmeticAliasHelperImageIndices {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        int offsetLayer(int baseLayer, bool choose, int dynamicLayer) {
+            int fallback = choose ? dynamicLayer : baseLayer;
+            return fallback + 2;
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel, bool choose, int dynamicLayer) {
+            int layer = offsetLayer(5, choose, dynamicLayer);
+            return imageLoad(images[layer], pixel);
+        }
+
+        compute {
+            void main(bool choose, int dynamicLayer) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[8] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u8);" in hlsl
+    assert "int offsetLayer(int baseLayer, bool choose, int dynamicLayer)" in hlsl
+    assert "int fallback = (choose ? dynamicLayer : baseLayer);" in hlsl
+    assert "return (fallback + 2);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[8], int2 pixel, "
+        "bool choose, int dynamicLayer)" in hlsl
+    )
+    assert "int layer = offsetLayer(5, choose, dynamicLayer);" in hlsl
+    assert "return images[layer][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[6]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 8> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(8)]]" in metal
+    assert "int offsetLayer(int baseLayer, bool choose, int dynamicLayer)" in metal
+    assert "int fallback = choose ? dynamicLayer : baseLayer;" in metal
+    assert "return fallback + 2;" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 8> "
+        "images, int2 pixel, bool choose, int dynamicLayer)" in metal
+    )
+    assert "int layer = offsetLayer(5, choose, dynamicLayer);" in metal
+    assert "return images[layer].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 6> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[8];" in glsl
+    assert "layout(rg32f, binding = 8) uniform image2D afterImage;" in glsl
+    assert "int offsetLayer(int baseLayer, bool choose, int dynamicLayer)" in glsl
+    assert "int fallback = (choose ? dynamicLayer : baseLayer);" in glsl
+    assert "return (fallback + 2);" in glsl
+    assert (
+        "vec2 readLayer(image2D images[8], ivec2 pixel, bool choose, int dynamicLayer)"
+        in glsl
+    )
+    assert "int layer = offsetLayer(5, choose, dynamicLayer);" in glsl
+    assert "return imageLoad(images[layer], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+    assert "image2D rgFloatImages[6]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[7] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 7 and 8"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_builtin_min_index_infers_sampled_size():
+    crossgl = """
+    shader BuiltinMinSampledIndex {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv, int layer) {
+            int bounded = min(layer, 6);
+            return texture(textures[bounded], samplers[bounded], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int layer) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, layer) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[7] : register(t0);" in hlsl
+    assert "SamplerState samplers[7] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t7);" in hlsl
+    assert (
+        "float4 sampleLayer(Texture2D textures[7], SamplerState samplers[7], "
+        "float2 uv, int layer)" in hlsl
+    )
+    assert "int bounded = min(layer, 6);" in hlsl
+    assert "return textures[bounded].Sample(samplers[bounded], uv);" in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 7> textures [[texture(0)]]" in metal
+    assert "array<sampler, 7> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(7)]]" in metal
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 7> textures, "
+        "array<sampler, 7> samplers, float2 uv, int layer)" in metal
+    )
+    assert "int bounded = min(layer, 6);" in metal
+    assert "return textures[bounded].sample(samplers[bounded], uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[7];" in glsl
+    assert "layout(binding = 7) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleLayer(sampler2D textures[7], vec2 uv, int layer)" in glsl
+    assert "int bounded = min(layer, 6);" in glsl
+    assert "return texture(textures[bounded], uv);" in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[6];\n        sampler samplers[6];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 6 and 7"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_builtin_clamp_index_infers_image_size():
+    crossgl = """
+    shader BuiltinClampImageIndex {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel, int layer) {
+            int bounded = clamp(layer, 0, 5);
+            return imageLoad(images[bounded], pixel);
+        }
+
+        compute {
+            void main(int layer) {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), layer);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[6] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u6);" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[6], int2 pixel, int layer)" in hlsl
+    )
+    assert "int bounded = clamp(layer, 0, 5);" in hlsl
+    assert "return images[bounded][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 6> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(6)]]" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 6> "
+        "images, int2 pixel, int layer)" in metal
+    )
+    assert "int bounded = clamp(layer, 0, 5);" in metal
+    assert "return images[bounded].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[6];" in glsl
+    assert "layout(rg32f, binding = 6) uniform image2D afterImage;" in glsl
+    assert "vec2 readLayer(image2D images[6], ivec2 pixel, int layer)" in glsl
+    assert "int bounded = clamp(layer, 0, 5);" in glsl
+    assert "return imageLoad(images[bounded], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[5] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 5 and 6"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_switch_match_unsized_sampled_arrays_infer_case_literal_size():
+    crossgl = """
+    shader SwitchMatchUnsizedSampledArrays {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            int layer @ TEXCOORD1;
+            int mode @ TEXCOORD2;
+        };
+
+        vec4 sampleCases(sampler2D textures[], sampler samplers[], int layer, vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    vec4 scoped = texture(textures[layer], samplers[layer], uv);
+                    result = scoped;
+                    break;
+                case 1:
+                    result = texture(textures[2], samplers[2], uv);
+                    break;
+                default:
+                    result = texture(textures[4], samplers[4], uv);
+                    break;
+            }
+            match mode {
+                0 => {
+                    result = result + texture(textures[layer], samplers[layer], uv);
+                }
+                _ => {
+                    result = result + texture(textures[3], samplers[3], uv);
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s5);" in hlsl
+    assert (
+        "float4 sampleCases(Texture2D textures[5], SamplerState samplers[5], "
+        "int layer, float2 uv, int mode)" in hlsl
+    )
+    assert "textures[layer].Sample(samplers[layer], uv)" in hlsl
+    assert "textures[4].Sample(samplers[4], uv)" in hlsl
+    assert "textures[3].Sample(samplers[3], uv)" in hlsl
+    assert "case 0: {" in hlsl
+    assert "Texture2D textures[] : register(t0);" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 sampleCases(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, int layer, float2 uv, int mode)" in metal
+    )
+    assert "textures[layer].sample(samplers[layer], uv)" in metal
+    assert "textures[4].sample(samplers[4], uv)" in metal
+    assert "textures[3].sample(samplers[3], uv)" in metal
+    assert "case 0: {" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert (
+        "vec4 sampleCases(sampler2D textures[5], int layer, vec2 uv, int mode)" in glsl
+    )
+    assert "texture(textures[layer], uv)" in glsl
+    assert "texture(textures[4], uv)" in glsl
+    assert "texture(textures[3], uv)" in glsl
+    assert "case 0: {" in glsl
+    assert "sampler2D textures[]" not in glsl
+
+
+def test_codegen_switch_match_unsized_image_arrays_infer_case_literal_size():
+    crossgl = """
+    shader SwitchMatchUnsizedImageArrays {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 imageCases(image2D images[] @rg32f, int layer, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    vec2 scoped = imageLoad(images[layer], pixel);
+                    result = scoped;
+                    break;
+                case 1:
+                    result = imageLoad(images[1], pixel);
+                    break;
+                default:
+                    result = imageLoad(images[3], pixel);
+                    break;
+            }
+            match mode {
+                0 => {
+                    result = result + imageLoad(images[layer], pixel);
+                }
+                _ => {
+                    result = result + imageLoad(images[2], pixel);
+                }
+            }
+            imageStore(images[0], pixel, result);
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageCases(rgFloatImages, 1, ivec2(0, 1), 2);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert (
+        "float2 imageCases(RWTexture2D<float2> images[4], int layer, "
+        "int2 pixel, int mode)" in hlsl
+    )
+    assert "images[layer][pixel]" in hlsl
+    assert "images[3][pixel]" in hlsl
+    assert "images[2][pixel]" in hlsl
+    assert "case 0: {" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 imageCases(array<texture2d<float, access::read_write>, 4> "
+        "images, int layer, int2 pixel, int mode)" in metal
+    )
+    assert "images[layer].read(uint2(pixel)).xy" in metal
+    assert "images[3].read(uint2(pixel)).xy" in metal
+    assert "images[2].read(uint2(pixel)).xy" in metal
+    assert "case 0: {" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert (
+        "vec2 imageCases(image2D images[4], int layer, ivec2 pixel, int mode)" in glsl
+    )
+    assert "imageLoad(images[layer], pixel).xy" in glsl
+    assert "imageLoad(images[3], pixel).xy" in glsl
+    assert "imageLoad(images[2], pixel).xy" in glsl
+    assert "case 0: {" in glsl
+    assert "image2D images[]" not in glsl
+
+
+def test_codegen_switch_match_sampled_array_returns_infer_case_literal_size():
+    crossgl = """
+    shader SwitchMatchReturnSampledArrays {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            int mode @ TEXCOORD1;
+        };
+
+        vec4 sampleReturns(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    return texture(textures[4], samplers[4], uv);
+                case 1:
+                    result = texture(textures[2], samplers[2], uv);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                2 => {
+                    return result + texture(textures[3], samplers[3], uv);
+                }
+                _ => {
+                    result = result + texture(textures[1], samplers[1], uv);
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return sampleReturns(textures, samplers, input.uv, input.mode) + texture(afterTexture, input.uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert (
+        "float4 sampleReturns(Texture2D textures[5], "
+        "SamplerState samplers[5], float2 uv, int mode)" in hlsl
+    )
+    assert "case 0: {" in hlsl
+    assert "return textures[4].Sample(samplers[4], uv);" in hlsl
+    assert "result = textures[2].Sample(samplers[2], uv);" in hlsl
+    assert "return (result + textures[3].Sample(samplers[3], uv));" in hlsl
+    assert "result = (result + textures[1].Sample(samplers[1], uv));" in hlsl
+    assert "Texture2D textures[] : register(t0);" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 sampleReturns(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode)" in metal
+    )
+    assert "case 0: {" in metal
+    assert "return textures[4].sample(samplers[4], uv);" in metal
+    assert "result = textures[2].sample(samplers[2], uv);" in metal
+    assert "return result + textures[3].sample(samplers[3], uv);" in metal
+    assert "result = result + textures[1].sample(samplers[1], uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 sampleReturns(sampler2D textures[5], vec2 uv, int mode)" in glsl
+    assert "case 0: {" in glsl
+    assert "return texture(textures[4], uv);" in glsl
+    assert "result = texture(textures[2], uv);" in glsl
+    assert "return (result + texture(textures[3], uv));" in glsl
+    assert "result = (result + texture(textures[1], uv));" in glsl
+    assert "sampler2D textures[]" not in glsl
+
+
+def test_codegen_switch_match_image_array_returns_infer_case_literal_size():
+    crossgl = """
+    shader SwitchMatchReturnImageArrays {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 imageReturns(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    return imageLoad(images[3], pixel);
+                case 1:
+                    result = imageLoad(images[1], pixel);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                2 => {
+                    return result + imageLoad(images[2], pixel);
+                }
+                _ => {
+                    result = result + imageLoad(images[0], pixel);
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageReturns(rgFloatImages, ivec2(0, 1), 0);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert (
+        "float2 imageReturns(RWTexture2D<float2> images[4], int2 pixel, int mode)"
+        in hlsl
+    )
+    assert "case 0: {" in hlsl
+    assert "return images[3][pixel];" in hlsl
+    assert "result = images[1][pixel];" in hlsl
+    assert "return (result + images[2][pixel]);" in hlsl
+    assert "result = (result + images[0][pixel]);" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 imageReturns(array<texture2d<float, access::read_write>, 4> "
+        "images, int2 pixel, int mode)" in metal
+    )
+    assert "case 0: {" in metal
+    assert "return images[3].read(uint2(pixel)).xy;" in metal
+    assert "result = images[1].read(uint2(pixel)).xy;" in metal
+    assert "return result + images[2].read(uint2(pixel)).xy;" in metal
+    assert "result = result + images[0].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 imageReturns(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert "case 0: {" in glsl
+    assert "return imageLoad(images[3], pixel).xy;" in glsl
+    assert "result = imageLoad(images[1], pixel).xy;" in glsl
+    assert "return (result + imageLoad(images[2], pixel).xy);" in glsl
+    assert "result = (result + imageLoad(images[0], pixel).xy);" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+
+
+def test_codegen_switch_match_loop_transitive_sampled_arrays_infer_case_only_size():
+    crossgl = """
+    shader SwitchMatchLoopTransitiveSampledArrays {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            int mode @ TEXCOORD1;
+        };
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv) {
+            vec4 result = vec4(0.0);
+            for (int i = 0; i < 1; i = i + 1) {
+                result = result + texture(textures[4], samplers[4], uv);
+            }
+            int j = 0;
+            while (j < 1) {
+                result = result + texture(textures[3], samplers[3], uv);
+                j = j + 1;
+            }
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, samplers, uv);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(textures, samplers, uv);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return mid(textures, samplers, input.uv, input.mode) + texture(afterTexture, input.uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert (
+        "float4 leaf(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv)" in hlsl
+    )
+    assert (
+        "float4 mid(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert "for (int i = 0; (i < 1); i = (i + 1))" in hlsl
+    assert "while ((j < 1))" in hlsl
+    assert "result = (result + textures[4].Sample(samplers[4], uv));" in hlsl
+    assert "result = (result + textures[3].Sample(samplers[3], uv));" in hlsl
+    assert "result = leaf(textures, samplers, uv);" in hlsl
+    assert "result = (result + leaf(textures, samplers, uv));" in hlsl
+    assert "Texture2D textures[] : register(t0);" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 leaf(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv)" in metal
+    )
+    assert (
+        "float4 mid(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode)" in metal
+    )
+    assert "for (int i = 0; i < 1; i = i + 1)" in metal
+    assert "while (j < 1)" in metal
+    assert "result = result + textures[4].sample(samplers[4], uv);" in metal
+    assert "result = result + textures[3].sample(samplers[3], uv);" in metal
+    assert "result = leaf(textures, samplers, uv);" in metal
+    assert "result = result + leaf(textures, samplers, uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 leaf(sampler2D textures[5], vec2 uv)" in glsl
+    assert "vec4 mid(sampler2D textures[5], vec2 uv, int mode)" in glsl
+    assert "for (int i = 0; (i < 1); i = (i + 1))" in glsl
+    assert "while ((j < 1))" in glsl
+    assert "result = (result + texture(textures[4], uv));" in glsl
+    assert "result = (result + texture(textures[3], uv));" in glsl
+    assert "result = leaf(textures, uv);" in glsl
+    assert "result = (result + leaf(textures, uv));" in glsl
+    assert "sampler2D textures[]" not in glsl
+
+
+def test_codegen_switch_match_loop_transitive_image_arrays_infer_case_only_size():
+    crossgl = """
+    shader SwitchMatchLoopTransitiveImageArrays {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
+            vec2 result = vec2(0.0);
+            for (int i = 0; i < 1; i = i + 1) {
+                result = result + imageLoad(images[3], pixel);
+            }
+            int j = 0;
+            while (j < 1) {
+                result = result + imageLoad(images[2], pixel);
+                j = j + 1;
+            }
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, pixel);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(images, pixel);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = mid(rgFloatImages, ivec2(0, 1), 0);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[4], int2 pixel)" in hlsl
+    assert "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
+    assert "for (int i = 0; (i < 1); i = (i + 1))" in hlsl
+    assert "while ((j < 1))" in hlsl
+    assert "result = (result + images[3][pixel]);" in hlsl
+    assert "result = (result + images[2][pixel]);" in hlsl
+    assert "result = leaf(images, pixel);" in hlsl
+    assert "result = (result + leaf(images, pixel));" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel)" in metal
+    )
+    assert (
+        "float2 mid(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int mode)" in metal
+    )
+    assert "for (int i = 0; i < 1; i = i + 1)" in metal
+    assert "while (j < 1)" in metal
+    assert "result = result + images[3].read(uint2(pixel)).xy;" in metal
+    assert "result = result + images[2].read(uint2(pixel)).xy;" in metal
+    assert "result = leaf(images, pixel);" in metal
+    assert "result = result + leaf(images, pixel);" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 leaf(image2D images[4], ivec2 pixel)" in glsl
+    assert "vec2 mid(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert "for (int i = 0; (i < 1); i = (i + 1))" in glsl
+    assert "while ((j < 1))" in glsl
+    assert "result = (result + imageLoad(images[3], pixel).xy);" in glsl
+    assert "result = (result + imageLoad(images[2], pixel).xy);" in glsl
+    assert "result = leaf(images, pixel);" in glsl
+    assert "result = (result + leaf(images, pixel));" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+
+
+def test_codegen_switch_match_fixed_loop_sampled_transitive_conflicts_are_rejected():
+    crossgl = """
+    shader SwitchMatchFixedLoopTransitiveSampledConflict {
+        sampler2D smallTextures[2];
+        sampler smallSamplers[2];
+        sampler2D largeTextures[5];
+        sampler largeSamplers[5];
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv) {
+            vec4 result = vec4(0.0);
+            for (int i = 0; i < 1; i = i + 1) {
+                result = result + texture(textures[4], samplers[4], uv);
+            }
+            while (false) {
+                result = result + texture(textures[3], samplers[3], uv);
+            }
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, samplers, uv);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(textures, samplers, uv);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return mid(smallTextures, smallSamplers, uv, mode) + mid(largeTextures, largeSamplers, uv, mode);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'smallTextures': 2 and 5"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_switch_match_fixed_loop_image_transitive_conflicts_are_rejected():
+    crossgl = """
+    shader SwitchMatchFixedLoopTransitiveImageConflict {
+        image2D smallImages[2] @rg32f;
+        image2D largeImages[4] @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
+            vec2 result = vec2(0.0);
+            for (int i = 0; i < 1; i = i + 1) {
+                result = result + imageLoad(images[3], pixel);
+            }
+            while (false) {
+                result = result + imageLoad(images[2], pixel);
+            }
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, pixel);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(images, pixel);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 a = mid(smallImages, ivec2(0, 1), 0);
+                vec2 b = mid(largeImages, ivec2(1, 2), 1);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'smallImages': 2 and 4"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_switch_match_for_in_transitive_sampled_arrays_infer_size():
+    crossgl = """
+    shader SwitchMatchForInTransitiveSampledArrays {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            int mode @ TEXCOORD1;
+            int limit @ TEXCOORD2;
+        };
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv, int limit) {
+            vec4 result = vec4(0.0);
+            for i in 0..1 {
+                result = result + texture(textures[4], samplers[4], uv);
+            }
+            for j in limit {
+                result = result + texture(textures[3], samplers[3], uv);
+            }
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode, int limit) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, samplers, uv, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(textures, samplers, uv, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return mid(textures, samplers, input.uv, input.mode, input.limit) + texture(afterTexture, input.uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert (
+        "float4 leaf(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int limit)" in hlsl
+    )
+    assert (
+        "float4 mid(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int mode, int limit)" in hlsl
+    )
+    assert "for (int i = 0; i < 1; ++i)" in hlsl
+    assert "for (int j = 0; j < limit; ++j)" in hlsl
+    assert "result = (result + textures[4].Sample(samplers[4], uv));" in hlsl
+    assert "result = (result + textures[3].Sample(samplers[3], uv));" in hlsl
+    assert "result = leaf(textures, samplers, uv, limit);" in hlsl
+    assert "result = (result + leaf(textures, samplers, uv, limit));" in hlsl
+    assert "Texture2D textures[] : register(t0);" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 leaf(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int limit)" in metal
+    )
+    assert (
+        "float4 mid(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode, int limit)" in metal
+    )
+    assert "for (int i = 0; i < 1; ++i)" in metal
+    assert "for (int j = 0; j < limit; ++j)" in metal
+    assert "result = result + textures[4].sample(samplers[4], uv);" in metal
+    assert "result = result + textures[3].sample(samplers[3], uv);" in metal
+    assert "result = leaf(textures, samplers, uv, limit);" in metal
+    assert "result = result + leaf(textures, samplers, uv, limit);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 leaf(sampler2D textures[5], vec2 uv, int limit)" in glsl
+    assert "vec4 mid(sampler2D textures[5], vec2 uv, int mode, int limit)" in glsl
+    assert "for (int i = 0; i < 1; ++i)" in glsl
+    assert "for (int j = 0; j < limit; ++j)" in glsl
+    assert "result = (result + texture(textures[4], uv));" in glsl
+    assert "result = (result + texture(textures[3], uv));" in glsl
+    assert "result = leaf(textures, uv, limit);" in glsl
+    assert "result = (result + leaf(textures, uv, limit));" in glsl
+    assert "sampler2D textures[]" not in glsl
+
+
+def test_codegen_switch_match_for_in_transitive_image_arrays_infer_size():
+    crossgl = """
+    shader SwitchMatchForInTransitiveImageArrays {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int limit) {
+            vec2 result = vec2(0.0);
+            for i in 0..1 {
+                result = result + imageLoad(images[3], pixel);
+            }
+            for j in limit {
+                result = result + imageLoad(images[2], pixel);
+            }
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode, int limit) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, pixel, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(images, pixel, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = mid(rgFloatImages, ivec2(0, 1), 0, 2);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[4], int2 pixel, int limit)" in hlsl
+    assert (
+        "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode, "
+        "int limit)" in hlsl
+    )
+    assert "for (int i = 0; i < 1; ++i)" in hlsl
+    assert "for (int j = 0; j < limit; ++j)" in hlsl
+    assert "result = (result + images[3][pixel]);" in hlsl
+    assert "result = (result + images[2][pixel]);" in hlsl
+    assert "result = leaf(images, pixel, limit);" in hlsl
+    assert "result = (result + leaf(images, pixel, limit));" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int limit)" in metal
+    )
+    assert (
+        "float2 mid(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int mode, int limit)" in metal
+    )
+    assert "for (int i = 0; i < 1; ++i)" in metal
+    assert "for (int j = 0; j < limit; ++j)" in metal
+    assert "result = result + images[3].read(uint2(pixel)).xy;" in metal
+    assert "result = result + images[2].read(uint2(pixel)).xy;" in metal
+    assert "result = leaf(images, pixel, limit);" in metal
+    assert "result = result + leaf(images, pixel, limit);" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 leaf(image2D images[4], ivec2 pixel, int limit)" in glsl
+    assert "vec2 mid(image2D images[4], ivec2 pixel, int mode, int limit)" in glsl
+    assert "for (int i = 0; i < 1; ++i)" in glsl
+    assert "for (int j = 0; j < limit; ++j)" in glsl
+    assert "result = (result + imageLoad(images[3], pixel).xy);" in glsl
+    assert "result = (result + imageLoad(images[2], pixel).xy);" in glsl
+    assert "result = leaf(images, pixel, limit);" in glsl
+    assert "result = (result + leaf(images, pixel, limit));" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+
+
+def test_codegen_switch_match_fixed_for_in_sampled_transitive_conflicts_are_rejected():
+    crossgl = """
+    shader SwitchMatchFixedForInTransitiveSampledConflict {
+        sampler2D smallTextures[2];
+        sampler smallSamplers[2];
+        sampler2D largeTextures[5];
+        sampler largeSamplers[5];
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv, int limit) {
+            vec4 result = vec4(0.0);
+            for i in 0..1 {
+                result = result + texture(textures[4], samplers[4], uv);
+            }
+            for j in limit {
+                result = result + texture(textures[3], samplers[3], uv);
+            }
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode, int limit) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, samplers, uv, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(textures, samplers, uv, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return mid(smallTextures, smallSamplers, uv, mode, 2) + mid(largeTextures, largeSamplers, uv, mode, 2);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'smallTextures': 2 and 5"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_switch_match_fixed_for_in_image_transitive_conflicts_are_rejected():
+    crossgl = """
+    shader SwitchMatchFixedForInTransitiveImageConflict {
+        image2D smallImages[2] @rg32f;
+        image2D largeImages[4] @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int limit) {
+            vec2 result = vec2(0.0);
+            for i in 0..1 {
+                result = result + imageLoad(images[3], pixel);
+            }
+            for j in limit {
+                result = result + imageLoad(images[2], pixel);
+            }
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode, int limit) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, pixel, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(images, pixel, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 a = mid(smallImages, ivec2(0, 1), 0, 2);
+                vec2 b = mid(largeImages, ivec2(1, 2), 1, 2);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'smallImages': 2 and 4"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_for_in_sampled_shadowed_const_restores_after_loop():
+    safe_crossgl = """
+    shader ForInShadowedConstSampledSafe {
+        const int COUNT = 4;
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        vec4 sampleLoop(sampler2D textures[4], sampler samplers[4], vec2 uv) {
+            vec4 result = vec4(0.0);
+            for COUNT in 0..1 {
+                result = result + texture(textures[COUNT], samplers[COUNT], uv);
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLoop(textures, samplers, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[4] : register(t0);" in hlsl
+    assert "SamplerState samplers[4] : register(s0);" in hlsl
+    assert (
+        "float4 sampleLoop(Texture2D textures[4], SamplerState samplers[4], "
+        "float2 uv)" in hlsl
+    )
+    assert "for (int COUNT = 0; COUNT < 1; ++COUNT)" in hlsl
+    assert "Texture2D textures[5]" not in hlsl
+    assert "SamplerState samplers[5]" not in hlsl
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
+    assert (
+        "float4 sampleLoop(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> samplers, float2 uv)" in metal
+    )
+    assert "for (int COUNT = 0; COUNT < 1; ++COUNT)" in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+    assert "array<sampler, 5> samplers" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
+    assert "vec4 sampleLoop(sampler2D textures[4], vec2 uv)" in glsl
+    assert "for (int COUNT = 0; COUNT < 1; ++COUNT)" in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + texture(textures[COUNT], samplers[COUNT], uv);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_for_in_image_shadowed_const_restores_after_loop():
+    safe_crossgl = """
+    shader ForInShadowedConstImageSafe {
+        const int COUNT = 4;
+        image2D rgFloatImages[4] @rg32f;
+
+        vec2 imageLoop(image2D images[4] @rg32f, ivec2 pixel) {
+            vec2 result = vec2(0.0);
+            for COUNT in 0..1 {
+                result = result + imageLoad(images[COUNT], pixel);
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageLoop(rgFloatImages, ivec2(0, 1));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "float2 imageLoop(RWTexture2D<float2> images[4], int2 pixel)" in hlsl
+    assert "for (int COUNT = 0; COUNT < 1; ++COUNT)" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert (
+        "float2 imageLoop(array<texture2d<float, access::read_write>, 4> "
+        "images, int2 pixel)" in metal
+    )
+    assert "for (int COUNT = 0; COUNT < 1; ++COUNT)" in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "vec2 imageLoop(image2D images[4], ivec2 pixel)" in glsl
+    assert "for (int COUNT = 0; COUNT < 1; ++COUNT)" in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + imageLoad(images[COUNT], pixel);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'images': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_for_in_switch_match_sampled_shadowed_const_restores_after_loop():
+    safe_crossgl = """
+    shader ForInSwitchMatchShadowedSampledSafe {
+        const int COUNT = 4;
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        vec4 sampleNested(sampler2D textures[4], sampler samplers[4], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            for COUNT in 0..1 {
+                switch (mode) {
+                    case 0:
+                        result = result + texture(textures[COUNT], samplers[COUNT], uv);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + texture(textures[COUNT], samplers[COUNT], uv);
+                    }
+                    _ => {
+                    }
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return sampleNested(textures, samplers, uv, mode);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[4] : register(t0);" in hlsl
+    assert "SamplerState samplers[4] : register(s0);" in hlsl
+    assert (
+        "float4 sampleNested(Texture2D textures[4], SamplerState samplers[4], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert "case 0: {" in hlsl
+    assert hlsl.count("textures[COUNT].Sample(samplers[COUNT], uv)") == 2
+    assert "Texture2D textures[5]" not in hlsl
+    assert "SamplerState samplers[5]" not in hlsl
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
+    assert (
+        "float4 sampleNested(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> samplers, float2 uv, int mode)" in metal
+    )
+    assert "case 0: {" in metal
+    assert metal.count("textures[COUNT].sample(samplers[COUNT], uv)") == 2
+    assert "array<texture2d<float>, 5> textures" not in metal
+    assert "array<sampler, 5> samplers" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
+    assert "vec4 sampleNested(sampler2D textures[4], vec2 uv, int mode)" in glsl
+    assert "case 0: {" in glsl
+    assert glsl.count("texture(textures[COUNT], uv)") == 2
+    assert "sampler2D textures[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + texture(textures[COUNT], samplers[COUNT], uv);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_for_in_switch_match_image_shadowed_const_restores_after_loop():
+    safe_crossgl = """
+    shader ForInSwitchMatchShadowedImageSafe {
+        const int COUNT = 4;
+        image2D rgFloatImages[4] @rg32f;
+
+        vec2 imageNested(image2D images[4] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            for COUNT in 0..1 {
+                switch (mode) {
+                    case 0:
+                        result = result + imageLoad(images[COUNT], pixel);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + imageLoad(images[COUNT], pixel);
+                    }
+                    _ => {
+                    }
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageNested(rgFloatImages, ivec2(0, 1), 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert (
+        "float2 imageNested(RWTexture2D<float2> images[4], int2 pixel, int mode)"
+        in hlsl
+    )
+    assert "case 0: {" in hlsl
+    assert hlsl.count("images[COUNT][pixel]") == 2
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert (
+        "float2 imageNested(array<texture2d<float, access::read_write>, 4> "
+        "images, int2 pixel, int mode)" in metal
+    )
+    assert "case 0: {" in metal
+    assert metal.count("images[COUNT].read(uint2(pixel)).xy") == 2
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "vec2 imageNested(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert "case 0: {" in glsl
+    assert glsl.count("imageLoad(images[COUNT], pixel).xy") == 2
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + imageLoad(images[COUNT], pixel);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'images': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_loop_forms_sampled_shadowed_const_restores_after_loop():
+    safe_crossgl = """
+    shader LoopShadowedConstSampledSafe {
+        const int COUNT = 4;
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        vec4 sampleLoops(sampler2D textures[4], sampler samplers[4], vec2 uv) {
+            vec4 result = vec4(0.0);
+            while (false) {
+                int COUNT = 0;
+                result = result + texture(textures[COUNT], samplers[COUNT], uv);
+            }
+            do {
+                int COUNT = 0;
+                result = result + texture(textures[COUNT], samplers[COUNT], uv);
+            } while (false);
+            loop {
+                int COUNT = 0;
+                result = result + texture(textures[COUNT], samplers[COUNT], uv);
+                break;
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleLoops(textures, samplers, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[4] : register(t0);" in hlsl
+    assert "SamplerState samplers[4] : register(s0);" in hlsl
+    assert hlsl.count("int COUNT = 0;") == 3
+    assert hlsl.count("textures[COUNT].Sample(samplers[COUNT], uv)") == 3
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert "while (true)" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "Texture2D textures[5]" not in hlsl
+    assert "SamplerState samplers[5]" not in hlsl
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
+    assert metal.count("int COUNT = 0;") == 3
+    assert metal.count("textures[COUNT].sample(samplers[COUNT], uv)") == 3
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert "while (true)" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+    assert "array<sampler, 5> samplers" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
+    assert glsl.count("int COUNT = 0;") == 3
+    assert glsl.count("texture(textures[COUNT], uv)") == 3
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert "while (true)" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + texture(textures[COUNT], samplers[COUNT], uv);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_loop_forms_image_shadowed_const_restores_after_loop():
+    safe_crossgl = """
+    shader LoopShadowedConstImageSafe {
+        const int COUNT = 4;
+        image2D rgFloatImages[4] @rg32f;
+
+        vec2 imageLoops(image2D images[4] @rg32f, ivec2 pixel) {
+            vec2 result = vec2(0.0);
+            while (false) {
+                int COUNT = 0;
+                result = result + imageLoad(images[COUNT], pixel);
+            }
+            do {
+                int COUNT = 0;
+                result = result + imageLoad(images[COUNT], pixel);
+            } while (false);
+            loop {
+                int COUNT = 0;
+                result = result + imageLoad(images[COUNT], pixel);
+                break;
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageLoops(rgFloatImages, ivec2(0, 1));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert hlsl.count("int COUNT = 0;") == 3
+    assert hlsl.count("images[COUNT][pixel]") == 3
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert "while (true)" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert metal.count("int COUNT = 0;") == 3
+    assert metal.count("images[COUNT].read(uint2(pixel)).xy") == 3
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert "while (true)" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert glsl.count("int COUNT = 0;") == 3
+    assert glsl.count("imageLoad(images[COUNT], pixel).xy") == 3
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert "while (true)" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + imageLoad(images[COUNT], pixel);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'images': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_do_while_switch_match_sampled_arrays_infer_size():
+    crossgl = """
+    shader DoWhileSwitchMatchSampledArrays {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 sampleCases(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            do {
+                switch (mode) {
+                    case 0:
+                        result = result + texture(textures[3], samplers[3], uv);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + texture(textures[2], samplers[2], uv);
+                    }
+                    _ => {
+                    }
+                }
+            } while (false);
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return sampleCases(textures, samplers, uv, mode) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[4] : register(t0);" in hlsl
+    assert "SamplerState samplers[4] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t4);" in hlsl
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert "case 0: {" in hlsl
+    assert "textures[3].Sample(samplers[3], uv)" in hlsl
+    assert "textures[2].Sample(samplers[2], uv)" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[5]" not in hlsl
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(4)]]" in metal
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert "case 0: {" in metal
+    assert "textures[3].sample(samplers[3], uv)" in metal
+    assert "textures[2].sample(samplers[2], uv)" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
+    assert "layout(binding = 4) uniform sampler2D afterTexture;" in glsl
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert "case 0: {" in glsl
+    assert "texture(textures[3], uv)" in glsl
+    assert "texture(textures[2], uv)" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+
+def test_codegen_do_while_switch_match_image_arrays_infer_size():
+    crossgl = """
+    shader DoWhileSwitchMatchImageArrays {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 imageCases(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            do {
+                switch (mode) {
+                    case 0:
+                        result = result + imageLoad(images[3], pixel);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + imageLoad(images[2], pixel);
+                    }
+                    _ => {
+                    }
+                }
+            } while (false);
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageCases(rgFloatImages, ivec2(0, 1), 0);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert "case 0: {" in hlsl
+    assert "images[3][pixel]" in hlsl
+    assert "images[2][pixel]" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert "case 0: {" in metal
+    assert "images[3].read(uint2(pixel)).xy" in metal
+    assert "images[2].read(uint2(pixel)).xy" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert "case 0: {" in glsl
+    assert "imageLoad(images[3], pixel).xy" in glsl
+    assert "imageLoad(images[2], pixel).xy" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+
+def test_codegen_do_while_transitive_sampled_arrays_infer_size():
+    crossgl = """
+    shader DoWhileTransitiveSampledArrays {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            do {
+                switch (mode) {
+                    case 0:
+                        result = result + texture(textures[4], samplers[4], uv);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + texture(textures[3], samplers[3], uv);
+                    }
+                    _ => {
+                    }
+                }
+            } while (false);
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            return leaf(textures, samplers, uv, mode);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return mid(textures, samplers, uv, mode) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert (
+        "float4 leaf(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert (
+        "float4 mid(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert "case 0: {" in hlsl
+    assert "textures[4].Sample(samplers[4], uv)" in hlsl
+    assert "textures[3].Sample(samplers[3], uv)" in hlsl
+    assert "return leaf(textures, samplers, uv, mode);" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[6]" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 leaf(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode)" in metal
+    )
+    assert (
+        "float4 mid(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode)" in metal
+    )
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert "case 0: {" in metal
+    assert "textures[4].sample(samplers[4], uv)" in metal
+    assert "textures[3].sample(samplers[3], uv)" in metal
+    assert "return leaf(textures, samplers, uv, mode);" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+    assert "array<texture2d<float>, 6> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 leaf(sampler2D textures[5], vec2 uv, int mode)" in glsl
+    assert "vec4 mid(sampler2D textures[5], vec2 uv, int mode)" in glsl
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert "case 0: {" in glsl
+    assert "texture(textures[4], uv)" in glsl
+    assert "texture(textures[3], uv)" in glsl
+    assert "return leaf(textures, uv, mode);" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[6]" not in glsl
+
+
+def test_codegen_do_while_transitive_image_arrays_infer_size():
+    crossgl = """
+    shader DoWhileTransitiveImageArrays {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            do {
+                switch (mode) {
+                    case 0:
+                        result = result + imageLoad(images[3], pixel);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + imageLoad(images[2], pixel);
+                    }
+                    _ => {
+                    }
+                }
+            } while (false);
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            return leaf(images, pixel, mode);
+        }
+
+        compute {
+            void main() {
+                vec2 result = mid(rgFloatImages, ivec2(0, 1), 0);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
+    assert "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert "case 0: {" in hlsl
+    assert "images[3][pixel]" in hlsl
+    assert "images[2][pixel]" in hlsl
+    assert "return leaf(images, pixel, mode);" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int mode)" in metal
+    )
+    assert (
+        "float2 mid(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int mode)" in metal
+    )
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert "case 0: {" in metal
+    assert "images[3].read(uint2(pixel)).xy" in metal
+    assert "images[2].read(uint2(pixel)).xy" in metal
+    assert "return leaf(images, pixel, mode);" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 leaf(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert "vec2 mid(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert "case 0: {" in glsl
+    assert "imageLoad(images[3], pixel).xy" in glsl
+    assert "imageLoad(images[2], pixel).xy" in glsl
+    assert "return leaf(images, pixel, mode);" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+
+def test_codegen_for_in_do_while_transitive_sampled_arrays_infer_size():
+    crossgl = """
+    shader ForInDoWhileTransitiveSampledArrays {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv, int limit) {
+            vec4 result = vec4(0.0);
+            for i in 0..1 {
+                do {
+                    result = result + texture(textures[4], samplers[4], uv);
+                } while (false);
+            }
+            do {
+                for j in limit {
+                    result = result + texture(textures[2], samplers[2], uv);
+                }
+            } while (false);
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode, int limit) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, samplers, uv, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(textures, samplers, uv, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode, int limit) @ gl_FragColor {
+                return mid(textures, samplers, uv, mode, limit) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert (
+        "float4 leaf(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int limit)" in hlsl
+    )
+    assert (
+        "float4 mid(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int mode, int limit)" in hlsl
+    )
+    assert "for (int i = 0; i < 1; ++i)" in hlsl
+    assert "for (int j = 0; j < limit; ++j)" in hlsl
+    assert hlsl.count("do {") == 2
+    assert hlsl.count("} while (false);") == 2
+    assert "textures[4].Sample(samplers[4], uv)" in hlsl
+    assert "textures[2].Sample(samplers[2], uv)" in hlsl
+    assert "result = leaf(textures, samplers, uv, limit);" in hlsl
+    assert "result = (result + leaf(textures, samplers, uv, limit));" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "ForInNode(" not in hlsl
+    assert "Texture2D textures[]" not in hlsl
+    assert "Texture2D textures[6]" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 leaf(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int limit)" in metal
+    )
+    assert (
+        "float4 mid(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode, int limit)" in metal
+    )
+    assert "for (int i = 0; i < 1; ++i)" in metal
+    assert "for (int j = 0; j < limit; ++j)" in metal
+    assert metal.count("do {") == 2
+    assert metal.count("} while (false);") == 2
+    assert "textures[4].sample(samplers[4], uv)" in metal
+    assert "textures[2].sample(samplers[2], uv)" in metal
+    assert "result = leaf(textures, samplers, uv, limit);" in metal
+    assert "result = result + leaf(textures, samplers, uv, limit);" in metal
+    assert "DoWhileNode(" not in metal
+    assert "ForInNode(" not in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+    assert "array<texture2d<float>, 6> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 leaf(sampler2D textures[5], vec2 uv, int limit)" in glsl
+    assert "vec4 mid(sampler2D textures[5], vec2 uv, int mode, int limit)" in glsl
+    assert "for (int i = 0; i < 1; ++i)" in glsl
+    assert "for (int j = 0; j < limit; ++j)" in glsl
+    assert glsl.count("do {") == 2
+    assert glsl.count("} while (false);") == 2
+    assert "texture(textures[4], uv)" in glsl
+    assert "texture(textures[2], uv)" in glsl
+    assert "result = leaf(textures, uv, limit);" in glsl
+    assert "result = (result + leaf(textures, uv, limit));" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "ForInNode(" not in glsl
+    assert "sampler2D textures[]" not in glsl
+    assert "sampler2D textures[6]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[4];\n        sampler samplers[4];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_for_in_do_while_transitive_image_arrays_infer_size():
+    crossgl = """
+    shader ForInDoWhileTransitiveImageArrays {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int limit) {
+            vec2 result = vec2(0.0);
+            for i in 0..1 {
+                do {
+                    result = result + imageLoad(images[3], pixel);
+                } while (false);
+            }
+            do {
+                for j in limit {
+                    result = result + imageLoad(images[1], pixel);
+                }
+            } while (false);
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode, int limit) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, pixel, limit);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + leaf(images, pixel, limit);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = mid(rgFloatImages, ivec2(0, 1), 0, 2);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[4], int2 pixel, int limit)" in hlsl
+    assert (
+        "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode, "
+        "int limit)" in hlsl
+    )
+    assert "for (int i = 0; i < 1; ++i)" in hlsl
+    assert "for (int j = 0; j < limit; ++j)" in hlsl
+    assert hlsl.count("do {") == 2
+    assert hlsl.count("} while (false);") == 2
+    assert "images[3][pixel]" in hlsl
+    assert "images[1][pixel]" in hlsl
+    assert "result = leaf(images, pixel, limit);" in hlsl
+    assert "result = (result + leaf(images, pixel, limit));" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "ForInNode(" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[]" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int limit)" in metal
+    )
+    assert (
+        "float2 mid(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int mode, int limit)" in metal
+    )
+    assert "for (int i = 0; i < 1; ++i)" in metal
+    assert "for (int j = 0; j < limit; ++j)" in metal
+    assert metal.count("do {") == 2
+    assert metal.count("} while (false);") == 2
+    assert "images[3].read(uint2(pixel)).xy" in metal
+    assert "images[1].read(uint2(pixel)).xy" in metal
+    assert "result = leaf(images, pixel, limit);" in metal
+    assert "result = result + leaf(images, pixel, limit);" in metal
+    assert "DoWhileNode(" not in metal
+    assert "ForInNode(" not in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 leaf(image2D images[4], ivec2 pixel, int limit)" in glsl
+    assert "vec2 mid(image2D images[4], ivec2 pixel, int mode, int limit)" in glsl
+    assert "for (int i = 0; i < 1; ++i)" in glsl
+    assert "for (int j = 0; j < limit; ++j)" in glsl
+    assert glsl.count("do {") == 2
+    assert glsl.count("} while (false);") == 2
+    assert "imageLoad(images[3], pixel).xy" in glsl
+    assert "imageLoad(images[1], pixel).xy" in glsl
+    assert "result = leaf(images, pixel, limit);" in glsl
+    assert "result = (result + leaf(images, pixel, limit));" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "ForInNode(" not in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[3] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 3 and 4"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_do_while_fixed_transitive_sampled_conflicts_are_rejected():
+    crossgl = """
+    shader DoWhileFixedTransitiveSampledConflict {
+        sampler2D smallTextures[2];
+        sampler smallSamplers[2];
+        sampler2D largeTextures[5];
+        sampler largeSamplers[5];
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            do {
+                switch (mode) {
+                    case 0:
+                        result = result + texture(textures[4], samplers[4], uv);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + texture(textures[3], samplers[3], uv);
+                    }
+                    _ => {
+                    }
+                }
+            } while (false);
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            return leaf(textures, samplers, uv, mode);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return mid(smallTextures, smallSamplers, uv, mode) + mid(largeTextures, largeSamplers, uv, mode);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'smallTextures': 2 and 5"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_do_while_fixed_transitive_image_conflicts_are_rejected():
+    crossgl = """
+    shader DoWhileFixedTransitiveImageConflict {
+        image2D smallImages[2] @rg32f;
+        image2D largeImages[4] @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            do {
+                switch (mode) {
+                    case 0:
+                        result = result + imageLoad(images[3], pixel);
+                        break;
+                    default:
+                        break;
+                }
+                match mode {
+                    1 => {
+                        result = result + imageLoad(images[2], pixel);
+                    }
+                    _ => {
+                    }
+                }
+            } while (false);
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            return leaf(images, pixel, mode);
+        }
+
+        compute {
+            void main() {
+                vec2 a = mid(smallImages, ivec2(0, 1), 0);
+                vec2 b = mid(largeImages, ivec2(1, 2), 1);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'smallImages': 2 and 4"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_do_while_transitive_shadowed_sampled_const_restores_after_loop():
+    safe_crossgl = """
+    shader DoWhileTransitiveShadowedSampledSafe {
+        const int COUNT = 4;
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv) {
+            vec4 result = vec4(0.0);
+            do {
+                int COUNT = 0;
+                result = result + texture(textures[COUNT], samplers[COUNT], uv);
+            } while (false);
+            return result;
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv) {
+            return leaf(textures, samplers, uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return mid(textures, samplers, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[4] : register(t0);" in hlsl
+    assert "SamplerState samplers[4] : register(s0);" in hlsl
+    assert (
+        "float4 leaf(Texture2D textures[4], SamplerState samplers[4], "
+        "float2 uv)" in hlsl
+    )
+    assert (
+        "float4 mid(Texture2D textures[4], SamplerState samplers[4], "
+        "float2 uv)" in hlsl
+    )
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert hlsl.count("int COUNT = 0;") == 1
+    assert "textures[COUNT].Sample(samplers[COUNT], uv)" in hlsl
+    assert "return leaf(textures, samplers, uv);" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "Texture2D textures[5]" not in hlsl
+    assert "SamplerState samplers[5]" not in hlsl
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
+    assert (
+        "float4 leaf(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> samplers, float2 uv)" in metal
+    )
+    assert (
+        "float4 mid(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> samplers, float2 uv)" in metal
+    )
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert metal.count("int COUNT = 0;") == 1
+    assert "textures[COUNT].sample(samplers[COUNT], uv)" in metal
+    assert "return leaf(textures, samplers, uv);" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+    assert "array<sampler, 5> samplers" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
+    assert "vec4 leaf(sampler2D textures[4], vec2 uv)" in glsl
+    assert "vec4 mid(sampler2D textures[4], vec2 uv)" in glsl
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert glsl.count("int COUNT = 0;") == 1
+    assert "texture(textures[COUNT], uv)" in glsl
+    assert "return leaf(textures, uv);" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + texture(textures[COUNT], samplers[COUNT], uv);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_do_while_transitive_shadowed_image_const_restores_after_loop():
+    safe_crossgl = """
+    shader DoWhileTransitiveShadowedImageSafe {
+        const int COUNT = 4;
+        image2D rgFloatImages[4] @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
+            vec2 result = vec2(0.0);
+            do {
+                int COUNT = 0;
+                result = result + imageLoad(images[COUNT], pixel);
+            } while (false);
+            return result;
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel) {
+            return leaf(images, pixel);
+        }
+
+        compute {
+            void main() {
+                vec2 result = mid(rgFloatImages, ivec2(0, 1));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(safe_crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[4], int2 pixel)" in hlsl
+    assert "float2 mid(RWTexture2D<float2> images[4], int2 pixel)" in hlsl
+    assert "do {" in hlsl
+    assert "} while (false);" in hlsl
+    assert hlsl.count("int COUNT = 0;") == 1
+    assert "images[COUNT][pixel]" in hlsl
+    assert "return leaf(images, pixel);" in hlsl
+    assert "DoWhileNode(" not in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel)" in metal
+    )
+    assert (
+        "float2 mid(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel)" in metal
+    )
+    assert "do {" in metal
+    assert "} while (false);" in metal
+    assert metal.count("int COUNT = 0;") == 1
+    assert "images[COUNT].read(uint2(pixel)).xy" in metal
+    assert "return leaf(images, pixel);" in metal
+    assert "DoWhileNode(" not in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "vec2 leaf(image2D images[4], ivec2 pixel)" in glsl
+    assert "vec2 mid(image2D images[4], ivec2 pixel)" in glsl
+    assert "do {" in glsl
+    assert "} while (false);" in glsl
+    assert glsl.count("int COUNT = 0;") == 1
+    assert "imageLoad(images[COUNT], pixel).xy" in glsl
+    assert "return leaf(images, pixel);" in glsl
+    assert "DoWhileNode(" not in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+    conflict_crossgl = safe_crossgl.replace(
+        "return result;",
+        "return result + imageLoad(images[COUNT], pixel);",
+    )
+    conflict_ast = parse_crossgl(conflict_crossgl)
+    assert conflict_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 4 and 5"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(conflict_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(conflict_ast)
+
+
+def test_codegen_switch_match_transitive_sampled_arrays_infer_case_only_size():
+    crossgl = """
+    shader SwitchMatchTransitiveSampledCaseOnly {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            int mode @ TEXCOORD1;
+        };
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv) {
+            return texture(textures[4], samplers[4], uv);
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, samplers, uv);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                0 => {
+                    result = result + leaf(textures, samplers, uv);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return mid(textures, samplers, input.uv, input.mode) + texture(afterTexture, input.uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert "SamplerState afterTextureSampler : register(s5);" in hlsl
+    assert (
+        "float4 leaf(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv)" in hlsl
+    )
+    assert (
+        "float4 mid(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert "result = leaf(textures, samplers, uv);" in hlsl
+    assert "result = (result + leaf(textures, samplers, uv));" in hlsl
+    assert "Texture2D textures[] : register(t0);" not in hlsl
+
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 leaf(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv)" in metal
+    )
+    assert (
+        "float4 mid(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode)" in metal
+    )
+    assert "result = leaf(textures, samplers, uv);" in metal
+    assert "result = result + leaf(textures, samplers, uv);" in metal
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 leaf(sampler2D textures[5], vec2 uv)" in glsl
+    assert "vec4 mid(sampler2D textures[5], vec2 uv, int mode)" in glsl
+    assert "result = leaf(textures, uv);" in glsl
+    assert "result = (result + leaf(textures, uv));" in glsl
+    assert "sampler2D textures[]" not in glsl
+
+
+def test_codegen_switch_match_transitive_image_arrays_infer_case_only_size():
+    crossgl = """
+    shader SwitchMatchTransitiveImageCaseOnly {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
+            return imageLoad(images[3], pixel);
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, pixel);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                0 => {
+                    result = result + leaf(images, pixel);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = mid(rgFloatImages, ivec2(0, 1), 0);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[4], int2 pixel)" in hlsl
+    assert "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
+    assert "return images[3][pixel];" in hlsl
+    assert "result = leaf(images, pixel);" in hlsl
+    assert "result = (result + leaf(images, pixel));" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel)" in metal
+    )
+    assert (
+        "float2 mid(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int mode)" in metal
+    )
+    assert "return images[3].read(uint2(pixel)).xy;" in metal
+    assert "result = leaf(images, pixel);" in metal
+    assert "result = result + leaf(images, pixel);" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 leaf(image2D images[4], ivec2 pixel)" in glsl
+    assert "vec2 mid(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert "return imageLoad(images[3], pixel).xy;" in glsl
+    assert "result = leaf(images, pixel);" in glsl
+    assert "result = (result + leaf(images, pixel));" in glsl
+    assert "image2D rgFloatImages[]" not in glsl
+
+
+def test_codegen_switch_match_shadowed_transitive_sampled_arrays_infer_size():
+    crossgl = """
+    shader SwitchMatchShadowedTransitiveSampled {
+        const int COUNT = 4;
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv) {
+            return texture(textures[COUNT], samplers[COUNT], uv);
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    int COUNT = 0;
+                    match mode {
+                        0 => {
+                            result = texture(textures[COUNT], samplers[COUNT], uv);
+                            result = result + leaf(textures, samplers, uv);
+                        }
+                        _ => {
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    int COUNT = 0;
+                    switch (mode) {
+                        case 1:
+                            result = result + texture(textures[COUNT], samplers[COUNT], uv);
+                            result = result + leaf(textures, samplers, uv);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv, int mode) @ gl_FragColor {
+                return mid(textures, samplers, uv, mode) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "static const int COUNT = 4;" in hlsl
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert (
+        "float4 leaf(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv)" in hlsl
+    )
+    assert (
+        "float4 mid(Texture2D textures[5], SamplerState samplers[5], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert hlsl.count("int COUNT = 0;") == 2
+    assert hlsl.count("textures[COUNT].Sample(samplers[COUNT], uv)") == 3
+    assert hlsl.count("leaf(textures, samplers, uv)") == 2
+    assert "Texture2D textures[] : register(t0);" not in hlsl
+
+    assert "constant int COUNT = 4;" in metal
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 leaf(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv)" in metal
+    )
+    assert (
+        "float4 mid(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, float2 uv, int mode)" in metal
+    )
+    assert metal.count("int COUNT = 0;") == 2
+    assert metal.count("textures[COUNT].sample(samplers[COUNT], uv)") == 3
+    assert metal.count("leaf(textures, samplers, uv)") == 2
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "const int COUNT = 4;" in glsl
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert "vec4 leaf(sampler2D textures[5], vec2 uv)" in glsl
+    assert "vec4 mid(sampler2D textures[5], vec2 uv, int mode)" in glsl
+    assert glsl.count("int COUNT = 0;") == 2
+    assert glsl.count("texture(textures[COUNT], uv)") == 3
+    assert glsl.count("leaf(textures, uv)") == 2
+    assert "sampler2D textures[]" not in glsl
+
+
+def test_codegen_switch_match_shadowed_transitive_image_arrays_infer_size():
+    crossgl = """
+    shader SwitchMatchShadowedTransitiveImage {
+        const int COUNT = 3;
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
+            return imageLoad(images[COUNT], pixel);
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    int COUNT = 0;
+                    match mode {
+                        0 => {
+                            result = imageLoad(images[COUNT], pixel);
+                            result = result + leaf(images, pixel);
+                        }
+                        _ => {
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    int COUNT = 0;
+                    switch (mode) {
+                        case 1:
+                            result = result + imageLoad(images[COUNT], pixel);
+                            result = result + leaf(images, pixel);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = mid(rgFloatImages, ivec2(0, 1), 0);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "static const int COUNT = 3;" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert "float2 leaf(RWTexture2D<float2> images[4], int2 pixel)" in hlsl
+    assert "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
+    assert hlsl.count("int COUNT = 0;") == 2
+    assert hlsl.count("images[COUNT][pixel]") == 3
+    assert hlsl.count("leaf(images, pixel)") == 2
+    assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
+
+    assert "constant int COUNT = 3;" in metal
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 leaf(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel)" in metal
+    )
+    assert (
+        "float2 mid(array<texture2d<float, access::read_write>, 4> images, "
+        "int2 pixel, int mode)" in metal
+    )
+    assert metal.count("int COUNT = 0;") == 2
+    assert metal.count("images[COUNT].read(uint2(pixel)).xy") == 3
+    assert metal.count("leaf(images, pixel)") == 2
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "const int COUNT = 3;" in glsl
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert "vec2 leaf(image2D images[4], ivec2 pixel)" in glsl
+    assert "vec2 mid(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert glsl.count("int COUNT = 0;") == 2
+    assert glsl.count("imageLoad(images[COUNT], pixel).xy") == 3
+    assert glsl.count("leaf(images, pixel)") == 2
+    assert "image2D rgFloatImages[]" not in glsl
+
+
+def test_codegen_switch_match_sampled_arrays_ignore_dynamic_negative_indices():
+    crossgl = """
+    shader SwitchMatchMixedComputedSampledIndices {
+        const int BASE = 2;
+        const int OFFSET = 2;
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            int layer @ TEXCOORD1;
+            int mode @ TEXCOORD2;
+        };
+
+        vec4 sampleCases(sampler2D textures[], sampler samplers[], int layer, vec2 uv, int mode) {
+            vec4 result = texture(textures[layer + 1], samplers[layer + 1], uv);
+            switch (mode) {
+                case 0:
+                    result = result + texture(textures[-1], samplers[-1], uv);
+                    break;
+                default:
+                    result = result + texture(textures[BASE + OFFSET], samplers[BASE + OFFSET], uv);
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + texture(textures[layer - 1], samplers[layer - 1], uv);
+                }
+                _ => {
+                    result = result + texture(textures[BASE + OFFSET], samplers[BASE + OFFSET], uv);
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "static const int BASE = 2;" in hlsl
+    assert "static const int OFFSET = 2;" in hlsl
+    assert "Texture2D textures[5] : register(t0);" in hlsl
+    assert "SamplerState samplers[5] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t5);" in hlsl
+    assert (
+        "float4 sampleCases(Texture2D textures[5], SamplerState samplers[5], "
+        "int layer, float2 uv, int mode)" in hlsl
+    )
+    assert "textures[(layer + 1)].Sample(samplers[(layer + 1)], uv)" in hlsl
+    assert "textures[-1].Sample(samplers[-1], uv)" in hlsl
+    assert "textures[(layer - 1)].Sample(samplers[(layer - 1)], uv)" in hlsl
+    assert (
+        hlsl.count("textures[(BASE + OFFSET)].Sample(samplers[(BASE + OFFSET)], uv)")
+        == 2
+    )
+    assert "Texture2D textures[1] : register(t0);" not in hlsl
+    assert "Texture2D afterTexture : register(t1);" not in hlsl
+
+    assert "constant int BASE = 2;" in metal
+    assert "constant int OFFSET = 2;" in metal
+    assert "array<texture2d<float>, 5> textures [[texture(0)]]" in metal
+    assert "array<sampler, 5> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(5)]]" in metal
+    assert (
+        "float4 sampleCases(array<texture2d<float>, 5> textures, "
+        "array<sampler, 5> samplers, int layer, float2 uv, int mode)" in metal
+    )
+    assert "textures[layer + 1].sample(samplers[layer + 1], uv)" in metal
+    assert "textures[-1].sample(samplers[-1], uv)" in metal
+    assert "textures[layer - 1].sample(samplers[layer - 1], uv)" in metal
+    assert (
+        metal.count("textures[BASE + OFFSET].sample(samplers[BASE + OFFSET], uv)") == 2
+    )
+    assert "array<texture2d<float>, 1> textures" not in metal
+    assert "texture2d<float> afterTexture [[texture(1)]]" not in metal
+
+    assert "const int BASE = 2;" in glsl
+    assert "const int OFFSET = 2;" in glsl
+    assert "layout(binding = 0) uniform sampler2D textures[5];" in glsl
+    assert "layout(binding = 5) uniform sampler2D afterTexture;" in glsl
+    assert (
+        "vec4 sampleCases(sampler2D textures[5], int layer, vec2 uv, int mode)" in glsl
+    )
+    assert "texture(textures[(layer + 1)], uv)" in glsl
+    assert "texture(textures[(-1)], uv)" in glsl
+    assert "texture(textures[(layer - 1)], uv)" in glsl
+    assert glsl.count("texture(textures[(BASE + OFFSET)], uv)") == 2
+    assert "layout(binding = 0) uniform sampler2D textures[1];" not in glsl
+    assert "layout(binding = 1) uniform sampler2D afterTexture;" not in glsl
+
+
+def test_codegen_switch_match_image_arrays_ignore_dynamic_negative_indices():
+    crossgl = """
+    shader SwitchMatchMixedComputedImageIndices {
+        const int BASE = 1;
+        const int OFFSET = 2;
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        vec2 imageCases(image2D images[] @rg32f, int layer, ivec2 pixel, int mode) {
+            vec2 result = imageLoad(images[layer + 1], pixel);
+            switch (mode) {
+                case 0:
+                    result = result + imageLoad(images[-1], pixel);
+                    break;
+                default:
+                    result = result + imageLoad(images[BASE + OFFSET], pixel);
+                    break;
+            }
+            match mode {
+                1 => {
+                    result = result + imageLoad(images[layer - 1], pixel);
+                }
+                _ => {
+                    result = result + imageLoad(images[BASE + OFFSET], pixel);
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageCases(rgFloatImages, 1, ivec2(0, 1), 0);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "static const int BASE = 1;" in hlsl
+    assert "static const int OFFSET = 2;" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u4);" in hlsl
+    assert (
+        "float2 imageCases(RWTexture2D<float2> images[4], int layer, "
+        "int2 pixel, int mode)" in hlsl
+    )
+    assert "images[(layer + 1)][pixel]" in hlsl
+    assert "images[-1][pixel]" in hlsl
+    assert "images[(layer - 1)][pixel]" in hlsl
+    assert hlsl.count("images[(BASE + OFFSET)][pixel]") == 2
+    assert "RWTexture2D<float2> rgFloatImages[1] : register(u0);" not in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u1);" not in hlsl
+
+    assert "constant int BASE = 1;" in metal
+    assert "constant int OFFSET = 2;" in metal
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(4)]]" in metal
+    assert (
+        "float2 imageCases(array<texture2d<float, access::read_write>, 4> "
+        "images, int layer, int2 pixel, int mode)" in metal
+    )
+    assert "images[layer + 1].read(uint2(pixel)).xy" in metal
+    assert "images[-1].read(uint2(pixel)).xy" in metal
+    assert "images[layer - 1].read(uint2(pixel)).xy" in metal
+    assert metal.count("images[BASE + OFFSET].read(uint2(pixel)).xy") == 2
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+    assert "texture2d<float, access::read_write> afterImage [[texture(1)]]" not in metal
+
+    assert "const int BASE = 1;" in glsl
+    assert "const int OFFSET = 2;" in glsl
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
+    assert (
+        "vec2 imageCases(image2D images[4], int layer, ivec2 pixel, int mode)" in glsl
+    )
+    assert "imageLoad(images[(layer + 1)], pixel).xy" in glsl
+    assert "imageLoad(images[(-1)], pixel).xy" in glsl
+    assert "imageLoad(images[(layer - 1)], pixel).xy" in glsl
+    assert glsl.count("imageLoad(images[(BASE + OFFSET)], pixel).xy") == 2
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[1];" not in glsl
+    assert "layout(rg32f, binding = 1) uniform image2D afterImage;" not in glsl
+
+
+def test_codegen_switch_match_fixed_sampled_transitive_conflicts_are_rejected():
+    crossgl = """
+    shader SwitchMatchFixedTransitiveSampledConflict {
+        sampler2D smallTextures[2];
+        sampler smallSamplers[2];
+        sampler2D largeTextures[5];
+        sampler largeSamplers[5];
+
+        vec4 leaf(sampler2D textures[], sampler samplers[], vec2 uv) {
+            return texture(textures[4], samplers[4], uv);
+        }
+
+        vec4 mid(sampler2D textures[], sampler samplers[], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(textures, samplers, uv);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                0 => {
+                    result = result + leaf(textures, samplers, uv);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return mid(smallTextures, smallSamplers, uv, 0) + mid(largeTextures, largeSamplers, uv, 1);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'smallTextures': 2 and 5"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_switch_match_fixed_image_transitive_conflicts_are_rejected():
+    crossgl = """
+    shader SwitchMatchFixedTransitiveImageConflict {
+        image2D smallImages[2] @rg32f;
+        image2D largeImages[4] @rg32f;
+
+        vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
+            return imageLoad(images[3], pixel);
+        }
+
+        vec2 mid(image2D images[] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    result = leaf(images, pixel);
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                0 => {
+                    result = result + leaf(images, pixel);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 a = mid(smallImages, ivec2(0, 1), 0);
+                vec2 b = mid(largeImages, ivec2(1, 2), 1);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'smallImages': 2 and 4"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_switch_match_fixed_sampled_arrays_reject_case_out_of_bounds():
+    crossgl = """
+    shader SwitchMatchFixedSampledOutOfBounds {
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        vec4 sampleCases(sampler2D textures[4], sampler samplers[4], vec2 uv, int mode) {
+            switch (mode) {
+                case 0:
+                    return texture(textures[4], samplers[4], uv);
+                default:
+                    break;
+            }
+            match mode {
+                0 => { return texture(textures[0], samplers[0], uv); }
+                _ => { return texture(textures[4], samplers[4], uv); }
+            }
+            return vec4(0.0);
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleCases(textures, samplers, uv, 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_switch_match_fixed_image_arrays_reject_case_out_of_bounds():
+    crossgl = """
+    shader SwitchMatchFixedImageOutOfBounds {
+        image2D rgFloatImages[4] @rg32f;
+
+        vec2 imageCases(image2D images[4] @rg32f, ivec2 pixel, int mode) {
+            switch (mode) {
+                case 0:
+                    return imageLoad(images[4], pixel);
+                default:
+                    break;
+            }
+            match mode {
+                0 => { return imageLoad(images[0], pixel); }
+                _ => { return imageLoad(images[4], pixel); }
+            }
+            return vec2(0.0);
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageCases(rgFloatImages, ivec2(0, 1), 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'images': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_switch_match_fixed_sampled_arrays_shadowed_case_const_stays_dynamic():
+    crossgl = """
+    shader SwitchMatchFixedSampledShadowedConst {
+        const int COUNT = 4;
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        vec4 sampleCases(sampler2D textures[4], sampler samplers[4], vec2 uv, int mode) {
+            vec4 result = vec4(0.0);
+            switch (mode) {
+                case 0:
+                    int COUNT = 0;
+                    vec4 scoped = texture(textures[COUNT], samplers[COUNT], uv);
+                    result = scoped;
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                0 => {
+                    int COUNT = 0;
+                    result = result + texture(textures[COUNT], samplers[COUNT], uv);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return sampleCases(textures, samplers, uv, 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[4] : register(t0);" in hlsl
+    assert "SamplerState samplers[4] : register(s0);" in hlsl
+    assert (
+        "float4 sampleCases(Texture2D textures[4], SamplerState samplers[4], "
+        "float2 uv, int mode)" in hlsl
+    )
+    assert hlsl.count("int COUNT = 0;") == 2
+    assert "textures[COUNT].Sample(samplers[COUNT], uv)" in hlsl
+    assert "Texture2D textures[5]" not in hlsl
+    assert "SamplerState samplers[5]" not in hlsl
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in metal
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in metal
+    assert (
+        "float4 sampleCases(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> samplers, float2 uv, int mode)" in metal
+    )
+    assert metal.count("int COUNT = 0;") == 2
+    assert "textures[COUNT].sample(samplers[COUNT], uv)" in metal
+    assert "array<texture2d<float>, 5> textures" not in metal
+    assert "array<sampler, 5> samplers" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
+    assert "vec4 sampleCases(sampler2D textures[4], vec2 uv, int mode)" in glsl
+    assert glsl.count("int COUNT = 0;") == 2
+    assert "texture(textures[COUNT], uv)" in glsl
+    assert "sampler2D textures[5]" not in glsl
+
+
+def test_codegen_switch_match_fixed_image_arrays_shadowed_case_const_stays_dynamic():
+    crossgl = """
+    shader SwitchMatchFixedImageShadowedConst {
+        const int COUNT = 4;
+        image2D rgFloatImages[4] @rg32f;
+
+        vec2 imageCases(image2D images[4] @rg32f, ivec2 pixel, int mode) {
+            vec2 result = vec2(0.0);
+            switch (mode) {
+                case 0:
+                    int COUNT = 0;
+                    vec2 scoped = imageLoad(images[COUNT], pixel);
+                    result = scoped;
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                0 => {
+                    int COUNT = 0;
+                    result = result + imageLoad(images[COUNT], pixel);
+                }
+                _ => {
+                }
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 result = imageCases(rgFloatImages, ivec2(0, 1), 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" in hlsl
+    assert (
+        "float2 imageCases(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
+    )
+    assert hlsl.count("int COUNT = 0;") == 2
+    assert "images[COUNT][pixel]" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[5]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 4> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert (
+        "float2 imageCases(array<texture2d<float, access::read_write>, 4> "
+        "images, int2 pixel, int mode)" in metal
+    )
+    assert metal.count("int COUNT = 0;") == 2
+    assert "images[COUNT].read(uint2(pixel)).xy" in metal
+    assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
+    assert "vec2 imageCases(image2D images[4], ivec2 pixel, int mode)" in glsl
+    assert glsl.count("int COUNT = 0;") == 2
+    assert "imageLoad(images[COUNT], pixel).xy" in glsl
+    assert "image2D rgFloatImages[5]" not in glsl
+
+
+def test_codegen_dynamic_fixed_multisample_image_array_indices_keep_swizzles():
+    crossgl = """
+    shader DynamicFixedMultisampleImageArrayIndex {
+        image2DMS colorImages[4] @rgba16f;
+        uimage2DMSArray counterLayers[4] @rgba32ui;
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        vec4 readColor(image2DMS images[4] @rgba16f, int layer, ivec2 pixel, int sampleIndex) {
+            return imageLoad(images[layer], pixel, sampleIndex);
+        }
+
+        uint readCounter(uimage2DMSArray images[4] @rgba32ui, int layer, ivec3 pixelLayer, int sampleIndex) {
+            return imageLoad(images[layer], pixelLayer, sampleIndex).x;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 color = readColor(colorImages, input.layer, ivec2(1, 2), 0);
+                uint counter = readCounter(counterLayers, input.layer, ivec3(1, 2, 3), 0);
+                return color + vec4(float(counter));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2DMS<float4> colorImages[4] : register(t0);" in hlsl
+    assert "Texture2DMSArray<uint4> counterLayers[4] : register(t4);" in hlsl
+    assert (
+        "float4 readColor(Texture2DMS<float4> images[4], int layer, int2 pixel, "
+        "int sampleIndex)" in hlsl
+    )
+    assert (
+        "uint readCounter(Texture2DMSArray<uint4> images[4], int layer, "
+        "int3 pixelLayer, int sampleIndex)" in hlsl
+    )
+    assert "return images[layer].Load(pixel, sampleIndex);" in hlsl
+    assert "return images[layer].Load(pixelLayer, sampleIndex).x;" in hlsl
+    assert ".x.x" not in hlsl
+
+    assert (
+        "array<texture2d_ms<float, access::read>, 4> colorImages [[texture(0)]]"
+        in metal
+    )
+    assert (
+        "array<texture2d_ms_array<uint, access::read>, 4> counterLayers [[texture(4)]]"
+        in metal
+    )
+    assert (
+        "float4 readColor(array<texture2d_ms<float, access::read>, 4> images, "
+        "int layer, int2 pixel, int sampleIndex)" in metal
+    )
+    assert (
+        "uint readCounter(array<texture2d_ms_array<uint, access::read>, 4> images, "
+        "int layer, int3 pixelLayer, int sampleIndex)" in metal
+    )
+    assert "return images[layer].read(uint2(pixel), uint(sampleIndex));" in metal
+    assert (
+        "return images[layer].read(uint2(pixelLayer.xy), uint(pixelLayer.z), "
+        "uint(sampleIndex)).x;" in metal
+    )
+    assert ".x.x" not in metal
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS colorImages[4];" in glsl
+    assert (
+        "layout(rgba32ui, binding = 4) uniform uimage2DMSArray counterLayers[4];"
+        in glsl
+    )
+    assert (
+        "vec4 readColor(image2DMS images[4], int layer, ivec2 pixel, int sampleIndex)"
+        in glsl
+    )
+    assert (
+        "uint readCounter(uimage2DMSArray images[4], int layer, "
+        "ivec3 pixelLayer, int sampleIndex)" in glsl
+    )
+    assert "return imageLoad(images[layer], pixel, sampleIndex);" in glsl
+    assert "return imageLoad(images[layer], pixelLayer, sampleIndex).x;" in glsl
+    assert ".x.x" not in glsl
+
+
+def test_codegen_multisample_image_later_shadowed_const_index_conflicts():
+    crossgl = """
+    shader LaterShadowMultisampleImageConstIndex {
+        const int COUNT = 4;
+        image2DMS colorImages[4] @rgba16f;
+
+        vec4 leaf(image2DMS images[] @rgba16f, ivec2 pixel, int sampleIndex) {
+            vec4 value = imageLoad(images[COUNT], pixel, sampleIndex);
+            int COUNT = 0;
+            return value;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return leaf(colorImages, ivec2(1, 2), 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'colorImages': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_multisample_image_earlier_shadowed_const_index_stays_dynamic():
+    crossgl = """
+    shader EarlierShadowMultisampleImageConstIndex {
+        const int COUNT = 4;
+        image2DMS colorImages[4] @rgba16f;
+        uimage2DMSArray counterLayers[4] @rgba32ui;
+
+        vec4 leafColor(image2DMS images[] @rgba16f, ivec2 pixel, int sampleIndex) {
+            int COUNT = 0;
+            return imageLoad(images[COUNT], pixel, sampleIndex);
+        }
+
+        uint leafCounter(uimage2DMSArray images[] @rgba32ui, ivec3 pixelLayer, int sampleIndex) {
+            int COUNT = 0;
+            return imageLoad(images[COUNT], pixelLayer, sampleIndex).x;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec4 color = leafColor(colorImages, ivec2(1, 2), 0);
+                uint counter = leafCounter(counterLayers, ivec3(1, 2, 3), 0);
+                return color + vec4(float(counter));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2DMS<float4> colorImages[4] : register(t0);" in hlsl
+    assert "Texture2DMSArray<uint4> counterLayers[4] : register(t4);" in hlsl
+    assert (
+        "float4 leafColor(Texture2DMS<float4> images[4], int2 pixel, int sampleIndex)"
+        in hlsl
+    )
+    assert (
+        "uint leafCounter(Texture2DMSArray<uint4> images[4], int3 pixelLayer, "
+        "int sampleIndex)" in hlsl
+    )
+    assert "return images[COUNT].Load(pixel, sampleIndex);" in hlsl
+    assert "return images[COUNT].Load(pixelLayer, sampleIndex).x;" in hlsl
+    assert "images[5]" not in hlsl
+    assert ".x.x" not in hlsl
+
+    assert (
+        "array<texture2d_ms<float, access::read>, 4> colorImages [[texture(0)]]"
+        in metal
+    )
+    assert (
+        "array<texture2d_ms_array<uint, access::read>, 4> counterLayers [[texture(4)]]"
+        in metal
+    )
+    assert (
+        "float4 leafColor(array<texture2d_ms<float, access::read>, 4> images, "
+        "int2 pixel, int sampleIndex)" in metal
+    )
+    assert (
+        "uint leafCounter(array<texture2d_ms_array<uint, access::read>, 4> images, "
+        "int3 pixelLayer, int sampleIndex)" in metal
+    )
+    assert "return images[COUNT].read(uint2(pixel), uint(sampleIndex));" in metal
+    assert (
+        "return images[COUNT].read(uint2(pixelLayer.xy), uint(pixelLayer.z), "
+        "uint(sampleIndex)).x;" in metal
+    )
+    assert "images[5]" not in metal
+    assert ".x.x" not in metal
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS colorImages[4];" in glsl
+    assert (
+        "layout(rgba32ui, binding = 4) uniform uimage2DMSArray counterLayers[4];"
+        in glsl
+    )
+    assert "vec4 leafColor(image2DMS images[4], ivec2 pixel, int sampleIndex)" in glsl
+    assert (
+        "uint leafCounter(uimage2DMSArray images[4], ivec3 pixelLayer, "
+        "int sampleIndex)" in glsl
+    )
+    assert "return imageLoad(images[COUNT], pixel, sampleIndex);" in glsl
+    assert "return imageLoad(images[COUNT], pixelLayer, sampleIndex).x;" in glsl
+    assert "images[5]" not in glsl
+    assert ".x.x" not in glsl
+
+
+def test_codegen_multisample_image_if_scope_restores_const_index_conflict():
+    crossgl = """
+    shader IfScopedMultisampleImageConstIndex {
+        const int COUNT = 4;
+        image2DMS colorImages[4] @rgba16f;
+
+        vec4 leaf(image2DMS images[] @rgba16f, ivec2 pixel, int sampleIndex, bool flag) {
+            if (flag) {
+                int COUNT = 0;
+                vec4 dynamicValue = imageLoad(images[COUNT], pixel, sampleIndex);
+            }
+            return imageLoad(images[COUNT], pixel, sampleIndex);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return leaf(colorImages, ivec2(1, 2), 0, true);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'colorImages': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_multisample_image_loop_scope_restores_const_index_conflict():
+    crossgl = """
+    shader LoopScopedMultisampleImageConstIndex {
+        const int COUNT = 4;
+        image2DMS colorImages[4] @rgba16f;
+
+        vec4 leaf(image2DMS images[] @rgba16f, ivec2 pixel, int sampleIndex) {
+            for (int i = 0; i < 1; i = i + 1) {
+                int COUNT = 0;
+                vec4 dynamicValue = imageLoad(images[COUNT], pixel, sampleIndex);
+            }
+            return imageLoad(images[COUNT], pixel, sampleIndex);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return leaf(colorImages, ivec2(1, 2), 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'colorImages': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_multisample_image_switch_scope_restores_const_index_conflict():
+    crossgl = """
+    shader SwitchScopedMultisampleImageConstIndex {
+        const int COUNT = 4;
+        image2DMS colorImages[4] @rgba16f;
+
+        vec4 leaf(image2DMS images[] @rgba16f, ivec2 pixel, int sampleIndex, int mode) {
+            switch (mode) {
+                case 0:
+                    int COUNT = 0;
+                    vec4 dynamicValue = imageLoad(images[COUNT], pixel, sampleIndex);
+                    break;
+                default:
+                    break;
+            }
+            return imageLoad(images[COUNT], pixel, sampleIndex);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return leaf(colorImages, ivec2(1, 2), 0, 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'colorImages': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_multisample_image_match_scope_restores_const_index_conflict():
+    crossgl = """
+    shader MatchScopedMultisampleImageConstIndex {
+        const int COUNT = 4;
+        image2DMS colorImages[4] @rgba16f;
+
+        vec4 leaf(image2DMS images[] @rgba16f, ivec2 pixel, int sampleIndex, int mode) {
+            match mode {
+                0 => {
+                    int COUNT = 0;
+                    vec4 dynamicValue = imageLoad(images[COUNT], pixel, sampleIndex);
+                },
+                _ => {
+                },
+            }
+            return imageLoad(images[COUNT], pixel, sampleIndex);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return leaf(colorImages, ivec2(1, 2), 0, 0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'colorImages': 4 and 5"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
+
+
+def test_codegen_multisample_image_array_transitive_size_conflicts_are_rejected():
+    crossgl = """
+    shader MixedFixedMultisampleImageCallSites {
+        image2DMS smallImages[2] @rgba16f;
+        image2DMS largeImages[4] @rgba16f;
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+        };
+
+        ivec2 leafSize(image2DMS images[] @rgba16f, int layer) {
+            return imageSize(images[layer]);
+        }
+
+        ivec2 midSize(image2DMS images[] @rgba16f, int layer) {
+            return leafSize(images, layer);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 a = midSize(smallImages, input.layer);
+                ivec2 b = midSize(largeImages, input.layer);
+                return vec4(float(a.x + b.x));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'smallImages': 2 and 4"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(shader_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(shader_ast)
 
 
 def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
@@ -4351,9 +11294,9 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
     assert "imageLoad(" not in hlsl
     assert "imageStore(" not in hlsl
 
-    assert "texture2d_ms<int, access::read_write> signedImage [[texture(0)]]" in metal
+    assert "texture2d_ms<int, access::read> signedImage [[texture(0)]]" in metal
     assert (
-        "texture2d_ms_array<uint, access::read_write> unsignedLayers "
+        "texture2d_ms_array<uint, access::read> unsignedLayers "
         "[[texture(1)]]" in metal
     )
     assert (
@@ -4387,12 +11330,20 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
         in metal
     )
     assert (
+        "unsupported Metal multisample image store: imageStore on "
+        "texture2d_ms<int, access::read>" in metal
+    )
+    assert (
+        "unsupported Metal multisample image store: imageStore on "
+        "texture2d_ms_array<uint, access::read>" in metal
+    )
+    assert (
         "signedImage.write(int4(0) /* unsupported Metal GLSL buffer block "
         "access intBlock: no target-side fallback declaration emitted */, "
         "uint2(int2(0) /* unsupported Metal GLSL buffer block access intBlock: "
         "no target-side fallback declaration emitted */), uint(0 /* unsupported "
         "Metal GLSL buffer block access intBlock: no target-side fallback "
-        "declaration emitted */));" in metal
+        "declaration emitted */));" not in metal
     )
     assert (
         "unsignedLayers.write(uint4(0) /* unsupported Metal GLSL buffer block "
@@ -4401,7 +11352,8 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
         "readPixelLayer: target function omitted */).xy), uint((int3(0) "
         "/* unsupported Metal GLSL buffer block function call readPixelLayer: "
         "target function omitted */).z), uint(0 /* unsupported Metal GLSL "
-        "buffer block function call readSample: target function omitted */));" in metal
+        "buffer block function call readSample: target function omitted */));"
+        not in metal
     )
     assert (
         "signedImage.write(int4(0 /* unsupported Metal GLSL buffer block "
@@ -4409,7 +11361,7 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
         "uint2(int2(0) /* unsupported Metal GLSL buffer block function call "
         "readPixel: target function omitted */), uint(0 /* unsupported Metal "
         "GLSL buffer block function call readSample: target function omitted */));"
-        in metal
+        not in metal
     )
     assert (
         "unsignedLayers.write(uint4(0u /* unsupported Metal GLSL buffer block "
@@ -4419,7 +11371,7 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
         "/* unsupported Metal GLSL buffer block access intBlock: no target-side "
         "fallback declaration emitted */).z), uint(0 /* unsupported Metal GLSL "
         "buffer block access intBlock: no target-side fallback declaration "
-        "emitted */));" in metal
+        "emitted */));" not in metal
     )
     assert "imageLoad(" not in metal
     assert "imageStore(" not in metal
@@ -4550,27 +11502,24 @@ def test_codegen_mixed_ssbo_multisample_image_atomics_use_sample_fallbacks():
     assert "imageAtomicAdd(counters" not in hlsl
     assert "imageAtomicCompSwap(signedLayers" not in hlsl
 
-    assert "texture2d_ms<uint, access::read_write> counters [[texture(0)]]" in metal
-    assert (
-        "texture2d_ms_array<int, access::read_write> signedLayers [[texture(1)]]"
-        in metal
-    )
+    assert "texture2d_ms<uint, access::read> counters [[texture(0)]]" in metal
+    assert "texture2d_ms_array<int, access::read> signedLayers [[texture(1)]]" in metal
     assert (
         "uint atomicDirect = /* unsupported Metal multisample image atomic: "
-        "imageAtomicAdd on texture2d_ms<uint, access::read_write> */ 0u;" in metal
+        "imageAtomicAdd on texture2d_ms<uint, access::read> */ 0u;" in metal
     )
     assert (
         "uint atomicCall = /* unsupported Metal multisample image atomic: "
-        "imageAtomicAdd on texture2d_ms<uint, access::read_write> */ 0u;" in metal
+        "imageAtomicAdd on texture2d_ms<uint, access::read> */ 0u;" in metal
     )
     assert (
         "int swapDirect = /* unsupported Metal multisample image atomic: "
-        "imageAtomicCompSwap on texture2d_ms_array<int, access::read_write> */ "
+        "imageAtomicCompSwap on texture2d_ms_array<int, access::read> */ "
         "0;" in metal
     )
     assert (
         "int swapCall = /* unsupported Metal multisample image atomic: "
-        "imageAtomicCompSwap on texture2d_ms_array<int, access::read_write> */ "
+        "imageAtomicCompSwap on texture2d_ms_array<int, access::read> */ "
         "0;" in metal
     )
     assert "atomic_fetch_add" not in metal
@@ -4596,6 +11545,90 @@ def test_codegen_mixed_ssbo_multisample_image_atomics_use_sample_fallbacks():
         "readPixelLayer(atomicBlock), readSample(atomicBlock), "
         "readCompare(atomicBlock), readSignedValue(atomicBlock));" in glsl
     )
+
+
+def test_codegen_multisample_image_switch_match_fallbacks_stay_in_case_blocks():
+    crossgl = """
+    shader MultisampleSwitchMatchFallbacks {
+        image2DMS colorImage @rgba16f;
+        uimage2DMS counters @r32ui;
+
+        struct VSOutput {
+            vec2 uv;
+        };
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                uint total = 0u;
+                switch (1) {
+                    case 0:
+                    case 1:
+                        vec4 scoped = imageLoad(colorImage, ivec2(0), 0);
+                        imageStore(colorImage, ivec2(0), 0, scoped + vec4(1.0));
+                        total = total + imageAtomicAdd(counters, ivec2(0), 0, 1u);
+                        break;
+                    default:
+                        vec4 scoped = imageLoad(colorImage, ivec2(1), 0);
+                        imageStore(colorImage, ivec2(1), 0, scoped + vec4(2.0));
+                        total = total + imageAtomicAdd(counters, ivec2(1), 0, 2u);
+                        break;
+                }
+                match 2 {
+                    0 => {
+                        vec4 scoped = imageLoad(colorImage, ivec2(2), 0);
+                        imageStore(colorImage, ivec2(2), 0, scoped + vec4(3.0));
+                        total = total + imageAtomicAdd(counters, ivec2(2), 0, 3u);
+                    }
+                    _ => {
+                        vec4 scoped = imageLoad(colorImage, ivec2(3), 0);
+                        imageStore(colorImage, ivec2(3), 0, scoped + vec4(4.0));
+                        total = total + imageAtomicAdd(counters, ivec2(3), 0, 4u);
+                    }
+                }
+                return vec4(float(total));
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2DMS<float4> colorImage : register(t0);" in hlsl
+    assert "Texture2DMS<uint> counters : register(t1);" in hlsl
+    assert "case 0:\n        case 1: {" in hlsl
+    assert hlsl.count("case 0: {") == 1
+    assert hlsl.count("float4 scoped") == 4
+    assert hlsl.count("unsupported DirectX multisample image store") == 4
+    assert hlsl.count("unsupported DirectX multisample image atomic") == 4
+    assert "imageStore(" not in hlsl
+    assert "imageAtomicAdd(counters" not in hlsl
+    assert "InterlockedAdd" not in hlsl
+
+    assert "texture2d_ms<float, access::read> colorImage [[texture(0)]]" in metal
+    assert "texture2d_ms<uint, access::read> counters [[texture(1)]]" in metal
+    assert "case 0:\n        case 1: {" in metal
+    assert metal.count("case 0: {") == 1
+    assert metal.count("float4 scoped") == 4
+    assert metal.count("unsupported Metal multisample image store") == 4
+    assert metal.count("unsupported Metal multisample image atomic") == 4
+    assert "imageStore(" not in metal
+    assert "imageAtomicAdd(counters" not in metal
+    assert "atomic_fetch_add" not in metal
+    assert ".write(" not in metal
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS colorImage;" in glsl
+    assert "layout(r32ui, binding = 1) uniform uimage2DMS counters;" in glsl
+    assert "case 0:\n        case 1: {" in glsl
+    assert glsl.count("case 0: {") == 1
+    assert glsl.count("vec4 scoped") == 4
+    assert glsl.count("imageStore(colorImage") == 4
+    assert glsl.count("imageAtomicAdd(counters") == 4
+    assert "unsupported" not in glsl
 
 
 @pytest.mark.parametrize(
@@ -4642,7 +11675,7 @@ def test_codegen_multisample_image_atomic_variants_use_sample_argument(
 
     assert (
         "uint old = /* unsupported Metal multisample image atomic: "
-        f"{operation} on texture2d_ms<uint, access::read_write> */ 0u;" in metal
+        f"{operation} on texture2d_ms<uint, access::read> */ 0u;" in metal
     )
     assert f"{operation}(counters" not in metal
 
@@ -4686,14 +11719,14 @@ def test_codegen_float_image_atomic_exchange_uses_backend_diagnostics():
     assert "imageAtomicExchange(sampleImage" not in hlsl
 
     assert "texture2d<float, access::read_write> scalarImage [[texture(0)]]" in metal
-    assert "texture2d_ms<float, access::read_write> sampleImage [[texture(1)]]" in metal
+    assert "texture2d_ms<float, access::read> sampleImage [[texture(1)]]" in metal
     assert (
         "float oldScalar = /* unsupported Metal image atomic resource call: "
         "imageAtomicExchange on texture2d<float, access::read_write> */ 0.0;" in metal
     )
     assert (
         "float oldSample = /* unsupported Metal multisample image atomic: "
-        "imageAtomicExchange on texture2d_ms<float, access::read_write> */ "
+        "imageAtomicExchange on texture2d_ms<float, access::read> */ "
         "0.0;" in metal
     )
     assert "atomic_exchange" not in metal

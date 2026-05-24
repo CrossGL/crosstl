@@ -65,6 +65,7 @@ class CudaToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.user_function_names = set()
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed CUDA AST."""
@@ -73,6 +74,7 @@ class CudaToCrossGLConverter:
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
+        self.user_function_names = self.collect_user_function_names(ast_node)
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -98,6 +100,34 @@ class CudaToCrossGLConverter:
         else:
             self.output.append("")
 
+    def collect_user_function_names(self, node):
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+
+            name = getattr(current, "name", None)
+            body = getattr(current, "body", None)
+            if name is not None and body is not None:
+                names.add(name)
+
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for kernel in getattr(current, "kernels", []):
+                collect(kernel)
+
+        collect(node)
+        names.discard(None)
+        return names
+
+    def is_user_defined_function(self, func_name):
+        return isinstance(func_name, str) and func_name in self.user_function_names
+
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
         if isinstance(stmt, list):
@@ -114,6 +144,8 @@ class CudaToCrossGLConverter:
 
     def emit_cuda_runtime_call_statement(self, stmt):
         if not isinstance(stmt, FunctionCallNode):
+            return False
+        if self.is_user_defined_function(stmt.name):
             return False
 
         comments = self.format_cuda_runtime_call(stmt)
@@ -550,6 +582,9 @@ class CudaToCrossGLConverter:
         if unique_ptr_init is not None:
             return unique_ptr_init
 
+        if self.is_user_defined_function(raw_name):
+            return f"{raw_name}({args_str})"
+
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
 
@@ -563,7 +598,7 @@ class CudaToCrossGLConverter:
 
     def format_make_unique_call(self, function_name, args):
         base_name, template_args = self.parse_cpp_template(function_name)
-        if base_name.split("::")[-1] != "make_unique" or not template_args:
+        if not self.is_std_make_unique_base_name(base_name) or not template_args:
             return None
 
         target_type, is_array = self.unwrap_array_template_type(template_args[0])
@@ -577,9 +612,9 @@ class CudaToCrossGLConverter:
         base_name, _ = self.parse_cpp_template(function_name)
         if len(args) != 1:
             return None
-        if base_name.split("::")[
-            -1
-        ] != "unique_ptr" and not self.is_unique_ptr_type_name(function_name):
+        if not self.is_std_unique_ptr_base_name(
+            base_name
+        ) and not self.is_unique_ptr_type_name(function_name):
             return None
 
         return args[0]
@@ -870,7 +905,13 @@ class CudaToCrossGLConverter:
         return self.is_unique_ptr_base_name(base_name) and bool(template_args)
 
     def is_unique_ptr_base_name(self, base_name):
-        return base_name.split("::")[-1] == "unique_ptr"
+        return self.is_std_unique_ptr_base_name(base_name)
+
+    def is_std_unique_ptr_base_name(self, base_name):
+        return base_name in {"unique_ptr", "std::unique_ptr"}
+
+    def is_std_make_unique_base_name(self, base_name):
+        return base_name in {"make_unique", "std::make_unique"}
 
     def has_array_suffix(self, type_name):
         depth = 0
@@ -978,6 +1019,9 @@ class CudaToCrossGLConverter:
             "sinf": "sin",
             "cosf": "cos",
             "tanf": "tan",
+            "sinhf": "sinh",
+            "coshf": "cosh",
+            "tanhf": "tanh",
             "asinf": "asin",
             "acosf": "acos",
             "atanf": "atan",
@@ -1008,6 +1052,7 @@ class CudaToCrossGLConverter:
             "fmod": "mod",
             "fmin": "min",
             "fmax": "max",
+            "__threadfence": "memoryBarrier",
             "floor": "floor",
             "ceil": "ceil",
             "bool": "bool",

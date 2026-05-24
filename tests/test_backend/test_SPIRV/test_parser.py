@@ -90,6 +90,22 @@ def test_function_parameter_qualifiers_parse():
     ]
 
 
+def test_function_parameter_array_suffixes_parse():
+    code = """
+    void sampleResources(sampler2D textures[4], uimage2D outputs[2]) {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert [(p.vtype, p.name) for p in function.params] == [
+        ("sampler2D", "textures[4]"),
+        ("uimage2D", "outputs[2]"),
+    ]
+
+
 def test_struct_array_members_preserve_suffixes():
     code = """
     struct LightBlock {
@@ -635,6 +651,30 @@ def test_layout_interpolation_qualifier_parsing():
     assert layout.variable_name == "faceID"
 
 
+def test_layout_component_and_index_qualifier_parsing():
+    code = """
+    layout(location = 1, component = 2) noperspective in vec4 color;
+    layout(location = 0, index = 1) out vec4 fragColor;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    color = ast.global_variables[0]
+    frag_color = ast.global_variables[1]
+
+    assert isinstance(color, LayoutNode)
+    assert color.qualifiers == [("location", "1"), ("component", "2")]
+    assert color.declaration_qualifiers == ["noperspective"]
+    assert color.layout_type == "IN"
+    assert color.data_type == "vec4"
+    assert color.variable_name == "color"
+    assert isinstance(frag_color, LayoutNode)
+    assert frag_color.qualifiers == [("location", "0"), ("index", "1")]
+    assert frag_color.layout_type == "OUT"
+    assert frag_color.data_type == "vec4"
+    assert frag_color.variable_name == "fragColor"
+
+
 def test_layout_readonly_buffer_qualifier_parsing():
     code = """
     layout(set = 0, binding = 0) readonly buffer Particles {
@@ -652,6 +692,35 @@ def test_layout_readonly_buffer_qualifier_parsing():
     assert layout.block_name == "Particles"
     assert layout.variable_name == "particles"
     assert layout.struct_fields == [("vec4", "pos[]")]
+
+
+def test_layout_storage_image_format_and_access_qualifier_parsing():
+    code = """
+    layout(set = 0, binding = 0, r32ui) coherent readonly uniform uimage2D counters;
+    layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D outImage;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    counters = ast.global_variables[0]
+    out_image = ast.global_variables[1]
+
+    assert isinstance(counters, LayoutNode)
+    assert counters.qualifiers == [("set", "0"), ("binding", "0"), ("r32ui", None)]
+    assert counters.declaration_qualifiers == ["coherent", "readonly"]
+    assert counters.layout_type == "UNIFORM"
+    assert counters.data_type == "uimage2D"
+    assert counters.variable_name == "counters"
+    assert isinstance(out_image, LayoutNode)
+    assert out_image.qualifiers == [
+        ("set", "0"),
+        ("binding", "1"),
+        ("rgba32f", None),
+    ]
+    assert out_image.declaration_qualifiers == ["writeonly"]
+    assert out_image.layout_type == "UNIFORM"
+    assert out_image.data_type == "image2D"
+    assert out_image.variable_name == "outImage"
 
 
 def test_compute_local_size_layout_parsing():
@@ -741,6 +810,44 @@ def test_one_dimensional_sampler_uniform_parsing():
     assert isinstance(uniform, UniformNode)
     assert uniform.vtype == "sampler1DArray"
     assert uniform.name == "ramps"
+
+
+def test_atomic_uint_uniform_parsing():
+    code = """
+    layout(set = 0, binding = 0) uniform atomic_uint counter;
+    uniform atomic_uint fallbackCounter;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+    uniform = ast.global_variables[1]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.data_type == "atomic_uint"
+    assert layout.variable_name == "counter"
+    assert isinstance(uniform, UniformNode)
+    assert uniform.vtype == "atomic_uint"
+    assert uniform.name == "fallbackCounter"
+
+
+def test_standalone_sampler_uniform_parsing():
+    code = """
+    layout(set = 0, binding = 0) uniform sampler compareSampler;
+    uniform sampler samplers[4];
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+    uniform = ast.global_variables[1]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.data_type == "sampler"
+    assert layout.variable_name == "compareSampler"
+    assert isinstance(uniform, UniformNode)
+    assert uniform.vtype == "sampler"
+    assert uniform.name == "samplers[4]"
 
 
 def test_standalone_function_call_statement_consumes_semicolon():

@@ -573,6 +573,33 @@ def test_loop_statement_lowers_to_while_true():
     assert "LoopNode(" not in generated_code
 
 
+def test_do_while_statement_lowers_to_c_style_syntax():
+    shader = """
+    shader DoWhileNodeSmoke {
+        int helper(int limit) {
+            int i = 0;
+            do {
+                i = i + 1;
+                if (i >= limit) {
+                    break;
+                }
+            } while (i < 4);
+            return i;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "do {" in generated_code
+    assert "i = (i + 1);" in generated_code
+    assert "if ((i >= limit))" in generated_code
+    assert "break;" in generated_code
+    assert "} while ((i < 4));" in generated_code
+    assert "return i;" in generated_code
+    assert "DoWhileNode(" not in generated_code
+
+
 def test_for_in_statement_lowers_to_counted_loop():
     shader = """
     shader ForInNodeSmoke {
@@ -931,8 +958,8 @@ def test_switch_fallthrough_and_nested_switch_emit_c_style_syntax():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" in generated_code
-    assert "case 0:\n        case 1:" in generated_code
-    assert "case 2:\n            switch (submode)" in generated_code
+    assert "case 0:\n        case 1: {" in generated_code
+    assert "case 2: {\n            switch (submode)" in generated_code
     assert generated_code.count("default:") == 2
     assert "value = (value + 1);" in generated_code
     assert "value = (value + 2);" in generated_code
@@ -941,6 +968,47 @@ def test_switch_fallthrough_and_nested_switch_emit_c_style_syntax():
     assert "return value;" in generated_code
     assert "SwitchNode(" not in generated_code
     assert "CaseNode(" not in generated_code
+
+
+def test_switch_and_match_case_blocks_scope_local_declarations():
+    shader = """
+    shader CaseScopeSmoke {
+        int switchHelper(int mode) {
+            int value = 0;
+            switch (mode) {
+                case 0:
+                case 1:
+                    int scoped = value + 1;
+                    value = scoped;
+                    break;
+                default:
+                    int scoped = value + 2;
+                    value = scoped;
+                    break;
+            }
+            return value;
+        }
+
+        int matchHelper(int mode) {
+            int value = 0;
+            match mode {
+                0 => { int scoped = value + 1; value = scoped; }
+                1 => { int scoped = value + 2; value = scoped; }
+                _ => { int scoped = value + 3; value = scoped; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "case 0:\n        case 1: {" in generated_code
+    assert generated_code.count("case 0: {") == 1
+    assert generated_code.count("int scoped") == 5
+    assert "default: {" in generated_code
+    assert "MatchNode(" not in generated_code
+    assert "SwitchNode(" not in generated_code
 
 
 def test_match_literal_and_wildcard_arms_lower_to_switch():
@@ -13336,17 +13404,34 @@ def test_glsl_sampler_1d_array_sampling_and_queries():
         sampler1DArray lineArray;
         sampler linearSampler;
 
-        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+        vec4 sampleLineArray(
+            sampler1DArray tex,
+            sampler samp,
+            vec2 uvLayer,
+            ivec2 pixelLayer,
+            int lod,
+            int offset
+        ) {
             ivec2 dims = textureSize(tex, lod);
             int levels = textureQueryLevels(tex);
+            vec2 lodInfo = textureQueryLod(tex, samp, uvLayer);
             return texture(tex, samp, uvLayer)
                 + textureLod(tex, samp, uvLayer, lod)
-                + vec4(dims.x, dims.y, levels, 0.0);
+                + texelFetch(tex, pixelLayer, lod)
+                + texelFetchOffset(tex, pixelLayer, lod, offset)
+                + vec4(dims.x, dims.y, levels, lodInfo.x + lodInfo.y);
         }
 
         fragment {
             vec4 main() @gl_FragColor {
-                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+                return sampleLineArray(
+                    lineArray,
+                    linearSampler,
+                    vec2(0.5, 0.0),
+                    ivec2(4, 0),
+                    0,
+                    1
+                );
             }
         }
     }
@@ -13358,14 +13443,21 @@ def test_glsl_sampler_1d_array_sampling_and_queries():
     assert "layout(binding = 0) uniform sampler1DArray lineArray;" in generated_code
     assert "sampler linearSampler" not in generated_code
     assert (
-        "vec4 sampleLineArray(sampler1DArray tex, vec2 uvLayer, int lod)"
+        "vec4 sampleLineArray(sampler1DArray tex, vec2 uvLayer, ivec2 pixelLayer, int lod, int offset)"
         in generated_code
     )
     assert "ivec2 dims = textureSize(tex, lod);" in generated_code
     assert "int levels = textureQueryLevels(tex);" in generated_code
+    assert "vec2 lodInfo = textureQueryLod(tex, uvLayer.x);" in generated_code
     assert "texture(tex, uvLayer)" in generated_code
     assert "textureLod(tex, uvLayer, lod)" in generated_code
-    assert "sampleLineArray(lineArray, vec2(0.5, 0.0), 0)" in generated_code
+    assert "texelFetch(tex, pixelLayer, lod)" in generated_code
+    assert "texelFetchOffset(tex, pixelLayer, lod, offset)" in generated_code
+    assert "textureQueryLod(tex, uvLayer);" not in generated_code
+    assert (
+        "sampleLineArray(lineArray, vec2(0.5, 0.0), ivec2(4, 0), 0, 1)"
+        in generated_code
+    )
 
 
 def test_glsl_image_1d_and_1d_array_storage_operations():
@@ -13396,6 +13488,10 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
             return imageAtomicExchange(image, coord, value);
         }
 
+        uint compareLayer(uimage1DArray image @r32ui, ivec2 coord, uint expected, uint value) {
+            return imageAtomicCompSwap(image, coord, expected, value);
+        }
+
         compute {
             void main() {
                 int sizeLine = imageSize(line);
@@ -13404,6 +13500,7 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
                 vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
                 uint c = addCounter(counters, 4, 7u);
                 uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+                uint e = compareLayer(layerCounters, ivec2(7, 8), d, c);
             }
         }
     }
@@ -13425,6 +13522,9 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
     assert "imageStore(image, coord, (oldValue + value));" in generated_code
     assert "return imageAtomicAdd(image, x, value);" in generated_code
     assert "return imageAtomicExchange(image, coord, value);" in generated_code
+    assert (
+        "return imageAtomicCompSwap(image, coord, expected, value);" in generated_code
+    )
 
 
 def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():

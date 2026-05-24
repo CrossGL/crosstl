@@ -242,6 +242,7 @@ def test_qualified_math_function_conversion():
         let c = std::f32::sqrt(x);
         let d = crate::math::custom(x);
         let e = Color::clamp(x, 0.0, 1.0);
+        let f = std::f32::ln(x);
     }
     """
     try:
@@ -251,6 +252,8 @@ def test_qualified_math_function_conversion():
         assert "c = sqrt(x);" in result
         assert "d = crate::math::custom(x);" in result
         assert "e = Color::clamp(x, 0.0, 1.0);" in result
+        assert "f = log(x);" in result
+        assert "std::f32::ln(" not in result
     except Exception as e:
         pytest.fail(f"Qualified math function conversion failed: {e}")
 
@@ -653,7 +656,8 @@ def test_scalar_math_method_conversion():
         let j = x.clamp(y, angle);
         let k = x.min(y);
         let l = x.max(y);
-        return a + b + c + d + e + f + g + h + i + j + k + l;
+        let m = y.atan2(x);
+        return a + b + c + d + e + f + g + h + i + j + k + l + m;
     }
     """
     try:
@@ -671,6 +675,7 @@ def test_scalar_math_method_conversion():
         assert "j = clamp(x, y, angle);" in result
         assert "k = min(x, y);" in result
         assert "l = max(x, y);" in result
+        assert "m = atan2(y, x);" in result
         assert ".abs()" not in result
         assert ".sqrt()" not in result
         assert ".sin()" not in result
@@ -682,6 +687,7 @@ def test_scalar_math_method_conversion():
         assert ".clamp(" not in result
         assert ".min(" not in result
         assert ".max(" not in result
+        assert ".atan2(" not in result
     except Exception as e:
         pytest.fail(f"Scalar math method conversion failed: {e}")
 
@@ -700,6 +706,112 @@ def test_lerp_function_converts_to_crossgl_mix():
         assert "lerp(a, b, t)" not in result
     except Exception as e:
         pytest.fail(f"Lerp function conversion failed: {e}")
+
+
+def test_user_defined_lerp_call_does_not_convert_to_mix():
+    code = """
+    fn lerp(x: f32) -> f32 {
+        x
+    }
+
+    fn shade(x: f32) -> f32 {
+        let y = lerp(x);
+        y
+    }
+    """
+    result = parse_and_generate(code)
+
+    assert "float lerp(float x)" in result
+    assert "let y = lerp(x);" in result
+    assert "let y = mix(x);" not in result
+
+
+def test_current_module_qualified_user_defined_lerp_call_does_not_convert_to_mix():
+    code = """
+    fn lerp(x: f32) -> f32 {
+        x
+    }
+
+    fn shade(x: f32) -> f32 {
+        let a = self::lerp(x);
+        let b = crate::lerp(x);
+        a + b
+    }
+    """
+    result = parse_and_generate(code)
+
+    assert "float lerp(float x)" in result
+    assert "let a = lerp(x);" in result
+    assert "let b = lerp(x);" in result
+    assert "mix(x)" not in result
+    assert "self::lerp" not in result
+    assert "crate::lerp" not in result
+
+
+def test_user_defined_impl_method_named_like_scalar_builtin_does_not_lower_to_builtin():
+    code = """
+    struct Wave {
+        value: f32,
+    }
+
+    impl Wave {
+        fn sin(&self) -> f32 {
+            return self.value;
+        }
+    }
+
+    fn sample(w: Wave) -> f32 {
+        return w.sin();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float Wave_sin(" in result
+    assert "return Wave_sin(w);" in result
+    assert "return sin(w);" not in result
+
+
+def test_inferred_struct_local_impl_method_named_like_scalar_builtin_does_not_lower_to_builtin():
+    code = """
+    struct Wave {
+        value: f32,
+    }
+
+    impl Wave {
+        fn sin(&self) -> f32 {
+            return self.value;
+        }
+    }
+
+    fn sample(x: f32) -> f32 {
+        let w = Wave { value: x };
+        return w.sin();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float Wave_sin(" in result
+    assert "let w = Wave { value: x };" in result
+    assert "return Wave_sin(w);" in result
+    assert "return sin(w);" not in result
+
+
+def test_modulo_function_converts_to_crossgl_mod():
+    code = """
+    fn wrap(x: f32) -> f32 {
+        let y = modulo(x, 2.0);
+        y
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "y = mod(x, 2.0);" in result
+        assert "modulo(x, 2.0)" not in result
+    except Exception as e:
+        pytest.fail(f"Modulo function conversion failed: {e}")
 
 
 def test_swizzle_and_index_assignment_return_conversion():

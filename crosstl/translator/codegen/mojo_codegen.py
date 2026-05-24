@@ -151,6 +151,7 @@ class MojoCodeGen:
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
         self.required_fract_helpers = set()
+        self.required_saturate_helpers = set()
         self.current_return_type = None
         self.current_shader = None
         self.do_while_contexts = []
@@ -182,6 +183,7 @@ class MojoCodeGen:
             },
             # Texture Types (Mojo equivalents)
             "sampler2D": "Texture2D",
+            "sampler3D": "Texture3D",
             "samplerCube": "TextureCube",
             "sampler": "Sampler",
         }
@@ -254,6 +256,7 @@ class MojoCodeGen:
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
         self.required_fract_helpers = set()
+        self.required_saturate_helpers = set()
         self.current_return_type = None
         self.do_while_contexts = []
         self.for_contexts = []
@@ -379,6 +382,9 @@ class MojoCodeGen:
         else:
             return_type = "void"
         self.function_return_types[func.name] = return_type
+
+    def is_user_defined_function(self, func_name):
+        return isinstance(func_name, str) and func_name in self.function_return_types
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
@@ -1263,6 +1269,10 @@ class MojoCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
 
+            if self.is_user_defined_function(func_name):
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"{callee}({args})"
+
             if func_name in {"fract", "frac"}:
                 return self.generate_fract_call(expr.args)
             if func_name == "mod":
@@ -1478,8 +1488,18 @@ class MojoCodeGen:
             return None
 
         arg_type = self.expression_result_type(args[0])
-        if self.vector_type_info(arg_type) is not None:
-            return None
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            dtype, source_width, storage_width, _ = vector_info
+            if dtype not in {"DType.float32", "DType.float64"}:
+                return None
+            arg_expr = self.generate_expression(args[0])
+            self.required_saturate_helpers.add((dtype, source_width, storage_width))
+            helper_name = self.saturate_vector_helper_name(
+                dtype, source_width, storage_width
+            )
+            return f"{helper_name}({arg_expr})"
+
         arg_dtype = self.expression_mojo_dtype(args[0])
         if arg_dtype not in {"DType.float32", "DType.float64"}:
             return None
@@ -1698,14 +1718,17 @@ class MojoCodeGen:
             and not self.required_matrix_types
             and not self.required_matrix_constructor_helpers
             and not self.required_fract_helpers
+            and not self.required_saturate_helpers
         ):
             return ""
 
         code = ""
-        if self.required_fract_helpers:
+        if self.required_fract_helpers or self.required_saturate_helpers:
             code += "# CrossGL math helpers\n"
             for key in sorted(self.required_fract_helpers):
                 code += self.generate_fract_helper(key)
+            for key in sorted(self.required_saturate_helpers):
+                code += self.generate_saturate_helper(key)
             code += "\n"
 
         if self.required_matrix_types:
@@ -1767,6 +1790,25 @@ class MojoCodeGen:
     def fract_vector_helper_name(self, dtype, source_width, storage_width):
         dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
         return f"_crossgl_fract_{dtype_suffix}_{source_width}_{storage_width}"
+
+    def generate_saturate_helper(self, key):
+        dtype, source_width, storage_width = key
+        _, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        components = [f"clamp(v[{index}], 0.0, 1.0)" for index in range(source_width)]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        helper_name = self.saturate_vector_helper_name(
+            dtype, source_width, storage_width
+        )
+        code = f"fn {helper_name}(v: {vector_type}) -> {vector_type}:\n"
+        code += f"    return {vector_type}({', '.join(components)})\n\n"
+        return code
+
+    def saturate_vector_helper_name(self, dtype, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_saturate_{dtype_suffix}_{source_width}_{storage_width}"
 
     def generate_vector_binary_helper(self, dtype, op, helper_kind):
         scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]

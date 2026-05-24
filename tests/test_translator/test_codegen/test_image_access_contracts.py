@@ -4,6 +4,56 @@ import pytest
 
 from crosstl.translator.ast import AttributeNode
 from crosstl.translator.codegen.image_access_contracts import (
+    INTEGER_COORDINATE_TYPE_NAMES,
+    PROJECTED_TEXTURE_BASIC_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_BASIC_OFFSET_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_GRAD_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_GRAD_OFFSET_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_LOD_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_LOD_OFFSET_INTRINSIC_NAMES,
+    PROJECTED_TEXTURE_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_BASIC_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_LOD_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_NON_PROJECTED_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_NON_PROJECTED_OFFSET_OPERATION_NAMES,
+    TEXTURE_COMPARE_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_COMPARE_OFFSET_OPERATION_NAMES,
+    TEXTURE_GATHER_BASIC_INTRINSIC_NAMES,
+    TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
+    TEXTURE_GATHER_COMPARE_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_GATHER_INTRINSIC_NAMES,
+    TEXTURE_GATHER_MULTI_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_GATHER_SINGLE_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_IMPLICIT_SAMPLER_INTRINSIC_NAMES,
+    TEXTURE_OFFSET_INTRINSIC_NAMES,
+    RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES,
+    RESOURCE_QUERY_SIZE_INTRINSIC_NAMES,
+    TEXTURE_QUERY_INTRINSIC_NAMES,
+    TEXTURE_QUERY_LEVELS_INTRINSIC_NAMES,
+    TEXTURE_QUERY_LOD_INTRINSIC_NAMES,
+    TEXTURE_QUERY_SAMPLES_INTRINSIC_NAMES,
+    TEXTURE_QUERY_SIZE_INTRINSIC_NAMES,
+    TEXTURE_RESOURCE_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_BASIC_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_GRAD_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_LOD_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_SAMPLING_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_SAMPLING_INTRINSIC_NAMES,
+    TEXTURE_TEXEL_FETCH_BASIC_INTRINSIC_NAMES,
+    TEXTURE_TEXEL_FETCH_OFFSET_INTRINSIC_NAMES,
+    TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES,
     component_count_mismatch,
     component_kind_mismatch,
     component_shape_requirement,
@@ -33,6 +83,9 @@ from crosstl.translator.codegen.image_access_contracts import (
     image_format_component_type,
     image_format_result_type,
     image_format_vector_type,
+    floating_coordinate_dimension_from_type_name,
+    image_access_diagnostic_name,
+    image_access_requirement_label,
     image_multisample_sample_argument_index,
     image_multisample_sample_type_error,
     image_multisample_sample_type_mismatch,
@@ -41,17 +94,72 @@ from crosstl.translator.codegen.image_access_contracts import (
     image_store_value_kind_mismatch,
     image_store_value_shape_error,
     image_store_value_shape_mismatch,
+    is_image_atomic_operation,
     is_glsl_float_image_resource,
     is_glsl_integer_image_type,
     is_glsl_storage_image_type,
     is_image_format_attribute,
+    is_image_resource_operation,
+    is_floating_scalar_type_name,
+    integer_coordinate_dimension_from_type_name,
+    is_integer_coordinate_type_name,
+    is_integer_scalar_type_name,
     is_metal_float_image_resource,
     is_metal_integer_image_type,
     is_metal_storage_image_resource,
+    is_numeric_scalar_type_name,
+    is_projected_texture_basic_offset_operation,
+    is_projected_texture_basic_operation,
+    is_projected_texture_compare_operation,
+    is_projected_texture_grad_offset_operation,
+    is_projected_texture_grad_operation,
+    is_projected_texture_lod_offset_operation,
+    is_projected_texture_lod_operation,
+    is_projected_texture_operation,
+    is_resource_samples_query_operation,
+    is_resource_size_query_operation,
     is_resource_access_attribute,
     is_scalar_image_format,
     is_storage_image_texture_comparison_operation,
     is_storage_image_texture_operation,
+    is_texel_fetch_basic_operation,
+    is_texel_fetch_offset_operation,
+    is_texel_fetch_operation,
+    is_texture_implicit_sampler_operation,
+    is_texture_compare_any_offset_operation,
+    is_texture_compare_basic_operation,
+    is_texture_compare_operation,
+    is_texture_compare_grad_offset_operation,
+    is_texture_compare_grad_operation,
+    is_texture_compare_lod_offset_operation,
+    is_texture_compare_lod_operation,
+    is_texture_compare_non_projected_offset_operation,
+    is_texture_compare_non_projected_operation,
+    is_texture_compare_offset_operation,
+    is_texture_gather_basic_operation,
+    is_texture_gather_compare_operation,
+    is_texture_gather_compare_offset_operation,
+    is_texture_gather_multi_offset_operation,
+    is_texture_gather_operation,
+    is_texture_gather_offset_operation,
+    is_texture_gather_single_offset_operation,
+    is_texture_offset_operation,
+    is_texture_query_operation,
+    is_texture_query_levels_operation,
+    is_texture_query_lod_operation,
+    is_texture_samples_query_operation,
+    is_texture_size_query_operation,
+    is_texture_resource_operation,
+    is_texture_sample_basic_offset_operation,
+    is_texture_sample_basic_operation,
+    is_texture_sample_grad_offset_operation,
+    is_texture_sample_grad_operation,
+    is_texture_sample_lod_offset_operation,
+    is_texture_sample_lod_operation,
+    is_texture_sampling_operation,
+    is_texture_sampling_offset_operation,
+    is_texture_sample_offset_operation,
+    is_texture_sample_operation,
     is_two_component_image_format,
     literal_numeric_component_count,
     literal_numeric_component_kind,
@@ -65,11 +173,17 @@ from crosstl.translator.codegen.image_access_contracts import (
     numeric_scalar_type_kind,
     numeric_type_component_count,
     numeric_type_component_kind,
+    operation_argument_type_error,
+    operation_dimension_argument_error,
     normalized_image_access,
     record_explicit_image_metadata,
+    requires_integer_coordinate,
     resolve_image_atomic_component_kind,
     resource_query_get_dimensions_descriptor,
+    resource_query_method_size_descriptor,
+    resource_query_scalar_constant_helper_descriptor,
     resource_query_scalar_helper_descriptor,
+    resource_query_size_components_descriptor,
     resource_query_size_helper_descriptor,
     should_validate_image_atomic_component_kind,
     should_validate_image_load_result_shape,
@@ -79,20 +193,83 @@ from crosstl.translator.codegen.image_access_contracts import (
     storage_image_store_constructors,
     storage_image_store_value_expression,
     storage_image_store_vector_constructor,
+    texture_image_resource_operation_names,
+    texture_resource_dimension_descriptor,
+    texture_resource_offset_dimension_key,
     storage_image_two_component_store_expression,
     storage_image_zero_values,
     supported_image_formats,
+    texel_fetch_offset_multisample_reason,
+    texel_fetch_zero_value,
+    texture_scalar_zero_value,
+    texture_vector_zero_value,
+    texture_argument_diagnostic_type,
+    texture_compare_argument_error,
+    texture_compare_coordinate_error,
+    texture_compare_extra_argument_count_error,
+    texture_compare_offset_capability_error,
+    texture_compare_projected_coordinate_error,
+    texture_compare_projected_lod_array_error,
+    texture_coordinate_arguments_error,
+    texture_gather_capability_error,
+    texture_gather_component_count_error,
+    texture_gather_component_literal_error,
+    texture_gather_compare_extra_argument_count_error,
+    texture_gather_offset_argument_count_error,
+    texture_gather_offset_capability_error,
+    texture_gather_offsets_argument_count_error,
+    texture_gather_operation_error,
+    texture_query_levels_multisample_expression,
+    texture_query_levels_zero_value,
+    texture_query_lod_coordinate_dimension_error,
+    texture_query_lod_coordinate_swizzle,
+    texture_query_lod_coordinate_type_error,
+    texture_samples_query_expression,
+    texture_samples_query_requirement_name,
+    texture_query_lod_zero_value,
+    texture_sample_offset_capability_error,
+    texture_multisample_sample_type_error,
+    projected_texture_offset_capability_error,
+    projected_texture_extra_argument_count_error,
+    texture_sample_offset_extra_argument_count_error,
     unsupported_multisample_texture_call_expression,
+    unsupported_multisample_texture_call_vector_expression,
     unsupported_multisample_texture_compare_expression,
+    unsupported_multisample_texture_compare_scalar_expression,
     unsupported_multisample_texture_gather_compare_expression,
+    unsupported_multisample_texture_gather_compare_vector_expression,
     unsupported_multisample_texture_query_expression,
+    unsupported_multisample_texture_query_lod_expression,
+    unsupported_multisample_texel_fetch_offset_expression,
+    unsupported_cube_texel_fetch_expression,
+    unsupported_projected_texture_call_expression,
+    unsupported_projected_texture_expression,
     unsupported_storage_image_texture_comparison_expression,
+    unsupported_storage_image_texture_comparison_scalar_expression,
     unsupported_storage_image_texture_operation_expression,
+    unsupported_storage_image_texture_operation_vector_expression,
+    unsupported_texel_fetch_expression,
+    unsupported_texel_fetch_offset_expression,
+    unsupported_texture_compare_expression,
+    unsupported_texture_compare_scalar_expression,
+    unsupported_texture_compare_operation_error,
+    unsupported_texture_offset_operation_error,
+    unsupported_projected_texture_operation_error,
+    unsupported_texture_gather_compare_call_expression,
+    unsupported_texture_gather_compare_expression,
+    unsupported_texture_gather_call_expression,
+    unsupported_texture_gather_expression,
+    unsupported_texture_offset_call_expression,
+    unsupported_texture_offset_expression,
     unsupported_image_atomic_expression,
     unsupported_multisample_image_atomic_expression,
     unsupported_multisample_image_store_expression,
     unsupported_texture_query_expression,
+    unsupported_texture_query_levels_expression,
+    unsupported_texture_query_lod_expression,
+    unsupported_texture_samples_query_call_expression,
     unsupported_texture_samples_query_expression,
+    validate_texture_operation_arity,
 )
 
 
@@ -118,6 +295,624 @@ def attribute_value_to_string(value):
 )
 def test_normalized_image_access_accepts_common_spellings(spelling, expected):
     assert normalized_image_access(spelling) == expected
+
+
+def test_image_access_diagnostic_labels_match_backend_conventions():
+    assert image_access_requirement_label("read") == "read-capable"
+    assert image_access_requirement_label("write") == "write-capable"
+    assert image_access_requirement_label("read_write") == "read-write"
+    assert (
+        image_access_requirement_label("read_write", read_write_label="read_write")
+        == "read_write"
+    )
+    assert image_access_requirement_label("custom") == "custom"
+
+    assert image_access_diagnostic_name("read") == "readonly"
+    assert image_access_diagnostic_name("write") == "writeonly"
+    assert image_access_diagnostic_name("read_write") == "readwrite"
+    assert (
+        image_access_diagnostic_name("read_write", read_write_label="read_write")
+        == "read_write"
+    )
+    assert image_access_diagnostic_name("custom") == "custom"
+
+
+def test_operation_argument_type_error_builds_backend_diagnostic():
+    assert (
+        operation_argument_type_error(
+            "DirectX",
+            "texture compare",
+            "textureCompare",
+            "a scalar floating",
+            "compare",
+            "depthRef",
+            "int",
+        )
+        == "DirectX texture compare operation 'textureCompare' requires a "
+        "scalar floating compare argument: depthRef has type int"
+    )
+    assert (
+        operation_argument_type_error(
+            "OpenGL",
+            "resource",
+            "imageLoad",
+            "an integer",
+            "coordinate",
+            "uv",
+            "vec2",
+        )
+        == "OpenGL resource operation 'imageLoad' requires an integer "
+        "coordinate argument: uv has type vec2"
+    )
+
+
+def test_operation_dimension_argument_error_builds_backend_diagnostic():
+    assert (
+        operation_dimension_argument_error(
+            "Metal",
+            "resource",
+            "textureGrad",
+            2,
+            "floating",
+            "gradient",
+            "texture2d<float>",
+            "ddx",
+            "float3",
+        )
+        == "Metal resource operation 'textureGrad' requires a 2D floating "
+        "gradient for texture2d<float>: ddx has type float3"
+    )
+
+
+def test_texture_query_lod_coordinate_errors_match_shared_diagnostics():
+    assert (
+        texture_query_lod_coordinate_type_error(
+            "OpenGL", "textureQueryLod", "pixel", "ivec2"
+        )
+        == "OpenGL texture query operation 'textureQueryLod' requires a "
+        "floating coordinate argument: pixel has type ivec2"
+    )
+    assert (
+        texture_query_lod_coordinate_dimension_error(
+            "DirectX",
+            "textureQueryLod",
+            3,
+            "TextureCube",
+            "uv",
+            "float2",
+        )
+        == "DirectX texture query operation 'textureQueryLod' requires a "
+        "3D floating coordinate for TextureCube: uv has type float2"
+    )
+
+
+def test_texture_argument_diagnostic_type_prefers_resource_then_sampler_then_result():
+    resource_types = {"textureArg": "Texture2D"}
+    expression_names = {
+        "textureArg": "textureArg",
+        "samplerArg": "samplerArg",
+        "valueArg": "valueArg",
+    }
+    result_types = {"samplerArg": "SamplerState", "valueArg": "float2"}
+
+    assert (
+        texture_argument_diagnostic_type(
+            "textureArg",
+            resource_types.get,
+            expression_names.get,
+            result_types.get,
+            {"samplerArg"},
+        )
+        == "Texture2D"
+    )
+    assert (
+        texture_argument_diagnostic_type(
+            "samplerArg",
+            resource_types.get,
+            expression_names.get,
+            result_types.get,
+            {"samplerArg"},
+        )
+        == "sampler"
+    )
+    assert (
+        texture_argument_diagnostic_type(
+            "valueArg",
+            resource_types.get,
+            expression_names.get,
+            result_types.get,
+            {"samplerArg"},
+        )
+        == "float2"
+    )
+
+
+def test_validate_texture_operation_arity_ignores_non_resource_operations():
+    def unexpected_explicit_sampler_check(args):
+        raise AssertionError("sampler mode should not be checked")
+
+    validate_texture_operation_arity(
+        "OpenGL",
+        "helper",
+        [],
+        {"texture"},
+        unexpected_explicit_sampler_check,
+    )
+
+
+def test_validate_texture_operation_arity_rejects_too_few_arguments():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX texture operation 'textureLod' requires at least 3 "
+            "argument\\(s\\), got 2"
+        ),
+    ):
+        validate_texture_operation_arity(
+            "DirectX",
+            "textureLod",
+            ["tex", "uv"],
+            {"textureLod"},
+            lambda args: False,
+        )
+
+
+def test_validate_texture_operation_arity_rejects_disallowed_counts():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal texture operation 'textureGatherOffsets' accepts "
+            "3, 4, 6, 7 argument\\(s\\), got 5"
+        ),
+    ):
+        validate_texture_operation_arity(
+            "Metal",
+            "textureGatherOffsets",
+            ["tex", "uv", "o0", "o1", "o2"],
+            {"textureGatherOffsets"},
+            lambda args: False,
+        )
+
+
+def test_validate_texture_operation_arity_rejects_too_many_arguments():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL texture operation 'texture' accepts at most 3 "
+            "argument\\(s\\), got 4"
+        ),
+    ):
+        validate_texture_operation_arity(
+            "OpenGL",
+            "texture",
+            ["tex", "uv", "bias", "extra"],
+            {"texture"},
+            lambda args: False,
+        )
+
+
+def test_texture_compare_extra_argument_count_error_matches_operation_shapes():
+    assert texture_compare_extra_argument_count_error("textureCompare", 1) is None
+    assert (
+        texture_compare_extra_argument_count_error("textureCompare", 2)
+        == "accepts no extra arguments"
+    )
+    assert texture_compare_extra_argument_count_error("textureCompareOffset", 2) is None
+    assert (
+        texture_compare_extra_argument_count_error("textureCompareOffset", 1)
+        == "requires compare and offset arguments"
+    )
+    assert texture_compare_extra_argument_count_error("textureCompareLod", 2) is None
+    assert (
+        texture_compare_extra_argument_count_error("textureCompareLod", 1)
+        == "requires compare and lod arguments"
+    )
+    assert (
+        texture_compare_extra_argument_count_error("textureCompareLodOffset", 3) is None
+    )
+    assert (
+        texture_compare_extra_argument_count_error("textureCompareLodOffset", 2)
+        == "requires compare, lod, and offset arguments"
+    )
+    assert texture_compare_extra_argument_count_error("textureCompareGrad", 3) is None
+    assert (
+        texture_compare_extra_argument_count_error("textureCompareGrad", 2)
+        == "requires compare, gradient x, and gradient y arguments"
+    )
+    assert (
+        texture_compare_extra_argument_count_error("textureCompareGradOffset", 4)
+        is None
+    )
+    assert (
+        texture_compare_extra_argument_count_error("textureCompareGradOffset", 3)
+        == "requires compare, gradient x, gradient y, and offset arguments"
+    )
+    assert texture_compare_extra_argument_count_error("texture", 2) is None
+
+
+def test_texture_gather_compare_extra_argument_count_error_matches_shapes():
+    assert (
+        texture_gather_compare_extra_argument_count_error("textureGatherCompare", 1)
+        is None
+    )
+    assert (
+        texture_gather_compare_extra_argument_count_error("textureGatherCompare", 2)
+        == "accepts no extra arguments"
+    )
+    assert (
+        texture_gather_compare_extra_argument_count_error(
+            "textureGatherCompareOffset", 2
+        )
+        is None
+    )
+    assert (
+        texture_gather_compare_extra_argument_count_error(
+            "textureGatherCompareOffset", 1
+        )
+        == "requires compare and offset arguments"
+    )
+    assert texture_gather_compare_extra_argument_count_error("textureGather", 1) is None
+
+
+def test_texture_compare_projected_coordinate_error_matches_backend_terms():
+    assert (
+        texture_compare_projected_coordinate_error("GLSL")
+        == "requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow "
+        "vec4 projection coordinates"
+    )
+    assert (
+        texture_compare_projected_coordinate_error("DirectX")
+        == "requires Texture2D vec3/vec4 or Texture2DArray "
+        "vec4 projection coordinates"
+    )
+    assert (
+        texture_compare_projected_coordinate_error("Metal")
+        == "requires depth2d vec3/vec4 or depth2d_array "
+        "vec4 projection coordinates"
+    )
+
+
+def test_texture_compare_coordinate_error_matches_shared_reason():
+    assert (
+        texture_compare_coordinate_error()
+        == "requires supported shadow texture coordinates"
+    )
+
+
+def test_texture_argument_presence_errors_match_shared_reasons():
+    assert (
+        texture_coordinate_arguments_error()
+        == "requires texture and coordinate arguments"
+    )
+    assert texture_compare_argument_error() == "requires a compare argument"
+
+
+def test_texture_gather_diagnostic_errors_match_shared_reasons():
+    assert (
+        texture_gather_capability_error()
+        == "requires 2D, 2D-array, cube, or cube-array textures"
+    )
+    assert (
+        texture_gather_offset_capability_error()
+        == "offsets require 2D or 2D-array textures"
+    )
+    assert (
+        texture_gather_component_count_error()
+        == "accepts at most one component argument"
+    )
+    assert (
+        texture_gather_offset_argument_count_error()
+        == "requires offset and optional component arguments"
+    )
+    assert (
+        texture_gather_offsets_argument_count_error()
+        == "requires a typed offsets array or four offset arguments"
+    )
+    assert texture_gather_operation_error() == "requires a gather operation"
+    assert (
+        texture_gather_component_literal_error()
+        == "component literal must be 0, 1, 2, or 3"
+    )
+
+
+def test_texture_compare_projected_lod_array_error_matches_shared_reason():
+    assert (
+        texture_compare_projected_lod_array_error()
+        == "projected explicit LOD is not supported for sampler2DArrayShadow"
+    )
+
+
+def test_unsupported_texture_compare_operation_error_matches_projection_mode():
+    assert (
+        unsupported_texture_compare_operation_error(projected=True)
+        == "is not a supported projected shadow compare operation"
+    )
+    assert (
+        unsupported_texture_compare_operation_error()
+        == "is not a supported shadow compare operation"
+    )
+
+
+def test_unsupported_texture_offset_operation_errors_match_shared_reasons():
+    assert (
+        unsupported_texture_offset_operation_error()
+        == "is not a supported texture offset operation"
+    )
+    assert (
+        unsupported_projected_texture_operation_error()
+        == "unsupported projected texture operation"
+    )
+
+
+def test_texture_compare_offset_capability_error_matches_backend_terms():
+    assert (
+        texture_compare_offset_capability_error("GLSL")
+        == "offsets require 2D or 2D-array shadow samplers"
+    )
+    assert (
+        texture_compare_offset_capability_error("DirectX")
+        == "offsets require 2D or 2D-array textures"
+    )
+    assert (
+        texture_compare_offset_capability_error("Metal")
+        == "offsets require 2D or 2D-array depth textures"
+    )
+
+
+def test_texture_sample_offset_capability_error_matches_backend_terms():
+    assert (
+        texture_sample_offset_capability_error("GLSL")
+        == "offsets require 1D, 2D, 2D-array, 3D, "
+        "or planar shadow samplers"
+    )
+    assert (
+        texture_sample_offset_capability_error("DirectX")
+        == "offsets require 1D, 2D, 2D-array, or 3D textures"
+    )
+    assert (
+        texture_sample_offset_capability_error("Metal")
+        == "offsets require 2D or 2D-array textures"
+    )
+
+
+def test_projected_texture_offset_capability_error_matches_shared_reason():
+    assert projected_texture_offset_capability_error() == "offsets require 2D textures"
+
+
+def test_texture_sample_offset_extra_argument_count_error_matches_shapes():
+    assert texture_sample_offset_extra_argument_count_error("textureOffset", 1) is None
+    assert texture_sample_offset_extra_argument_count_error("textureOffset", 2) is None
+    assert (
+        texture_sample_offset_extra_argument_count_error("textureOffset", 0)
+        == "requires offset and optional bias arguments"
+    )
+    assert (
+        texture_sample_offset_extra_argument_count_error("textureLodOffset", 2) is None
+    )
+    assert (
+        texture_sample_offset_extra_argument_count_error("textureLodOffset", 1)
+        == "requires lod and offset arguments"
+    )
+    assert (
+        texture_sample_offset_extra_argument_count_error("textureGradOffset", 3) is None
+    )
+    assert (
+        texture_sample_offset_extra_argument_count_error("textureGradOffset", 2)
+        == "requires gradient x, gradient y, and offset arguments"
+    )
+    assert texture_sample_offset_extra_argument_count_error("texture", 2) is None
+
+
+def test_projected_texture_extra_argument_count_error_matches_shapes():
+    assert projected_texture_extra_argument_count_error("textureProj", 0) is None
+    assert projected_texture_extra_argument_count_error("textureProj", 1) is None
+    assert (
+        projected_texture_extra_argument_count_error("textureProj", 2)
+        == "accepts at most one bias argument"
+    )
+    assert projected_texture_extra_argument_count_error("textureProjOffset", 1) is None
+    assert projected_texture_extra_argument_count_error("textureProjOffset", 2) is None
+    assert (
+        projected_texture_extra_argument_count_error("textureProjOffset", 0)
+        == "requires offset and optional bias arguments"
+    )
+    assert projected_texture_extra_argument_count_error("textureProjLod", 1) is None
+    assert (
+        projected_texture_extra_argument_count_error("textureProjLod", 0)
+        == "requires one lod argument"
+    )
+    assert (
+        projected_texture_extra_argument_count_error("textureProjLodOffset", 2) is None
+    )
+    assert (
+        projected_texture_extra_argument_count_error("textureProjLodOffset", 1)
+        == "requires lod and offset arguments"
+    )
+    assert projected_texture_extra_argument_count_error("textureProjGrad", 2) is None
+    assert (
+        projected_texture_extra_argument_count_error("textureProjGrad", 1)
+        == "requires gradient x and gradient y arguments"
+    )
+    assert (
+        projected_texture_extra_argument_count_error("textureProjGradOffset", 3) is None
+    )
+    assert (
+        projected_texture_extra_argument_count_error("textureProjGradOffset", 2)
+        == "requires gradient x, gradient y, and offset arguments"
+    )
+    assert projected_texture_extra_argument_count_error("texture", 2) is None
+
+
+def test_requires_integer_coordinate_matches_intrinsic_contract_set():
+    integer_coordinate_intrinsics = {"texelFetch", "imageLoad", "imageStore"}
+
+    assert requires_integer_coordinate("texelFetch", integer_coordinate_intrinsics)
+    assert requires_integer_coordinate("imageLoad", integer_coordinate_intrinsics)
+    assert not requires_integer_coordinate("texture", integer_coordinate_intrinsics)
+    assert not requires_integer_coordinate("textureSize", integer_coordinate_intrinsics)
+
+
+def test_integer_coordinate_type_names_match_source_and_backend_spellings():
+    assert INTEGER_COORDINATE_TYPE_NAMES == frozenset(
+        {
+            "int",
+            "uint",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "int2",
+            "int3",
+            "int4",
+            "uint2",
+            "uint3",
+            "uint4",
+        }
+    )
+
+    assert is_integer_coordinate_type_name("int")
+    assert is_integer_coordinate_type_name("uint")
+    assert is_integer_coordinate_type_name("ivec2")
+    assert is_integer_coordinate_type_name("uvec4")
+    assert is_integer_coordinate_type_name("int2")
+    assert is_integer_coordinate_type_name("uint4")
+    assert is_integer_coordinate_type_name("vec2", "int2")
+    assert is_integer_coordinate_type_name("float2", "uint3")
+    assert not is_integer_coordinate_type_name("float")
+    assert not is_integer_coordinate_type_name("vec2", "float2")
+
+
+def test_scalar_type_name_helpers_accept_source_and_backend_spellings():
+    def map_type(type_name):
+        return {
+            "floatAlias": "float",
+            "numericAlias": "double",
+            "uintAlias": "uint",
+        }.get(type_name, type_name)
+
+    assert is_floating_scalar_type_name("float", map_type)
+    assert is_floating_scalar_type_name("half", map_type)
+    assert is_floating_scalar_type_name("floatAlias", map_type)
+    assert not is_floating_scalar_type_name("int", map_type)
+
+    assert is_numeric_scalar_type_name("double", map_type)
+    assert is_numeric_scalar_type_name("numericAlias", map_type)
+    assert is_numeric_scalar_type_name("uint", map_type)
+    assert not is_numeric_scalar_type_name("bool", map_type)
+
+    assert is_integer_scalar_type_name("int", map_type)
+    assert is_integer_scalar_type_name("uintAlias", map_type)
+    assert not is_integer_scalar_type_name("float", map_type)
+
+
+def test_scalar_type_name_helpers_reject_unknown_and_array_spellings():
+    def unexpected_map_type(type_name):
+        raise AssertionError(f"should not map {type_name}")
+
+    assert not is_floating_scalar_type_name(None, unexpected_map_type)
+    assert not is_numeric_scalar_type_name("", unexpected_map_type)
+    assert not is_integer_scalar_type_name("int[4]", unexpected_map_type)
+
+
+def test_floating_coordinate_dimension_from_type_name_uses_source_and_mapped_names():
+    def map_type(type_name):
+        return {
+            "float2Alias": "float2",
+            "vec3Alias": "vec3",
+        }.get(type_name, type_name)
+
+    assert floating_coordinate_dimension_from_type_name("float", map_type) == 1
+    assert floating_coordinate_dimension_from_type_name("vec2", map_type) == 2
+    assert floating_coordinate_dimension_from_type_name("float3", map_type) == 3
+    assert floating_coordinate_dimension_from_type_name("float2Alias", map_type) == 2
+    assert floating_coordinate_dimension_from_type_name("vec3Alias", map_type) == 3
+    assert floating_coordinate_dimension_from_type_name("int2", map_type) is None
+    assert floating_coordinate_dimension_from_type_name(None, map_type) is None
+
+
+def test_integer_coordinate_dimension_from_type_name_uses_source_and_mapped_names():
+    def map_type(type_name):
+        return {
+            "ivec2Alias": "ivec2",
+            "uint3Alias": "uint3",
+        }.get(type_name, type_name)
+
+    assert integer_coordinate_dimension_from_type_name("int", map_type) == 1
+    assert integer_coordinate_dimension_from_type_name("ivec2", map_type) == 2
+    assert integer_coordinate_dimension_from_type_name("uint4", map_type) == 4
+    assert integer_coordinate_dimension_from_type_name("ivec2Alias", map_type) == 2
+    assert integer_coordinate_dimension_from_type_name("uint3Alias", map_type) == 3
+    assert integer_coordinate_dimension_from_type_name("vec2", map_type) is None
+    assert integer_coordinate_dimension_from_type_name(None, map_type) is None
+
+
+def test_texture_resource_dimension_descriptor_builds_canonical_shape():
+    descriptor = texture_resource_dimension_descriptor(
+        "Texture2DArray",
+        {
+            "sample_offset": True,
+            "gather_offset": True,
+            "compare_offset": True,
+            "gather_compare_offset": True,
+        },
+        coordinate_dimension=3,
+        offset_dimension=2,
+        gradient_dimension=2,
+        query_lod_coordinate_dimension=3,
+    )
+
+    assert descriptor == {
+        "texture_type": "Texture2DArray",
+        "coordinate_dimension": 3,
+        "offset_dimension": 2,
+        "sample_offset_dimension": 2,
+        "texel_fetch_offset_dimension": 2,
+        "gather_offset_dimension": 2,
+        "compare_offset_dimension": 2,
+        "compare_lod_offset_dimension": 2,
+        "compare_grad_offset_dimension": 2,
+        "gather_compare_offset_dimension": 2,
+        "gradient_dimension": 2,
+        "query_lod_coordinate_dimension": 3,
+    }
+
+
+def test_texture_resource_dimension_descriptor_honors_explicit_capability_keys():
+    descriptor = texture_resource_dimension_descriptor(
+        "sampler2DArrayShadow",
+        {
+            "sample_offset": True,
+            "gather_offset": False,
+            "compare_offset": True,
+            "compare_lod_offset": False,
+            "compare_grad_offset": True,
+            "gather_compare_offset": True,
+        },
+        coordinate_dimension=3,
+        offset_dimension=2,
+    )
+
+    assert descriptor["sample_offset_dimension"] == 2
+    assert descriptor["gather_offset_dimension"] is None
+    assert descriptor["compare_offset_dimension"] == 2
+    assert descriptor["compare_lod_offset_dimension"] is None
+    assert descriptor["compare_grad_offset_dimension"] == 2
+    assert descriptor["gather_compare_offset_dimension"] == 2
+
+
+def test_texture_resource_dimension_descriptor_honors_multisample_texel_fetch():
+    descriptor = texture_resource_dimension_descriptor(
+        "Texture2DMS",
+        {"sample_offset": True},
+        coordinate_dimension=2,
+        offset_dimension=2,
+        is_multisample=True,
+    )
+
+    assert descriptor["sample_offset_dimension"] == 2
+    assert descriptor["texel_fetch_offset_dimension"] is None
 
 
 def test_explicit_image_access_prefers_qualifier_before_attribute():
@@ -499,6 +1294,11 @@ def test_numeric_expression_component_count_prefers_literal_then_inferred_type()
 def test_image_atomic_value_kind_mismatch_reports_first_concrete_mismatch():
     kinds = {"unknown": None, "bad": "int", "later": "float"}
 
+    assert is_image_atomic_operation("imageAtomicAdd")
+    assert is_image_atomic_operation("imageAtomicCompSwap")
+    assert not is_image_atomic_operation("imageLoad")
+    assert not is_image_atomic_operation("imageSamples")
+
     assert image_atomic_value_kind_mismatch(
         "imageAtomicAdd",
         ["unknown", "bad", "later"],
@@ -729,6 +1529,33 @@ def test_resource_query_get_dimensions_descriptor_normalizes_query_metadata():
     }
 
 
+def test_resource_query_size_components_descriptor_builds_query_metadata():
+    assert resource_query_size_components_descriptor(
+        "int3",
+        ("width", "height", "elements"),
+        tail_dimensions=("levels",),
+        function_params="int lod",
+        get_dimensions_prefix=("lod",),
+    ) == {
+        "size_return_type": "int3",
+        "function_params": "int lod",
+        "dimensions": ("width", "height", "elements", "levels"),
+        "get_dimensions_args": ("lod", "width", "height", "elements", "levels"),
+        "size_return_expr": "int3(width, height, elements)",
+    }
+    assert resource_query_size_components_descriptor(
+        "int",
+        ("width",),
+        tail_dimensions=("samples",),
+    ) == {
+        "size_return_type": "int",
+        "function_params": "",
+        "dimensions": ("width", "samples"),
+        "get_dimensions_args": ("width", "samples"),
+        "size_return_expr": "int(width)",
+    }
+
+
 def test_resource_query_size_helper_descriptor_derives_public_size_metadata():
     query_descriptor = resource_query_get_dimensions_descriptor(
         "int3",
@@ -783,12 +1610,102 @@ def test_resource_query_scalar_helper_descriptor_derives_public_scalar_metadata(
     assert resource_query_scalar_helper_descriptor(None, "int(levels)") is None
 
 
+def test_resource_query_scalar_constant_helper_descriptor_builds_scalar_metadata():
+    assert resource_query_scalar_constant_helper_descriptor("1") == {
+        "return_type": "int",
+        "function_params": "",
+        "dimensions": (),
+        "get_dimensions_args": (),
+        "return_expr": "1",
+    }
+    assert resource_query_scalar_constant_helper_descriptor(
+        "uint(4)", return_type="uint"
+    ) == {
+        "return_type": "uint",
+        "function_params": "",
+        "dimensions": (),
+        "get_dimensions_args": (),
+        "return_expr": "uint(4)",
+    }
+
+
+def test_resource_query_method_size_descriptor_normalizes_method_metadata():
+    assert resource_query_method_size_descriptor(
+        "int3",
+        [
+            ("get_width", True),
+            ("get_height", True),
+            ("get_array_size", False),
+        ],
+    ) == {
+        "return_type": "int3",
+        "dimensions": (
+            ("get_width", True),
+            ("get_height", True),
+            ("get_array_size", False),
+        ),
+    }
+
+
+def test_texture_query_levels_multisample_expression_matches_single_level():
+    assert texture_query_levels_multisample_expression() == "1"
+    assert texture_query_levels_zero_value() == "0"
+
+
+def test_texture_query_lod_coordinate_swizzle_drops_array_layers():
+    assert texture_query_lod_coordinate_swizzle("GLSL", "sampler1DArray") == "x"
+    assert texture_query_lod_coordinate_swizzle("GLSL", "isampler2DArray") == "xy"
+    assert (
+        texture_query_lod_coordinate_swizzle("GLSL", "samplerCubeArrayShadow") == "xyz"
+    )
+    assert texture_query_lod_coordinate_swizzle("DirectX", "Texture1DArray") == "x"
+    assert texture_query_lod_coordinate_swizzle("DirectX", "Texture2DArray") == "xy"
+    assert texture_query_lod_coordinate_swizzle("DirectX", "TextureCubeArray") == "xyz"
+    assert (
+        texture_query_lod_coordinate_swizzle("Metal", "texture1d_array<float>") == "x"
+    )
+    assert texture_query_lod_coordinate_swizzle("Metal", "depth2d_array<float>") == "xy"
+    assert (
+        texture_query_lod_coordinate_swizzle("Metal", "depthcube_array<float>") == "xyz"
+    )
+    assert texture_query_lod_coordinate_swizzle("GLSL", "sampler2D") is None
+
+
+def test_texture_samples_query_expression_matches_backend_syntax():
+    assert texture_samples_query_expression("GLSL", "msTex") == "textureSamples(msTex)"
+    assert (
+        texture_samples_query_expression("DirectX", "textures[2]")
+        == "textureSamples(textures[2])"
+    )
+    assert (
+        texture_samples_query_expression("Metal", "arrays[layer]")
+        == "int(arrays[layer].get_num_samples())"
+    )
+
+
+def test_texture_samples_query_requirement_name_matches_backend_terms():
+    assert texture_samples_query_requirement_name("GLSL") == "sampler"
+    assert texture_samples_query_requirement_name("DirectX") == "texture"
+    assert texture_samples_query_requirement_name("Metal") == "texture"
+
+
 def test_unsupported_texture_query_fallback_helpers_build_backend_expressions():
     assert (
         unsupported_texture_query_expression(
             "GLSL", "textureQueryLevels", "image2D", "0"
         )
         == "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
+    )
+    assert (
+        unsupported_texture_query_levels_expression("GLSL", "image2D")
+        == "/* unsupported GLSL texture query: textureQueryLevels on image2D */ 0"
+    )
+    assert (
+        unsupported_texture_query_levels_expression(
+            "Metal", "texture2d<float, access::read_write>"
+        )
+        == "/* unsupported Metal texture query: textureQueryLevels on "
+        "texture2d<float, access::read_write> */ 0"
     )
     assert (
         unsupported_texture_query_expression(
@@ -807,10 +1724,45 @@ def test_unsupported_texture_query_fallback_helpers_build_backend_expressions():
         == "/* unsupported DirectX multisample texture query: "
         "textureQueryLod on Texture2DMS<float4> */ float2(0.0)"
     )
+    assert texture_query_lod_zero_value("GLSL") == "vec2(0.0)"
+    assert texture_query_lod_zero_value("DirectX") == "float2(0.0)"
+    assert texture_query_lod_zero_value("Metal") == "float2(0.0)"
+    assert (
+        unsupported_texture_query_lod_expression("GLSL", "image2D")
+        == "/* unsupported GLSL texture query: textureQueryLod on "
+        "image2D */ vec2(0.0)"
+    )
+    assert (
+        unsupported_texture_query_lod_expression("DirectX", "RWTexture2D<float4>")
+        == "/* unsupported DirectX texture query: textureQueryLod on "
+        "RWTexture2D<float4> */ float2(0.0)"
+    )
+    assert (
+        unsupported_multisample_texture_query_lod_expression("GLSL", "sampler2DMS")
+        == "/* unsupported GLSL multisample texture query: "
+        "textureQueryLod on sampler2DMS */ vec2(0.0)"
+    )
+    assert (
+        unsupported_multisample_texture_query_lod_expression(
+            "Metal", "texture2d_ms_array<float>"
+        )
+        == "/* unsupported Metal multisample texture query: "
+        "textureQueryLod on texture2d_ms_array<float> */ float2(0.0)"
+    )
     assert (
         unsupported_texture_samples_query_expression("GLSL", "sampler")
         == "/* unsupported GLSL texture samples query: "
         "requires multisample sampler */ 0"
+    )
+    assert (
+        unsupported_texture_samples_query_call_expression("DirectX")
+        == "/* unsupported DirectX texture samples query: "
+        "requires multisample texture */ 0"
+    )
+    assert (
+        unsupported_texture_samples_query_call_expression("Metal")
+        == "/* unsupported Metal texture samples query: "
+        "requires multisample texture */ 0"
     )
     assert (
         unsupported_texture_samples_query_expression("Metal", "texture")
@@ -828,11 +1780,39 @@ def test_unsupported_multisample_texture_fallback_helpers_build_backend_expressi
         "texture on sampler2DMS */ vec4(0.0)"
     )
     assert (
+        unsupported_multisample_texture_call_vector_expression(
+            "DirectX", "textureGrad", "Texture2DMS<float4>"
+        )
+        == "/* unsupported DirectX multisample texture call: "
+        "textureGrad on Texture2DMS<float4> */ float4(0.0)"
+    )
+    assert (
+        unsupported_multisample_texture_call_vector_expression(
+            "Metal", "texture", "texture2d_ms_array<float>"
+        )
+        == "/* unsupported Metal multisample texture call: "
+        "texture on texture2d_ms_array<float> */ float4(0.0)"
+    )
+    assert (
         unsupported_multisample_texture_compare_expression(
             "Metal", "textureCompare", "texture2d_ms<float>", "0.0"
         )
         == "/* unsupported Metal multisample texture comparison: "
         "textureCompare on texture2d_ms<float> */ 0.0"
+    )
+    assert (
+        unsupported_multisample_texture_compare_scalar_expression(
+            "GLSL", "textureCompareGrad", "sampler2DMS"
+        )
+        == "/* unsupported GLSL multisample texture comparison: "
+        "textureCompareGrad on sampler2DMS */ 0.0"
+    )
+    assert (
+        unsupported_multisample_texture_compare_scalar_expression(
+            "DirectX", "textureCompare", "Texture2DMSArray<float4>"
+        )
+        == "/* unsupported DirectX multisample texture comparison: "
+        "textureCompare on Texture2DMSArray<float4> */ 0.0"
     )
     assert (
         unsupported_multisample_texture_gather_compare_expression(
@@ -844,6 +1824,20 @@ def test_unsupported_multisample_texture_fallback_helpers_build_backend_expressi
         == "/* unsupported DirectX multisample texture gather comparison: "
         "textureGatherCompare on Texture2DMSArray<float4> */ float4(0.0)"
     )
+    assert (
+        unsupported_multisample_texture_gather_compare_vector_expression(
+            "GLSL", "textureGatherCompare", "sampler2DMS"
+        )
+        == "/* unsupported GLSL multisample texture gather comparison: "
+        "textureGatherCompare on sampler2DMS */ vec4(0.0)"
+    )
+    assert (
+        unsupported_multisample_texture_gather_compare_vector_expression(
+            "Metal", "textureGatherCompareOffset", "texture2d_ms_array<float>"
+        )
+        == "/* unsupported Metal multisample texture gather comparison: "
+        "textureGatherCompareOffset on texture2d_ms_array<float> */ float4(0.0)"
+    )
 
 
 def test_unsupported_storage_image_texture_helpers_build_backend_expressions():
@@ -853,6 +1847,23 @@ def test_unsupported_storage_image_texture_helpers_build_backend_expressions():
         )
         == "/* unsupported GLSL storage image texture comparison: "
         "textureCompare on image2D */ 0.0"
+    )
+    assert texture_scalar_zero_value("GLSL") == "0.0"
+    assert texture_scalar_zero_value("DirectX") == "0.0"
+    assert texture_scalar_zero_value("Metal") == "0.0"
+    assert (
+        unsupported_storage_image_texture_comparison_scalar_expression(
+            "Metal", "textureCompare", "texture2d<float, access::read_write>"
+        )
+        == "/* unsupported Metal storage image texture comparison: "
+        "textureCompare on texture2d<float, access::read_write> */ 0.0"
+    )
+    assert (
+        unsupported_storage_image_texture_comparison_scalar_expression(
+            "DirectX", "textureGatherCompare", "RWTexture2D<float4>"
+        )
+        == "/* unsupported DirectX storage image texture comparison: "
+        "textureGatherCompare on RWTexture2D<float4> */ 0.0"
     )
     assert (
         unsupported_storage_image_texture_operation_expression(
@@ -871,6 +1882,20 @@ def test_unsupported_storage_image_texture_helpers_build_backend_expressions():
         == "/* unsupported Metal storage image texture operation: texelFetch "
         "on texture2d<float, access::read_write> */ float4(0.0)"
     )
+    assert (
+        unsupported_storage_image_texture_operation_vector_expression(
+            "GLSL", "texture", "image2D"
+        )
+        == "/* unsupported GLSL storage image texture operation: texture on "
+        "image2D */ vec4(0.0)"
+    )
+    assert (
+        unsupported_storage_image_texture_operation_vector_expression(
+            "DirectX", "textureGather", "RWTexture2D<float4>"
+        )
+        == "/* unsupported DirectX storage image texture operation: "
+        "textureGather on RWTexture2D<float4> */ float4(0.0)"
+    )
 
 
 def test_storage_image_texture_operation_classifiers_match_intrinsic_groups():
@@ -882,6 +1907,575 @@ def test_storage_image_texture_operation_classifiers_match_intrinsic_groups():
     assert not is_storage_image_texture_comparison_operation("texture")
     assert not is_storage_image_texture_operation("textureCompare")
     assert not is_storage_image_texture_operation("imageLoad")
+
+
+def test_projected_texture_classifiers_match_intrinsic_groups():
+    assert is_projected_texture_operation("textureProj")
+    assert is_projected_texture_operation("textureProjGradOffset")
+    assert is_projected_texture_compare_operation("textureCompareProj")
+    assert is_projected_texture_compare_operation("textureCompareProjGradOffset")
+    assert not is_projected_texture_operation("texture")
+    assert not is_projected_texture_operation("textureCompareProj")
+    assert not is_projected_texture_compare_operation("textureCompare")
+    assert not is_projected_texture_compare_operation("textureProj")
+    assert PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES <= TEXTURE_COMPARE_INTRINSIC_NAMES
+    assert not PROJECTED_TEXTURE_INTRINSIC_NAMES & TEXTURE_COMPARE_INTRINSIC_NAMES
+
+
+def test_projected_texture_shape_classifiers_match_intrinsic_groups():
+    assert is_projected_texture_basic_operation("textureProj")
+    assert is_projected_texture_basic_offset_operation("textureProjOffset")
+    assert is_projected_texture_lod_operation("textureProjLod")
+    assert is_projected_texture_lod_offset_operation("textureProjLodOffset")
+    assert is_projected_texture_grad_operation("textureProjGrad")
+    assert is_projected_texture_grad_offset_operation("textureProjGradOffset")
+
+    assert not is_projected_texture_basic_operation("textureProjOffset")
+    assert not is_projected_texture_basic_offset_operation("textureProj")
+    assert not is_projected_texture_lod_operation("textureProjLodOffset")
+    assert not is_projected_texture_lod_offset_operation("textureProjLod")
+    assert not is_projected_texture_grad_operation("textureProjGradOffset")
+    assert not is_projected_texture_grad_offset_operation("textureProjGrad")
+
+    assert PROJECTED_TEXTURE_INTRINSIC_NAMES == (
+        PROJECTED_TEXTURE_BASIC_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_BASIC_OFFSET_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_LOD_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_LOD_OFFSET_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_GRAD_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_GRAD_OFFSET_INTRINSIC_NAMES
+    )
+    assert PROJECTED_TEXTURE_OFFSET_INTRINSIC_NAMES == (
+        PROJECTED_TEXTURE_BASIC_OFFSET_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_LOD_OFFSET_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_GRAD_OFFSET_INTRINSIC_NAMES
+    )
+
+
+def test_texture_operation_classifiers_match_intrinsic_groups():
+    assert is_texture_sample_operation("texture")
+    assert is_texture_sample_operation("textureGrad")
+    assert is_texture_sample_offset_operation("textureOffset")
+    assert is_texture_sample_offset_operation("textureGradOffset")
+    assert is_texture_sampling_operation("texture")
+    assert is_texture_sampling_operation("textureOffset")
+    assert is_texture_sampling_operation("textureProjGradOffset")
+    assert is_texture_gather_operation("textureGather")
+    assert is_texture_gather_operation("textureGatherOffsets")
+    assert is_texture_gather_compare_operation("textureGatherCompare")
+    assert is_texture_gather_compare_operation("textureGatherCompareOffset")
+    assert is_texture_query_operation("textureQueryLod")
+    assert is_texture_query_operation("textureSamples")
+    assert not is_texture_sample_operation("textureOffset")
+    assert not is_texture_sample_offset_operation("texture")
+    assert not is_texture_sampling_operation("textureCompare")
+    assert not is_texture_sampling_operation("textureGather")
+    assert not is_texture_sampling_operation("texelFetch")
+    assert not is_texture_gather_operation("textureGatherCompare")
+    assert not is_texture_gather_compare_operation("textureGather")
+    assert not is_texture_query_operation("texture")
+    assert TEXTURE_SAMPLING_INTRINSIC_NAMES == (
+        TEXTURE_SAMPLE_INTRINSIC_NAMES
+        | TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES
+        | PROJECTED_TEXTURE_INTRINSIC_NAMES
+    )
+    assert not TEXTURE_GATHER_INTRINSIC_NAMES & TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+    assert not TEXTURE_QUERY_INTRINSIC_NAMES & TEXTURE_SAMPLING_INTRINSIC_NAMES
+    assert not TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES & TEXTURE_QUERY_INTRINSIC_NAMES
+
+
+def test_texture_sample_shape_classifiers_match_intrinsic_groups():
+    assert is_texture_sample_basic_operation("texture")
+    assert is_texture_sample_lod_operation("textureLod")
+    assert is_texture_sample_grad_operation("textureGrad")
+    assert is_texture_sample_basic_offset_operation("textureOffset")
+    assert is_texture_sample_lod_offset_operation("textureLodOffset")
+    assert is_texture_sample_grad_offset_operation("textureGradOffset")
+
+    assert not is_texture_sample_basic_operation("textureLod")
+    assert not is_texture_sample_lod_operation("textureLodOffset")
+    assert not is_texture_sample_grad_operation("textureGradOffset")
+    assert not is_texture_sample_basic_offset_operation("texture")
+    assert not is_texture_sample_lod_offset_operation("textureLod")
+    assert not is_texture_sample_grad_offset_operation("textureGrad")
+    assert TEXTURE_SAMPLE_INTRINSIC_NAMES == (
+        TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES
+        | TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES
+        | TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES
+    )
+    assert TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES == (
+        TEXTURE_SAMPLE_BASIC_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_SAMPLE_LOD_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_SAMPLE_GRAD_OFFSET_INTRINSIC_NAMES
+    )
+    assert not TEXTURE_SAMPLE_INTRINSIC_NAMES & TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES
+
+
+def test_texture_query_shape_classifiers_match_intrinsic_groups():
+    assert is_texture_query_lod_operation("textureQueryLod")
+    assert is_texture_query_levels_operation("textureQueryLevels")
+    assert is_texture_size_query_operation("textureSize")
+    assert is_texture_samples_query_operation("textureSamples")
+    assert is_resource_size_query_operation("imageSize")
+    assert is_resource_size_query_operation("textureSize")
+    assert is_resource_samples_query_operation("imageSamples")
+    assert is_resource_samples_query_operation("textureSamples")
+
+    assert not is_texture_query_lod_operation("textureQueryLevels")
+    assert not is_texture_query_levels_operation("textureQueryLod")
+    assert not is_texture_size_query_operation("imageSize")
+    assert not is_texture_samples_query_operation("imageSamples")
+    assert TEXTURE_QUERY_INTRINSIC_NAMES == (
+        TEXTURE_QUERY_LOD_INTRINSIC_NAMES
+        | TEXTURE_QUERY_LEVELS_INTRINSIC_NAMES
+        | TEXTURE_QUERY_SIZE_INTRINSIC_NAMES
+        | TEXTURE_QUERY_SAMPLES_INTRINSIC_NAMES
+    )
+    assert RESOURCE_QUERY_SIZE_INTRINSIC_NAMES == {"textureSize", "imageSize"}
+    assert RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES == {
+        "textureSamples",
+        "imageSamples",
+    }
+
+
+def test_texture_compare_shape_classifiers_match_intrinsic_groups():
+    assert is_texture_compare_operation("textureCompare")
+    assert is_texture_compare_operation("textureCompareProjGradOffset")
+    assert is_texture_compare_basic_operation("textureCompare")
+    assert is_texture_compare_basic_operation("textureCompareProj")
+    assert is_texture_compare_offset_operation("textureCompareProjOffset")
+    assert is_texture_compare_lod_operation("textureCompareProjLod")
+    assert is_texture_compare_lod_offset_operation("textureCompareLodOffset")
+    assert is_texture_compare_grad_operation("textureCompareProjGrad")
+    assert is_texture_compare_grad_offset_operation("textureCompareGradOffset")
+    assert is_texture_compare_non_projected_operation("textureCompareGradOffset")
+    assert is_texture_compare_non_projected_offset_operation("textureCompareGradOffset")
+
+    assert not is_texture_compare_basic_operation("textureCompareOffset")
+    assert not is_texture_compare_lod_operation("textureCompareLodOffset")
+    assert not is_texture_compare_grad_operation("textureCompareGradOffset")
+    assert not is_texture_compare_operation("texture")
+    assert not is_texture_compare_operation("textureProj")
+    assert not is_texture_compare_non_projected_operation("textureCompareProj")
+    assert not is_texture_compare_non_projected_offset_operation(
+        "textureCompareProjOffset"
+    )
+    assert TEXTURE_COMPARE_INTRINSIC_NAMES == (
+        TEXTURE_COMPARE_BASIC_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_LOD_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+    )
+    assert TEXTURE_COMPARE_NON_PROJECTED_INTRINSIC_NAMES == (
+        TEXTURE_COMPARE_INTRINSIC_NAMES - PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
+    )
+    assert TEXTURE_COMPARE_NON_PROJECTED_OFFSET_OPERATION_NAMES == (
+        TEXTURE_COMPARE_OFFSET_OPERATION_NAMES
+        - PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
+    )
+    assert PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES <= TEXTURE_COMPARE_INTRINSIC_NAMES
+
+
+def test_texture_gather_shape_classifiers_match_intrinsic_groups():
+    assert is_texture_gather_basic_operation("textureGather")
+    assert is_texture_gather_single_offset_operation("textureGatherOffset")
+    assert is_texture_gather_multi_offset_operation("textureGatherOffsets")
+    assert is_texture_gather_offset_operation("textureGatherOffset")
+    assert is_texture_gather_offset_operation("textureGatherOffsets")
+
+    assert not is_texture_gather_basic_operation("textureGatherOffset")
+    assert not is_texture_gather_single_offset_operation("textureGather")
+    assert not is_texture_gather_multi_offset_operation("textureGatherOffset")
+    assert not is_texture_gather_offset_operation("textureGather")
+    assert TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES == (
+        TEXTURE_GATHER_SINGLE_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_GATHER_MULTI_OFFSET_INTRINSIC_NAMES
+    )
+    assert TEXTURE_GATHER_INTRINSIC_NAMES == (
+        TEXTURE_GATHER_BASIC_INTRINSIC_NAMES | TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES
+    )
+    assert not (
+        TEXTURE_GATHER_BASIC_INTRINSIC_NAMES & TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES
+    )
+    assert not (
+        TEXTURE_GATHER_SINGLE_OFFSET_INTRINSIC_NAMES
+        & TEXTURE_GATHER_MULTI_OFFSET_INTRINSIC_NAMES
+    )
+
+
+def test_texture_resource_and_sampler_intrinsic_groups_are_shared_unions():
+    assert TEXTURE_RESOURCE_INTRINSIC_NAMES == (
+        TEXTURE_SAMPLING_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_INTRINSIC_NAMES
+        | TEXTURE_GATHER_INTRINSIC_NAMES
+        | TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+        | TEXTURE_QUERY_INTRINSIC_NAMES
+        | TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES
+    )
+    assert TEXTURE_IMPLICIT_SAMPLER_INTRINSIC_NAMES == (
+        TEXTURE_SAMPLING_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_INTRINSIC_NAMES
+        | TEXTURE_GATHER_INTRINSIC_NAMES
+        | TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+        | TEXTURE_QUERY_LOD_INTRINSIC_NAMES
+    )
+    for intrinsic in TEXTURE_RESOURCE_INTRINSIC_NAMES:
+        assert is_texture_resource_operation(intrinsic)
+    for intrinsic in TEXTURE_IMPLICIT_SAMPLER_INTRINSIC_NAMES:
+        assert is_texture_implicit_sampler_operation(intrinsic)
+
+    assert is_texture_resource_operation("textureSamples")
+    assert is_texture_resource_operation("texelFetch")
+    assert is_texture_implicit_sampler_operation("textureGatherCompare")
+    assert is_texture_implicit_sampler_operation("textureQueryLod")
+    assert not is_texture_implicit_sampler_operation("textureSize")
+    assert not is_texture_implicit_sampler_operation("texelFetch")
+    assert not is_texture_resource_operation("imageLoad")
+    assert is_image_resource_operation("imageLoad", {"imageLoad", "imageSize"})
+    assert is_image_resource_operation("imageSize", {"imageLoad", "imageSize"})
+    assert not is_image_resource_operation("imageSamples", {"imageLoad", "imageSize"})
+    assert not is_image_resource_operation("textureSize", {"imageLoad", "imageSize"})
+    assert texture_image_resource_operation_names({"imageLoad", "imageSize"}) == (
+        TEXTURE_RESOURCE_INTRINSIC_NAMES | {"imageLoad", "imageSize", "imageSamples"}
+    )
+
+
+def test_texture_offset_classifiers_match_intrinsic_groups():
+    assert is_texture_sampling_offset_operation("textureOffset")
+    assert is_texture_sampling_offset_operation("textureProjGradOffset")
+    assert is_texture_gather_offset_operation("textureGatherOffsets")
+    assert is_texture_gather_compare_offset_operation("textureGatherCompareOffset")
+    assert is_texture_compare_offset_operation("textureCompareProjOffset")
+    assert is_texture_compare_lod_offset_operation("textureCompareProjLodOffset")
+    assert is_texture_compare_grad_offset_operation("textureCompareProjGradOffset")
+    assert is_texture_compare_any_offset_operation("textureCompareGradOffset")
+    assert is_texel_fetch_offset_operation("texelFetchOffset")
+
+    for intrinsic in TEXTURE_OFFSET_INTRINSIC_NAMES:
+        assert is_texture_offset_operation(intrinsic)
+
+    assert not is_texture_offset_operation("texture")
+    assert not is_texture_sampling_offset_operation("textureCompareOffset")
+    assert not is_texture_compare_any_offset_operation("textureProjOffset")
+    assert TEXTURE_SAMPLING_OFFSET_INTRINSIC_NAMES == (
+        TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES | PROJECTED_TEXTURE_OFFSET_INTRINSIC_NAMES
+    )
+    assert TEXTURE_COMPARE_OFFSET_OPERATION_NAMES == (
+        TEXTURE_COMPARE_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
+        | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+    )
+    assert TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES <= TEXTURE_GATHER_INTRINSIC_NAMES
+    assert (
+        TEXTURE_GATHER_COMPARE_OFFSET_INTRINSIC_NAMES
+        <= TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+    )
+    assert (
+        TEXTURE_TEXEL_FETCH_OFFSET_INTRINSIC_NAMES
+        <= TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES
+    )
+
+
+def test_texture_resource_offset_dimension_key_routes_operation_shapes():
+    assert (
+        texture_resource_offset_dimension_key("textureGatherOffset")
+        == "gather_offset_dimension"
+    )
+    assert (
+        texture_resource_offset_dimension_key("textureGatherCompareOffset")
+        == "gather_compare_offset_dimension"
+    )
+    assert (
+        texture_resource_offset_dimension_key("textureCompareOffset")
+        == "compare_offset_dimension"
+    )
+    assert (
+        texture_resource_offset_dimension_key("textureCompareLodOffset")
+        == "compare_lod_offset_dimension"
+    )
+    assert (
+        texture_resource_offset_dimension_key("textureCompareGradOffset")
+        == "compare_grad_offset_dimension"
+    )
+    assert (
+        texture_resource_offset_dimension_key(
+            "textureCompareGradOffset", collapse_compare_offsets=True
+        )
+        == "compare_offset_dimension"
+    )
+    assert (
+        texture_resource_offset_dimension_key("texelFetchOffset")
+        == "texel_fetch_offset_dimension"
+    )
+    assert (
+        texture_resource_offset_dimension_key("textureProjLodOffset")
+        == "sample_offset_dimension"
+    )
+    assert texture_resource_offset_dimension_key("imageLoad") == "offset_dimension"
+
+
+def test_texel_fetch_classifiers_match_intrinsic_groups():
+    assert is_texel_fetch_operation("texelFetch")
+    assert is_texel_fetch_operation("texelFetchOffset")
+    assert is_texel_fetch_basic_operation("texelFetch")
+    assert is_texel_fetch_offset_operation("texelFetchOffset")
+
+    assert not is_texel_fetch_operation("texture")
+    assert not is_texel_fetch_basic_operation("texelFetchOffset")
+    assert not is_texel_fetch_offset_operation("texelFetch")
+
+    assert TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES == (
+        TEXTURE_TEXEL_FETCH_BASIC_INTRINSIC_NAMES
+        | TEXTURE_TEXEL_FETCH_OFFSET_INTRINSIC_NAMES
+    )
+    assert not TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES & TEXTURE_QUERY_INTRINSIC_NAMES
+
+
+def test_unsupported_texture_gather_and_texel_fetch_helpers_build_backend_expressions():
+    assert (
+        unsupported_texture_gather_expression(
+            "GLSL",
+            "textureGather",
+            "requires 2D, 2D-array, cube, or cube-array textures",
+            "vec4(0.0)",
+        )
+        == "/* unsupported GLSL texture gather: textureGather requires 2D, "
+        "2D-array, cube, or cube-array textures */ vec4(0.0)"
+    )
+    assert (
+        unsupported_texture_gather_call_expression(
+            "Metal",
+            "textureGatherOffsets",
+            "offsets require 2D or 2D-array textures",
+        )
+        == "/* unsupported Metal texture gather: textureGatherOffsets offsets "
+        "require 2D or 2D-array textures */ float4(0.0)"
+    )
+    assert (
+        unsupported_texture_gather_compare_expression(
+            "DirectX",
+            "textureGatherCompareOffset",
+            "offsets require 2D or 2D-array depth textures",
+            "float4(0.0)",
+        )
+        == "/* unsupported DirectX texture gather compare: "
+        "textureGatherCompareOffset offsets require 2D or 2D-array depth "
+        "textures */ float4(0.0)"
+    )
+    assert (
+        unsupported_texture_gather_compare_call_expression(
+            "GLSL",
+            "textureGatherCompareOffset",
+            "offsets require 2D or 2D-array depth textures",
+        )
+        == "/* unsupported GLSL texture gather compare: "
+        "textureGatherCompareOffset offsets require 2D or 2D-array depth "
+        "textures */ vec4(0.0)"
+    )
+    assert (
+        unsupported_texel_fetch_expression(
+            "Metal", "texelFetch", "texturecube<float>", "float4(0.0)"
+        )
+        == "/* unsupported Metal texel fetch: texelFetch on "
+        "texturecube<float> */ float4(0.0)"
+    )
+    assert texel_fetch_zero_value("GLSL") == "vec4(0.0)"
+    assert texel_fetch_zero_value("DirectX") == "float4(0.0)"
+    assert texel_fetch_zero_value("Metal") == "float4(0.0)"
+    assert (
+        unsupported_cube_texel_fetch_expression(
+            "GLSL", "texelFetchOffset", "samplerCube"
+        )
+        == "/* unsupported GLSL texel fetch: texelFetchOffset on "
+        "samplerCube */ vec4(0.0)"
+    )
+    assert (
+        unsupported_cube_texel_fetch_expression(
+            "DirectX", "texelFetch", "TextureCubeArray"
+        )
+        == "/* unsupported DirectX texel fetch: texelFetch on "
+        "TextureCubeArray */ float4(0.0)"
+    )
+    assert (
+        unsupported_cube_texel_fetch_expression(
+            "Metal", "texelFetch", "texturecube<float>"
+        )
+        == "/* unsupported Metal texel fetch: texelFetch on "
+        "texturecube<float> */ float4(0.0)"
+    )
+
+
+def test_unsupported_texture_offset_helpers_build_backend_expressions():
+    assert (
+        texel_fetch_offset_multisample_reason("GLSL", "sampler2DMS")
+        == "multisample texture sampler2DMS does not support offsets"
+    )
+    assert (
+        texel_fetch_offset_multisample_reason("DirectX")
+        == "multisample textures do not support offsets"
+    )
+    assert (
+        texel_fetch_offset_multisample_reason("Metal")
+        == "multisample textures do not support offsets"
+    )
+    assert (
+        unsupported_texture_offset_expression(
+            "GLSL",
+            "textureOffset",
+            "requires offset and optional bias arguments",
+            "vec4(0.0)",
+        )
+        == "/* unsupported GLSL texture offset: textureOffset requires "
+        "offset and optional bias arguments */ vec4(0.0)"
+    )
+    assert texture_vector_zero_value("GLSL") == "vec4(0.0)"
+    assert texture_vector_zero_value("DirectX") == "float4(0.0)"
+    assert texture_vector_zero_value("Metal") == "float4(0.0)"
+    assert (
+        unsupported_texture_offset_call_expression(
+            "DirectX",
+            "textureGradOffset",
+            "offsets require 1D, 2D, 2D-array, or 3D textures",
+        )
+        == "/* unsupported DirectX texture offset: textureGradOffset "
+        "offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+    )
+    assert (
+        unsupported_texture_offset_call_expression(
+            "Metal", "textureOffset", "offsets require 2D or 2D-array textures"
+        )
+        == "/* unsupported Metal texture offset: textureOffset offsets "
+        "require 2D or 2D-array textures */ float4(0.0)"
+    )
+    assert (
+        unsupported_texel_fetch_offset_expression(
+            "GLSL",
+            "multisample texture sampler2DMS does not support offsets",
+            "vec4(0.0)",
+        )
+        == "/* unsupported GLSL texel fetch offset: multisample texture "
+        "sampler2DMS does not support offsets */ vec4(0.0)"
+    )
+    assert (
+        unsupported_texel_fetch_offset_expression(
+            "DirectX",
+            "multisample textures do not support offsets",
+            "float4(0.0)",
+        )
+        == "/* unsupported DirectX texel fetch offset: multisample "
+        "textures do not support offsets */ float4(0.0)"
+    )
+    assert (
+        unsupported_multisample_texel_fetch_offset_expression(
+            "GLSL", "sampler2DMSArray"
+        )
+        == "/* unsupported GLSL texel fetch offset: multisample texture "
+        "sampler2DMSArray does not support offsets */ vec4(0.0)"
+    )
+    assert (
+        unsupported_multisample_texel_fetch_offset_expression("DirectX")
+        == "/* unsupported DirectX texel fetch offset: multisample "
+        "textures do not support offsets */ float4(0.0)"
+    )
+    assert (
+        unsupported_multisample_texel_fetch_offset_expression("Metal")
+        == "/* unsupported Metal texel fetch offset: multisample textures "
+        "do not support offsets */ float4(0.0)"
+    )
+
+
+def test_unsupported_projected_texture_helper_builds_backend_expressions():
+    assert (
+        unsupported_projected_texture_expression(
+            "GLSL",
+            "textureProjGradOffset",
+            "requires 1D, 2D, 2D-array, or 3D projection coordinates",
+            "vec4(0.0)",
+        )
+        == "/* unsupported GLSL projected texture: textureProjGradOffset "
+        "requires 1D, 2D, 2D-array, or 3D projection coordinates */ vec4(0.0)"
+    )
+    assert (
+        unsupported_projected_texture_expression(
+            "Metal",
+            "textureProj",
+            "requires 1D, 2D, or 3D projection coordinates",
+            "float4(0.0)",
+        )
+        == "/* unsupported Metal projected texture: textureProj requires "
+        "1D, 2D, or 3D projection coordinates */ float4(0.0)"
+    )
+    assert (
+        unsupported_projected_texture_call_expression(
+            "DirectX",
+            "textureProj",
+            "requires 1D, 2D, or 3D projection coordinates",
+        )
+        == "/* unsupported DirectX projected texture: textureProj requires "
+        "1D, 2D, or 3D projection coordinates */ float4(0.0)"
+    )
+    assert (
+        unsupported_projected_texture_call_expression(
+            "GLSL",
+            "textureProjGradOffset",
+            "requires 1D, 2D, 2D-array, or 3D projection coordinates",
+        )
+        == "/* unsupported GLSL projected texture: textureProjGradOffset "
+        "requires 1D, 2D, 2D-array, or 3D projection coordinates */ vec4(0.0)"
+    )
+
+
+def test_unsupported_texture_compare_helper_builds_backend_expressions():
+    assert (
+        unsupported_texture_compare_expression(
+            "GLSL",
+            "textureCompareProjLodOffset",
+            "projected explicit LOD is not supported for sampler2DArrayShadow",
+            "0.0",
+        )
+        == "/* unsupported GLSL texture compare: textureCompareProjLodOffset "
+        "projected explicit LOD is not supported for sampler2DArrayShadow */ 0.0"
+    )
+    assert (
+        unsupported_texture_compare_expression(
+            "DirectX",
+            "textureCompareProjGradOffset",
+            "requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates",
+            "0.0",
+        )
+        == "/* unsupported DirectX texture compare: textureCompareProjGradOffset "
+        "requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
+    )
+    assert (
+        unsupported_texture_compare_expression(
+            "Metal",
+            "textureCompareProjGradOffset",
+            "requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates",
+            "0.0",
+        )
+        == "/* unsupported Metal texture compare: textureCompareProjGradOffset "
+        "requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates */ 0.0"
+    )
+    assert (
+        unsupported_texture_compare_scalar_expression(
+            "GLSL",
+            "textureCompareLodOffset",
+            "explicit LOD offsets require 2D shadow samplers",
+        )
+        == "/* unsupported GLSL texture compare: textureCompareLodOffset "
+        "explicit LOD offsets require 2D shadow samplers */ 0.0"
+    )
+    assert (
+        unsupported_texture_compare_scalar_expression(
+            "Metal",
+            "textureCompareOffset",
+            "offsets require 2D or 2D-array depth textures",
+        )
+        == "/* unsupported Metal texture compare: textureCompareOffset "
+        "offsets require 2D or 2D-array depth textures */ 0.0"
+    )
 
 
 def test_component_count_mismatch_allows_unknown_scalar_and_exact_counts():
@@ -1160,6 +2754,16 @@ def test_image_multisample_sample_type_helpers_validate_scalar_integer_samples()
         )
         == "Metal multisample image operation 'imageLoad' requires a scalar "
         "integer sample index argument: sampleValue has type float"
+    )
+
+
+def test_texture_multisample_sample_type_error_matches_texel_fetch_diagnostic():
+    assert (
+        texture_multisample_sample_type_error(
+            "DirectX", "texelFetch", "sampleValue", "float"
+        )
+        == "DirectX multisample texel fetch operation 'texelFetch' requires a "
+        "scalar integer sample index argument: sampleValue has type float"
     )
 
 

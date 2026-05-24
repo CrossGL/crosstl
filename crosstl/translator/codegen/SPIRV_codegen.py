@@ -102,6 +102,10 @@ class VulkanSPIRVCodeGen:
         self.vector_constants = {}
         self.composite_constants = {}
         self.resource_type_metadata = {}
+        self.precise_global_variables = set()
+        self.precise_local_variables = set()
+        self.no_contraction_ids = set()
+        self.precise_expression_depth = 0
 
         self.functions = {}
         self.function_signatures = {}
@@ -127,6 +131,8 @@ class VulkanSPIRVCodeGen:
         self.uniform_buffers = []
         self.next_input_location = 0
         self.next_output_location = 0
+        self.used_input_locations = set()
+        self.used_output_locations = set()
         self.next_resource_binding = 0
 
         self.is_vertex_shader = False
@@ -209,7 +215,13 @@ class VulkanSPIRVCodeGen:
         id_value = self.get_id()
         self.emit(f"%{id_value} = OpTypeMatrix %{column_type.id} {count}")
 
-        type_name = f"mat{count}x{column_type.type.base_type[1]}"
+        column_info = self.vector_component_type_and_count(column_type.type.base_type)
+        if column_info is not None:
+            component_type, row_count = column_info
+            prefix = "dmat" if component_type == "double" else "mat"
+            type_name = f"{prefix}{count}x{row_count}"
+        else:
+            type_name = f"mat{count}x{column_type.type.base_type[1]}"
         spirv_type = SpirvType(type_name)
         spirv_id = SpirvId(id_value, spirv_type, type_name)
         self.matrix_types[key] = spirv_id
@@ -258,6 +270,8 @@ class VulkanSPIRVCodeGen:
             self.require_capability("StorageImageMultisample")
             if arrayed:
                 self.require_capability("ImageMSArray")
+        if sampled == 1 and dim == "1D":
+            self.require_capability("Sampled1D")
 
         id_value = self.get_id()
         self.emit(
@@ -554,6 +568,53 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = member_type
         return spirv_id
 
+    def composite_insert(
+        self,
+        composite: SpirvId,
+        value: SpirvId,
+        composite_type: SpirvId,
+        member_index: int,
+    ) -> SpirvId:
+        """Insert a member value into a composite value."""
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpCompositeInsert %{composite_type.id} "
+            f"%{value.id} %{composite.id} {member_index}"
+        )
+
+        spirv_id = SpirvId(id_value, composite_type.type)
+        self.value_types[id_value] = composite_type
+        return spirv_id
+
+    def vector_shuffle(
+        self, vector: SpirvId, result_type: SpirvId, component_indices: List[int]
+    ) -> SpirvId:
+        """Create a vector by selecting components from an existing vector."""
+        id_value = self.get_id()
+        components = " ".join(str(index) for index in component_indices)
+        self.emit(
+            f"%{id_value} = OpVectorShuffle %{result_type.id} "
+            f"%{vector.id} %{vector.id} {components}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def composite_construct(
+        self, result_type: SpirvId, components: List[SpirvId]
+    ) -> SpirvId:
+        """Construct a composite value from component values."""
+        id_value = self.get_id()
+        component_list = " ".join(f"%{component.id}" for component in components)
+        self.emit(
+            f"%{id_value} = OpCompositeConstruct %{result_type.id} {component_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
     def vector_member_info(self, vector_type: str, member_name: str):
         vector_info = self.vector_component_type_and_count(vector_type)
         if vector_info is None:
@@ -579,6 +640,48 @@ class VulkanSPIRVCodeGen:
             return None
 
         return member_index, self.register_primitive_type(component_type)
+
+    def vector_swizzle_indices(self, vector_type: str, member_name: str):
+        vector_info = self.vector_component_type_and_count(vector_type)
+        if vector_info is None or not 2 <= len(member_name) <= 4:
+            return None
+
+        component_indices = (
+            {"x": 0, "y": 1, "z": 2, "w": 3},
+            {"r": 0, "g": 1, "b": 2, "a": 3},
+            {"s": 0, "t": 1, "p": 2, "q": 3},
+        )
+        family = next(
+            (
+                indices
+                for indices in component_indices
+                if all(component in indices for component in member_name)
+            ),
+            None,
+        )
+        if family is None:
+            return None
+
+        _, component_count = vector_info
+        indices = [family[component] for component in member_name]
+        if any(index >= component_count for index in indices):
+            return None
+
+        return indices
+
+    def vector_swizzle_info(self, vector_type: str, member_name: str):
+        vector_info = self.vector_component_type_and_count(vector_type)
+        if vector_info is None:
+            return None
+
+        indices = self.vector_swizzle_indices(vector_type, member_name)
+        if indices is None:
+            return None
+
+        component_type_name, _ = vector_info
+        component_type = self.register_primitive_type(component_type_name)
+        result_type = self.register_vector_type(component_type, len(indices))
+        return indices, component_type, result_type
 
     def struct_member_info(self, struct_type: str, member_name: str):
         members = self.current_struct_members.get(struct_type)
@@ -717,10 +820,61 @@ class VulkanSPIRVCodeGen:
 
         id_value = self.get_id()
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{left.id} %{right.id}")
+        self.decorate_no_contraction_result(id_value, spv_op, result_type)
 
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
         return spirv_id
+
+    def decorate_no_contraction_result(
+        self, id_value: int, opcode: str, result_type: SpirvId
+    ):
+        if self.precise_expression_depth <= 0:
+            return
+        if opcode not in {
+            "OpFAdd",
+            "OpFSub",
+            "OpFMul",
+            "OpFDiv",
+            "OpFMod",
+            "OpFNegate",
+            "OpDot",
+        }:
+            return
+        if not self.is_float_like_type_id(result_type):
+            return
+        self.decorate_no_contraction(id_value)
+
+    def decorate_no_contraction(self, id_value):
+        id_number = id_value.id if isinstance(id_value, SpirvId) else id_value
+        if id_number in self.no_contraction_ids:
+            return
+        self.no_contraction_ids.add(id_number)
+        self.decorations.append(f"OpDecorate %{id_number} NoContraction")
+
+    def is_float_like_type_id(self, type_id: SpirvId) -> bool:
+        component_type = self.scalar_or_vector_component_type(type_id.type)
+        if component_type in {"float", "double"}:
+            return True
+
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is None:
+            return False
+
+        column_type, _ = matrix_info
+        return self.is_float_like_type_id(column_type)
+
+    def process_expression_with_precision(
+        self, expr, precise: bool
+    ) -> Optional[SpirvId]:
+        if not precise:
+            return self.process_expression(expr)
+
+        self.precise_expression_depth += 1
+        try:
+            return self.process_expression(expr)
+        finally:
+            self.precise_expression_depth -= 1
 
     def logical_result_type_and_operands(
         self, left: SpirvId, right: SpirvId
@@ -812,6 +966,35 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = vector_type
         return SpirvId(id_value, vector_type.type)
 
+    def convert_scalar_to_type(self, value: SpirvId, target_type: SpirvId) -> SpirvId:
+        """Convert a scalar value to a compatible scalar target type."""
+        source_type_name = self.normalize_primitive_name(value.type.base_type)
+        target_type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if source_type_name == target_type_name:
+            return value
+
+        float_types = {"float", "double"}
+        integer_types = {"int", "uint"}
+        scalar_types = float_types | integer_types
+        if source_type_name not in scalar_types or target_type_name not in scalar_types:
+            return value
+
+        if source_type_name in float_types and target_type_name in float_types:
+            opcode = "OpFConvert"
+        elif source_type_name in integer_types and target_type_name in float_types:
+            opcode = "OpConvertUToF" if source_type_name == "uint" else "OpConvertSToF"
+        elif source_type_name in float_types and target_type_name in integer_types:
+            opcode = "OpConvertFToU" if target_type_name == "uint" else "OpConvertFToS"
+        elif source_type_name in integer_types and target_type_name in integer_types:
+            opcode = "OpBitcast"
+        else:
+            return value
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{target_type.id} %{value.id}")
+        self.value_types[id_value] = target_type
+        return SpirvId(id_value, target_type.type)
+
     def is_integer_type(self, spirv_type: SpirvType) -> bool:
         return spirv_type.base_type in {"int", "uint"}
 
@@ -840,6 +1023,7 @@ class VulkanSPIRVCodeGen:
             return operand
 
         self.emit(f"%{id_value} = {spv_op} %{result_type.id} %{operand.id}")
+        self.decorate_no_contraction_result(id_value, spv_op, result_type)
 
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
@@ -1756,6 +1940,155 @@ class VulkanSPIRVCodeGen:
 
         return self.process_expression(arg)
 
+    def flatten_vector_constructor_args(
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        component_type: SpirvId,
+        component_count: int,
+    ) -> List[SpirvId]:
+        if (
+            len(args) == 1
+            and self.vector_component_type_and_count(args[0].type.base_type) is None
+        ):
+            component_arg = self.convert_vector_constructor_scalar(
+                args[0], component_type, function_name
+            )
+            return [component_arg] * component_count
+
+        flattened_args = []
+        for arg in args:
+            vector_info = self.vector_component_type_and_count(arg.type.base_type)
+            if vector_info is None:
+                flattened_args.append(
+                    self.convert_vector_constructor_scalar(
+                        arg, component_type, function_name
+                    )
+                )
+                continue
+
+            source_component_type_name, source_component_count = vector_info
+            source_component_type = self.register_primitive_type(
+                source_component_type_name
+            )
+            for index in range(source_component_count):
+                source_value = self.composite_extract(arg, source_component_type, index)
+                flattened_args.append(
+                    self.convert_vector_constructor_scalar(
+                        source_value, component_type, function_name
+                    )
+                )
+
+        if len(flattened_args) < component_count:
+            self.emit(
+                f"; WARNING: Constructor {function_name} expected {component_count} "
+                f"components but got {len(flattened_args)}; padding with defaults"
+            )
+            default_value = self.default_value_for_type(component_type)
+            flattened_args.extend(
+                [default_value] * (component_count - len(flattened_args))
+            )
+        elif len(flattened_args) > component_count:
+            self.emit(
+                f"; WARNING: Constructor {function_name} expected {component_count} "
+                f"components but got {len(flattened_args)}; truncating extra components"
+            )
+            flattened_args = flattened_args[:component_count]
+
+        return flattened_args
+
+    def convert_vector_constructor_scalar(
+        self, value: SpirvId, component_type: SpirvId, function_name: str
+    ) -> SpirvId:
+        converted_value = self.convert_scalar_to_type(value, component_type)
+        source_type = self.normalize_primitive_name(converted_value.type.base_type)
+        target_type = self.normalize_primitive_name(component_type.type.base_type)
+        if source_type != target_type:
+            self.emit(
+                f"; WARNING: Constructor {function_name} cannot convert "
+                f"{source_type} component to {target_type}; using default value"
+            )
+            return self.default_value_for_type(component_type)
+
+        return converted_value
+
+    def flatten_matrix_constructor_components(
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        component_type: SpirvId,
+        component_count: int,
+    ) -> List[SpirvId]:
+        flattened_args = []
+        for arg in args:
+            flattened_args.extend(
+                self.flatten_matrix_constructor_arg(function_name, arg, component_type)
+            )
+
+        if len(flattened_args) < component_count:
+            self.emit(
+                f"; WARNING: Constructor {function_name} expected {component_count} "
+                f"components but got {len(flattened_args)}; padding with defaults"
+            )
+            default_value = self.default_value_for_type(component_type)
+            flattened_args.extend(
+                [default_value] * (component_count - len(flattened_args))
+            )
+        elif len(flattened_args) > component_count:
+            self.emit(
+                f"; WARNING: Constructor {function_name} expected {component_count} "
+                f"components but got {len(flattened_args)}; truncating extra components"
+            )
+            flattened_args = flattened_args[:component_count]
+
+        return flattened_args
+
+    def flatten_matrix_constructor_arg(
+        self, function_name: str, arg: SpirvId, component_type: SpirvId
+    ) -> List[SpirvId]:
+        vector_info = self.vector_component_type_and_count(arg.type.base_type)
+        if vector_info is not None:
+            source_component_type_name, source_component_count = vector_info
+            source_component_type = self.register_primitive_type(
+                source_component_type_name
+            )
+            return [
+                self.convert_vector_constructor_scalar(
+                    self.composite_extract(arg, source_component_type, index),
+                    component_type,
+                    function_name,
+                )
+                for index in range(source_component_count)
+            ]
+
+        registered_type = self.find_registered_type_by_base(arg.type.base_type)
+        matrix_info = self.matrix_type_info_from_type(registered_type)
+        if matrix_info is not None:
+            column_type, column_count = matrix_info
+            column_info = self.vector_type_info_from_type(column_type)
+            if column_info is None:
+                return []
+
+            source_component_type, row_count = column_info
+            flattened_components = []
+            for column_index in range(column_count):
+                column_value = self.composite_extract(arg, column_type, column_index)
+                for row_index in range(row_count):
+                    flattened_components.append(
+                        self.convert_vector_constructor_scalar(
+                            self.composite_extract(
+                                column_value, source_component_type, row_index
+                            ),
+                            component_type,
+                            function_name,
+                        )
+                    )
+            return flattened_components
+
+        return [
+            self.convert_vector_constructor_scalar(arg, component_type, function_name)
+        ]
+
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -1770,13 +2103,26 @@ class VulkanSPIRVCodeGen:
             if saturated is not None:
                 return saturated
 
+        if function_name == "sign" and len(args) == 1:
+            signed = self.call_sign_function(args[0])
+            if signed is not None:
+                return signed
+
+        if (
+            function_name in {"min", "max"}
+            and len(args) == 2
+            or function_name == "clamp"
+            and len(args) == 3
+        ):
+            min_max_clamp = self.call_min_max_clamp_function(function_name, args)
+            if min_max_clamp is not None:
+                return min_max_clamp
+
         vector_info = self.vector_component_type_and_count(function_name)
         if vector_info:
             component_type_name, component_count = vector_info
             component_type = self.register_primitive_type(component_type_name)
             vector_type = self.register_vector_type(component_type, component_count)
-
-            id_value = self.get_id()
 
             # If no arguments are provided, construct a default vector
             if not args:
@@ -1799,20 +2145,13 @@ class VulkanSPIRVCodeGen:
                 if component_count > 0:
                     default_args[0] = component_one
 
-                arg_list = " ".join([f"%{arg.id}" for arg in default_args])
-            elif (
-                len(args) == 1
-                and self.vector_component_type_and_count(args[0].type.base_type) is None
-            ):
-                arg_list = " ".join(f"%{args[0].id}" for _ in range(component_count))
+                constructor_args = default_args
             else:
-                arg_list = " ".join([f"%{arg.id}" for arg in args])
+                constructor_args = self.flatten_vector_constructor_args(
+                    function_name, args, component_type, component_count
+                )
 
-            self.emit(
-                f"%{id_value} = OpCompositeConstruct %{vector_type.id} {arg_list}"
-            )
-
-            return SpirvId(id_value, vector_type.type)
+            return self.composite_construct(vector_type, constructor_args)
 
         if function_name in self.struct_types:
             struct_type = self.struct_types[function_name]
@@ -1826,27 +2165,23 @@ class VulkanSPIRVCodeGen:
             return spirv_id
 
         # Matrix constructors
-        elif re.match(r"mat(\d)x\d", function_name) or re.match(
-            r"mat\d", function_name
-        ):
-            if "x" in function_name:
-                match = re.match(r"mat(\d)x(\d)", function_name)
-                cols, rows = int(match.group(1)), int(match.group(2))
-            else:
-                match = re.match(r"mat(\d)", function_name)
-                cols = rows = int(match.group(1))
+        elif re.fullmatch(r"(d)?mat([234])(?:x([234]))?", function_name):
+            match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", function_name)
+            is_double, cols, rows = match.groups()
+            cols = int(cols)
+            rows = int(rows or cols)
 
-            float_type = self.register_primitive_type("float")
-            vector_type = self.register_vector_type(float_type, rows)
+            component_type = self.register_primitive_type(
+                "double" if is_double else "float"
+            )
+            vector_type = self.register_vector_type(component_type, rows)
             matrix_type = self.register_matrix_type(vector_type, cols)
-
-            id_value = self.get_id()
 
             # If no arguments provided, create identity matrix
             if not args:
                 # Create identity matrix: 1's on diagonal, 0's elsewhere
-                float_zero = self.register_constant(0.0, float_type)
-                float_one = self.register_constant(1.0, float_type)
+                zero_value = self.register_constant(0.0, component_type)
+                one_value = self.register_constant(1.0, component_type)
 
                 # Create column vectors
                 col_vectors = []
@@ -1854,40 +2189,45 @@ class VulkanSPIRVCodeGen:
                     col_components = []
                     for row in range(rows):
                         if col == row:
-                            col_components.append(float_one)
+                            col_components.append(one_value)
                         else:
-                            col_components.append(float_zero)
+                            col_components.append(zero_value)
 
-                    col_id = self.get_id()
-                    col_args = " ".join([f"%{comp.id}" for comp in col_components])
-                    self.emit(
-                        f"%{col_id} = OpCompositeConstruct %{vector_type.id} {col_args}"
+                    col_vectors.append(
+                        self.composite_construct(vector_type, col_components)
                     )
-                    col_vectors.append(SpirvId(col_id, vector_type.type))
-
-                arg_list = " ".join([f"%{vec.id}" for vec in col_vectors])
             else:
-                arg_list = " ".join([f"%{arg.id}" for arg in args])
+                components = self.flatten_matrix_constructor_components(
+                    function_name, args, component_type, cols * rows
+                )
+                col_vectors = []
+                for col in range(cols):
+                    start = col * rows
+                    col_vectors.append(
+                        self.composite_construct(
+                            vector_type, components[start : start + rows]
+                        )
+                    )
 
-            self.emit(
-                f"%{id_value} = OpCompositeConstruct %{matrix_type.id} {arg_list}"
-            )
-
-            return SpirvId(id_value, matrix_type.type)
+            return self.composite_construct(matrix_type, col_vectors)
 
         # Special case for dot product - use OpDot instead of OpExtInst
         elif function_name == "dot" and len(args) == 2:
-            # Get the result type (always float)
-            float_type = self.register_primitive_type("float")
-            result_type_id = float_type.id
+            component_type = self.scalar_or_vector_component_type(args[0].type)
+            if component_type not in {"float", "double"}:
+                component_type = "float"
+            result_type = self.register_primitive_type(component_type)
 
             # Generate a direct OpDot instruction
             id_value = self.get_id()
             self.emit(
-                f"%{id_value} = OpDot %{result_type_id} %{args[0].id} %{args[1].id}"
+                f"%{id_value} = OpDot %{result_type.id} %{args[0].id} %{args[1].id}"
             )
+            self.decorate_no_contraction_result(id_value, "OpDot", result_type)
 
-            return SpirvId(id_value, float_type.type)
+            spirv_id = SpirvId(id_value, result_type.type)
+            self.value_types[id_value] = result_type
+            return spirv_id
 
         elif function_name in {"fmod", "mod"} and len(args) == 2:
             result_type = self.ensure_registered_type(args[0].type)
@@ -1907,6 +2247,7 @@ class VulkanSPIRVCodeGen:
                     "sin",
                     "cos",
                     "tan",
+                    "atan2",
                     "asin",
                     "acos",
                     "atan",
@@ -1920,7 +2261,6 @@ class VulkanSPIRVCodeGen:
                     "sqrt",
                     "inversesqrt",
                     "abs",
-                    "sign",
                     "floor",
                     "ceil",
                     "fract",
@@ -1949,6 +2289,7 @@ class VulkanSPIRVCodeGen:
                 "sin": "Sin",
                 "cos": "Cos",
                 "tan": "Tan",
+                "atan2": "Atan2",
                 "asin": "Asin",
                 "acos": "Acos",
                 "atan": "Atan",
@@ -1962,7 +2303,6 @@ class VulkanSPIRVCodeGen:
                 "sqrt": "Sqrt",
                 "inversesqrt": "InverseSqrt",
                 "abs": "FAbs",
-                "sign": "FSign",
                 "floor": "Floor",
                 "ceil": "Ceil",
                 "fract": "Fract",
@@ -2001,11 +2341,154 @@ class VulkanSPIRVCodeGen:
 
             return SpirvId(id_value, result_type)
 
-    def call_saturate_function(self, value: SpirvId) -> Optional[SpirvId]:
-        """Lower scalar floating saturate(x) to GLSL.std.450 FClamp."""
+    def call_sign_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower sign to typed GLSL.std.450 or unsigned select operations."""
         result_type = self.ensure_registered_type(value.type)
-        if self.vector_component_type_and_count(result_type.type.base_type) is not None:
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type in {"float", "double", "int"}:
+            glsl_function = "SSign" if component_type == "int" else "FSign"
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+                f"{glsl_function} %{value.id}"
+            )
+
+            spirv_id = SpirvId(id_value, result_type.type)
+            self.value_types[id_value] = result_type
+            return spirv_id
+
+        if component_type == "uint":
+            return self.call_unsigned_sign_function(value, result_type)
+
+        return value if component_type == "bool" else None
+
+    def call_unsigned_sign_function(
+        self, value: SpirvId, result_type: SpirvId
+    ) -> SpirvId:
+        """Lower unsigned sign as value > 0 ? 1 : 0."""
+        vector_info = self.vector_component_type_and_count(result_type.type.base_type)
+        uint_type = self.register_primitive_type("uint")
+        bool_type = self.register_primitive_type("bool")
+        zero = self.register_constant(0, uint_type)
+        one = self.register_constant(1, uint_type)
+
+        if vector_info is not None:
+            _, component_count = vector_info
+            zero_value = self.register_vector_constant(
+                result_type, [zero] * component_count
+            )
+            one_value = self.register_vector_constant(
+                result_type, [one] * component_count
+            )
+        else:
+            zero_value = zero
+            one_value = one
+
+        condition = self.binary_operation(">", bool_type, value, zero_value)
+        return self.select_operation(result_type, condition, one_value, zero_value)
+
+    def call_min_max_clamp_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        """Lower min/max/clamp to typed GLSL.std.450 extinsts."""
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        prefix = {
+            "float": "F",
+            "double": "F",
+            "int": "S",
+            "uint": "U",
+        }.get(component_type)
+        if prefix is None:
             return None
+
+        operands = self.match_extinst_operands_to_result_type(result_type, args)
+        if operands is None:
+            return None
+
+        op_suffix = {
+            "min": "Min",
+            "max": "Max",
+            "clamp": "Clamp",
+        }[function_name]
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in operands)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"{prefix}{op_suffix} {arg_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def match_extinst_operands_to_result_type(
+        self, result_type: SpirvId, args: List[SpirvId]
+    ) -> Optional[List[SpirvId]]:
+        """Return operands shaped to the given GLSL.std.450 result type."""
+        result_vector = self.vector_component_type_and_count(result_type.type.base_type)
+        result_component_type = self.scalar_or_vector_component_type(result_type.type)
+
+        operands = []
+        for arg in args:
+            arg_vector = self.vector_component_type_and_count(arg.type.base_type)
+            if result_vector is None:
+                if arg_vector is not None:
+                    return None
+                scalar_arg = self.convert_scalar_to_type(arg, result_type)
+                if (
+                    self.normalize_primitive_name(scalar_arg.type.base_type)
+                    != result_component_type
+                ):
+                    return None
+                operands.append(scalar_arg)
+                continue
+
+            if arg_vector is not None:
+                if arg_vector != result_vector:
+                    return None
+                operands.append(arg)
+                continue
+
+            component_type = self.register_primitive_type(result_component_type)
+            scalar_arg = self.convert_scalar_to_type(arg, component_type)
+            if (
+                self.normalize_primitive_name(scalar_arg.type.base_type)
+                != result_component_type
+            ):
+                return None
+            operands.append(self.splat_scalar_to_vector(scalar_arg, result_type))
+
+        return operands
+
+    def call_saturate_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower floating saturate(x) to GLSL.std.450 FClamp."""
+        result_type = self.ensure_registered_type(value.type)
+        vector_info = self.vector_component_type_and_count(result_type.type.base_type)
+        if vector_info is not None:
+            component_type_name, component_count = vector_info
+            if component_type_name not in {"float", "double"}:
+                return None
+
+            component_type = self.register_primitive_type(component_type_name)
+            zero = self.register_constant(0.0, component_type)
+            one = self.register_constant(1.0, component_type)
+            zero_vector = self.register_vector_constant(
+                result_type, [zero] * component_count
+            )
+            one_vector = self.register_vector_constant(
+                result_type, [one] * component_count
+            )
+
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+                f"FClamp %{value.id} %{zero_vector.id} %{one_vector.id}"
+            )
+
+            spirv_id = SpirvId(id_value, result_type.type)
+            self.value_types[id_value] = result_type
+            return spirv_id
 
         if result_type.type.base_type not in {"float", "double"}:
             return None
@@ -2121,6 +2604,16 @@ class VulkanSPIRVCodeGen:
                 "dim": "1D",
                 "depth": 0,
                 "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "sampler1DArray": {
+                "kind": "sampled_image",
+                "component_type": "float",
+                "dim": "1D",
+                "depth": 0,
+                "arrayed": 1,
                 "multisampled": 0,
                 "sampled": 1,
                 "format": "Unknown",
@@ -2354,10 +2847,10 @@ class VulkanSPIRVCodeGen:
             return None
         if isinstance(value, str):
             return value
-        if hasattr(value, "name"):
-            return str(value.name)
         if hasattr(value, "value"):
             return str(value.value).strip('"')
+        if hasattr(value, "name") and value.name is not None:
+            return str(value.name)
         return str(value)
 
     def explicit_image_format(self, node) -> Optional[str]:
@@ -2672,6 +3165,7 @@ class VulkanSPIRVCodeGen:
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
         self.local_variables.clear()
+        self.precise_local_variables.clear()
         return function_id
 
     def process_statements(self, statements):
@@ -2733,13 +3227,18 @@ class VulkanSPIRVCodeGen:
         var_type = self.map_resource_type_with_format(var_type_source, node)
         var_id = self.create_variable(var_type, "Function", node.name)
         self.local_variables[node.name] = var_id
+        is_precise = self.has_attribute(node, "precise")
+        if is_precise:
+            self.precise_local_variables.add(node.name)
 
         initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
             if isinstance(initial_value, ArrayLiteralNode):
                 rhs_value = self.process_array_literal(initial_value, var_type)
             else:
-                rhs_value = self.process_expression(initial_value)
+                rhs_value = self.process_expression_with_precision(
+                    initial_value, is_precise
+                )
             if rhs_value is not None:
                 self.store_to_variable(var_id, rhs_value)
 
@@ -2762,13 +3261,13 @@ class VulkanSPIRVCodeGen:
             )
 
         if storage_class == "Input":
-            location = self.next_input_location
-            self.next_input_location += 1
+            location = self.global_interface_location(node, "Input")
             var_id = self.register_input(node.name, var_type, location, 0)
+            self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
-            location = self.next_output_location
-            self.next_output_location += 1
+            location = self.global_interface_location(node, "Output")
             var_id = self.register_output(node.name, var_type, location, 0)
+            self.decorate_global_interface_variable(node, var_id)
         else:
             var_id = self.create_variable(
                 var_type, storage_class, node.name, initializer
@@ -2780,7 +3279,170 @@ class VulkanSPIRVCodeGen:
                 self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
         self.global_variables[node.name] = var_id
+        if self.has_attribute(node, "precise"):
+            self.precise_global_variables.add(node.name)
         return var_id
+
+    def global_interface_location(self, node: VariableNode, storage_class: str) -> int:
+        if storage_class == "Input":
+            counter_name = "next_input_location"
+            used_slots = self.used_input_locations
+        else:
+            counter_name = "next_output_location"
+            used_slots = self.used_output_locations
+
+        explicit_location = self.explicit_location_attribute(node)
+        if explicit_location is not None:
+            slot_keys = self.interface_slot_keys(node, storage_class, explicit_location)
+            if used_slots & slot_keys:
+                raise ValueError(
+                    f"Duplicate SPIR-V {storage_class.lower()} location "
+                    f"{explicit_location}"
+                )
+            used_slots.update(slot_keys)
+            return explicit_location
+
+        location = getattr(self, counter_name)
+        slot_keys = self.interface_slot_keys(node, storage_class, location)
+        while used_slots & slot_keys:
+            location += 1
+            slot_keys = self.interface_slot_keys(node, storage_class, location)
+        used_slots.update(slot_keys)
+        setattr(self, counter_name, location + 1)
+        return location
+
+    def explicit_location_attribute(self, node: VariableNode) -> Optional[int]:
+        return self.explicit_interface_integer_attribute(node, "location")
+
+    def explicit_component_attribute(self, node: VariableNode) -> Optional[int]:
+        component = self.explicit_interface_integer_attribute(node, "component")
+        if component is not None and component > 3:
+            raise ValueError(f"SPIR-V component must be in 0..3: {component}")
+        return component
+
+    def explicit_interface_integer_attribute(
+        self, node: VariableNode, attribute_name: str
+    ) -> Optional[int]:
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != attribute_name:
+                continue
+
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if not arguments:
+                continue
+
+            attribute_value = self.interface_integer_attribute_value(
+                arguments[0], attribute_name
+            )
+            if attribute_value is None:
+                continue
+
+            if attribute_value < 0:
+                raise ValueError(
+                    f"SPIR-V {attribute_name} must be non-negative: "
+                    f"{attribute_value}"
+                )
+            return attribute_value
+
+        return None
+
+    def interface_integer_attribute_value(self, value, attribute_name: str):
+        if isinstance(value, UnaryOpNode) and value.operator == "-":
+            operand_value = self.interface_integer_attribute_value(
+                value.operand, attribute_name
+            )
+            return -operand_value if operand_value is not None else None
+
+        value_text = self.attribute_value_to_string(value)
+        if value_text is None:
+            return None
+
+        try:
+            return int(str(value_text), 0)
+        except ValueError as exc:
+            raise ValueError(
+                f"SPIR-V {attribute_name} must be an integer: {value_text}"
+            ) from exc
+
+    def decorate_global_interface_variable(self, node: VariableNode, var_id: SpirvId):
+        self.validate_interface_interpolation_attributes(node)
+
+        for attribute_name, decoration_name in {
+            "component": "Component",
+            "index": "Index",
+        }.items():
+            attribute_value = self.explicit_interface_integer_attribute(
+                node, attribute_name
+            )
+            if attribute_value is not None:
+                self.decorations.append(
+                    f"OpDecorate %{var_id.id} {decoration_name} {attribute_value}"
+                )
+
+        for attribute_name, decoration_name in {
+            "flat": "Flat",
+            "noperspective": "NoPerspective",
+            "centroid": "Centroid",
+            "sample": "Sample",
+            "invariant": "Invariant",
+        }.items():
+            if self.has_attribute(node, attribute_name):
+                if attribute_name == "sample":
+                    self.require_capability("SampleRateShading")
+                self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
+
+    def has_attribute(self, node, attribute_name: str) -> bool:
+        return any(
+            str(getattr(attr, "name", "")).lower() == attribute_name
+            for attr in getattr(node, "attributes", []) or []
+        )
+
+    def validate_interface_interpolation_attributes(self, node: VariableNode):
+        for first, second in (("flat", "noperspective"), ("centroid", "sample")):
+            if self.has_attribute(node, first) and self.has_attribute(node, second):
+                raise ValueError(
+                    "SPIR-V interpolation attributes "
+                    f"@{first} and @{second} cannot be combined"
+                )
+
+    def interface_slot_keys(
+        self, node: VariableNode, storage_class: str, location: int
+    ) -> set:
+        component = self.explicit_component_attribute(node)
+        component_start = component if component is not None else 0
+        component_width = self.interface_component_width(node)
+        if component_start + component_width > 4:
+            raise ValueError(
+                f"SPIR-V component range overflows location {location}: "
+                f"{component_start}..{component_start + component_width - 1}"
+            )
+
+        index = self.explicit_interface_integer_attribute(node, "index") or 0
+        return {
+            (location, index, component)
+            for component in range(component_start, component_start + component_width)
+        }
+
+    def interface_component_width(self, node: VariableNode) -> int:
+        type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        type_name = self.type_name_from_value(type_source)
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is not None:
+            _, component_count = vector_info
+            return component_count
+
+        if self.normalize_primitive_name(type_name) in {
+            "float",
+            "double",
+            "int",
+            "uint",
+            "bool",
+        }:
+            return 1
+
+        return 4
 
     def infer_global_storage_class(
         self, node: VariableNode, default_storage_class: str, type_name: str = None
@@ -2838,6 +3500,47 @@ class VulkanSPIRVCodeGen:
 
         walk(root)
         return functions
+
+    def order_functions_by_dependencies(self, functions):
+        ordered = []
+        visiting = set()
+        visited = set()
+        function_list = list(functions)
+        function_names = [getattr(func, "name", None) for func in function_list]
+        unique_names = {
+            name for name in function_names if name and function_names.count(name) == 1
+        }
+        functions_by_name = {
+            func.name: func
+            for func in function_list
+            if getattr(func, "name", None) in unique_names
+        }
+
+        def visit(func):
+            func_id = id(func)
+            if func_id in visited:
+                return
+            if func_id in visiting:
+                return
+
+            visiting.add(func_id)
+            for node in self.walk_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+
+                dependency_name = self.function_call_name(node)
+                dependency = functions_by_name.get(dependency_name)
+                if dependency is not None and dependency is not func:
+                    visit(dependency)
+
+            visiting.remove(func_id)
+            visited.add(func_id)
+            ordered.append(func)
+
+        for func in function_list:
+            visit(func)
+
+        return ordered
 
     def walk_ast_nodes(self, root):
         visited = set()
@@ -3471,6 +4174,12 @@ class VulkanSPIRVCodeGen:
         target = getattr(
             node, "name", getattr(node, "target", getattr(node, "left", None))
         )
+        target_is_precise = self.assignment_target_is_precise(target)
+        operator = getattr(node, "operator", "=")
+
+        if operator != "=":
+            self.process_compound_assignment(node, target, operator, target_is_precise)
+            return
 
         if isinstance(node.value, ArrayLiteralNode):
             target_pointer = self.assignable_pointer_from_expression(target)
@@ -3481,7 +4190,9 @@ class VulkanSPIRVCodeGen:
             )
             rhs_value = self.process_array_literal(node.value, target_type)
         else:
-            rhs_value = self.process_expression(node.value)
+            rhs_value = self.process_expression_with_precision(
+                node.value, target_is_precise
+            )
 
         if rhs_value is None:
             return
@@ -3514,6 +4225,12 @@ class VulkanSPIRVCodeGen:
             if access is not None:
                 self.store_to_variable(access, rhs_value)
                 return
+            if self.store_to_vector_swizzle(base_pointer, member_name, rhs_value):
+                return
+            if self.store_to_vector_component(base_pointer, member_name, rhs_value):
+                return
+            if self.emit_invalid_vector_swizzle_warning(base_pointer, member_name):
+                return
 
             # Default handling if member not found
             struct_type = self.struct_type_name_from_pointer(base_pointer)
@@ -3538,6 +4255,377 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 f"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}"
             )
+
+    def process_compound_assignment(
+        self, node: AssignmentNode, target, operator: str, target_is_precise: bool
+    ):
+        spv_operator = self.compound_assignment_operator(operator)
+        if spv_operator is None:
+            self.emit(f"; WARNING: Unsupported compound assignment operator {operator}")
+            return
+        if isinstance(node.value, ArrayLiteralNode):
+            self.emit("; WARNING: Compound array literal assignment is unsupported")
+            return
+
+        if isinstance(target, MemberAccessNode):
+            base_pointer = self.assignable_pointer_from_expression(target.object)
+            if (
+                base_pointer is not None
+                and self.process_vector_swizzle_compound_assignment(
+                    base_pointer,
+                    target.member,
+                    node.value,
+                    spv_operator,
+                    target_is_precise,
+                )
+            ):
+                return
+            if (
+                base_pointer is not None
+                and self.process_vector_component_compound_assignment(
+                    base_pointer,
+                    target.member,
+                    node.value,
+                    spv_operator,
+                    target_is_precise,
+                )
+            ):
+                return
+            if base_pointer is not None and self.emit_invalid_vector_swizzle_warning(
+                base_pointer, target.member
+            ):
+                return
+
+        target_pointer = self.assignable_pointer_from_expression(target)
+        if target_pointer is None:
+            self.emit(
+                f"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}"
+            )
+            return
+
+        target_type = self.variable_value_types.get(target_pointer.id)
+        if target_type is None:
+            target_type = self.find_registered_type_by_base(
+                target_pointer.type.base_type.replace("ptr_", "", 1)
+            )
+        if target_type is None:
+            self.emit("; WARNING: Could not determine compound assignment type")
+            return
+
+        if target_is_precise:
+            self.precise_expression_depth += 1
+
+        try:
+            current_value = self.load_from_variable(target_pointer, target_type)
+            rhs_value = self.process_expression(node.value)
+            if rhs_value is None:
+                return
+            result = self.binary_operation(
+                spv_operator, target_type, current_value, rhs_value
+            )
+        finally:
+            if target_is_precise:
+                self.precise_expression_depth -= 1
+
+        self.store_to_variable(target_pointer, result)
+
+    def vector_component_update_info(self, base_pointer: SpirvId, member_name: str):
+        vector_type = self.variable_value_types.get(base_pointer.id)
+        if vector_type is None:
+            vector_type = self.find_registered_type_by_base(
+                base_pointer.type.base_type.replace("ptr_", "", 1)
+            )
+        if vector_type is None:
+            return None
+
+        member_info = self.vector_member_info(vector_type.type.base_type, member_name)
+        if member_info is None:
+            return None
+
+        member_index, member_type = member_info
+        return vector_type, member_index, member_type
+
+    def store_to_vector_component(
+        self, base_pointer: SpirvId, member_name: str, value: SpirvId
+    ) -> bool:
+        update_info = self.vector_component_update_info(base_pointer, member_name)
+        if update_info is None:
+            return False
+
+        vector_type, member_index, member_type = update_info
+        component_value = self.convert_vector_component_value(
+            value, member_type, member_name
+        )
+        if component_value is None:
+            return True
+
+        vector_value = self.load_from_variable(base_pointer, vector_type)
+        updated_value = self.composite_insert(
+            vector_value, component_value, vector_type, member_index
+        )
+        self.store_to_variable(base_pointer, updated_value)
+        return True
+
+    def vector_swizzle_update_info(self, base_pointer: SpirvId, member_name: str):
+        vector_type = self.variable_value_types.get(base_pointer.id)
+        if vector_type is None:
+            vector_type = self.find_registered_type_by_base(
+                base_pointer.type.base_type.replace("ptr_", "", 1)
+            )
+        if vector_type is None:
+            return None
+
+        swizzle_info = self.vector_swizzle_info(vector_type.type.base_type, member_name)
+        if swizzle_info is None:
+            return None
+
+        indices, member_type, swizzle_type = swizzle_info
+        return vector_type, indices, member_type, swizzle_type
+
+    def emit_invalid_vector_swizzle_warning(
+        self, base_pointer: SpirvId, member_name: str
+    ) -> bool:
+        if len(member_name) <= 1:
+            return False
+
+        vector_type = self.variable_value_types.get(base_pointer.id)
+        if vector_type is None:
+            vector_type = self.find_registered_type_by_base(
+                base_pointer.type.base_type.replace("ptr_", "", 1)
+            )
+        if vector_type is None:
+            return False
+
+        vector_type_name = vector_type.type.base_type
+        if self.vector_component_type_and_count(vector_type_name) is None:
+            return False
+        if self.vector_swizzle_info(vector_type_name, member_name) is not None:
+            return False
+
+        self.emit(
+            f"; WARNING: Invalid vector swizzle {member_name} for {vector_type_name}"
+        )
+        return True
+
+    def store_to_vector_swizzle(
+        self, base_pointer: SpirvId, member_name: str, value: SpirvId
+    ) -> bool:
+        update_info = self.vector_swizzle_update_info(base_pointer, member_name)
+        if update_info is None:
+            return False
+
+        vector_type, member_indices, member_type, _ = update_info
+        if len(set(member_indices)) != len(member_indices):
+            self.emit(
+                f"; WARNING: Cannot assign to vector swizzle {member_name} "
+                "with duplicate components"
+            )
+            return True
+
+        component_values = self.convert_vector_swizzle_assignment_components(
+            value, member_type, len(member_indices), member_name
+        )
+        if component_values is None:
+            return True
+
+        updated_value = self.load_from_variable(base_pointer, vector_type)
+        for member_index, component_value in zip(member_indices, component_values):
+            updated_value = self.composite_insert(
+                updated_value, component_value, vector_type, member_index
+            )
+        self.store_to_variable(base_pointer, updated_value)
+        return True
+
+    def convert_vector_swizzle_assignment_components(
+        self,
+        value: SpirvId,
+        member_type: SpirvId,
+        component_count: int,
+        member_name: str,
+    ) -> Optional[List[SpirvId]]:
+        source_vector_info = self.vector_component_type_and_count(value.type.base_type)
+        if source_vector_info is None:
+            self.emit(
+                f"; WARNING: Cannot assign scalar value to vector swizzle {member_name}"
+            )
+            return None
+
+        source_component_type_name, source_component_count = source_vector_info
+        if source_component_count != component_count:
+            self.emit(
+                f"; WARNING: Cannot assign {source_component_count}-component vector "
+                f"to {component_count}-component swizzle {member_name}"
+            )
+            return None
+
+        source_component_type = self.register_primitive_type(source_component_type_name)
+        target_type_name = self.normalize_primitive_name(member_type.type.base_type)
+        component_values = []
+        for source_index in range(component_count):
+            source_value = self.composite_extract(
+                value, source_component_type, source_index
+            )
+            component_value = self.convert_scalar_to_type(source_value, member_type)
+            converted_type_name = self.normalize_primitive_name(
+                component_value.type.base_type
+            )
+            if converted_type_name != target_type_name:
+                self.emit(
+                    f"; WARNING: Cannot assign {converted_type_name} value to "
+                    f"vector swizzle {member_name} of type {target_type_name}"
+                )
+                return None
+            component_values.append(component_value)
+
+        return component_values
+
+    def process_vector_swizzle_compound_assignment(
+        self,
+        base_pointer: SpirvId,
+        member_name: str,
+        value_expr,
+        spv_operator: str,
+        target_is_precise: bool,
+    ) -> bool:
+        update_info = self.vector_swizzle_update_info(base_pointer, member_name)
+        if update_info is None:
+            return False
+
+        vector_type, member_indices, member_type, swizzle_type = update_info
+        if len(set(member_indices)) != len(member_indices):
+            self.emit(
+                f"; WARNING: Cannot assign to vector swizzle {member_name} "
+                "with duplicate components"
+            )
+            return True
+
+        if target_is_precise:
+            self.precise_expression_depth += 1
+
+        try:
+            rhs_value = self.process_expression(value_expr)
+            if rhs_value is None:
+                return True
+            rhs_components = self.convert_vector_swizzle_assignment_components(
+                rhs_value, member_type, len(member_indices), member_name
+            )
+            if rhs_components is None:
+                return True
+
+            rhs_vector = self.composite_construct(swizzle_type, rhs_components)
+            vector_value = self.load_from_variable(base_pointer, vector_type)
+            current_value = self.vector_shuffle(
+                vector_value, swizzle_type, member_indices
+            )
+            result = self.binary_operation(
+                spv_operator, swizzle_type, current_value, rhs_vector
+            )
+        finally:
+            if target_is_precise:
+                self.precise_expression_depth -= 1
+
+        updated_value = vector_value
+        for result_index, member_index in enumerate(member_indices):
+            component_value = self.composite_extract(result, member_type, result_index)
+            updated_value = self.composite_insert(
+                updated_value, component_value, vector_type, member_index
+            )
+        self.store_to_variable(base_pointer, updated_value)
+        return True
+
+    def convert_vector_component_value(
+        self, value: SpirvId, member_type: SpirvId, member_name: str
+    ) -> Optional[SpirvId]:
+        if self.vector_component_type_and_count(value.type.base_type) is not None:
+            self.emit(
+                f"; WARNING: Cannot assign composite value to vector component {member_name}"
+            )
+            return None
+
+        component_value = self.convert_scalar_to_type(value, member_type)
+        source_type = self.normalize_primitive_name(component_value.type.base_type)
+        target_type = self.normalize_primitive_name(member_type.type.base_type)
+        if source_type != target_type:
+            self.emit(
+                f"; WARNING: Cannot assign {source_type} value to vector component "
+                f"{member_name} of type {target_type}"
+            )
+            return None
+
+        return component_value
+
+    def process_vector_component_compound_assignment(
+        self,
+        base_pointer: SpirvId,
+        member_name: str,
+        value_expr,
+        spv_operator: str,
+        target_is_precise: bool,
+    ) -> bool:
+        update_info = self.vector_component_update_info(base_pointer, member_name)
+        if update_info is None:
+            return False
+
+        vector_type, member_index, member_type = update_info
+        if target_is_precise:
+            self.precise_expression_depth += 1
+
+        try:
+            vector_value = self.load_from_variable(base_pointer, vector_type)
+            current_value = self.composite_extract(
+                vector_value, member_type, member_index
+            )
+            rhs_value = self.process_expression(value_expr)
+            if rhs_value is None:
+                return True
+            rhs_value = self.convert_vector_component_value(
+                rhs_value, member_type, member_name
+            )
+            if rhs_value is None:
+                return True
+
+            result = self.binary_operation(
+                spv_operator, member_type, current_value, rhs_value
+            )
+        finally:
+            if target_is_precise:
+                self.precise_expression_depth -= 1
+
+        updated_value = self.composite_insert(
+            vector_value, result, vector_type, member_index
+        )
+        self.store_to_variable(base_pointer, updated_value)
+        return True
+
+    def compound_assignment_operator(self, operator: str) -> Optional[str]:
+        return {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+            "&=": "&",
+            "|=": "|",
+            "^=": "^",
+            "<<=": "<<",
+            ">>=": ">>",
+        }.get(operator)
+
+    def assignment_target_is_precise(self, target) -> bool:
+        if isinstance(target, IdentifierNode):
+            return self.variable_name_is_precise(target.name)
+        if isinstance(target, str):
+            return self.variable_name_is_precise(target)
+        if isinstance(target, MemberAccessNode):
+            return self.assignment_target_is_precise(target.object)
+        if isinstance(target, ArrayAccessNode):
+            return self.assignment_target_is_precise(target.array)
+        return False
+
+    def variable_name_is_precise(self, name: str) -> bool:
+        if name in self.local_variables:
+            return name in self.precise_local_variables
+        return name in self.precise_global_variables
 
     def process_return(self, node: ReturnNode):
         """Process a CrossGL return statement."""
@@ -4243,7 +5331,10 @@ class VulkanSPIRVCodeGen:
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-            if callee_name in self.resource_function_names():
+            if (
+                callee_name in self.resource_function_names()
+                and callee_name not in self.functions
+            ):
                 return self.call_resource_function(callee_name, args)
 
             return self.call_function(callee_name, args)
@@ -4271,6 +5362,20 @@ class VulkanSPIRVCodeGen:
             if member_info is not None:
                 member_index, member_type = member_info
                 return self.composite_extract(base, member_type, member_index)
+
+            swizzle_info = self.vector_swizzle_info(struct_type, member_name)
+            if swizzle_info is not None:
+                indices, _, result_type = swizzle_info
+                return self.vector_shuffle(base, result_type, indices)
+
+            if (
+                self.vector_component_type_and_count(struct_type) is not None
+                and len(member_name) > 1
+            ):
+                self.emit(
+                    f"; WARNING: Invalid vector swizzle {member_name} for {struct_type}"
+                )
+                return None
 
             # Default handling if member not found
             self.emit(
@@ -4394,7 +5499,14 @@ class VulkanSPIRVCodeGen:
         base_value = self.get_variable_value(builtin)
         member_info = self.vector_member_info(base_value.type.base_type, member_name)
         if member_info is None:
-            return None
+            swizzle_info = self.vector_swizzle_info(
+                base_value.type.base_type, member_name
+            )
+            if swizzle_info is None:
+                return None
+
+            indices, _, result_type = swizzle_info
+            return self.vector_shuffle(base_value, result_type, indices)
 
         member_index, member_type = member_info
         return self.composite_extract(base_value, member_type, member_index)
@@ -4724,6 +5836,7 @@ class VulkanSPIRVCodeGen:
             self.process_global_variable_declaration(var)
 
         top_level_entries = []
+        helper_functions = []
         for func in ast.functions:
             qualifier = self.get_function_qualifier(func)
 
@@ -4737,8 +5850,10 @@ class VulkanSPIRVCodeGen:
             ]:
                 top_level_entries.append((func, qualifier))
             else:
-                # Helper function
-                self.process_function_node(func)
+                helper_functions.append(func)
+
+        for func in self.order_functions_by_dependencies(helper_functions):
+            self.process_function_node(func)
 
         entry_points = []
 
@@ -4750,7 +5865,12 @@ class VulkanSPIRVCodeGen:
 
             processed_local_functions = set()
             for stage in ast.stages.values():
-                for func in getattr(stage, "local_functions", []):
+                local_functions = [
+                    func
+                    for func in getattr(stage, "local_functions", [])
+                    if id(func) not in processed_local_functions
+                ]
+                for func in self.order_functions_by_dependencies(local_functions):
                     if id(func) not in processed_local_functions:
                         self.process_function_node(func, stage=stage)
                         processed_local_functions.add(id(func))

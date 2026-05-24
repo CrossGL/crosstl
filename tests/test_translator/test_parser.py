@@ -4,6 +4,7 @@ from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
     ArrayType,
+    AssignmentNode,
     DoWhileNode,
     ForInNode,
     FunctionCallNode,
@@ -763,6 +764,50 @@ def test_and_operator():
         pytest.fail("Bitwise AND not working")
 
 
+def test_compound_assignments_parse_operator_tokens():
+    code = """
+    shader CompoundAssignments {
+        compute {
+            void main() {
+                float value = 1.0;
+                value += 2.0;
+                value -= 3.0;
+                value *= 4.0;
+                value /= 5.0;
+                int bits = 7;
+                bits &= 3;
+                bits |= 8;
+                bits ^= 2;
+                bits <<= 1;
+                bits >>= 1;
+                bits %= 2;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+    assignments = [
+        stmt.expression
+        for stmt in statements
+        if isinstance(getattr(stmt, "expression", None), AssignmentNode)
+    ]
+
+    assert [assignment.operator for assignment in assignments] == [
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "&=",
+        "|=",
+        "^=",
+        "<<=",
+        ">>=",
+        "%=",
+    ]
+
+
 def test_modulus_operations():
     code = """
     shader main {
@@ -1078,6 +1123,36 @@ def test_compute_layout_execution_config_parsing():
     }
 
 
+def test_compute_layout_does_not_consume_resource_layouts():
+    code = """
+    shader ComputeLayoutWithResources {
+        compute {
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer float values[];
+            layout(set = 0, binding = 1) uniform sampler2D sourceTexture;
+            layout(set = 0, binding = 2) sampler sourceSampler;
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+
+    assert compute_stage.execution_config == {
+        "local_size_x": "8",
+        "local_size_y": "8",
+        "local_size_z": "1",
+    }
+    assert [variable.name for variable in compute_stage.local_variables] == [
+        "values",
+        "sourceTexture",
+        "sourceSampler",
+    ]
+
+
 def test_double_vector_type_keywords_parse():
     code = """
     shader DoubleVectors {
@@ -1313,6 +1388,60 @@ def test_image_format_attributes_parse():
     assert [attr.name for attr in ast.global_variables[1].attributes] == ["r32ui"]
     assert [attr.name for attr in ast.global_variables[2].attributes] == ["format"]
     assert ast.global_variables[2].attributes[0].arguments[0].name == "rgba8"
+
+
+def test_global_io_location_attributes_parse():
+    code = """
+    shader Interface {
+        float inputValue @input @location(3) @component(1) @flat @centroid;
+        float outputValue @output @location(5) @index(1) @noperspective @sample @invariant @precise;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    input_value, output_value = ast.global_variables
+
+    assert [attr.name for attr in input_value.attributes] == [
+        "input",
+        "location",
+        "component",
+        "flat",
+        "centroid",
+    ]
+    assert isinstance(input_value.attributes[1].arguments[0], LiteralNode)
+    assert input_value.attributes[1].arguments[0].value == 3
+    assert input_value.attributes[2].arguments[0].value == 1
+    assert [attr.name for attr in output_value.attributes] == [
+        "output",
+        "location",
+        "index",
+        "noperspective",
+        "sample",
+        "invariant",
+        "precise",
+    ]
+    assert isinstance(output_value.attributes[1].arguments[0], LiteralNode)
+    assert output_value.attributes[1].arguments[0].value == 5
+    assert output_value.attributes[2].arguments[0].value == 1
+
+
+def test_precise_variable_attribute_parse():
+    code = """
+    shader Precise {
+        compute {
+            void main() {
+                float acc @precise = 0.0;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    statements = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+
+    assert isinstance(statements[0], VariableNode)
+    assert [attr.name for attr in statements[0].attributes] == ["precise"]
 
 
 def test_image_format_parameter_attributes_parse():

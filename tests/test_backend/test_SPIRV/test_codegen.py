@@ -143,10 +143,43 @@ def test_function_parameter_qualifiers_codegen_smoke():
     generated_code = generate_code(ast)
 
     assert (
-        "void accumulate(float3 normal, float weight, float4 color)" in generated_code
+        "void accumulate(in float3 normal, inout float weight, out float4 color)"
+        in generated_code
     )
     assert "color = float4(normal, weight);" in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_resource_array_parameter_qualifiers_codegen():
+    code = """
+    void sampleResources(in sampler2D textures[4], inout uimage2D outputs[2]) {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "void sampleResources(in Texture2D textures[4], "
+        "inout RWTexture2D<uint> outputs[2])" in generated_code
+    )
+
+
+def test_function_parameter_array_suffixes_codegen():
+    code = """
+    void sampleResources(sampler2D textures[4], uimage2D outputs[2]) {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "void sampleResources(Texture2D textures[4], RWTexture2D<uint> outputs[2])"
+        in generated_code
+    )
 
 
 def test_member_access_assignment_codegen():
@@ -213,7 +246,7 @@ def test_vulkan_layout_blocks_emit_crossgl_resources():
     assert "float4x4 viewProj;" in generated_code
     assert "struct Particles" in generated_code
     assert "RWStructuredBuffer<Particles> particles;" in generated_code
-    assert "float3 position;" in generated_code
+    assert "float3 position @input @location(0);" in generated_code
     assert "vertex {" in generated_code
     assert "gl_Position = float4(position, 1.0);" in generated_code
 
@@ -228,7 +261,24 @@ def test_vulkan_layout_interpolation_qualifier_codegen():
     generated_code = generate_code(ast)
 
     assert ast.global_variables[0].declaration_qualifiers == ["flat"]
-    assert "int faceID;" in generated_code
+    assert "int faceID @input @location(0) @flat;" in generated_code
+
+
+def test_vulkan_layout_component_and_index_codegen():
+    code = """
+    layout(location = 1, component = 2) noperspective in vec4 color;
+    layout(location = 0, index = 1) out vec4 fragColor;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 color @input @location(1) @component(2) @noperspective;"
+        in generated_code
+    )
+    assert "float4 fragColor @output @location(0) @index(1);" in generated_code
 
 
 def test_vulkan_readonly_buffer_layout_codegen():
@@ -357,6 +407,586 @@ def test_vulkan_one_dimensional_sampler_uniforms_emit_crossgl_resources():
     assert "Texture1DArray ramps;" in generated_code
 
 
+def test_vulkan_integer_one_dimensional_sampler_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isampler1D signedRamp;
+    layout(set = 0, binding = 1) uniform usampler1D unsignedRamp;
+    layout(set = 0, binding = 2) uniform isampler1DArray signedRamps;
+    layout(set = 0, binding = 3) uniform usampler1DArray unsignedRamps;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert [variable.data_type for variable in ast.global_variables] == [
+        "isampler1D",
+        "usampler1D",
+        "isampler1DArray",
+        "usampler1DArray",
+    ]
+    assert "isampler1D signedRamp;" in generated_code
+    assert "usampler1D unsignedRamp;" in generated_code
+    assert "isampler1DArray signedRamps;" in generated_code
+    assert "usampler1DArray unsignedRamps;" in generated_code
+    assert "Texture1D<int> signedRamp;" not in generated_code
+    assert "Texture1D<uint> unsignedRamp;" not in generated_code
+    assert "Texture1DArray<int> signedRamps;" not in generated_code
+    assert "Texture1DArray<uint> unsignedRamps;" not in generated_code
+
+
+def test_vulkan_integer_2d_sampler_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isampler2D signedTex;
+    layout(set = 0, binding = 1) uniform usampler2D unsignedTex;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "isampler2D"
+    assert ast.global_variables[0].variable_name == "signedTex"
+    assert ast.global_variables[1].data_type == "usampler2D"
+    assert ast.global_variables[1].variable_name == "unsignedTex"
+    assert "isampler2D signedTex;" in generated_code
+    assert "usampler2D unsignedTex;" in generated_code
+    assert "Texture2D<int> signedTex;" not in generated_code
+    assert "Texture2D<uint> unsignedTex;" not in generated_code
+
+
+def test_vulkan_integer_2d_array_sampler_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isampler2DArray signedLayers;
+    layout(set = 0, binding = 1) uniform usampler2DArray unsignedLayers;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "isampler2DArray"
+    assert ast.global_variables[0].variable_name == "signedLayers"
+    assert ast.global_variables[1].data_type == "usampler2DArray"
+    assert ast.global_variables[1].variable_name == "unsignedLayers"
+    assert "isampler2DArray signedLayers;" in generated_code
+    assert "usampler2DArray unsignedLayers;" in generated_code
+    assert "Texture2DArray<int> signedLayers;" not in generated_code
+    assert "Texture2DArray<uint> unsignedLayers;" not in generated_code
+
+
+def test_vulkan_integer_multisample_sampler_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isampler2DMS signedSamples;
+    layout(set = 0, binding = 1) uniform usampler2DMS unsignedSamples;
+    layout(set = 0, binding = 2) uniform isampler2DMSArray signedSampleLayers;
+    layout(set = 0, binding = 3) uniform usampler2DMSArray unsignedSampleLayers;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert [variable.data_type for variable in ast.global_variables] == [
+        "isampler2DMS",
+        "usampler2DMS",
+        "isampler2DMSArray",
+        "usampler2DMSArray",
+    ]
+    assert "isampler2DMS signedSamples;" in generated_code
+    assert "usampler2DMS unsignedSamples;" in generated_code
+    assert "isampler2DMSArray signedSampleLayers;" in generated_code
+    assert "usampler2DMSArray unsignedSampleLayers;" in generated_code
+    assert "Texture2DMS<int> signedSamples;" not in generated_code
+    assert "Texture2DMS<uint> unsignedSamples;" not in generated_code
+    assert "Texture2DMSArray<int> signedSampleLayers;" not in generated_code
+    assert "Texture2DMSArray<uint> unsignedSampleLayers;" not in generated_code
+
+
+def test_vulkan_integer_3d_sampler_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isampler3D signedVolume;
+    layout(set = 0, binding = 1) uniform usampler3D unsignedVolume;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "isampler3D"
+    assert ast.global_variables[0].variable_name == "signedVolume"
+    assert ast.global_variables[1].data_type == "usampler3D"
+    assert ast.global_variables[1].variable_name == "unsignedVolume"
+    assert "isampler3D signedVolume;" in generated_code
+    assert "usampler3D unsignedVolume;" in generated_code
+    assert "Texture3D<int> signedVolume;" not in generated_code
+    assert "Texture3D<uint> unsignedVolume;" not in generated_code
+
+
+def test_vulkan_integer_cube_sampler_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isamplerCube signedCube;
+    layout(set = 0, binding = 1) uniform usamplerCube unsignedCube;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "isamplerCube"
+    assert ast.global_variables[0].variable_name == "signedCube"
+    assert ast.global_variables[1].data_type == "usamplerCube"
+    assert ast.global_variables[1].variable_name == "unsignedCube"
+    assert "isamplerCube signedCube;" in generated_code
+    assert "usamplerCube unsignedCube;" in generated_code
+    assert "TextureCube<int> signedCube;" not in generated_code
+    assert "TextureCube<uint> unsignedCube;" not in generated_code
+
+
+def test_vulkan_integer_cube_array_sampler_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isamplerCubeArray signedCubeLayers;
+    layout(set = 0, binding = 1) uniform usamplerCubeArray unsignedCubeLayers;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "isamplerCubeArray"
+    assert ast.global_variables[0].variable_name == "signedCubeLayers"
+    assert ast.global_variables[1].data_type == "usamplerCubeArray"
+    assert ast.global_variables[1].variable_name == "unsignedCubeLayers"
+    assert "isamplerCubeArray signedCubeLayers;" in generated_code
+    assert "usamplerCubeArray unsignedCubeLayers;" in generated_code
+    assert "TextureCubeArray<int> signedCubeLayers;" not in generated_code
+    assert "TextureCubeArray<uint> unsignedCubeLayers;" not in generated_code
+
+
+def test_vulkan_one_dimensional_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform image1D line;
+    layout(set = 0, binding = 1) uniform image1DArray lines;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "image1D"
+    assert ast.global_variables[0].variable_name == "line"
+    assert ast.global_variables[1].data_type == "image1DArray"
+    assert ast.global_variables[1].variable_name == "lines"
+    assert "RWTexture1D line;" in generated_code
+    assert "RWTexture1DArray lines;" in generated_code
+    assert "image1D line;" not in generated_code
+    assert "image1DArray lines;" not in generated_code
+
+
+def test_vulkan_image2d_array_uniform_emits_crossgl_resource():
+    code = """
+    layout(set = 0, binding = 0) uniform image2DArray layers;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "image2DArray"
+    assert ast.global_variables[0].variable_name == "layers"
+    assert "RWTexture2DArray layers;" in generated_code
+    assert "image2DArray layers;" not in generated_code
+
+
+def test_vulkan_typed_2d_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimage2D signedImage;
+    layout(set = 0, binding = 1) uniform uimage2D counters;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "iimage2D"
+    assert ast.global_variables[0].variable_name == "signedImage"
+    assert ast.global_variables[1].data_type == "uimage2D"
+    assert ast.global_variables[1].variable_name == "counters"
+    assert "RWTexture2D<int> signedImage;" in generated_code
+    assert "RWTexture2D<uint> counters;" in generated_code
+    assert "iimage2D signedImage;" not in generated_code
+    assert "uimage2D counters;" not in generated_code
+
+
+def test_vulkan_storage_image_layout_and_access_qualifiers_codegen():
+    code = """
+    layout(set = 0, binding = 0, r32ui) coherent readonly uniform uimage2D counters;
+    layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D outImage;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "RWTexture2D<uint> counters @binding(0) @r32ui @coherent @readonly;"
+        in generated_code
+    )
+    assert "RWTexture2D outImage @binding(1) @rgba32f @writeonly;" in generated_code
+    assert "@set(0)" not in generated_code
+    assert "uimage2D counters @binding" not in generated_code
+    assert "image2D outImage @binding" not in generated_code
+
+
+def test_vulkan_typed_1d_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimage1D signedLine;
+    layout(set = 0, binding = 1) uniform uimage1D counters;
+    layout(set = 0, binding = 2) uniform iimage1DArray signedLayers;
+    layout(set = 0, binding = 3) uniform uimage1DArray layerCounters;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert [variable.data_type for variable in ast.global_variables] == [
+        "iimage1D",
+        "uimage1D",
+        "iimage1DArray",
+        "uimage1DArray",
+    ]
+    assert "RWTexture1D<int> signedLine;" in generated_code
+    assert "RWTexture1D<uint> counters;" in generated_code
+    assert "RWTexture1DArray<int> signedLayers;" in generated_code
+    assert "RWTexture1DArray<uint> layerCounters;" in generated_code
+    assert "iimage1D signedLine;" not in generated_code
+    assert "uimage1D counters;" not in generated_code
+    assert "iimage1DArray signedLayers;" not in generated_code
+    assert "uimage1DArray layerCounters;" not in generated_code
+
+
+def test_vulkan_typed_3d_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimage3D signedVolume;
+    layout(set = 0, binding = 1) uniform uimage3D counters;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "iimage3D"
+    assert ast.global_variables[0].variable_name == "signedVolume"
+    assert ast.global_variables[1].data_type == "uimage3D"
+    assert ast.global_variables[1].variable_name == "counters"
+    assert "RWTexture3D<int> signedVolume;" in generated_code
+    assert "RWTexture3D<uint> counters;" in generated_code
+    assert "iimage3D signedVolume;" not in generated_code
+    assert "uimage3D counters;" not in generated_code
+
+
+def test_vulkan_typed_cube_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimageCube signedCube;
+    layout(set = 0, binding = 1) uniform uimageCube cubeCounters;
+    layout(set = 0, binding = 2) uniform iimageCubeArray signedCubeLayers;
+    layout(set = 0, binding = 3) uniform uimageCubeArray cubeLayerCounters;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert [variable.data_type for variable in ast.global_variables] == [
+        "iimageCube",
+        "uimageCube",
+        "iimageCubeArray",
+        "uimageCubeArray",
+    ]
+    assert "RWTextureCube<int> signedCube;" in generated_code
+    assert "RWTextureCube<uint> cubeCounters;" in generated_code
+    assert "RWTextureCubeArray<int> signedCubeLayers;" in generated_code
+    assert "RWTextureCubeArray<uint> cubeLayerCounters;" in generated_code
+    assert "iimageCube signedCube;" not in generated_code
+    assert "uimageCube cubeCounters;" not in generated_code
+    assert "iimageCubeArray signedCubeLayers;" not in generated_code
+    assert "uimageCubeArray cubeLayerCounters;" not in generated_code
+
+
+def test_vulkan_typed_2d_array_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimage2DArray signedLayers;
+    layout(set = 0, binding = 1) uniform uimage2DArray counters;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "iimage2DArray"
+    assert ast.global_variables[0].variable_name == "signedLayers"
+    assert ast.global_variables[1].data_type == "uimage2DArray"
+    assert ast.global_variables[1].variable_name == "counters"
+    assert "RWTexture2DArray<int> signedLayers;" in generated_code
+    assert "RWTexture2DArray<uint> counters;" in generated_code
+    assert "iimage2DArray signedLayers;" not in generated_code
+    assert "uimage2DArray counters;" not in generated_code
+
+
+def test_vulkan_typed_2d_ms_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimage2DMS signedSamples;
+    layout(set = 0, binding = 1) uniform uimage2DMS sampleCounters;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "iimage2DMS"
+    assert ast.global_variables[0].variable_name == "signedSamples"
+    assert ast.global_variables[1].data_type == "uimage2DMS"
+    assert ast.global_variables[1].variable_name == "sampleCounters"
+    assert "RWTexture2DMS<int> signedSamples;" in generated_code
+    assert "RWTexture2DMS<uint> sampleCounters;" in generated_code
+    assert "iimage2DMS signedSamples;" not in generated_code
+    assert "uimage2DMS sampleCounters;" not in generated_code
+
+
+def test_vulkan_typed_2d_ms_array_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimage2DMSArray signedLayers;
+    layout(set = 0, binding = 1) uniform uimage2DMSArray sampleCounters;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "iimage2DMSArray"
+    assert ast.global_variables[0].variable_name == "signedLayers"
+    assert ast.global_variables[1].data_type == "uimage2DMSArray"
+    assert ast.global_variables[1].variable_name == "sampleCounters"
+    assert "RWTexture2DMSArray<int> signedLayers;" in generated_code
+    assert "RWTexture2DMSArray<uint> sampleCounters;" in generated_code
+    assert "iimage2DMSArray signedLayers;" not in generated_code
+    assert "uimage2DMSArray sampleCounters;" not in generated_code
+
+
+def test_vulkan_image_cube_array_uniform_emits_crossgl_resource():
+    code = """
+    layout(set = 0, binding = 0) uniform imageCubeArray cubes;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "imageCubeArray"
+    assert ast.global_variables[0].variable_name == "cubes"
+    assert "RWTextureCubeArray cubes;" in generated_code
+    assert "imageCubeArray cubes;" not in generated_code
+
+
+def test_vulkan_multisample_sampler_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform sampler2DMS msTex;
+    layout(set = 0, binding = 1) uniform sampler2DMSArray msTexArray;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "sampler2DMS"
+    assert ast.global_variables[0].variable_name == "msTex"
+    assert ast.global_variables[1].data_type == "sampler2DMSArray"
+    assert ast.global_variables[1].variable_name == "msTexArray"
+    assert "Texture2DMS msTex;" in generated_code
+    assert "Texture2DMSArray msTexArray;" in generated_code
+    assert "sampler2DMS msTex;" not in generated_code
+    assert "sampler2DMSArray msTexArray;" not in generated_code
+
+
+def test_vulkan_multisample_image_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform image2DMS msImage;
+    layout(set = 0, binding = 1) uniform image2DMSArray msImages;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "image2DMS"
+    assert ast.global_variables[0].variable_name == "msImage"
+    assert ast.global_variables[1].data_type == "image2DMSArray"
+    assert ast.global_variables[1].variable_name == "msImages"
+    assert "RWTexture2DMS msImage;" in generated_code
+    assert "RWTexture2DMSArray msImages;" in generated_code
+    assert "image2DMS msImage;" not in generated_code
+    assert "image2DMSArray msImages;" not in generated_code
+
+
+def test_vulkan_image_buffer_uniform_emits_crossgl_resource():
+    code = """
+    layout(set = 0, binding = 0) uniform imageBuffer data;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "imageBuffer"
+    assert ast.global_variables[0].variable_name == "data"
+    assert "RWBuffer data;" in generated_code
+    assert "imageBuffer data;" not in generated_code
+
+
+def test_vulkan_typed_image_buffer_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform iimageBuffer signedData;
+    layout(set = 0, binding = 1) uniform uimageBuffer unsignedData;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "iimageBuffer"
+    assert ast.global_variables[0].variable_name == "signedData"
+    assert ast.global_variables[1].data_type == "uimageBuffer"
+    assert ast.global_variables[1].variable_name == "unsignedData"
+    assert "RWBuffer<int> signedData;" in generated_code
+    assert "RWBuffer<uint> unsignedData;" in generated_code
+    assert "iimageBuffer signedData;" not in generated_code
+    assert "uimageBuffer unsignedData;" not in generated_code
+
+
+def test_vulkan_sampler_buffer_uniform_emits_crossgl_resource():
+    code = """
+    layout(set = 0, binding = 0) uniform samplerBuffer data;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "samplerBuffer"
+    assert ast.global_variables[0].variable_name == "data"
+    assert "Buffer data;" in generated_code
+    assert "samplerBuffer data;" not in generated_code
+
+
+def test_vulkan_integer_sampler_buffer_uniforms_preserve_crossgl_resource_types():
+    code = """
+    layout(set = 0, binding = 0) uniform isamplerBuffer signedData;
+    layout(set = 0, binding = 1) uniform usamplerBuffer unsignedData;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "isamplerBuffer"
+    assert ast.global_variables[0].variable_name == "signedData"
+    assert ast.global_variables[1].data_type == "usamplerBuffer"
+    assert ast.global_variables[1].variable_name == "unsignedData"
+    assert "isamplerBuffer signedData;" in generated_code
+    assert "usamplerBuffer unsignedData;" in generated_code
+    assert "Buffer<int> signedData;" not in generated_code
+    assert "Buffer<uint> unsignedData;" not in generated_code
+
+
+def test_vulkan_subpass_input_uniforms_emit_crossgl_resources():
+    code = """
+    layout(input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput colorInput;
+    layout(input_attachment_index = 1, set = 0, binding = 1) uniform subpassInputMS msColorInput;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "subpassInput"
+    assert ast.global_variables[0].variable_name == "colorInput"
+    assert ast.global_variables[1].data_type == "subpassInputMS"
+    assert ast.global_variables[1].variable_name == "msColorInput"
+    assert "Texture2D colorInput;" in generated_code
+    assert "Texture2DMS msColorInput;" in generated_code
+    assert "subpassInput colorInput;" not in generated_code
+    assert "subpassInputMS msColorInput;" not in generated_code
+
+
+def test_vulkan_atomic_uint_uniform_emits_crossgl_resource():
+    code = """
+    layout(set = 0, binding = 0) uniform atomic_uint counter;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "atomic_uint"
+    assert ast.global_variables[0].variable_name == "counter"
+    assert "RWStructuredBuffer<uint> counter;" in generated_code
+    assert "atomic_uint counter;" not in generated_code
+
+
+def test_vulkan_standalone_sampler_uniforms_preserve_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform sampler compareSampler;
+    uniform sampler samplers[4];
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "sampler"
+    assert ast.global_variables[0].variable_name == "compareSampler"
+    assert ast.global_variables[1].vtype == "sampler"
+    assert ast.global_variables[1].name == "samplers[4]"
+    assert "sampler compareSampler;" in generated_code
+    assert "sampler samplers[4];" in generated_code
+    assert "Texture2D compareSampler;" not in generated_code
+
+
+def test_vulkan_shadow_sampler_uniforms_emit_crossgl_resources():
+    code = """
+    layout(set = 0, binding = 0) uniform sampler1DShadow shadowRamp;
+    layout(set = 0, binding = 1) uniform sampler1DArrayShadow shadowRamps;
+    layout(set = 0, binding = 2) uniform sampler2DShadow shadowMap;
+    layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowArray;
+    layout(set = 0, binding = 4) uniform samplerCubeShadow shadowCube;
+    layout(set = 0, binding = 5) uniform samplerCubeArrayShadow shadowCubeArray;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert [variable.data_type for variable in ast.global_variables] == [
+        "sampler1DShadow",
+        "sampler1DArrayShadow",
+        "sampler2DShadow",
+        "sampler2DArrayShadow",
+        "samplerCubeShadow",
+        "samplerCubeArrayShadow",
+    ]
+    assert "sampler1DShadow shadowRamp;" in generated_code
+    assert "sampler1DArrayShadow shadowRamps;" in generated_code
+    assert "sampler2DShadow shadowMap;" in generated_code
+    assert "sampler2DArrayShadow shadowArray;" in generated_code
+    assert "samplerCubeShadow shadowCube;" in generated_code
+    assert "samplerCubeArrayShadow shadowCubeArray;" in generated_code
+    assert "Texture1D shadowRamp;" not in generated_code
+    assert "Texture1DArray shadowRamps;" not in generated_code
+    assert "Texture2D shadowMap;" not in generated_code
+    assert "TextureCube shadowCube;" not in generated_code
+
+
 def test_vulkan_precision_declarations_do_not_emit_crossgl_resources():
     code = """
     precision highp float;
@@ -386,10 +1016,8 @@ def test_vulkan_layout_precision_after_in_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float2 vUV;" in generated_code
-    assert "float4 fragColor;" in generated_code
-    assert "highp" not in generated_code
-    assert "mediump" not in generated_code
+    assert "float2 vUV @input @location(0) @highp;" in generated_code
+    assert "float4 fragColor @output @location(0) @mediump;" in generated_code
 
 
 def test_translate_api_accepts_spirv_layout_source(tmp_path):

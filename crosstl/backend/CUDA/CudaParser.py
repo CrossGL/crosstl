@@ -47,6 +47,23 @@ class CudaParser:
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"RESTRICT"}
     TYPE_REFERENCE_TOKENS = {"BITWISE_AND", "LOGICAL_AND"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
+    ATOMIC_FUNCTION_TOKENS = {
+        "ATOMICADD",
+        "ATOMICSUB",
+        "ATOMICMAX",
+        "ATOMICMIN",
+        "ATOMICEXCH",
+        "ATOMICCAS",
+    }
+    ATOMIC_FUNCTION_NAMES = {
+        "atomicAdd",
+        "atomicSub",
+        "atomicMax",
+        "atomicMin",
+        "atomicExch",
+        "atomicCAS",
+    }
+    FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     DECLARATION_QUALIFIER_TOKENS = {
         "CONST",
         "VOLATILE",
@@ -124,6 +141,60 @@ class CudaParser:
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
         self.type_aliases = set()
+        self.user_function_names = self.collect_user_function_names()
+
+    def collect_user_function_names(self):
+        names = set()
+        depth = 0
+        index = 0
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACE":
+                depth += 1
+                index += 1
+                continue
+            if token_type == "RBRACE":
+                depth = max(0, depth - 1)
+                index += 1
+                continue
+
+            if depth == 0:
+                name_index = self.function_name_index_at(index)
+                if name_index is not None:
+                    names.add(self.tokens[name_index][1])
+                    index = name_index + 1
+                    continue
+
+            index += 1
+
+        return names
+
+    def function_name_index_at(self, index):
+        while (
+            index < len(self.tokens)
+            and self.tokens[index][0] in self.FUNCTION_SPECIFIER_TOKENS
+        ):
+            index += 1
+
+        while (
+            index < len(self.tokens)
+            and self.tokens[index][0] in self.TYPE_QUALIFIER_TOKENS
+        ):
+            index += 1
+
+        index = self.skip_type_at_index(index)
+        if index is None:
+            return None
+
+        if (
+            index + 1 < len(self.tokens)
+            and self.is_function_name_token(self.tokens[index])
+            and self.tokens[index + 1][0] == "LPAREN"
+        ):
+            return index
+
+        return None
 
     def parse(self):
         """Parse the entire CUDA program into a ``ShaderNode``."""
@@ -188,7 +259,7 @@ class CudaParser:
         if saved_index is not None:
             if (
                 saved_index < len(self.tokens) - 1
-                and self.tokens[saved_index][0] == "IDENTIFIER"
+                and self.is_function_name_token(self.tokens[saved_index])
                 and self.tokens[saved_index + 1][0] == "LPAREN"
             ):
                 return True
@@ -338,6 +409,19 @@ class CudaParser:
         else:
             raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
 
+    def is_function_name_token(self, token=None):
+        token = token or self.current_token
+        return bool(token and token[0] in self.FUNCTION_NAME_TOKENS)
+
+    def consume_function_name(self):
+        if not self.is_function_name_token():
+            token_type = self.current_token[0] if self.current_token else "EOF"
+            raise SyntaxError(f"Expected function name, got {token_type}")
+
+        name = self.current_token[1]
+        self.eat(self.current_token[0])
+        return name
+
     def parse_preprocessor(self):
         """Parse preprocessor directives"""
         directive_token = self.eat("PREPROCESSOR")
@@ -430,7 +514,8 @@ class CudaParser:
             self.eat(self.current_token[0])
 
         return_type = self.parse_type()
-        name = self.eat("IDENTIFIER")[1]
+        name = self.consume_function_name()
+        self.user_function_names.add(name)
         params = self.parse_parameters()
         body = self.parse_block()
 
@@ -1206,8 +1291,11 @@ class CudaParser:
                         args.append(self.parse_expression())
                 self.eat("RPAREN")
 
-                # Check for atomic operations
-                if isinstance(left, str) and left.startswith("atomic"):
+                if (
+                    isinstance(left, str)
+                    and left in self.ATOMIC_FUNCTION_NAMES
+                    and left not in self.user_function_names
+                ):
                     left = AtomicOperationNode(left, args)
                 else:
                     left = self.parse_function_call_node(left, args)
@@ -1349,7 +1437,11 @@ class CudaParser:
         if named_cast is not None:
             return named_cast
 
-        if function_name == "cudaLaunchKernel" and len(args) == 6:
+        if (
+            function_name == "cudaLaunchKernel"
+            and len(args) == 6
+            and function_name not in self.user_function_names
+        ):
             return KernelLaunchNode(
                 self.unwrap_cuda_kernel_function_arg(args[0]),
                 args[1],
@@ -1476,14 +1568,7 @@ class CudaParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             return name
-        elif self.current_token[0] in [
-            "ATOMICADD",
-            "ATOMICSUB",
-            "ATOMICMAX",
-            "ATOMICMIN",
-            "ATOMICEXCH",
-            "ATOMICCAS",
-        ]:
+        elif self.current_token[0] in self.ATOMIC_FUNCTION_TOKENS:
             name = self.current_token[1]
             self.eat(self.current_token[0])
             return name

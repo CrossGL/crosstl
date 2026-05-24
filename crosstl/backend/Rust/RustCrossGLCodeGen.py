@@ -54,6 +54,7 @@ class RustToCrossGLConverter:
         "max": "max",
         "powf": "pow",
         "powi": "pow",
+        "atan2": "atan2",
     }
     SCALAR_TWO_ARG_METHOD_MAP = {
         "clamp": "clamp",
@@ -155,9 +156,11 @@ class RustToCrossGLConverter:
             "round": "round",
             "sqrt": "sqrt",
             "pow": "pow",
+            "modulo": "mod",
             "exp": "exp",
             "exp2": "exp2",
             "log": "log",
+            "ln": "log",
             "log2": "log2",
             "sin": "sin",
             "cos": "cos",
@@ -229,6 +232,9 @@ class RustToCrossGLConverter:
         self.try_block_value_counter = 0
         self.transparent_block_value_counter = 0
         self.current_function_return_type = None
+        self.user_function_names = set()
+        self.impl_method_names = {}
+        self.value_type_scopes = []
 
     def get_indent(self):
         """Return whitespace for the current indentation level."""
@@ -282,6 +288,9 @@ class RustToCrossGLConverter:
         self.try_block_value_counter = 0
         self.transparent_block_value_counter = 0
         self.current_function_return_type = None
+        self.user_function_names = self.collect_user_function_names(ast)
+        self.impl_method_names = self.collect_impl_method_names(ast)
+        self.value_type_scopes = []
         code = "shader main {\n"
 
         for use_stmt in ast.use_statements:
@@ -344,6 +353,70 @@ class RustToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def collect_user_function_names(self, ast):
+        names = {getattr(func, "name", None) for func in getattr(ast, "functions", [])}
+        for impl_block in getattr(ast, "impl_blocks", []):
+            for func in getattr(impl_block, "functions", []):
+                names.add(getattr(func, "name", None))
+        names.discard(None)
+        return names
+
+    def collect_impl_method_names(self, ast):
+        methods_by_type = {}
+        for impl_block in getattr(ast, "impl_blocks", []):
+            struct_name = getattr(impl_block, "struct_name", None)
+            if not struct_name:
+                continue
+
+            methods = methods_by_type.setdefault(struct_name, set())
+            for func in getattr(impl_block, "functions", []):
+                method_name = getattr(func, "name", None)
+                if method_name:
+                    methods.add(method_name)
+
+        return methods_by_type
+
+    def is_user_defined_function(self, func_name):
+        return isinstance(func_name, str) and func_name in self.user_function_names
+
+    def push_value_type_scope(self, entries=None):
+        scope = {}
+        if entries:
+            for name, type_name in entries:
+                if name and type_name:
+                    scope[name] = type_name
+        self.value_type_scopes.append(scope)
+
+    def pop_value_type_scope(self):
+        if self.value_type_scopes:
+            self.value_type_scopes.pop()
+
+    def add_value_type(self, name, type_name, struct_name=None):
+        normalized_type = self.normalize_receiver_type(type_name, struct_name)
+        if name and normalized_type and self.value_type_scopes:
+            self.value_type_scopes[-1][name] = normalized_type
+
+    def lookup_value_type(self, name):
+        for scope in reversed(self.value_type_scopes):
+            type_name = scope.get(name)
+            if type_name:
+                return type_name
+        return None
+
+    def normalize_receiver_type(self, type_name, struct_name=None):
+        if not type_name:
+            return None
+
+        type_name = self.strip_reference_type(type_name)
+        if type_name == "Self" and struct_name:
+            return struct_name
+        return type_name
+
+    def infer_value_type(self, expression):
+        if isinstance(expression, StructInitializationNode):
+            return expression.struct_name
+        return None
 
     def is_block_expression_node(self, node):
         return isinstance(node, BLOCK_EXPRESSION_NODE_TYPES)
@@ -420,8 +493,11 @@ class RustToCrossGLConverter:
         indent_str = "    " * indent
 
         params = []
+        param_types = []
         for param in func.params:
             params.append(self.format_typed_declarator(param.vtype, param.name))
+            param_type = self.normalize_receiver_type(param.vtype, struct_name)
+            param_types.append((param.name, param_type))
 
         params_str = ", ".join(params)
         return_type = self.map_type(func.return_type)
@@ -433,12 +509,14 @@ class RustToCrossGLConverter:
 
         previous_return_type = self.current_function_return_type
         self.current_function_return_type = func.return_type
+        self.push_value_type_scope(param_types)
         try:
             code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
             code += self.generate_function_body(func.body, indent=indent + 1)
             code += f"{indent_str}}}\n\n"
         finally:
             self.current_function_return_type = previous_return_type
+            self.pop_value_type_scope()
 
         return code
 
@@ -609,11 +687,16 @@ class RustToCrossGLConverter:
         if stmt.value:
             value_str = self.generate_expression(stmt.value)
             if stmt.vtype:
+                self.add_value_type(stmt.name, stmt.vtype)
                 return f"{indent_str}{type_str} = {value_str};\n"
+            inferred_type = self.infer_value_type(stmt.value)
+            if inferred_type:
+                self.add_value_type(stmt.name, inferred_type)
             mutability = "mut " if stmt.is_mutable else ""
             return f"{indent_str}let {mutability}{stmt.name} = {value_str};\n"
         else:
             if stmt.vtype:
+                self.add_value_type(stmt.name, stmt.vtype)
                 return f"{indent_str}{type_str};\n"
             return f"{indent_str}{stmt.name};\n"
 
@@ -1925,6 +2008,10 @@ class RustToCrossGLConverter:
         return name_code + args_code, f"{name}({', '.join(args)})"
 
     def format_method_call_parts(self, method_name, obj, args, arg_nodes):
+        impl_call = self.format_user_impl_method_call(method_name, obj, args)
+        if impl_call is not None:
+            return impl_call
+
         if method_name == "len" and not args:
             return f"{obj}.length"
 
@@ -1965,6 +2052,26 @@ class RustToCrossGLConverter:
 
         if self.is_swizzle_member(method_name) and not args:
             return f"{obj}.{method_name}"
+
+        return None
+
+    def format_user_impl_method_call(self, method_name, obj, args):
+        struct_name = self.lookup_impl_method_receiver_type(obj, method_name)
+        if struct_name is None:
+            return None
+
+        call_args = [obj] + args
+        return f"{struct_name}_{method_name}({', '.join(call_args)})"
+
+    def lookup_impl_method_receiver_type(self, obj, method_name):
+        receiver_type = self.lookup_value_type(obj)
+        if receiver_type is None:
+            return None
+
+        for type_name in self.type_lookup_names(receiver_type):
+            methods = self.impl_method_names.get(type_name)
+            if methods and method_name in methods:
+                return type_name
 
         return None
 
@@ -5498,6 +5605,13 @@ class RustToCrossGLConverter:
 
     def map_function(self, rust_func):
         rust_func = self.resolve_imported_module_path(rust_func)
+        if self.is_user_defined_function(rust_func):
+            return rust_func
+
+        current_module_function = self.current_module_user_function_name(rust_func)
+        if current_module_function is not None:
+            return current_module_function
+
         mapped = self.function_map.get(rust_func)
         if mapped is not None:
             return mapped
@@ -5513,6 +5627,19 @@ class RustToCrossGLConverter:
         if self.is_module_qualified_function_path(segments[:-1]):
             return mapped
         return rust_func
+
+    def current_module_user_function_name(self, rust_func):
+        if not isinstance(rust_func, str) or "::" not in rust_func:
+            return None
+
+        segments = rust_func.split("::")
+        if len(segments) != 2 or segments[0] not in {"self", "crate"}:
+            return None
+
+        function_name = segments[-1]
+        if self.is_user_defined_function(function_name):
+            return function_name
+        return None
 
     def is_module_qualified_function_path(self, qualifier_segments):
         if not qualifier_segments:

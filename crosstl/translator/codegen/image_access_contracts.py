@@ -1,6 +1,16 @@
 """Shared image access analysis and metadata helpers for code generators."""
 
 from ..ast import FunctionCallNode
+from ..validation import (
+    floating_coordinate_dimension,
+    integer_coordinate_dimension,
+    is_floating_scalar_type,
+    is_integer_scalar_type,
+    is_numeric_scalar_type,
+    texture_intrinsic_allowed_argument_counts,
+    texture_intrinsic_max_argument_count,
+    texture_intrinsic_min_argument_count,
+)
 
 IMAGE_ATOMIC_INTRINSIC_NAMES = {
     "imageAtomicAdd",
@@ -19,6 +29,12 @@ IMAGE_ATOMIC_VALUE_INTRINSIC_NAMES = IMAGE_ATOMIC_INTRINSIC_NAMES - {
 
 IMAGE_ATOMIC_INTEGER_FORMATS = ("r32i", "r32ui")
 IMAGE_ATOMIC_EXCHANGE_FORMATS = ("r32i", "r32ui", "r32f")
+
+
+def is_image_atomic_operation(operation):
+    """Return whether an intrinsic is a storage image atomic operation."""
+    return operation in IMAGE_ATOMIC_INTRINSIC_NAMES
+
 
 SUPPORTED_IMAGE_FORMATS = frozenset(
     {
@@ -256,6 +272,265 @@ def image_access_satisfies_requirement(required_access, actual_access):
     if required_access == "write":
         return actual_access == "write"
     return False
+
+
+def image_access_requirement_label(required_access, read_write_label="read-write"):
+    """Return a diagnostic label for a required image access mode."""
+    return {
+        "read": "read-capable",
+        "write": "write-capable",
+        "read_write": read_write_label,
+    }.get(required_access, str(required_access))
+
+
+def image_access_diagnostic_name(access, read_write_label="readwrite"):
+    """Return a source-level diagnostic name for an actual image access mode."""
+    return {
+        "read": "readonly",
+        "write": "writeonly",
+        "read_write": read_write_label,
+    }.get(access, str(access))
+
+
+def operation_argument_type_error(
+    backend_name,
+    operation_kind,
+    func_name,
+    requirement,
+    argument_label,
+    argument_name,
+    argument_type,
+):
+    """Return a backend resource/texture argument type diagnostic."""
+    return (
+        f"{backend_name} {operation_kind} operation '{func_name}' requires "
+        f"{requirement} {argument_label} argument: {argument_name} has type "
+        f"{argument_type}"
+    )
+
+
+def operation_dimension_argument_error(
+    backend_name,
+    operation_kind,
+    func_name,
+    expected_dimension,
+    value_kind,
+    argument_label,
+    resource_type,
+    argument_name,
+    argument_type,
+):
+    """Return a backend resource/texture argument dimension diagnostic."""
+    return (
+        f"{backend_name} {operation_kind} operation '{func_name}' requires a "
+        f"{expected_dimension}D {value_kind} {argument_label} for "
+        f"{resource_type}: {argument_name} has type {argument_type}"
+    )
+
+
+def texture_argument_diagnostic_type(
+    arg,
+    texture_resource_type,
+    expression_name,
+    expression_result_type,
+    sampler_names,
+):
+    """Return the diagnostic type label for a texture/resource call argument."""
+    texture_type = texture_resource_type(arg)
+    if texture_type is not None:
+        return texture_type
+    if expression_name(arg) in sampler_names:
+        return "sampler"
+    return expression_result_type(arg)
+
+
+def validate_texture_operation_arity(
+    backend_name,
+    operation,
+    args,
+    texture_resource_operation_names,
+    texture_call_uses_explicit_sampler,
+):
+    """Validate shared texture/image operation arity for a backend."""
+    if operation not in texture_resource_operation_names:
+        return
+    has_explicit_sampler = texture_call_uses_explicit_sampler(args)
+    argument_count = len(args)
+    min_count = texture_intrinsic_min_argument_count(
+        operation,
+        has_explicit_sampler,
+    )
+    if min_count is not None and argument_count < min_count:
+        raise ValueError(
+            f"{backend_name} texture operation '{operation}' requires at least "
+            f"{min_count} argument(s), got {argument_count}"
+        )
+    allowed_counts = texture_intrinsic_allowed_argument_counts(
+        operation,
+        has_explicit_sampler,
+    )
+    if allowed_counts is not None and argument_count not in allowed_counts:
+        counts = ", ".join(str(count) for count in allowed_counts)
+        raise ValueError(
+            f"{backend_name} texture operation '{operation}' accepts "
+            f"{counts} argument(s), got {argument_count}"
+        )
+    max_count = texture_intrinsic_max_argument_count(
+        operation,
+        has_explicit_sampler,
+    )
+    if max_count is None or argument_count <= max_count:
+        return
+    raise ValueError(
+        f"{backend_name} texture operation '{operation}' accepts at most "
+        f"{max_count} argument(s), got {argument_count}"
+    )
+
+
+INTEGER_COORDINATE_TYPE_NAMES = frozenset(
+    {
+        "int",
+        "uint",
+        "ivec2",
+        "ivec3",
+        "ivec4",
+        "uvec2",
+        "uvec3",
+        "uvec4",
+        "int2",
+        "int3",
+        "int4",
+        "uint2",
+        "uint3",
+        "uint4",
+    }
+)
+
+
+def is_integer_coordinate_type_name(type_name, mapped_type=None):
+    """Return whether a source or backend type name can address integer texels."""
+    return (
+        type_name in INTEGER_COORDINATE_TYPE_NAMES
+        or mapped_type in INTEGER_COORDINATE_TYPE_NAMES
+    )
+
+
+def integer_coordinate_dimension_from_type_name(type_name, map_type):
+    """Return integer coordinate width for a source or backend type name."""
+    if not type_name:
+        return None
+    mapped_type = map_type(type_name)
+    return integer_coordinate_dimension(type_name) or integer_coordinate_dimension(
+        mapped_type
+    )
+
+
+def _is_mapped_scalar_type_name(type_name, map_type, scalar_type_predicate):
+    if not type_name or "[" in str(type_name):
+        return False
+    mapped_type = map_type(type_name)
+    return scalar_type_predicate(mapped_type) or scalar_type_predicate(type_name)
+
+
+def is_floating_scalar_type_name(type_name, map_type):
+    """Return whether a source or backend type name is scalar floating-point."""
+    return _is_mapped_scalar_type_name(type_name, map_type, is_floating_scalar_type)
+
+
+def is_numeric_scalar_type_name(type_name, map_type):
+    """Return whether a source or backend type name is scalar numeric."""
+    return _is_mapped_scalar_type_name(type_name, map_type, is_numeric_scalar_type)
+
+
+def is_integer_scalar_type_name(type_name, map_type):
+    """Return whether a source or backend type name is scalar integer."""
+    return _is_mapped_scalar_type_name(type_name, map_type, is_integer_scalar_type)
+
+
+def floating_coordinate_dimension_from_type_name(type_name, map_type):
+    """Return floating coordinate width for a source or backend type name."""
+    if not type_name:
+        return None
+    mapped_type = map_type(type_name)
+    return floating_coordinate_dimension(mapped_type) or floating_coordinate_dimension(
+        type_name
+    )
+
+
+def _offset_dimension_from_capability(
+    sampling, capability_name, default_dimension, fallback_dimension=None
+):
+    if capability_name in sampling:
+        return default_dimension if sampling[capability_name] else None
+    return fallback_dimension
+
+
+def texture_resource_dimension_descriptor(
+    texture_type,
+    sampling,
+    coordinate_dimension=None,
+    offset_dimension=None,
+    sample_offset_dimension=None,
+    texel_fetch_offset_dimension=None,
+    gradient_dimension=None,
+    query_lod_coordinate_dimension=None,
+    is_multisample=False,
+):
+    """Build the shared texture/image dimension descriptor shape."""
+    sample_offset_dimension = (
+        sample_offset_dimension
+        if sample_offset_dimension is not None
+        else offset_dimension
+    )
+    if not sampling.get("sample_offset"):
+        sample_offset_dimension = None
+
+    if is_multisample:
+        texel_fetch_offset_dimension = None
+    elif texel_fetch_offset_dimension is None:
+        texel_fetch_offset_dimension = offset_dimension
+
+    gather_offset_dimension = _offset_dimension_from_capability(
+        sampling, "gather_offset", 2
+    )
+    compare_offset_dimension = _offset_dimension_from_capability(
+        sampling, "compare_offset", 2
+    )
+    compare_lod_offset_dimension = _offset_dimension_from_capability(
+        sampling,
+        "compare_lod_offset",
+        2,
+        fallback_dimension=compare_offset_dimension,
+    )
+    compare_grad_offset_dimension = _offset_dimension_from_capability(
+        sampling,
+        "compare_grad_offset",
+        2,
+        fallback_dimension=compare_offset_dimension,
+    )
+    gather_compare_offset_dimension = _offset_dimension_from_capability(
+        sampling, "gather_compare_offset", 2
+    )
+
+    return {
+        "texture_type": texture_type,
+        "coordinate_dimension": coordinate_dimension,
+        "offset_dimension": offset_dimension,
+        "sample_offset_dimension": sample_offset_dimension,
+        "texel_fetch_offset_dimension": texel_fetch_offset_dimension,
+        "gather_offset_dimension": gather_offset_dimension,
+        "compare_offset_dimension": compare_offset_dimension,
+        "compare_lod_offset_dimension": compare_lod_offset_dimension,
+        "compare_grad_offset_dimension": compare_grad_offset_dimension,
+        "gather_compare_offset_dimension": gather_compare_offset_dimension,
+        "gradient_dimension": gradient_dimension,
+        "query_lod_coordinate_dimension": query_lod_coordinate_dimension,
+    }
+
+
+def requires_integer_coordinate(operation, integer_coordinate_intrinsic_names):
+    """Return whether an operation validates argument 1 as integer coordinates."""
+    return operation in integer_coordinate_intrinsic_names
 
 
 def image_atomic_format_allowed_names(func_name):
@@ -496,6 +771,34 @@ def resource_query_get_dimensions_descriptor(
     }
 
 
+def resource_query_size_components_descriptor(
+    size_return_type,
+    size_components,
+    tail_dimensions=(),
+    function_params="",
+    get_dimensions_prefix=(),
+):
+    """Return GetDimensions metadata from the dimensions that form the size."""
+    size_components = tuple(size_components)
+    tail_dimensions = tuple(tail_dimensions)
+    dimensions = size_components + tail_dimensions
+    if size_return_type == "int":
+        size_return_expr = f"int({size_components[0]})"
+    else:
+        size_return_expr = f"{size_return_type}({', '.join(size_components)})"
+    get_dimensions_prefix = tuple(get_dimensions_prefix)
+    get_dimensions_args = None
+    if get_dimensions_prefix:
+        get_dimensions_args = get_dimensions_prefix + dimensions
+    return resource_query_get_dimensions_descriptor(
+        size_return_type,
+        dimensions,
+        size_return_expr,
+        function_params=function_params,
+        get_dimensions_args=get_dimensions_args,
+    )
+
+
 def resource_query_size_helper_descriptor(
     query_descriptor, include_function_fields=True
 ):
@@ -534,6 +837,25 @@ def resource_query_scalar_helper_descriptor(
     }
 
 
+def resource_query_scalar_constant_helper_descriptor(return_expr, return_type="int"):
+    """Return scalar-helper metadata for queries with a constant result."""
+    return {
+        "return_type": return_type,
+        "function_params": "",
+        "dimensions": (),
+        "get_dimensions_args": (),
+        "return_expr": return_expr,
+    }
+
+
+def resource_query_method_size_descriptor(return_type, dimensions):
+    """Return size-query metadata for APIs that expose per-dimension methods."""
+    return {
+        "return_type": return_type,
+        "dimensions": tuple(dimensions),
+    }
+
+
 def unsupported_texture_query_expression(
     backend_name, operation, resource_type, zero_value
 ):
@@ -541,6 +863,26 @@ def unsupported_texture_query_expression(
     return (
         f"/* unsupported {backend_name} texture query: "
         f"{operation} on {resource_type} */ {zero_value}"
+    )
+
+
+def unsupported_texture_query_lod_expression(backend_name, resource_type):
+    """Return an unsupported textureQueryLod fallback expression."""
+    return unsupported_texture_query_expression(
+        backend_name,
+        "textureQueryLod",
+        resource_type,
+        texture_query_lod_zero_value(backend_name),
+    )
+
+
+def unsupported_texture_query_levels_expression(backend_name, resource_type):
+    """Return an unsupported textureQueryLevels fallback expression."""
+    return unsupported_texture_query_expression(
+        backend_name,
+        "textureQueryLevels",
+        resource_type,
+        texture_query_levels_zero_value(),
     )
 
 
@@ -554,6 +896,44 @@ def unsupported_multisample_texture_query_expression(
     )
 
 
+def unsupported_multisample_texture_query_lod_expression(backend_name, resource_type):
+    """Return an unsupported multisample textureQueryLod fallback expression."""
+    return unsupported_multisample_texture_query_expression(
+        backend_name,
+        "textureQueryLod",
+        resource_type,
+        texture_query_lod_zero_value(backend_name),
+    )
+
+
+def texture_query_levels_multisample_expression():
+    """Return the mip-level count for multisample textures."""
+    return "1"
+
+
+def texture_query_levels_zero_value():
+    """Return the fallback mip-level count for unsupported texture queries."""
+    return "0"
+
+
+def texture_samples_query_expression(backend_name, texture_name):
+    """Return the supported multisample texture sample-count expression."""
+    return {
+        "GLSL": f"textureSamples({texture_name})",
+        "DirectX": f"textureSamples({texture_name})",
+        "Metal": f"int({texture_name}.get_num_samples())",
+    }[backend_name]
+
+
+def texture_samples_query_requirement_name(backend_name):
+    """Return the backend term used in unsupported sample-query diagnostics."""
+    return {
+        "GLSL": "sampler",
+        "DirectX": "texture",
+        "Metal": "texture",
+    }[backend_name]
+
+
 def unsupported_texture_samples_query_expression(
     backend_name, multisample_resource_name
 ):
@@ -561,6 +941,13 @@ def unsupported_texture_samples_query_expression(
     return (
         f"/* unsupported {backend_name} texture samples query: "
         f"requires multisample {multisample_resource_name} */ 0"
+    )
+
+
+def unsupported_texture_samples_query_call_expression(backend_name):
+    """Return an unsupported textureSamples fallback expression."""
+    return unsupported_texture_samples_query_expression(
+        backend_name, texture_samples_query_requirement_name(backend_name)
     )
 
 
@@ -574,6 +961,18 @@ def unsupported_multisample_texture_call_expression(
     )
 
 
+def unsupported_multisample_texture_call_vector_expression(
+    backend_name, operation, resource_type
+):
+    """Return an unsupported multisample texture-call fallback with vector zero."""
+    return unsupported_multisample_texture_call_expression(
+        backend_name,
+        operation,
+        resource_type,
+        texture_vector_zero_value(backend_name),
+    )
+
+
 def unsupported_multisample_texture_compare_expression(
     backend_name, operation, resource_type, zero_value
 ):
@@ -581,6 +980,18 @@ def unsupported_multisample_texture_compare_expression(
     return (
         f"/* unsupported {backend_name} multisample texture comparison: "
         f"{operation} on {resource_type} */ {zero_value}"
+    )
+
+
+def unsupported_multisample_texture_compare_scalar_expression(
+    backend_name, operation, resource_type
+):
+    """Return an unsupported multisample texture comparison with scalar zero."""
+    return unsupported_multisample_texture_compare_expression(
+        backend_name,
+        operation,
+        resource_type,
+        texture_scalar_zero_value(backend_name),
     )
 
 
@@ -594,6 +1005,18 @@ def unsupported_multisample_texture_gather_compare_expression(
     )
 
 
+def unsupported_multisample_texture_gather_compare_vector_expression(
+    backend_name, operation, resource_type
+):
+    """Return an unsupported multisample gather-compare fallback with vector zero."""
+    return unsupported_multisample_texture_gather_compare_expression(
+        backend_name,
+        operation,
+        resource_type,
+        texture_vector_zero_value(backend_name),
+    )
+
+
 def unsupported_storage_image_texture_comparison_expression(
     backend_name, operation, resource_type, zero_value
 ):
@@ -601,6 +1024,18 @@ def unsupported_storage_image_texture_comparison_expression(
     return (
         f"/* unsupported {backend_name} storage image texture comparison: "
         f"{operation} on {resource_type} */ {zero_value}"
+    )
+
+
+def unsupported_storage_image_texture_comparison_scalar_expression(
+    backend_name, operation, resource_type
+):
+    """Return an unsupported storage-image texture comparison with scalar zero."""
+    return unsupported_storage_image_texture_comparison_expression(
+        backend_name,
+        operation,
+        resource_type,
+        texture_scalar_zero_value(backend_name),
     )
 
 
@@ -614,14 +1049,79 @@ def unsupported_storage_image_texture_operation_expression(
     )
 
 
-STORAGE_IMAGE_TEXTURE_COMPARISON_OPERATIONS = frozenset(
+def unsupported_storage_image_texture_operation_vector_expression(
+    backend_name, operation, resource_type
+):
+    """Return an unsupported storage-image texture operation with vector zero."""
+    return unsupported_storage_image_texture_operation_expression(
+        backend_name,
+        operation,
+        resource_type,
+        texture_vector_zero_value(backend_name),
+    )
+
+
+PROJECTED_TEXTURE_BASIC_INTRINSIC_NAMES = frozenset(
     {
-        "textureCompare",
-        "textureCompareOffset",
-        "textureCompareLod",
-        "textureCompareLodOffset",
-        "textureCompareGrad",
-        "textureCompareGradOffset",
+        "textureProj",
+    }
+)
+
+
+PROJECTED_TEXTURE_BASIC_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
+        "textureProjOffset",
+    }
+)
+
+
+PROJECTED_TEXTURE_LOD_INTRINSIC_NAMES = frozenset(
+    {
+        "textureProjLod",
+    }
+)
+
+
+PROJECTED_TEXTURE_LOD_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
+        "textureProjLodOffset",
+    }
+)
+
+
+PROJECTED_TEXTURE_GRAD_INTRINSIC_NAMES = frozenset(
+    {
+        "textureProjGrad",
+    }
+)
+
+
+PROJECTED_TEXTURE_GRAD_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
+        "textureProjGradOffset",
+    }
+)
+
+
+PROJECTED_TEXTURE_INTRINSIC_NAMES = (
+    PROJECTED_TEXTURE_BASIC_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_BASIC_OFFSET_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_LOD_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_LOD_OFFSET_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_GRAD_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_GRAD_OFFSET_INTRINSIC_NAMES
+)
+
+
+PROJECTED_TEXTURE_OFFSET_INTRINSIC_NAMES = (
+    PROJECTED_TEXTURE_BASIC_OFFSET_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_LOD_OFFSET_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_GRAD_OFFSET_INTRINSIC_NAMES
+)
+
+
+PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES = frozenset(
+    {
         "textureCompareProj",
         "textureCompareProjOffset",
         "textureCompareProjLod",
@@ -632,28 +1132,304 @@ STORAGE_IMAGE_TEXTURE_COMPARISON_OPERATIONS = frozenset(
 )
 
 
-STORAGE_IMAGE_TEXTURE_OPERATIONS = frozenset(
+TEXTURE_COMPARE_BASIC_INTRINSIC_NAMES = frozenset(
+    {
+        "textureCompare",
+        "textureCompareProj",
+    }
+)
+
+
+TEXTURE_COMPARE_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
+        "textureCompareOffset",
+        "textureCompareProjOffset",
+    }
+)
+
+
+TEXTURE_COMPARE_LOD_INTRINSIC_NAMES = frozenset(
+    {
+        "textureCompareLod",
+        "textureCompareProjLod",
+    }
+)
+
+
+TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
+        "textureCompareLodOffset",
+        "textureCompareProjLodOffset",
+    }
+)
+
+
+TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES = frozenset(
+    {
+        "textureCompareGrad",
+        "textureCompareProjGrad",
+    }
+)
+
+
+TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
+        "textureCompareGradOffset",
+        "textureCompareProjGradOffset",
+    }
+)
+
+
+TEXTURE_COMPARE_OFFSET_OPERATION_NAMES = (
+    TEXTURE_COMPARE_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_COMPARE_INTRINSIC_NAMES = (
+    TEXTURE_COMPARE_BASIC_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_LOD_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_COMPARE_NON_PROJECTED_INTRINSIC_NAMES = (
+    TEXTURE_COMPARE_INTRINSIC_NAMES - PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
+)
+
+
+TEXTURE_COMPARE_NON_PROJECTED_OFFSET_OPERATION_NAMES = (
+    TEXTURE_COMPARE_OFFSET_OPERATION_NAMES - PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
+)
+
+
+TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES = frozenset(
     {
         "texture",
+    }
+)
+
+
+TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES = frozenset(
+    {
         "textureLod",
+    }
+)
+
+
+TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES = frozenset(
+    {
         "textureGrad",
+    }
+)
+
+
+TEXTURE_SAMPLE_INTRINSIC_NAMES = (
+    TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES
+    | TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES
+    | TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES
+)
+
+
+TEXTURE_SAMPLE_BASIC_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
         "textureOffset",
+    }
+)
+
+
+TEXTURE_SAMPLE_LOD_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
         "textureLodOffset",
+    }
+)
+
+
+TEXTURE_SAMPLE_GRAD_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
         "textureGradOffset",
-        "textureProj",
-        "textureProjOffset",
-        "textureProjLod",
-        "textureProjLodOffset",
-        "textureProjGrad",
-        "textureProjGradOffset",
+    }
+)
+
+
+TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES = (
+    TEXTURE_SAMPLE_BASIC_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_SAMPLE_LOD_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_SAMPLE_GRAD_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_SAMPLING_OFFSET_INTRINSIC_NAMES = (
+    TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES | PROJECTED_TEXTURE_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_GATHER_BASIC_INTRINSIC_NAMES = frozenset(
+    {
         "textureGather",
+    }
+)
+
+
+TEXTURE_GATHER_SINGLE_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
         "textureGatherOffset",
+    }
+)
+
+
+TEXTURE_GATHER_MULTI_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
         "textureGatherOffsets",
+    }
+)
+
+
+TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES = (
+    TEXTURE_GATHER_SINGLE_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_GATHER_MULTI_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_GATHER_INTRINSIC_NAMES = (
+    TEXTURE_GATHER_BASIC_INTRINSIC_NAMES | TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES = frozenset(
+    {
         "textureGatherCompare",
         "textureGatherCompareOffset",
+    }
+)
+
+
+TEXTURE_GATHER_COMPARE_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
+        "textureGatherCompareOffset",
+    }
+)
+
+
+TEXTURE_QUERY_LOD_INTRINSIC_NAMES = frozenset(
+    {
+        "textureQueryLod",
+    }
+)
+
+
+TEXTURE_QUERY_LEVELS_INTRINSIC_NAMES = frozenset(
+    {
+        "textureQueryLevels",
+    }
+)
+
+
+TEXTURE_QUERY_SIZE_INTRINSIC_NAMES = frozenset(
+    {
+        "textureSize",
+    }
+)
+
+
+TEXTURE_QUERY_SAMPLES_INTRINSIC_NAMES = frozenset(
+    {
+        "textureSamples",
+    }
+)
+
+
+TEXTURE_QUERY_INTRINSIC_NAMES = (
+    TEXTURE_QUERY_LOD_INTRINSIC_NAMES
+    | TEXTURE_QUERY_LEVELS_INTRINSIC_NAMES
+    | TEXTURE_QUERY_SIZE_INTRINSIC_NAMES
+    | TEXTURE_QUERY_SAMPLES_INTRINSIC_NAMES
+)
+
+
+RESOURCE_QUERY_SIZE_INTRINSIC_NAMES = frozenset(
+    {
+        "textureSize",
+        "imageSize",
+    }
+)
+
+
+RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES = frozenset(
+    {
+        "textureSamples",
+        "imageSamples",
+    }
+)
+
+
+TEXTURE_TEXEL_FETCH_BASIC_INTRINSIC_NAMES = frozenset(
+    {
         "texelFetch",
+    }
+)
+
+
+TEXTURE_TEXEL_FETCH_OFFSET_INTRINSIC_NAMES = frozenset(
+    {
         "texelFetchOffset",
     }
+)
+
+
+TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES = (
+    TEXTURE_TEXEL_FETCH_BASIC_INTRINSIC_NAMES
+    | TEXTURE_TEXEL_FETCH_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_OFFSET_INTRINSIC_NAMES = (
+    TEXTURE_SAMPLING_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_OFFSET_OPERATION_NAMES
+    | TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_GATHER_COMPARE_OFFSET_INTRINSIC_NAMES
+    | TEXTURE_TEXEL_FETCH_OFFSET_INTRINSIC_NAMES
+)
+
+
+TEXTURE_SAMPLING_INTRINSIC_NAMES = (
+    TEXTURE_SAMPLE_INTRINSIC_NAMES
+    | TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES
+    | PROJECTED_TEXTURE_INTRINSIC_NAMES
+)
+
+
+TEXTURE_RESOURCE_INTRINSIC_NAMES = (
+    TEXTURE_SAMPLING_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_INTRINSIC_NAMES
+    | TEXTURE_GATHER_INTRINSIC_NAMES
+    | TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+    | TEXTURE_QUERY_INTRINSIC_NAMES
+    | TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES
+)
+
+
+TEXTURE_IMPLICIT_SAMPLER_INTRINSIC_NAMES = (
+    TEXTURE_SAMPLING_INTRINSIC_NAMES
+    | TEXTURE_COMPARE_INTRINSIC_NAMES
+    | TEXTURE_GATHER_INTRINSIC_NAMES
+    | TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+    | TEXTURE_QUERY_LOD_INTRINSIC_NAMES
+)
+
+
+STORAGE_IMAGE_TEXTURE_COMPARISON_OPERATIONS = TEXTURE_COMPARE_INTRINSIC_NAMES
+
+
+STORAGE_IMAGE_TEXTURE_OPERATIONS = (
+    TEXTURE_SAMPLING_INTRINSIC_NAMES
+    | TEXTURE_GATHER_INTRINSIC_NAMES
+    | TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+    | TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES
 )
 
 
@@ -665,6 +1441,707 @@ def is_storage_image_texture_comparison_operation(operation):
 def is_storage_image_texture_operation(operation):
     """Return whether a texture intrinsic is unsupported for storage images."""
     return operation in STORAGE_IMAGE_TEXTURE_OPERATIONS
+
+
+def is_projected_texture_operation(operation):
+    """Return whether a texture intrinsic uses projected coordinates."""
+    return operation in PROJECTED_TEXTURE_INTRINSIC_NAMES
+
+
+def is_projected_texture_basic_operation(operation):
+    """Return whether a projected texture intrinsic uses implicit derivatives."""
+    return operation in PROJECTED_TEXTURE_BASIC_INTRINSIC_NAMES
+
+
+def is_projected_texture_basic_offset_operation(operation):
+    """Return whether a projected texture intrinsic uses offset and implicit derivatives."""
+    return operation in PROJECTED_TEXTURE_BASIC_OFFSET_INTRINSIC_NAMES
+
+
+def is_projected_texture_lod_operation(operation):
+    """Return whether a projected texture intrinsic uses explicit LOD."""
+    return operation in PROJECTED_TEXTURE_LOD_INTRINSIC_NAMES
+
+
+def is_projected_texture_lod_offset_operation(operation):
+    """Return whether a projected texture intrinsic uses explicit LOD and offset."""
+    return operation in PROJECTED_TEXTURE_LOD_OFFSET_INTRINSIC_NAMES
+
+
+def is_projected_texture_grad_operation(operation):
+    """Return whether a projected texture intrinsic uses explicit gradients."""
+    return operation in PROJECTED_TEXTURE_GRAD_INTRINSIC_NAMES
+
+
+def is_projected_texture_grad_offset_operation(operation):
+    """Return whether a projected texture intrinsic uses gradients and offset."""
+    return operation in PROJECTED_TEXTURE_GRAD_OFFSET_INTRINSIC_NAMES
+
+
+def is_projected_texture_compare_operation(operation):
+    """Return whether a texture compare intrinsic uses projected coordinates."""
+    return operation in PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
+
+
+def is_texture_compare_operation(operation):
+    """Return whether a texture intrinsic is a depth-compare operation."""
+    return operation in TEXTURE_COMPARE_INTRINSIC_NAMES
+
+
+def is_texture_compare_basic_operation(operation):
+    """Return whether a texture compare intrinsic uses base compare sampling."""
+    return operation in TEXTURE_COMPARE_BASIC_INTRINSIC_NAMES
+
+
+def is_texture_compare_lod_operation(operation):
+    """Return whether a texture compare intrinsic uses explicit LOD."""
+    return operation in TEXTURE_COMPARE_LOD_INTRINSIC_NAMES
+
+
+def is_texture_compare_grad_operation(operation):
+    """Return whether a texture compare intrinsic uses explicit gradients."""
+    return operation in TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES
+
+
+def is_texture_compare_non_projected_operation(operation):
+    """Return whether a texture compare intrinsic is not projected."""
+    return operation in TEXTURE_COMPARE_NON_PROJECTED_INTRINSIC_NAMES
+
+
+def is_texture_sample_operation(operation):
+    """Return whether a texture intrinsic is a basic sample operation."""
+    return operation in TEXTURE_SAMPLE_INTRINSIC_NAMES
+
+
+def is_texture_sampling_operation(operation):
+    """Return whether a texture intrinsic performs non-compare sampling."""
+    return operation in TEXTURE_SAMPLING_INTRINSIC_NAMES
+
+
+def is_texture_sample_basic_operation(operation):
+    """Return whether a texture sample intrinsic uses implicit derivatives."""
+    return operation in TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES
+
+
+def is_texture_sample_lod_operation(operation):
+    """Return whether a texture sample intrinsic uses explicit LOD."""
+    return operation in TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES
+
+
+def is_texture_sample_grad_operation(operation):
+    """Return whether a texture sample intrinsic uses explicit gradients."""
+    return operation in TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES
+
+
+def is_texture_sample_offset_operation(operation):
+    """Return whether a texture intrinsic is a sample-offset operation."""
+    return operation in TEXTURE_SAMPLE_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_sample_basic_offset_operation(operation):
+    """Return whether a texture sample intrinsic uses offset with implicit derivatives."""
+    return operation in TEXTURE_SAMPLE_BASIC_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_sample_lod_offset_operation(operation):
+    """Return whether a texture sample intrinsic uses explicit LOD and offset."""
+    return operation in TEXTURE_SAMPLE_LOD_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_sample_grad_offset_operation(operation):
+    """Return whether a texture sample intrinsic uses gradients and offset."""
+    return operation in TEXTURE_SAMPLE_GRAD_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_sampling_offset_operation(operation):
+    """Return whether a texture sampling intrinsic uses an offset argument."""
+    return operation in TEXTURE_SAMPLING_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_gather_operation(operation):
+    """Return whether a texture intrinsic is a gather operation."""
+    return operation in TEXTURE_GATHER_INTRINSIC_NAMES
+
+
+def is_texture_gather_basic_operation(operation):
+    """Return whether a texture gather intrinsic uses no offset arguments."""
+    return operation in TEXTURE_GATHER_BASIC_INTRINSIC_NAMES
+
+
+def is_texture_gather_single_offset_operation(operation):
+    """Return whether a texture gather intrinsic uses one offset argument."""
+    return operation in TEXTURE_GATHER_SINGLE_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_gather_multi_offset_operation(operation):
+    """Return whether a texture gather intrinsic uses four offset arguments."""
+    return operation in TEXTURE_GATHER_MULTI_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_gather_offset_operation(operation):
+    """Return whether a texture gather intrinsic uses offset argument(s)."""
+    return operation in TEXTURE_GATHER_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_gather_compare_operation(operation):
+    """Return whether a texture intrinsic is a gather-compare operation."""
+    return operation in TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES
+
+
+def is_texture_gather_compare_offset_operation(operation):
+    """Return whether a texture gather-compare intrinsic uses an offset."""
+    return operation in TEXTURE_GATHER_COMPARE_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_query_operation(operation):
+    """Return whether a texture intrinsic is a query operation."""
+    return operation in TEXTURE_QUERY_INTRINSIC_NAMES
+
+
+def is_texture_query_lod_operation(operation):
+    """Return whether a texture query intrinsic reads LOD."""
+    return operation in TEXTURE_QUERY_LOD_INTRINSIC_NAMES
+
+
+def is_texture_query_levels_operation(operation):
+    """Return whether a texture query intrinsic reads mip level count."""
+    return operation in TEXTURE_QUERY_LEVELS_INTRINSIC_NAMES
+
+
+def is_texture_size_query_operation(operation):
+    """Return whether a texture query intrinsic reads texture dimensions."""
+    return operation in TEXTURE_QUERY_SIZE_INTRINSIC_NAMES
+
+
+def is_texture_samples_query_operation(operation):
+    """Return whether a texture query intrinsic reads sample count."""
+    return operation in TEXTURE_QUERY_SAMPLES_INTRINSIC_NAMES
+
+
+def is_resource_size_query_operation(operation):
+    """Return whether a resource query intrinsic reads resource dimensions."""
+    return operation in RESOURCE_QUERY_SIZE_INTRINSIC_NAMES
+
+
+def is_resource_samples_query_operation(operation):
+    """Return whether a resource query intrinsic reads sample count."""
+    return operation in RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES
+
+
+def texture_query_lod_coordinate_type_error(
+    backend_name, operation, coordinate_name, coordinate_type
+):
+    """Return the diagnostic for non-floating textureQueryLod coordinates."""
+    return operation_argument_type_error(
+        backend_name,
+        "texture query",
+        operation,
+        "a floating",
+        "coordinate",
+        coordinate_name,
+        coordinate_type,
+    )
+
+
+def texture_query_lod_coordinate_dimension_error(
+    backend_name,
+    operation,
+    expected_dimension,
+    resource_type,
+    coordinate_name,
+    coordinate_type,
+):
+    """Return the diagnostic for wrong-dimensional textureQueryLod coordinates."""
+    return operation_dimension_argument_error(
+        backend_name,
+        "texture query",
+        operation,
+        expected_dimension,
+        "floating",
+        "coordinate",
+        resource_type,
+        coordinate_name,
+        coordinate_type,
+    )
+
+
+def is_texture_compare_offset_operation(operation):
+    """Return whether a texture compare intrinsic uses a direct offset."""
+    return operation in TEXTURE_COMPARE_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_compare_lod_offset_operation(operation):
+    """Return whether a texture compare intrinsic uses lod and offset arguments."""
+    return operation in TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_compare_grad_offset_operation(operation):
+    """Return whether a texture compare intrinsic uses gradients and an offset."""
+    return operation in TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+
+
+def is_texture_compare_any_offset_operation(operation):
+    """Return whether any texture compare intrinsic uses an offset."""
+    return operation in TEXTURE_COMPARE_OFFSET_OPERATION_NAMES
+
+
+def texture_compare_projected_coordinate_error(backend_name):
+    """Return the backend-specific projected compare coordinate diagnostic."""
+    return {
+        "GLSL": (
+            "requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow "
+            "vec4 projection coordinates"
+        ),
+        "DirectX": (
+            "requires Texture2D vec3/vec4 or Texture2DArray "
+            "vec4 projection coordinates"
+        ),
+        "Metal": (
+            "requires depth2d vec3/vec4 or depth2d_array " "vec4 projection coordinates"
+        ),
+    }[backend_name]
+
+
+def texture_compare_coordinate_error():
+    """Return the diagnostic for unsupported non-projected compare coordinates."""
+    return "requires supported shadow texture coordinates"
+
+
+def texture_coordinate_arguments_error():
+    """Return the diagnostic for missing texture/coordinate arguments."""
+    return "requires texture and coordinate arguments"
+
+
+def texture_compare_argument_error():
+    """Return the diagnostic for missing texture compare arguments."""
+    return "requires a compare argument"
+
+
+def texture_gather_capability_error():
+    """Return the diagnostic for unsupported texture gather resources."""
+    return "requires 2D, 2D-array, cube, or cube-array textures"
+
+
+def texture_gather_offset_capability_error():
+    """Return the diagnostic for unsupported texture gather offsets."""
+    return "offsets require 2D or 2D-array textures"
+
+
+def texture_gather_component_count_error():
+    """Return the diagnostic for too many basic gather component arguments."""
+    return "accepts at most one component argument"
+
+
+def texture_gather_offset_argument_count_error():
+    """Return the diagnostic for invalid single-offset gather argument counts."""
+    return "requires offset and optional component arguments"
+
+
+def texture_gather_offsets_argument_count_error():
+    """Return the diagnostic for invalid multi-offset gather argument counts."""
+    return "requires a typed offsets array or four offset arguments"
+
+
+def texture_gather_operation_error():
+    """Return the diagnostic for unhandled gather operation shapes."""
+    return "requires a gather operation"
+
+
+def texture_gather_component_literal_error():
+    """Return the diagnostic for invalid gather component literals."""
+    return "component literal must be 0, 1, 2, or 3"
+
+
+def texture_sample_offset_capability_error(backend_name):
+    """Return the backend-specific unsupported sample-offset diagnostic."""
+    return {
+        "GLSL": "offsets require 1D, 2D, 2D-array, 3D, " "or planar shadow samplers",
+        "DirectX": "offsets require 1D, 2D, 2D-array, or 3D textures",
+        "Metal": "offsets require 2D or 2D-array textures",
+    }[backend_name]
+
+
+def projected_texture_offset_capability_error():
+    """Return the diagnostic for unsupported projected texture offsets."""
+    return "offsets require 2D textures"
+
+
+def texture_sample_offset_extra_argument_count_error(operation, argument_count):
+    """Return the shape-specific sample-offset argument-count diagnostic reason."""
+    if is_texture_sample_basic_offset_operation(operation):
+        if argument_count in {1, 2}:
+            return None
+        return "requires offset and optional bias arguments"
+    if is_texture_sample_lod_offset_operation(operation):
+        if argument_count == 2:
+            return None
+        return "requires lod and offset arguments"
+    if is_texture_sample_grad_offset_operation(operation):
+        if argument_count == 3:
+            return None
+        return "requires gradient x, gradient y, and offset arguments"
+    return None
+
+
+def projected_texture_extra_argument_count_error(operation, argument_count):
+    """Return the shape-specific projected texture argument-count diagnostic reason."""
+    if is_projected_texture_basic_operation(operation):
+        if argument_count in {0, 1}:
+            return None
+        return "accepts at most one bias argument"
+    if is_projected_texture_basic_offset_operation(operation):
+        if argument_count in {1, 2}:
+            return None
+        return "requires offset and optional bias arguments"
+    if is_projected_texture_lod_operation(operation):
+        if argument_count == 1:
+            return None
+        return "requires one lod argument"
+    if is_projected_texture_lod_offset_operation(operation):
+        if argument_count == 2:
+            return None
+        return "requires lod and offset arguments"
+    if is_projected_texture_grad_operation(operation):
+        if argument_count == 2:
+            return None
+        return "requires gradient x and gradient y arguments"
+    if is_projected_texture_grad_offset_operation(operation):
+        if argument_count == 3:
+            return None
+        return "requires gradient x, gradient y, and offset arguments"
+    return None
+
+
+def unsupported_texture_offset_operation_error():
+    """Return the diagnostic for unhandled texture offset operation shapes."""
+    return "is not a supported texture offset operation"
+
+
+def unsupported_projected_texture_operation_error():
+    """Return the diagnostic for unhandled projected texture operation shapes."""
+    return "unsupported projected texture operation"
+
+
+def texture_compare_projected_lod_array_error():
+    """Return the diagnostic for unsupported projected array compare LOD."""
+    return "projected explicit LOD is not supported for sampler2DArrayShadow"
+
+
+def unsupported_texture_compare_operation_error(projected=False):
+    """Return the diagnostic for unhandled compare operation shapes."""
+    if projected:
+        return "is not a supported projected shadow compare operation"
+    return "is not a supported shadow compare operation"
+
+
+def texture_compare_offset_capability_error(backend_name):
+    """Return the backend-specific unsupported compare-offset diagnostic."""
+    return {
+        "GLSL": "offsets require 2D or 2D-array shadow samplers",
+        "DirectX": "offsets require 2D or 2D-array textures",
+        "Metal": "offsets require 2D or 2D-array depth textures",
+    }[backend_name]
+
+
+def texture_compare_extra_argument_count_error(operation, argument_count):
+    """Return the shape-specific compare argument-count diagnostic reason."""
+    if is_texture_compare_basic_operation(operation):
+        expected_count = 1
+        reason = "accepts no extra arguments"
+    elif is_texture_compare_offset_operation(operation):
+        expected_count = 2
+        reason = "requires compare and offset arguments"
+    elif is_texture_compare_lod_operation(operation):
+        expected_count = 2
+        reason = "requires compare and lod arguments"
+    elif is_texture_compare_lod_offset_operation(operation):
+        expected_count = 3
+        reason = "requires compare, lod, and offset arguments"
+    elif is_texture_compare_grad_operation(operation):
+        expected_count = 3
+        reason = "requires compare, gradient x, and gradient y arguments"
+    elif is_texture_compare_grad_offset_operation(operation):
+        expected_count = 4
+        reason = "requires compare, gradient x, gradient y, and offset arguments"
+    else:
+        return None
+    if argument_count == expected_count:
+        return None
+    return reason
+
+
+def texture_gather_compare_extra_argument_count_error(operation, argument_count):
+    """Return the shape-specific gather-compare argument-count diagnostic reason."""
+    if is_texture_gather_compare_offset_operation(operation):
+        expected_count = 2
+        reason = "requires compare and offset arguments"
+    elif is_texture_gather_compare_operation(operation):
+        expected_count = 1
+        reason = "accepts no extra arguments"
+    else:
+        return None
+    if argument_count == expected_count:
+        return None
+    return reason
+
+
+def is_texture_compare_non_projected_offset_operation(operation):
+    """Return whether a non-projected texture compare intrinsic uses an offset."""
+    return operation in TEXTURE_COMPARE_NON_PROJECTED_OFFSET_OPERATION_NAMES
+
+
+def is_texel_fetch_offset_operation(operation):
+    """Return whether a texel-fetch intrinsic uses an offset."""
+    return operation in TEXTURE_TEXEL_FETCH_OFFSET_INTRINSIC_NAMES
+
+
+def is_texel_fetch_operation(operation):
+    """Return whether a texture intrinsic fetches an explicit texel."""
+    return operation in TEXTURE_TEXEL_FETCH_INTRINSIC_NAMES
+
+
+def is_texel_fetch_basic_operation(operation):
+    """Return whether a texel-fetch intrinsic has no offset argument."""
+    return operation in TEXTURE_TEXEL_FETCH_BASIC_INTRINSIC_NAMES
+
+
+def is_texture_offset_operation(operation):
+    """Return whether a texture intrinsic has offset argument semantics."""
+    return operation in TEXTURE_OFFSET_INTRINSIC_NAMES
+
+
+def texture_resource_offset_dimension_key(operation, collapse_compare_offsets=False):
+    """Return the descriptor key used to validate an operation's offset argument."""
+    if is_texture_gather_offset_operation(operation):
+        return "gather_offset_dimension"
+    if is_texture_gather_compare_offset_operation(operation):
+        return "gather_compare_offset_dimension"
+    if collapse_compare_offsets:
+        if is_texture_compare_any_offset_operation(operation):
+            return "compare_offset_dimension"
+    else:
+        if is_texture_compare_offset_operation(operation):
+            return "compare_offset_dimension"
+        if is_texture_compare_lod_offset_operation(operation):
+            return "compare_lod_offset_dimension"
+        if is_texture_compare_grad_offset_operation(operation):
+            return "compare_grad_offset_dimension"
+    if is_texel_fetch_offset_operation(operation):
+        return "texel_fetch_offset_dimension"
+    if is_texture_sampling_offset_operation(operation):
+        return "sample_offset_dimension"
+    return "offset_dimension"
+
+
+def is_texture_resource_operation(operation):
+    """Return whether an intrinsic operates on texture resources."""
+    return operation in TEXTURE_RESOURCE_INTRINSIC_NAMES
+
+
+def texture_image_resource_operation_names(image_resource_intrinsic_names):
+    """Return texture and image resource operation names for resource validation."""
+    return (
+        TEXTURE_RESOURCE_INTRINSIC_NAMES
+        | frozenset(image_resource_intrinsic_names)
+        | {"imageSamples"}
+    )
+
+
+def is_image_resource_operation(operation, image_resource_intrinsic_names):
+    """Return whether an intrinsic operates on storage image resources."""
+    return operation in image_resource_intrinsic_names
+
+
+def is_texture_implicit_sampler_operation(operation):
+    """Return whether a texture intrinsic may require an implicit sampler."""
+    return operation in TEXTURE_IMPLICIT_SAMPLER_INTRINSIC_NAMES
+
+
+def unsupported_texel_fetch_expression(
+    backend_name, operation, resource_type, zero_value
+):
+    """Return an unsupported texel fetch fallback expression."""
+    return (
+        f"/* unsupported {backend_name} texel fetch: "
+        f"{operation} on {resource_type} */ {zero_value}"
+    )
+
+
+def texture_vector_zero_value(backend_name):
+    """Return the backend vector fallback value for texture diagnostics."""
+    if backend_name == "GLSL":
+        return "vec4(0.0)"
+    return "float4(0.0)"
+
+
+def texture_scalar_zero_value(backend_name):
+    """Return the backend scalar fallback value for texture diagnostics."""
+    return "0.0"
+
+
+def texture_query_lod_zero_value(backend_name):
+    """Return the backend vector fallback value for textureQueryLod diagnostics."""
+    if backend_name == "GLSL":
+        return "vec2(0.0)"
+    return "float2(0.0)"
+
+
+def texture_query_lod_coordinate_swizzle(backend_name, texture_type):
+    """Return the non-layer coordinate swizzle for textureQueryLod resources."""
+    texture_type = str(texture_type or "")
+    if backend_name == "GLSL":
+        if texture_type in {
+            "sampler1DArray",
+            "isampler1DArray",
+            "usampler1DArray",
+        }:
+            return "x"
+        if texture_type in {
+            "sampler2DArray",
+            "sampler2DArrayShadow",
+            "isampler2DArray",
+            "usampler2DArray",
+        }:
+            return "xy"
+        if texture_type in {
+            "samplerCubeArray",
+            "samplerCubeArrayShadow",
+            "isamplerCubeArray",
+            "usamplerCubeArray",
+        }:
+            return "xyz"
+    elif backend_name == "DirectX":
+        if texture_type == "Texture1DArray":
+            return "x"
+        if texture_type == "Texture2DArray":
+            return "xy"
+        if texture_type == "TextureCubeArray":
+            return "xyz"
+    elif backend_name == "Metal":
+        if texture_type.startswith("texture1d_array<"):
+            return "x"
+        if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
+            return "xy"
+        if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
+            return "xyz"
+    return None
+
+
+def texel_fetch_zero_value(backend_name):
+    """Return the backend fallback value for unsupported texel fetches."""
+    return texture_vector_zero_value(backend_name)
+
+
+def unsupported_cube_texel_fetch_expression(backend_name, operation, resource_type):
+    """Return an unsupported cube texel fetch fallback expression."""
+    return unsupported_texel_fetch_expression(
+        backend_name, operation, resource_type, texel_fetch_zero_value(backend_name)
+    )
+
+
+def unsupported_texel_fetch_offset_expression(backend_name, reason, zero_value):
+    """Return an unsupported texel-fetch offset fallback expression."""
+    return (
+        f"/* unsupported {backend_name} texel fetch offset: "
+        f"{reason} */ {zero_value}"
+    )
+
+
+def texel_fetch_offset_multisample_reason(backend_name, texture_type=None):
+    """Return the diagnostic reason for multisample texelFetchOffset."""
+    if backend_name == "GLSL":
+        return f"multisample texture {texture_type} does not support offsets"
+    return "multisample textures do not support offsets"
+
+
+def unsupported_multisample_texel_fetch_offset_expression(
+    backend_name, texture_type=None
+):
+    """Return an unsupported multisample texelFetchOffset fallback expression."""
+    return unsupported_texel_fetch_offset_expression(
+        backend_name,
+        texel_fetch_offset_multisample_reason(backend_name, texture_type),
+        texel_fetch_zero_value(backend_name),
+    )
+
+
+def unsupported_texture_offset_expression(backend_name, operation, reason, zero_value):
+    """Return an unsupported texture offset fallback expression."""
+    return (
+        f"/* unsupported {backend_name} texture offset: "
+        f"{operation} {reason} */ {zero_value}"
+    )
+
+
+def unsupported_texture_offset_call_expression(backend_name, operation, reason):
+    """Return an unsupported texture offset fallback with backend zero value."""
+    return unsupported_texture_offset_expression(
+        backend_name, operation, reason, texture_vector_zero_value(backend_name)
+    )
+
+
+def unsupported_projected_texture_expression(
+    backend_name, operation, reason, zero_value
+):
+    """Return an unsupported projected texture fallback expression."""
+    return (
+        f"/* unsupported {backend_name} projected texture: "
+        f"{operation} {reason} */ {zero_value}"
+    )
+
+
+def unsupported_projected_texture_call_expression(backend_name, operation, reason):
+    """Return an unsupported projected texture fallback with backend zero value."""
+    return unsupported_projected_texture_expression(
+        backend_name, operation, reason, texture_vector_zero_value(backend_name)
+    )
+
+
+def unsupported_texture_compare_expression(backend_name, operation, reason, zero_value):
+    """Return an unsupported texture compare fallback expression."""
+    return (
+        f"/* unsupported {backend_name} texture compare: "
+        f"{operation} {reason} */ {zero_value}"
+    )
+
+
+def unsupported_texture_compare_scalar_expression(backend_name, operation, reason):
+    """Return an unsupported texture compare fallback with scalar zero."""
+    return unsupported_texture_compare_expression(
+        backend_name, operation, reason, texture_scalar_zero_value(backend_name)
+    )
+
+
+def unsupported_texture_gather_expression(backend_name, operation, reason, zero_value):
+    """Return an unsupported texture gather fallback expression."""
+    return (
+        f"/* unsupported {backend_name} texture gather: "
+        f"{operation} {reason} */ {zero_value}"
+    )
+
+
+def unsupported_texture_gather_call_expression(backend_name, operation, reason):
+    """Return an unsupported texture gather fallback with backend zero value."""
+    return unsupported_texture_gather_expression(
+        backend_name, operation, reason, texture_vector_zero_value(backend_name)
+    )
+
+
+def unsupported_texture_gather_compare_expression(
+    backend_name, operation, reason, zero_value
+):
+    """Return an unsupported texture gather-compare fallback expression."""
+    return (
+        f"/* unsupported {backend_name} texture gather compare: "
+        f"{operation} {reason} */ {zero_value}"
+    )
+
+
+def unsupported_texture_gather_compare_call_expression(backend_name, operation, reason):
+    """Return an unsupported texture gather-compare fallback with backend zero value."""
+    return unsupported_texture_gather_compare_expression(
+        backend_name, operation, reason, texture_vector_zero_value(backend_name)
+    )
 
 
 def component_count_mismatch(expected_count, actual_count, allow_scalar=True):
@@ -1132,6 +2609,21 @@ def image_multisample_sample_type_error(
         f"{backend_name} multisample image operation '{func_name}' requires a "
         f"scalar integer sample index argument: {sample_name} has type "
         f"{sample_type_name}"
+    )
+
+
+def texture_multisample_sample_type_error(
+    backend_name, func_name, sample_name, sample_type_name
+):
+    """Return a backend multisample texel-fetch sample-index diagnostic."""
+    return operation_argument_type_error(
+        backend_name,
+        "multisample texel fetch",
+        func_name,
+        "a scalar integer",
+        "sample index",
+        sample_name,
+        sample_type_name,
     )
 
 

@@ -216,6 +216,32 @@ def test_if_statement():
         pytest.fail("If statement codegen not implemented.")
 
 
+def test_sampler3d_type_maps_to_texture3d():
+    code = """
+    shader VolumeShader {
+        sampler3D volumeMap;
+        fragment {
+            vec4 sampleVolume(sampler3D tex, vec3 uvw) {
+                return texture(tex, uvw);
+            }
+            vec4 main() @ gl_FragColor {
+                vec3 uvw = vec3(0.25, 0.5, 0.75);
+                return sampleVolume(volumeMap, uvw);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var volumeMap: Texture3D" in generated_code
+    assert "fn sampleVolume(tex: Texture3D, uvw:" in generated_code
+    assert "return sample(tex, uvw)" in generated_code
+    assert "sampler3D" not in generated_code
+
+
 def test_for_statement():
     code = """
     shader main {
@@ -706,6 +732,7 @@ def test_builtin_function_call_names_are_mapped():
                 float w = mod(5.0, 2.0);
                 float sat = saturate(1.25);
                 float satNested = saturate(frac(1.75));
+                vec2 satVec = saturate(vec2(-1.0, 2.0));
                 float inv = inversesqrt(x);
                 vec2 invVec = inversesqrt(vec2(4.0, 9.0));
                 vec3 v = vec3(5.0, 7.0, 9.0);
@@ -729,6 +756,11 @@ def test_builtin_function_call_names_are_mapped():
         "var satNested: Float32 = "
         "clamp(_crossgl_fract_f32(1.75), 0.0, 1.0)" in generated_code
     )
+    assert (
+        "var satVec: SIMD[DType.float32, 2] = "
+        "_crossgl_saturate_f32_2_2("
+        "SIMD[DType.float32, 2]((-1.0), 2.0))" in generated_code
+    )
     assert "var inv: Float32 = rsqrt(x)" in generated_code
     assert (
         "var invVec: SIMD[DType.float32, 2] = "
@@ -748,6 +780,30 @@ def test_builtin_function_call_names_are_mapped():
     assert "inversesqrt(" not in generated_code
     assert "var w: Float32 = mod(" not in generated_code
     assert "var i: Int32 = fmod(" not in generated_code
+
+
+def test_user_defined_mix_function_is_not_lowered_to_lerp():
+    code = """
+    shader main {
+        compute {
+            float mix(float x, float y, float t) {
+                return x + y + t;
+            }
+
+            void main() {
+                float adjusted = mix(0.0, 1.0, 0.25);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn mix(x: Float32, y: Float32, t: Float32) -> Float32:" in generated_code
+    assert "var adjusted: Float32 = mix(0.0, 1.0, 0.25)" in generated_code
+    assert "var adjusted: Float32 = lerp(0.0, 1.0, 0.25)" not in generated_code
 
 
 def test_fract_scalar_builtin_lowers_to_helper():
@@ -809,6 +865,59 @@ def test_saturate_integer_input_is_left_unmapped():
     generated_code = generate_code(ast)
 
     assert "var x: Int32 = saturate(n)" in generated_code
+    assert "clamp(n, 0.0, 1.0)" not in generated_code
+
+
+def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                vec3 v = saturate(vec3(-1.0, 0.5, 2.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "fn _crossgl_saturate_f32_3_4(v: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:"
+    ) in generated_code
+    assert (
+        "return SIMD[DType.float32, 4]("
+        "clamp(v[0], 0.0, 1.0), clamp(v[1], 0.0, 1.0), "
+        "clamp(v[2], 0.0, 1.0), 0.0)"
+    ) in generated_code
+    assert (
+        "var v: SIMD[DType.float32, 4] = "
+        "_crossgl_saturate_f32_3_4("
+        "SIMD[DType.float32, 4]((-1.0), 0.5, 2.0, 0.0))"
+    ) in generated_code
+    assert "saturate(" not in generated_code
+
+
+def test_saturate_integer_vector_input_is_left_unmapped():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                ivec2 n = ivec2(1, 2);
+                ivec2 x = saturate(n);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var x: SIMD[DType.int32, 2] = saturate(n)" in generated_code
+    assert "_crossgl_saturate" not in generated_code
     assert "clamp(n, 0.0, 1.0)" not in generated_code
 
 

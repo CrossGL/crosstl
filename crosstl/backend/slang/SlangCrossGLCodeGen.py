@@ -59,8 +59,13 @@ class SlangToCrossGLConverter:
             "bool4": "bvec4",
             "float": "float",
             "double": "double",
+            "Texture1D": "sampler1D",
             "Texture2D": "sampler2D",
+            "Texture2DArray": "sampler2DArray",
+            "Texture2DMS": "sampler2DMS",
+            "Texture3D": "sampler3D",
             "TextureCube": "samplerCube",
+            "TextureCubeArray": "samplerCubeArray",
         }
         self.function_map = {
             "frac": "fract",
@@ -434,7 +439,10 @@ class SlangToCrossGLConverter:
                 and expr.name not in self.user_function_names
             ):
                 return f"clamp({args}, 0.0, 1.0)"
-            name = self.function_map.get(expr.name, expr.name)
+            if expr.name in self.user_function_names:
+                name = expr.name
+            else:
+                name = self.function_map.get(expr.name, expr.name)
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)

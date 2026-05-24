@@ -93,5 +93,226 @@ def test_one_dimensional_sampler_tokenization():
     assert ("SAMPLER1DARRAY", "sampler1DArray") in tokens
 
 
+def test_integer_one_dimensional_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform isampler1D signedRamp;
+        uniform usampler1D unsignedRamp;
+        uniform isampler1DArray signedRamps;
+        uniform usampler1DArray unsignedRamps;
+        """)
+
+    assert ("ISAMPLER1D", "isampler1D") in tokens
+    assert ("USAMPLER1D", "usampler1D") in tokens
+    assert ("ISAMPLER1DARRAY", "isampler1DArray") in tokens
+    assert ("USAMPLER1DARRAY", "usampler1DArray") in tokens
+
+
+def test_integer_2d_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform isampler2D signedTex;
+        uniform usampler2D unsignedTex;
+        """)
+
+    assert ("ISAMPLER2D", "isampler2D") in tokens
+    assert ("USAMPLER2D", "usampler2D") in tokens
+
+
+def test_integer_2d_array_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform isampler2DArray signedLayers;
+        uniform usampler2DArray unsignedLayers;
+        """)
+
+    assert ("ISAMPLER2DARRAY", "isampler2DArray") in tokens
+    assert ("USAMPLER2DARRAY", "usampler2DArray") in tokens
+
+
+def test_integer_multisample_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform isampler2DMS signedSamples;
+        uniform usampler2DMS unsignedSamples;
+        uniform isampler2DMSArray signedSampleLayers;
+        uniform usampler2DMSArray unsignedSampleLayers;
+        """)
+
+    assert ("ISAMPLER2DMS", "isampler2DMS") in tokens
+    assert ("USAMPLER2DMS", "usampler2DMS") in tokens
+    assert ("ISAMPLER2DMSARRAY", "isampler2DMSArray") in tokens
+    assert ("USAMPLER2DMSARRAY", "usampler2DMSArray") in tokens
+
+
+def test_integer_3d_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform isampler3D signedVolume;
+        uniform usampler3D unsignedVolume;
+        """)
+
+    assert ("ISAMPLER3D", "isampler3D") in tokens
+    assert ("USAMPLER3D", "usampler3D") in tokens
+
+
+def test_integer_cube_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform isamplerCube signedCube;
+        uniform usamplerCube unsignedCube;
+        """)
+
+    assert ("ISAMPLERCUBE", "isamplerCube") in tokens
+    assert ("USAMPLERCUBE", "usamplerCube") in tokens
+
+
+def test_integer_cube_array_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform isamplerCubeArray signedCubeLayers;
+        uniform usamplerCubeArray unsignedCubeLayers;
+        """)
+
+    assert ("ISAMPLERCUBEARRAY", "isamplerCubeArray") in tokens
+    assert ("USAMPLERCUBEARRAY", "usamplerCubeArray") in tokens
+
+
+def test_integer_sampler_buffer_tokenization():
+    tokens = tokenize_code("""
+        uniform isamplerBuffer signedData;
+        uniform usamplerBuffer unsignedData;
+        """)
+
+    assert ("ISAMPLERBUFFER", "isamplerBuffer") in tokens
+    assert ("USAMPLERBUFFER", "usamplerBuffer") in tokens
+
+
+def test_typed_image_buffer_tokenization():
+    tokens = tokenize_code("""
+        uniform iimageBuffer signedData;
+        uniform uimageBuffer unsignedData;
+        """)
+
+    assert ("IIMAGEBUFFER", "iimageBuffer") in tokens
+    assert ("UIMAGEBUFFER", "uimageBuffer") in tokens
+
+
+def test_shadow_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform sampler1DShadow shadowRamp;
+        uniform sampler1DArrayShadow shadowRamps;
+        uniform sampler2DShadow shadowMap;
+        uniform sampler2DArrayShadow shadowArray;
+        uniform samplerCubeShadow shadowCube;
+        uniform samplerCubeArrayShadow shadowCubeArray;
+        """)
+
+    assert ("SAMPLER1DSHADOW", "sampler1DShadow") in tokens
+    assert ("SAMPLER1DARRAYSHADOW", "sampler1DArrayShadow") in tokens
+    assert ("SAMPLER2DSHADOW", "sampler2DShadow") in tokens
+    assert ("SAMPLER2DARRAYSHADOW", "sampler2DArrayShadow") in tokens
+    assert ("SAMPLERCUBESHADOW", "samplerCubeShadow") in tokens
+    assert ("SAMPLERCUBEARRAYSHADOW", "samplerCubeArrayShadow") in tokens
+
+
+def test_subpass_input_tokenization():
+    tokens = tokenize_code("""
+        uniform subpassInput colorInput;
+        uniform subpassInputMS msColorInput;
+        """)
+
+    assert ("SUBPASSINPUT", "subpassInput") in tokens
+    assert ("SUBPASSINPUTMS", "subpassInputMS") in tokens
+
+
+def test_atomic_uint_tokenization():
+    tokens = tokenize_code("""
+        uniform atomic_uint counter;
+        """)
+
+    assert ("ATOMICUINT", "atomic_uint") in tokens
+
+
+def test_standalone_sampler_tokenization():
+    tokens = tokenize_code("""
+        uniform sampler compareSampler;
+        uniform sampler samplers[4];
+        """)
+
+    assert ("SAMPLER", "sampler") in tokens
+
+
+def test_typed_2d_image_tokenization():
+    tokens = tokenize_code("""
+        uniform iimage2D signedImage;
+        uniform uimage2D counters;
+        """)
+
+    assert ("IIMAGE2D", "iimage2D") in tokens
+    assert ("UIMAGE2D", "uimage2D") in tokens
+
+
+def test_typed_1d_image_tokenization():
+    tokens = tokenize_code("""
+        uniform iimage1D signedLine;
+        uniform uimage1D counters;
+        uniform iimage1DArray signedLayers;
+        uniform uimage1DArray layerCounters;
+        """)
+
+    assert ("IIMAGE1D", "iimage1D") in tokens
+    assert ("UIMAGE1D", "uimage1D") in tokens
+    assert ("IIMAGE1DARRAY", "iimage1DArray") in tokens
+    assert ("UIMAGE1DARRAY", "uimage1DArray") in tokens
+
+
+def test_typed_3d_image_tokenization():
+    tokens = tokenize_code("""
+        uniform iimage3D signedVolume;
+        uniform uimage3D counters;
+        """)
+
+    assert ("IIMAGE3D", "iimage3D") in tokens
+    assert ("UIMAGE3D", "uimage3D") in tokens
+
+
+def test_typed_cube_image_tokenization():
+    tokens = tokenize_code("""
+        uniform iimageCube signedCube;
+        uniform uimageCube cubeCounters;
+        uniform iimageCubeArray signedCubeLayers;
+        uniform uimageCubeArray cubeLayerCounters;
+        """)
+
+    assert ("IIMAGECUBE", "iimageCube") in tokens
+    assert ("UIMAGECUBE", "uimageCube") in tokens
+    assert ("IIMAGECUBEARRAY", "iimageCubeArray") in tokens
+    assert ("UIMAGECUBEARRAY", "uimageCubeArray") in tokens
+
+
+def test_typed_2d_array_image_tokenization():
+    tokens = tokenize_code("""
+        uniform iimage2DArray signedLayers;
+        uniform uimage2DArray counters;
+        """)
+
+    assert ("IIMAGE2DARRAY", "iimage2DArray") in tokens
+    assert ("UIMAGE2DARRAY", "uimage2DArray") in tokens
+
+
+def test_typed_2d_ms_image_tokenization():
+    tokens = tokenize_code("""
+        uniform iimage2DMS signedSamples;
+        uniform uimage2DMS sampleCounters;
+        """)
+
+    assert ("IIMAGE2DMS", "iimage2DMS") in tokens
+    assert ("UIMAGE2DMS", "uimage2DMS") in tokens
+
+
+def test_typed_2d_ms_array_image_tokenization():
+    tokens = tokenize_code("""
+        uniform iimage2DMSArray signedLayers;
+        uniform uimage2DMSArray sampleCounters;
+        """)
+
+    assert ("IIMAGE2DMSARRAY", "iimage2DMSArray") in tokens
+    assert ("UIMAGE2DMSARRAY", "uimage2DMSArray") in tokens
+
+
 if __name__ == "__main__":
     pytest.main()

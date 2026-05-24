@@ -234,6 +234,141 @@ def evaluate_literal_int_expression(
         if operator == "*":
             return left * right
 
+    if "Cast" in class_name:
+        return _evaluate_literal_int_cast(
+            getattr(expr, "target_type", None),
+            getattr(expr, "expression", None),
+            constants,
+        )
+
+    if "Constructor" in class_name:
+        return _evaluate_literal_int_constructor(
+            getattr(expr, "constructor_type", None),
+            getattr(expr, "arguments", []),
+            constants,
+        )
+
+    if "FunctionCall" in class_name:
+        return _evaluate_literal_int_constructor(
+            getattr(expr, "function", getattr(expr, "name", None)),
+            getattr(expr, "arguments", getattr(expr, "args", [])),
+            constants,
+        )
+
+    if "MemberAccess" in class_name or "Swizzle" in class_name:
+        return _evaluate_literal_int_swizzle(expr, constants)
+
+    return None
+
+
+def _evaluate_literal_int_cast(target_type, expression, constants) -> Optional[int]:
+    """Evaluate a narrow integer cast expression when it is compile-time safe."""
+    type_name = _literal_type_name(target_type)
+    value = evaluate_literal_int_expression(expression, constants)
+    return _coerce_literal_int(type_name, value)
+
+
+def _evaluate_literal_int_constructor(
+    constructor, arguments, constants
+) -> Optional[int]:
+    """Evaluate scalar integer constructors used as constant integer expressions."""
+    type_name = _literal_type_name(constructor)
+    args = list(arguments or [])
+    if len(args) != 1:
+        return None
+    value = evaluate_literal_int_expression(args[0], constants)
+    return _coerce_literal_int(type_name, value)
+
+
+def _evaluate_literal_int_swizzle(expr, constants) -> Optional[int]:
+    """Evaluate scalar swizzles from literal integer vector constructors."""
+    components = getattr(expr, "member", None)
+    vector_expr = getattr(expr, "object_expr", None)
+    if components is None:
+        components = getattr(expr, "components", None)
+        vector_expr = getattr(expr, "vector_expr", None)
+    if not isinstance(components, str) or len(components) != 1:
+        return None
+
+    component_index = _swizzle_component_index(components)
+    if component_index is None:
+        return None
+
+    class_name = vector_expr.__class__.__name__ if vector_expr is not None else ""
+    if "FunctionCall" in class_name:
+        type_name = _literal_type_name(
+            getattr(vector_expr, "function", getattr(vector_expr, "name", None))
+        )
+        args = getattr(vector_expr, "arguments", getattr(vector_expr, "args", []))
+    elif "Constructor" in class_name:
+        type_name = _literal_type_name(getattr(vector_expr, "constructor_type", None))
+        args = getattr(vector_expr, "arguments", [])
+    else:
+        return None
+
+    if not _is_integer_vector_type(type_name):
+        return None
+    args = list(args or [])
+    if len(args) == 1:
+        arg_index = 0
+    elif component_index < len(args):
+        arg_index = component_index
+    else:
+        return None
+
+    value = evaluate_literal_int_expression(args[arg_index], constants)
+    return _coerce_literal_int(_integer_vector_element_type(type_name), value)
+
+
+def _literal_type_name(node) -> Optional[str]:
+    """Return a compact type/function name for literal expression decisions."""
+    if isinstance(node, str):
+        return node
+    if node is None:
+        return None
+    name = getattr(node, "name", None)
+    if isinstance(name, str):
+        return name
+    identifier = getattr(node, "identifier", None)
+    if isinstance(identifier, str):
+        return identifier
+    return None
+
+
+def _coerce_literal_int(type_name, value) -> Optional[int]:
+    """Return an integer value when the target type preserves integer indexing."""
+    if value is None:
+        return None
+    if type_name in {"int", "int32_t", "long"}:
+        return value
+    if type_name in {"uint", "uint32_t", "unsigned", "ulong"}:
+        return value if value >= 0 else None
+    return None
+
+
+def _is_integer_vector_type(type_name) -> bool:
+    return isinstance(type_name, str) and (
+        type_name in {"ivec2", "ivec3", "ivec4", "uvec2", "uvec3", "uvec4"}
+        or type_name in {"int2", "int3", "int4", "uint2", "uint3", "uint4"}
+    )
+
+
+def _integer_vector_element_type(type_name) -> Optional[str]:
+    if not isinstance(type_name, str):
+        return None
+    if type_name.startswith(("ivec", "int")):
+        return "int"
+    if type_name.startswith(("uvec", "uint")):
+        return "uint"
+    return None
+
+
+def _swizzle_component_index(component) -> Optional[int]:
+    component_groups = ("xyzw", "rgba", "stpq")
+    for group in component_groups:
+        index = group.find(component)
+        if index != -1:
+            return index
     return None
 
 

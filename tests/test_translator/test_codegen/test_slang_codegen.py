@@ -157,6 +157,33 @@ def test_mix_builtin_lowers_to_lerp_without_affecting_resources_or_constructors(
     assert "texture(" not in generated_code
 
 
+def test_user_defined_texture_function_shadows_resource_lowering():
+    code = """
+    shader TextureShadow {
+        sampler2d tex;
+
+        fragment {
+            vec4 texture(sampler2d src, vec2 uv) {
+                return vec4(uv, 0.0, 1.0);
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.5);
+                vec4 color = texture(tex, uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 texture(Sampler2D<float4> src, float2 uv)" in generated_code
+    assert "float4 color = texture(tex, uv);" in generated_code
+    assert "float4 color = tex.Sample(uv);" not in generated_code
+
+
 def test_mod_builtin_lowers_to_slang_fmod():
     code = """
     shader BuiltinGap {
@@ -221,6 +248,118 @@ def test_inversesqrt_builtin_lowers_to_slang_rsqrt():
     assert "float inv = rsqrt(x);" in generated_code
     assert "float2 invVec = rsqrt(float2(4.0, 9.0));" in generated_code
     assert "inversesqrt(" not in generated_code
+
+
+def test_saturate_builtin_lowers_to_slang_clamp():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float saturated = saturate(1.25);
+                vec2 saturatedVec = saturate(vec2(-1.0, 2.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float saturated = clamp(1.25, 0.0, 1.0);" in generated_code
+    assert "float2 saturatedVec = clamp(float2(-1.0, 2.0), 0.0, 1.0);" in generated_code
+    assert "saturate(" not in generated_code
+
+
+def test_user_defined_saturate_function_is_not_lowered_to_clamp():
+    code = """
+    shader BuiltinGap {
+        compute {
+            float saturate(float x) {
+                return x + 1.0;
+            }
+
+            void main() {
+                float adjusted = saturate(0.5);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float saturate(float x)" in generated_code
+    assert "float adjusted = saturate(0.5);" in generated_code
+    assert "float adjusted = clamp(0.5, 0.0, 1.0);" not in generated_code
+
+
+def test_user_defined_mix_function_is_not_lowered_to_lerp():
+    code = """
+    shader BuiltinGap {
+        compute {
+            float mix(float x, float y, float t) {
+                return x + y + t;
+            }
+
+            void main() {
+                float adjusted = mix(0.0, 1.0, 0.25);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float mix(float x, float y, float t)" in generated_code
+    assert "float adjusted = mix(0.0, 1.0, 0.25);" in generated_code
+    assert "float adjusted = lerp(0.0, 1.0, 0.25);" not in generated_code
+
+
+def test_workgroup_barrier_lowers_to_slang_group_sync():
+    code = """
+    shader BarrierGap {
+        compute {
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "GroupMemoryBarrierWithGroupSync();" in generated_code
+    assert "workgroupBarrier();" not in generated_code
+
+
+def test_user_defined_workgroup_barrier_is_not_lowered_to_group_sync():
+    code = """
+    shader BarrierGap {
+        compute {
+            void workgroupBarrier() {
+                return;
+            }
+
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void workgroupBarrier()" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
 
 
 def test_floating_binary_modulo_lowers_to_slang_fmod():

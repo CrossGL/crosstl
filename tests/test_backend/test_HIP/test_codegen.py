@@ -8,6 +8,26 @@ from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
 
 class TestHipCodeGen:
+    def test_hip_flat_builtin_alias_conversion(self):
+        """Test HIP flat builtin aliases convert to CrossGL builtins."""
+        code = """
+        __global__ void kernel(float* out) {
+            out[hipThreadIdx_x] = hipBlockDim_y + warpSize;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[gl_LocalInvocationID.x] = (gl_WorkGroupSize.y + 32);" in result
+        assert "hipThreadIdx_x" not in result
+        assert "hipBlockDim_y" not in result
+        assert "warpSize" not in result
+
     def test_basic_kernel_conversion(self):
         """Test basic kernel to CrossGL conversion"""
         code = """
@@ -144,6 +164,81 @@ class TestHipCodeGen:
         assert "out[1] = atan2(y, x);" in result
         assert "atan2f" not in result
 
+    def test_atomic_builtins_parse_and_convert_to_crossgl(self):
+        """Test HIP atomic builtins parse and convert back to CrossGL names."""
+        code = """
+        __global__ void atomics(int* out, int* expected) {
+            atomicAdd(out, 1);
+            hipAtomicExch(out, 2);
+            atomicCAS(expected, 0, 3);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "atomicAdd(out, 1);" in result
+        assert "atomicExchange(out, 2);" in result
+        assert "atomicCompareExchange(expected, 0, 3);" in result
+        assert "hipAtomicExch" not in result
+        assert "atomicCAS(" not in result
+
+    def test_user_defined_atomic_name_call_does_not_convert_to_builtin(self):
+        """Test user-defined HIP atomic names shadow builtin conversion."""
+        code = """
+        int hipAtomicExch(int value) {
+            return value + 1;
+        }
+
+        __global__ void kernel(int* out) {
+            int value = hipAtomicExch(7);
+            atomicAdd(out, 1);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "i32 hipAtomicExch(i32 value)" in result
+        assert "var value: i32 = hipAtomicExch(7);" in result
+        assert "atomicAdd(out, 1);" in result
+        assert "atomicExchange(7)" not in result
+
+    def test_user_defined_atomic_name_declared_later_does_not_convert_to_builtin(
+        self,
+    ):
+        """Test later user-defined HIP atomic names shadow builtin conversion."""
+        code = """
+        __global__ void kernel(int* out) {
+            int value = hipAtomicExch(7);
+            atomicAdd(out, 1);
+        }
+
+        int hipAtomicExch(int value) {
+            return value + 1;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "i32 hipAtomicExch(i32 value)" in result
+        assert "var value: i32 = hipAtomicExch(7);" in result
+        assert "atomicAdd(out, 1);" in result
+        assert "atomicExchange(7)" not in result
+
     def test_lerp_builtin_converts_to_crossgl_mix(self):
         """Test HIP lerp converts back to CrossGL mix."""
         code = """
@@ -161,6 +256,77 @@ class TestHipCodeGen:
 
         assert "out[0] = mix(a, b, t);" in result
         assert "out[0] = lerp(a, b, t);" not in result
+
+    def test_user_defined_lerp_call_does_not_convert_to_mix(self):
+        """Test user-defined HIP functions shadow builtin call conversion."""
+        code = """
+        float lerp(float x) {
+            return x;
+        }
+
+        __global__ void kernel(float* out, float x) {
+            out[0] = lerp(x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "f32 lerp(f32 x) {" in result
+        assert "out[0] = lerp(x);" in result
+        assert "out[0] = mix(x);" not in result
+
+    def test_hyperbolic_builtins_convert_to_crossgl(self):
+        """Test HIP hyperbolic functions convert back to CrossGL names."""
+        code = """
+        __global__ void hyper(float* out, float x) {
+            out[0] = sinhf(x);
+            out[1] = coshf(x);
+            out[2] = tanhf(x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = sinh(x);" in result
+        assert "out[1] = cosh(x);" in result
+        assert "out[2] = tanh(x);" in result
+        assert "sinhf" not in result
+        assert "coshf" not in result
+        assert "tanhf" not in result
+
+    def test_inverse_hyperbolic_builtins_convert_to_crossgl(self):
+        """Test HIP inverse hyperbolic functions convert back to CrossGL names."""
+        code = """
+        __global__ void invhyper(float* out, float x) {
+            out[0] = asinhf(x);
+            out[1] = acoshf(x);
+            out[2] = atanhf(x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = asinh(x);" in result
+        assert "out[1] = acosh(x);" in result
+        assert "out[2] = atanh(x);" in result
+        assert "asinhf" not in result
+        assert "acoshf" not in result
+        assert "atanhf" not in result
 
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test HIP inverse trig functions convert back to CrossGL names."""
@@ -384,6 +550,60 @@ class TestHipCodeGen:
         assert "// Arguments: data, n" in result
         assert "hipLaunchKernelGGL" not in result
 
+    def test_user_defined_hip_launch_kernel_ggl_call_is_not_kernel_launch(self):
+        """Test user-defined hipLaunchKernelGGL shadows launch lowering."""
+        code = """
+        void hipLaunchKernelGGL(float* out, int grid, int block, int shared, int stream) {
+            return;
+        }
+
+        void host(float* out, int grid, int block) {
+            hipLaunchKernelGGL(out, grid, block, 0, 0);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "void hipLaunchKernelGGL(ptr<f32> out, i32 grid, i32 block, "
+            "i32 shared, i32 stream)"
+        ) in result
+        assert "hipLaunchKernelGGL(out, grid, block, 0, 0);" in result
+        assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
+
+    def test_user_defined_hip_launch_kernel_ggl_declared_later_is_not_kernel_launch(
+        self,
+    ):
+        """Test later user-defined hipLaunchKernelGGL shadows launch lowering."""
+        code = """
+        void host(float* out, int grid, int block) {
+            hipLaunchKernelGGL(out, grid, block, 0, 0);
+        }
+
+        void hipLaunchKernelGGL(float* out, int grid, int block, int shared, int stream) {
+            return;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "void hipLaunchKernelGGL(ptr<f32> out, i32 grid, i32 block, "
+            "i32 shared, i32 stream)"
+        ) in result
+        assert "hipLaunchKernelGGL(out, grid, block, 0, 0);" in result
+        assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
+
     def test_templated_hip_launch_kernel_ggl_conversion(self):
         """Test hipLaunchKernelGGL converts a template-id kernel argument"""
         code = """
@@ -542,6 +762,31 @@ class TestHipCodeGen:
         ) in result
         assert "if ((err != hipSuccess))" in result
         assert "err = hipDeviceSynchronize();" in result
+
+    def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
+        """Test user-defined HIP runtime names shadow runtime call comments."""
+        code = """
+        void hipMemcpy(float* dst, float* src, int bytes, int kind) {
+            return;
+        }
+
+        void host(float* d, float* h, int n) {
+            hipMemcpy(d, h, n, 7);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "void hipMemcpy(ptr<f32> dst, ptr<f32> src, i32 bytes, i32 kind)" in result
+        )
+        assert "hipMemcpy(d, h, n, 7);" in result
+        assert "// HIP memory copy: h -> d, bytes: n, kind: 7" not in result
 
     def test_hip_runtime_event_api_conversion(self):
         """Test HIP stream and event API calls emit metadata comments"""
@@ -966,6 +1211,31 @@ class TestHipCodeGen:
         assert "std::unique_ptr" not in result
         assert "std::make_unique" not in result
 
+    def test_non_std_unique_ptr_helpers_do_not_lower_to_host_allocation(self):
+        """Test non-std unique_ptr helpers remain ordinary qualified calls."""
+        code = """
+        void host(int n) {
+            auto p = my::make_unique<float[]>(n);
+            my::unique_ptr<float[]> q =
+                my::unique_ptr<float[]>(new float[n]);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var p: auto = my::make_unique<float[]>(n);" in result
+        assert (
+            "var q: my::unique_ptr<float[]> = "
+            "my::unique_ptr<float[]>(new_array<f32>(n));"
+        ) in result
+        assert "var p: auto = new_array<f32>(n);" not in result
+        assert "var q: ptr<f32>" not in result
+
     def test_qualified_template_argument_spacing_conversion(self):
         """Test template arguments keep spaces during conversion"""
         code = """
@@ -1239,7 +1509,7 @@ class TestHipCodeGen:
         result = translate(str(source_path), backend="rust", format_output=False)
 
         assert "pub fn kernel(data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
-        assert "data[indices[0]] = value;" in result
+        assert "data[indices[0] as usize] = value;" in result
 
     def test_qualified_declaration_conversion(self):
         """Test const, unsigned, and static declaration conversion"""

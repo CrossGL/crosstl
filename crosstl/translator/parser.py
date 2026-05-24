@@ -438,7 +438,11 @@ class Parser:
         execution_config = {}
 
         while self.current_token[0] != "RBRACE":
-            if self.current_token[0] == "LAYOUT":
+            if (
+                stage_enum == ShaderStage.COMPUTE
+                and self.current_token[0] == "LAYOUT"
+                and self.is_compute_execution_layout()
+            ):
                 execution_config.update(self.parse_compute_layout())
             elif self.is_function_declaration():
                 func = self.parse_function()
@@ -521,6 +525,33 @@ class Parser:
             self.eat(self.current_token[0])
         self.eat("SEMICOLON")
         return execution_config
+
+    def is_compute_execution_layout(self):
+        """Return whether the current layout is ``layout(local_size_*) in``."""
+        if self.current_token[0] != "LAYOUT" or self.peek(1)[0] != "LPAREN":
+            return False
+
+        local_size_keys = {"local_size_x", "local_size_y", "local_size_z"}
+        saw_local_size = False
+        depth = 1
+        offset = 2
+
+        while depth > 0:
+            token_type, token_value = self.peek(offset)
+            if token_type == "EOF":
+                return False
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+            elif depth == 1 and token_value in local_size_keys:
+                saw_local_size = True
+            offset += 1
+
+        next_type, next_value = self.peek(offset)
+        return saw_local_size and (
+            next_type == "IN" or (next_type == "IDENTIFIER" and next_value == "in")
+        )
 
     def parse_preprocessor_directive(self):
         """Parse a preprocessor token into a structured directive node."""

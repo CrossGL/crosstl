@@ -35,6 +35,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     resource_diagnostic_backend = "CUDA"
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
+        "Texture1DArray": "sampler1DArray",
         "Texture2D": "sampler2D",
         "Texture2DArray": "sampler2DArray",
         "Texture2DMS": "sampler2DMS",
@@ -563,15 +564,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         args = [self.visit(arg) for arg in raw_args]
 
-        resource_call = self.generate_resource_call(func_name, raw_args, args)
-        if resource_call is not None:
-            return resource_call
+        is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            resource_call = self.generate_resource_call(func_name, raw_args, args)
+            if resource_call is not None:
+                return resource_call
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
+        if is_user_function:
+            return f"{func_name}({', '.join(args)})"
+
         if func_name == "abs" and len(args) == 1:
             abs_call = self.generate_abs_call(raw_args, args)
             if abs_call is not None:
                 return abs_call
+
+        if func_name == "sign" and len(args) == 1:
+            sign_call = self.generate_sign_call(raw_args, args)
+            if sign_call is not None:
+                return sign_call
 
         if func_name == "mod" and len(args) == 2:
             mod_call = self.generate_mod_call(raw_args, args)
@@ -585,6 +596,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name == "clamp" and len(args) == 3:
             return self.generate_clamp_call(raw_args, args)
+
+        if func_name == "atan2" and len(args) == 2:
+            atan2_call = self.generate_atan2_call(raw_args, args)
+            if atan2_call is not None:
+                return atan2_call
+
+        if func_name == "mix" and len(args) == 3:
+            mix_call = self.generate_mix_call(raw_args, args)
+            if mix_call is not None:
+                return mix_call
 
         if func_name == "saturate" and len(args) == 1:
             saturate_call = self.generate_saturate_call(raw_args, args)
@@ -602,7 +623,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         vector_info = self.vector_type_info(func_name)
         if vector_info:
+            splat_call = self.generate_vector_scalar_splat_call(
+                vector_info, raw_args, args
+            )
+            if splat_call is not None:
+                return splat_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
+
+        scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)
+        if scalar_math_call is not None:
+            return scalar_math_call
+
         args_str = ", ".join(args)
 
         # Convert built-in functions
@@ -787,6 +818,125 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             [raw_args[0], None, None],
             [args[0], "0.0", "1.0"],
         )
+
+    def generate_mix_call(self, raw_args, args):
+        left_type = self.expression_result_type(raw_args[0])
+        right_type = self.expression_result_type(raw_args[1])
+        factor_type = self.expression_result_type(raw_args[2])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        factor_info = self.vector_type_info(factor_type)
+
+        if not left_info and not right_info and not factor_info:
+            return None
+
+        if left_info is None or right_info is None:
+            return None
+        if (
+            len(left_info["components"]) != len(right_info["components"])
+            or left_info["component_type"] != right_info["component_type"]
+        ):
+            return None
+
+        if factor_info is not None and (
+            len(factor_info["components"]) != len(left_info["components"])
+            or factor_info["component_type"] != left_info["component_type"]
+        ):
+            return None
+
+        helper_name = self.require_vector_mix_helper(
+            left_info,
+            factor_is_vector=factor_info is not None,
+        )
+        if helper_name is None:
+            return None
+        return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
+
+    def require_vector_mix_helper(self, vector_info, factor_is_vector):
+        component_type = vector_info["component_type"]
+        if component_type not in {"float", "double"}:
+            return None
+
+        vector_type = vector_info["type"]
+        factor_shape = "vector" if factor_is_vector else "scalar"
+        helper_name = f"cgl_{vector_type}_mix_{factor_shape}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        factor_type = (
+            vector_type
+            if factor_is_vector
+            else self.vector_scalar_parameter_type(vector_info)
+        )
+        components = []
+        for component in vector_info["components"]:
+            factor_component = f"a.{component}" if factor_is_vector else "a"
+            components.append(
+                self.format_mix_component(
+                    f"x.{component}",
+                    f"y.{component}",
+                    factor_component,
+                )
+            )
+
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}"
+            f"({vector_type} x, {vector_type} y, {factor_type} a)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_mix_component(self, left, right, factor):
+        return f"({left} + (({right} - {left}) * {factor}))"
+
+    def generate_atan2_call(self, raw_args, args):
+        y_type = self.expression_result_type(raw_args[0])
+        x_type = self.expression_result_type(raw_args[1])
+        y_info = self.vector_type_info(y_type)
+        x_info = self.vector_type_info(x_type)
+
+        if y_info is None and x_info is None:
+            return None
+        if y_info is None or x_info is None:
+            return None
+        if (
+            len(y_info["components"]) != len(x_info["components"])
+            or y_info["component_type"] != x_info["component_type"]
+        ):
+            return None
+
+        helper_name = self.require_vector_atan2_helper(y_info)
+        if helper_name is None:
+            return None
+        return f"{helper_name}({args[0]}, {args[1]})"
+
+    def require_vector_atan2_helper(self, vector_info):
+        component_type = vector_info["component_type"]
+        if component_type not in {"float", "double"}:
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_atan2"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        scalar_func = "atan2" if component_type == "double" else "atan2f"
+        components = [
+            f"{scalar_func}(y.{component}, x.{component})"
+            for component in vector_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}"
+            f"({vector_type} y, {vector_type} x)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
 
     def clamp_scalar_type(self, type_name):
         if type_name is None:
@@ -1185,6 +1335,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             # Texture/resource types
             "sampler": "cudaTextureObject_t",
             "sampler1D": "texture<float4, 1>",
+            "sampler1DArray": "cudaTextureObject_t",
             "sampler2D": "texture<float4, 2>",
             "sampler3D": "texture<float4, 3>",
             "samplerCube": "textureCube<float4>",
@@ -1526,6 +1677,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     return f"tex1DLod({texture_name}, {coord}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
                     return f"tex1DGrad({texture_name}, {coord}, {args[2]}, {args[3]})"
+
+            if texture_type == "sampler1DArray":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}"
+                )
+                if func_name == "texture":
+                    return f"tex1DLayered<float4>({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex1DLayeredLod<float4>({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return (
+                        f"tex1DLayeredGrad<float4>"
+                        f"({coord_args}, {args[2]}, {args[3]})"
+                    )
 
             if texture_type == "sampler2DArray":
                 coord_args = (

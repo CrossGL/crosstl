@@ -349,6 +349,71 @@ def test_generic_resource_global_codegen():
     assert "SamplerState linearSampler;" in generated_code
 
 
+def test_line_texture_resource_global_codegen():
+    code = """
+    Texture1D<float4> line;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_vars[0].vtype == "Texture1D<float4>"
+    assert "sampler1D line;" in generated_code
+    assert "Texture1D<float4> line;" not in generated_code
+
+
+def test_volume_texture_resource_global_codegen():
+    code = """
+    Texture3D<float4> volume;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_vars[0].vtype == "Texture3D<float4>"
+    assert "sampler3D volume;" in generated_code
+    assert "Texture3D<float4> volume;" not in generated_code
+
+
+def test_array_texture_resource_global_codegen():
+    code = """
+    Texture2DArray<float4> layers;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_vars[0].vtype == "Texture2DArray<float4>"
+    assert "sampler2DArray layers;" in generated_code
+    assert "Texture2DArray<float4> layers;" not in generated_code
+
+
+def test_cube_array_texture_resource_global_codegen():
+    code = """
+    TextureCubeArray<float4> probes;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_vars[0].vtype == "TextureCubeArray<float4>"
+    assert "samplerCubeArray probes;" in generated_code
+    assert "TextureCubeArray<float4> probes;" not in generated_code
+
+
+def test_multisample_texture_resource_global_codegen():
+    code = """
+    Texture2DMS<float4> msTex;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_vars[0].vtype == "Texture2DMS<float4>"
+    assert "sampler2DMS msTex;" in generated_code
+    assert "Texture2DMS<float4> msTex;" not in generated_code
+
+
 def test_bound_generic_resource_global_codegen():
     code = """
     Texture2D<float4> albedo : register(t0);
@@ -560,6 +625,26 @@ def test_slang_lerp_builtin_lowers_to_crossgl_mix():
         "vec2 blendedVec = mix(vec2(0.0, 1.0), vec2(1.0, 0.0), 0.5);" in generated_code
     )
     assert "lerp(" not in generated_code
+
+
+def test_user_defined_lerp_function_is_not_lowered_to_mix():
+    code = """
+    float lerp(float a, float b, float t) {
+        return a + ((b - a) * t);
+    }
+
+    float main() {
+        return lerp(0.0, 1.0, 0.25);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float lerp(float a, float b, float t)" in generated_code
+    assert "return lerp(0.0, 1.0, 0.25);" in generated_code
+    assert "return mix(0.0, 1.0, 0.25);" not in generated_code
 
 
 def test_slang_rsqrt_builtin_lowers_to_crossgl_inversesqrt():

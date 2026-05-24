@@ -19,6 +19,7 @@ from ..ast import (
     LiteralNode,
     LiteralPatternNode,
     MatchNode,
+    MemberAccessNode,
     PrimitiveType,
     RangeNode,
     ReturnNode,
@@ -920,16 +921,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         raw_args = getattr(node, "args", getattr(node, "arguments", []))
         args = [self.visit(arg) for arg in raw_args]
 
-        resource_call = self.generate_resource_call(func_name, raw_args, args)
-        if resource_call is not None:
-            return resource_call
+        is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            resource_call = self.generate_resource_call(func_name, raw_args, args)
+            if resource_call is not None:
+                return resource_call
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
-        vector_info = self.vector_type_info(func_name)
-        if vector_info and len(args) == 1:
-            arg_type = self.expression_result_type(raw_args[0])
-            if arg_type is not None and not self.vector_type_info(arg_type):
-                args = args * len(vector_info["components"])
+        if is_user_function:
+            return f"{callee}({', '.join(args)})"
 
         # Map function name
         mapped_name = self.function_map.get(func_name, func_name)
@@ -940,6 +940,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 abs_call = self.generate_abs_call(raw_args, args)
                 if abs_call is not None:
                     return abs_call
+        elif func_name == "sign":
+            if len(args) == 1:
+                sign_call = self.generate_sign_call(raw_args, args)
+                if sign_call is not None:
+                    return sign_call
         elif func_name == "mod":
             if len(args) == 2:
                 mod_call = self.generate_mod_call(raw_args, args)
@@ -953,6 +958,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 min_max_call = self.generate_min_max_call(func_name, raw_args, args)
                 if min_max_call is not None:
                     return min_max_call
+        elif func_name == "atan2":
+            if len(args) == 2:
+                atan2_call = self.generate_atan2_call(raw_args, args)
+                if atan2_call is not None:
+                    return atan2_call
         elif func_name in {"dot", "cross", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
@@ -983,9 +993,91 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         elif func_name == "memoryBarrier":
             return "__threadfence()"
 
+        vector_info = self.vector_type_info(func_name)
+        if vector_info:
+            splat_call = self.generate_vector_scalar_splat_call(
+                vector_info, raw_args, args
+            )
+            if splat_call is not None:
+                return splat_call
+            args = self.generate_vector_constructor_args(vector_info, raw_args, args)
+
+        scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)
+        if scalar_math_call is not None:
+            return scalar_math_call
+
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def generate_vector_constructor_args(self, vector_info, raw_args, args):
+        """Flatten vector arguments passed to HIP make_* constructors."""
+        if len(args) == 1:
+            arg_type = self.expression_result_type(raw_args[0])
+            if arg_type is not None and not self.vector_type_info(arg_type):
+                return args * len(vector_info["components"])
+
+        generated_args = []
+        for raw_arg, arg_expr in zip(raw_args, args):
+            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            if arg_info is None:
+                generated_args.append(arg_expr)
+            else:
+                generated_args.extend(
+                    self.vector_argument_lane_expressions(
+                        raw_arg,
+                        arg_expr,
+                        arg_info,
+                    )
+                )
+
+            if len(generated_args) >= len(vector_info["components"]):
+                return generated_args[: len(vector_info["components"])]
+
+        return generated_args
+
+    def vector_argument_lane_expressions(self, raw_arg, arg_expr, arg_info):
+        swizzle_components = self.member_swizzle_components(raw_arg)
+        if swizzle_components is not None:
+            object_node = getattr(
+                raw_arg,
+                "object_expr",
+                getattr(raw_arg, "object", None),
+            )
+            object_expr = self.visit(object_node)
+            return [f"{object_expr}.{component}" for component in swizzle_components]
+
+        return [f"{arg_expr}.{component}" for component in arg_info["components"]]
+
+    def member_swizzle_components(self, node):
+        if not isinstance(node, MemberAccessNode):
+            return None
+
+        object_node = getattr(node, "object_expr", getattr(node, "object", None))
+        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        if vector_info is None:
+            return None
+
+        component_aliases = {
+            "x": "x",
+            "y": "y",
+            "z": "z",
+            "w": "w",
+            "r": "x",
+            "g": "y",
+            "b": "z",
+            "a": "w",
+        }
+        member = getattr(node, "member", "")
+        components = [component_aliases.get(component) for component in member]
+        if not components or any(component is None for component in components):
+            return None
+
+        available_components = vector_info["components"]
+        if any(component not in available_components for component in components):
+            return None
+
+        return components
 
     def generate_fract_call(self, raw_args, args):
         arg_type = self.expression_result_type(raw_args[0])
@@ -1269,6 +1361,52 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def format_mix_component(self, left, right, factor):
         return f"({left} + (({right} - {left}) * {factor}))"
+
+    def generate_atan2_call(self, raw_args, args):
+        y_type = self.expression_result_type(raw_args[0])
+        x_type = self.expression_result_type(raw_args[1])
+        y_info = self.vector_type_info(y_type)
+        x_info = self.vector_type_info(x_type)
+
+        if y_info is None and x_info is None:
+            return None
+        if y_info is None or x_info is None:
+            return None
+        if (
+            len(y_info["components"]) != len(x_info["components"])
+            or y_info["component_type"] != x_info["component_type"]
+        ):
+            return None
+
+        helper_name = self.require_vector_atan2_helper(y_info)
+        if helper_name is None:
+            return None
+        return f"{helper_name}({args[0]}, {args[1]})"
+
+    def require_vector_atan2_helper(self, vector_info):
+        component_type = vector_info["component_type"]
+        if component_type not in {"float", "double"}:
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_atan2"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        scalar_func = "atan2" if component_type == "double" else "atan2f"
+        components = [
+            f"{scalar_func}(y.{component}, x.{component})"
+            for component in vector_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}"
+            f"({vector_type} y, {vector_type} x)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
 
     def clamp_scalar_type(self, type_name):
         if type_name is None:

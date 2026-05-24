@@ -171,6 +171,124 @@ class TestCudaCodeGen:
         assert "out[0] = mix(a, b, t);" in result
         assert "out[0] = lerp(a, b, t);" not in result
 
+    def test_user_defined_lerp_call_does_not_convert_to_mix(self):
+        """Test user-defined CUDA functions shadow builtin call conversion."""
+        code = """
+        float lerp(float x) {
+            return x;
+        }
+
+        __global__ void kernel(float* out, float x) {
+            out[0] = lerp(x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "f32 lerp(f32 x) {" in result
+        assert "out[0] = lerp(x);" in result
+        assert "out[0] = mix(x);" not in result
+
+    def test_user_defined_cuda_atomic_name_call_does_not_convert_to_builtin(self):
+        """Test user-defined CUDA atomic names shadow builtin conversion."""
+        code = """
+        int atomicExch(int value) {
+            return value + 1;
+        }
+
+        __global__ void kernel(int* out, int* expected) {
+            int value = atomicExch(7);
+            atomicCAS(expected, 0, 3);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "i32 atomicExch(i32 value)" in result
+        assert "var value: i32 = atomicExch(7);" in result
+        assert "atomicCompareExchange(expected, 0, 3);" in result
+        assert "atomicExchange(7)" not in result
+
+    def test_user_defined_cuda_atomic_name_declared_later_does_not_convert_to_builtin(
+        self,
+    ):
+        """Test later user-defined CUDA atomic names shadow builtin conversion."""
+        code = """
+        __global__ void kernel(int* out, int* expected) {
+            int value = atomicExch(7);
+            atomicCAS(expected, 0, 3);
+        }
+
+        int atomicExch(int value) {
+            return value + 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "i32 atomicExch(i32 value)" in result
+        assert "var value: i32 = atomicExch(7);" in result
+        assert "atomicCompareExchange(expected, 0, 3);" in result
+        assert "atomicExchange(7)" not in result
+
+    def test_user_defined_cuda_runtime_call_does_not_emit_runtime_comment(self):
+        """Test user-defined CUDA runtime names shadow runtime call comments."""
+        code = """
+        void cudaFree(float* p) {
+            p[0] = 1.0f;
+        }
+
+        __global__ void kernel(float* out) {
+            cudaFree(out);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "void cudaFree(ptr<f32> p)" in result
+        assert "cudaFree(out);" in result
+        assert "// CUDA memory free: out" not in result
+
+    def test_threadfence_converts_to_crossgl_memory_barrier(self):
+        """Test CUDA thread fence converts back to CrossGL memoryBarrier."""
+        code = """
+        __global__ void fence(float* out) {
+            __threadfence();
+            __syncthreads();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "memoryBarrier();" in result
+        assert "workgroupBarrier();" in result
+        assert "__threadfence" not in result
+
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test CUDA inverse trig functions convert back to CrossGL names."""
         code = """
@@ -194,6 +312,30 @@ class TestCudaCodeGen:
         assert "asinf" not in result
         assert "acosf" not in result
         assert "atanf" not in result
+
+    def test_hyperbolic_builtins_convert_to_crossgl(self):
+        """Test CUDA hyperbolic functions convert back to CrossGL names."""
+        code = """
+        __global__ void hyper(float* out, float x) {
+            out[0] = sinhf(x);
+            out[1] = coshf(x);
+            out[2] = tanhf(x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = sinh(x);" in result
+        assert "out[1] = cosh(x);" in result
+        assert "out[2] = tanh(x);" in result
+        assert "sinhf" not in result
+        assert "coshf" not in result
+        assert "tanhf" not in result
 
     def test_extended_math_builtins_convert_to_crossgl(self):
         """Test CUDA extended math functions convert back to CrossGL names."""
@@ -318,6 +460,54 @@ class TestCudaCodeGen:
         assert "// Kernel launch: kernel<<<grid, block, 0, stream>>>()" in result
         assert "// Arguments: data, n" in result
         assert "cudaLaunchKernel" not in result
+
+    def test_user_defined_cuda_launch_kernel_call_is_not_kernel_launch(self):
+        """Test user-defined cudaLaunchKernel calls are not launch metadata"""
+        code = """
+        void cudaLaunchKernel(float* out, int grid, int block, void* args, int shared, int stream) {
+            return;
+        }
+
+        void host(float* out, int grid, int block, void* args) {
+            cudaLaunchKernel(out, grid, block, args, 0, 0);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Function: cudaLaunchKernel" in result
+        assert "void cudaLaunchKernel(" in result
+        assert "cudaLaunchKernel(out, grid, block, args, 0, 0);" in result
+        assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
+
+    def test_user_defined_cuda_launch_kernel_declared_later_is_not_kernel_launch(self):
+        """Test later user-defined cudaLaunchKernel shadows launch metadata."""
+        code = """
+        void host(float* out, int grid, int block, void* args) {
+            cudaLaunchKernel(out, grid, block, args, 0, 0);
+        }
+
+        void cudaLaunchKernel(float* out, int grid, int block, void* args, int shared, int stream) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Function: cudaLaunchKernel" in result
+        assert "void cudaLaunchKernel(" in result
+        assert "cudaLaunchKernel(out, grid, block, args, 0, 0);" in result
+        assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
 
     def test_cuda_launch_kernel_casted_packed_args_conversion(self):
         """Test casted packed args still expand in cudaLaunchKernel"""
@@ -918,6 +1108,31 @@ class TestCudaCodeGen:
         assert "std::unique_ptr" not in result
         assert "std::make_unique" not in result
 
+    def test_non_std_unique_ptr_helpers_do_not_lower_to_host_allocation(self):
+        """Test non-std unique_ptr helpers remain ordinary qualified calls."""
+        code = """
+        void host(int n) {
+            auto p = my::make_unique<float[]>(n);
+            my::unique_ptr<float[]> q =
+                my::unique_ptr<float[]>(new float[n]);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var p: auto = my::make_unique<float[]>(n);" in result
+        assert (
+            "var q: my::unique_ptr<float[]> = "
+            "my::unique_ptr<float[]>(new_array<f32>(n));"
+        ) in result
+        assert "var p: auto = new_array<f32>(n);" not in result
+        assert "var q: ptr<f32>" not in result
+
     def test_qualified_template_argument_spacing_conversion(self):
         """Test template arguments keep spaces during conversion"""
         code = """
@@ -1172,7 +1387,7 @@ class TestCudaCodeGen:
         result = translate(str(source_path), backend="rust", format_output=False)
 
         assert "pub fn kernel(data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
-        assert "data[indices[0]] = value;" in result
+        assert "data[indices[0] as usize] = value;" in result
 
     def test_qualified_declaration_conversion(self):
         """Test const, unsigned, and static declaration conversion"""

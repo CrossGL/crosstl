@@ -3,6 +3,7 @@
 from crosstl.backend.HIP.HipAst import (
     AssignmentNode,
     ArrayAccessNode,
+    AtomicOperationNode,
     BinaryOpNode,
     CastNode,
     DeleteNode,
@@ -11,6 +12,7 @@ from crosstl.backend.HIP.HipAst import (
     ForNode,
     FunctionNode,
     FunctionCallNode,
+    HipBuiltinNode,
     IfNode,
     InitializerListNode,
     KernelNode,
@@ -32,6 +34,33 @@ from crosstl.backend.HIP.HipParser import HipParser, HipProgramNode
 
 
 class TestHipParser:
+    def test_hip_flat_builtin_alias_parsing(self):
+        """Test HIP flat builtin aliases normalize to dotted builtin nodes."""
+        code = """
+        __global__ void kernel(float* out) {
+            out[hipThreadIdx_x] = hipBlockDim_y + warpSize;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        assignment = ast.statements[0].body[0]
+        index = assignment.left.index
+        left_value = assignment.right.left
+        right_value = assignment.right.right
+
+        assert isinstance(index, HipBuiltinNode)
+        assert index.builtin_name == "threadIdx"
+        assert index.component == "x"
+        assert isinstance(left_value, HipBuiltinNode)
+        assert left_value.builtin_name == "blockDim"
+        assert left_value.component == "y"
+        assert isinstance(right_value, HipBuiltinNode)
+        assert right_value.builtin_name == "warpSize"
+        assert right_value.component is None
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
         code = """
@@ -59,6 +88,64 @@ class TestHipParser:
         assert ast.statements[2].params[0]["type"] == "float[4]"
         assert ast.statements[2].body[0].vtype == "float[2]"
         assert isinstance(ast.statements[2].body[0].value, InitializerListNode)
+
+    def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
+        """Test user-defined atomic names shadow HIP atomic parsing."""
+        code = """
+        int hipAtomicExch(int value) {
+            return value + 1;
+        }
+
+        __global__ void kernel(int* out) {
+            int value = hipAtomicExch(7);
+            atomicAdd(out, 1);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        helper = ast.statements[0]
+        kernel = ast.statements[1]
+        shadow_call = kernel.body[0].value
+        builtin_call = kernel.body[1]
+
+        assert helper.name == "hipAtomicExch"
+        assert isinstance(shadow_call, FunctionCallNode)
+        assert not isinstance(shadow_call, AtomicOperationNode)
+        assert shadow_call.name == "hipAtomicExch"
+        assert isinstance(builtin_call, AtomicOperationNode)
+
+    def test_user_defined_atomic_name_declared_later_is_not_parsed_as_builtin_atomic(
+        self,
+    ):
+        """Test later user-defined atomic names shadow HIP atomic parsing."""
+        code = """
+        __global__ void kernel(int* out) {
+            int value = hipAtomicExch(7);
+            atomicAdd(out, 1);
+        }
+
+        int hipAtomicExch(int value) {
+            return value + 1;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.statements[0]
+        helper = ast.statements[1]
+        shadow_call = kernel.body[0].value
+        builtin_call = kernel.body[1]
+
+        assert helper.name == "hipAtomicExch"
+        assert isinstance(shadow_call, FunctionCallNode)
+        assert not isinstance(shadow_call, AtomicOperationNode)
+        assert shadow_call.name == "hipAtomicExch"
+        assert isinstance(builtin_call, AtomicOperationNode)
 
     def test_multiline_initializer_lists_parsing(self):
         """Test multiline brace initializer lists"""

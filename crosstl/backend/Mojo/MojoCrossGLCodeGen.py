@@ -25,6 +25,8 @@ class MojoToCrossGLConverter:
 
     def __init__(self):
         """Initialize Mojo-to-CrossGL type, semantic, and function mappings."""
+        self.user_function_names = set()
+        self.scoped_value_names = []
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -123,11 +125,14 @@ class MojoToCrossGLConverter:
             "math.abs": "abs",
             "math.floor": "floor",
             "math.ceil": "ceil",
+            "math.exp": "exp",
             "math.fract": "fract",
+            "math.log": "log",
             "math.fmod": "mod",
             "fmod": "mod",
             "power": "pow",
             "rsqrt": "inversesqrt",
+            "math.rsqrt": "inversesqrt",
             "lerp": "mix",
             "math.lerp": "mix",
             "math.min": "min",
@@ -147,6 +152,7 @@ class MojoToCrossGLConverter:
 
     def generate(self, ast):
         """Generate complete CrossGL source from a parsed Mojo AST."""
+        self.user_function_names = self.collect_user_function_names(ast)
         code = "shader main {\n"
 
         if hasattr(ast, "functions") and ast.functions:
@@ -228,6 +234,38 @@ class MojoToCrossGLConverter:
         code += "}\n"
         return code
 
+    def collect_user_function_names(self, ast):
+        names = set()
+        for node in getattr(ast, "functions", []):
+            if isinstance(node, FunctionNode):
+                names.add(node.name)
+            elif isinstance(node, ClassNode):
+                for method in getattr(node, "methods", []):
+                    if isinstance(method, FunctionNode):
+                        names.add(method.name)
+        names.discard(None)
+        return names
+
+    def is_user_defined_function(self, func_name):
+        return isinstance(func_name, str) and func_name in self.user_function_names
+
+    def push_value_scope(self, names=None):
+        scope = set()
+        if names:
+            scope.update(name for name in names if name)
+        self.scoped_value_names.append(scope)
+
+    def pop_value_scope(self):
+        if self.scoped_value_names:
+            self.scoped_value_names.pop()
+
+    def add_scoped_value_name(self, name):
+        if name and self.scoped_value_names:
+            self.scoped_value_names[-1].add(name)
+
+    def is_scoped_value_name(self, name):
+        return any(name in scope for scope in reversed(self.scoped_value_names))
+
     def generate_global_variables(self, ast):
         global_variables = getattr(ast, "global_variables", []) or []
         if not global_variables:
@@ -303,6 +341,7 @@ class MojoToCrossGLConverter:
         indent_str = "    " * indent
 
         params = []
+        param_names = []
         if hasattr(func, "params") and func.params:
             for p in func.params:
                 param_str = f"{self.map_type(p.vtype)} {p.name}"
@@ -311,6 +350,7 @@ class MojoToCrossGLConverter:
                     if semantic:
                         param_str += f" {semantic}"
                 params.append(param_str)
+                param_names.append(p.name)
 
         params_str = ", ".join(params) if params else ""
         return_type = self.map_type(func.return_type) if func.return_type else "void"
@@ -321,8 +361,12 @@ class MojoToCrossGLConverter:
             f"{indent_str}{return_type} {func.name}({params_str}){func_attributes} {{\n"
         )
 
-        if hasattr(func, "body") and func.body:
-            code += self.generate_function_body(func.body, indent + 1)
+        self.push_value_scope(param_names)
+        try:
+            if hasattr(func, "body") and func.body:
+                code += self.generate_function_body(func.body, indent + 1)
+        finally:
+            self.pop_value_scope()
 
         code += f"{indent_str}}}\n\n"
         return code
@@ -331,48 +375,54 @@ class MojoToCrossGLConverter:
         code = ""
         indent_str = "    " * indent
 
-        for stmt in body:
-            if isinstance(stmt, PassNode):
-                continue
+        self.push_value_scope()
+        try:
+            for stmt in body:
+                if isinstance(stmt, PassNode):
+                    continue
 
-            code += indent_str
-            if isinstance(stmt, VariableDeclarationNode):
-                code += self.generate_variable_declaration(stmt) + ";\n"
-            elif isinstance(stmt, VariableNode):
-                if hasattr(stmt, "vtype") and stmt.vtype:
-                    code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                code += indent_str
+                if isinstance(stmt, VariableDeclarationNode):
+                    code += self.generate_variable_declaration(stmt) + ";\n"
+                    self.add_scoped_value_name(stmt.name)
+                elif isinstance(stmt, VariableNode):
+                    if hasattr(stmt, "vtype") and stmt.vtype:
+                        code += f"{self.map_type(stmt.vtype)} {stmt.name};\n"
+                    else:
+                        code += f"{stmt.name};\n"
+                    self.add_scoped_value_name(stmt.name)
+                elif isinstance(stmt, AssignmentNode):
+                    code += self.generate_assignment(stmt) + ";\n"
+                elif isinstance(stmt, ReturnNode):
+                    if stmt.value is None:
+                        code += "return;\n"
+                    else:
+                        code += f"return {self.generate_expression(stmt.value)};\n"
+                elif isinstance(stmt, BreakNode):
+                    code += "break;\n"
+                elif isinstance(stmt, ContinueNode):
+                    code += "continue;\n"
+                elif isinstance(stmt, BinaryOpNode):
+                    code += f"{self.generate_expression(stmt)};\n"
+                elif isinstance(stmt, ForNode):
+                    code += self.generate_for_loop(stmt, indent)
+                elif isinstance(stmt, RangeForNode):
+                    code += self.generate_range_for_loop(stmt, indent)
+                elif isinstance(stmt, WhileNode):
+                    code += self.generate_while_loop(stmt, indent)
+                elif isinstance(stmt, IfNode):
+                    code += self.generate_if_statement(stmt, indent)
+                elif isinstance(stmt, SwitchNode):
+                    code += self.generate_switch_statement(stmt, indent)
+                elif isinstance(stmt, (FunctionCallNode, MethodCallNode, CallNode)):
+                    code += f"{self.generate_expression(stmt)};\n"
+                elif isinstance(stmt, str):
+                    code += f"{stmt};\n"
                 else:
-                    code += f"{stmt.name};\n"
-            elif isinstance(stmt, AssignmentNode):
-                code += self.generate_assignment(stmt) + ";\n"
-            elif isinstance(stmt, ReturnNode):
-                if stmt.value is None:
-                    code += "return;\n"
-                else:
-                    code += f"return {self.generate_expression(stmt.value)};\n"
-            elif isinstance(stmt, BreakNode):
-                code += "break;\n"
-            elif isinstance(stmt, ContinueNode):
-                code += "continue;\n"
-            elif isinstance(stmt, BinaryOpNode):
-                code += f"{self.generate_expression(stmt)};\n"
-            elif isinstance(stmt, ForNode):
-                code += self.generate_for_loop(stmt, indent)
-            elif isinstance(stmt, RangeForNode):
-                code += self.generate_range_for_loop(stmt, indent)
-            elif isinstance(stmt, WhileNode):
-                code += self.generate_while_loop(stmt, indent)
-            elif isinstance(stmt, IfNode):
-                code += self.generate_if_statement(stmt, indent)
-            elif isinstance(stmt, SwitchNode):
-                code += self.generate_switch_statement(stmt, indent)
-            elif isinstance(stmt, (FunctionCallNode, MethodCallNode, CallNode)):
-                code += f"{self.generate_expression(stmt)};\n"
-            elif isinstance(stmt, str):
-                code += f"{stmt};\n"
-            else:
-                # For any unhandled statement type
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                    # For any unhandled statement type
+                    code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+        finally:
+            self.pop_value_scope()
 
         return code
 
@@ -601,6 +651,8 @@ class MojoToCrossGLConverter:
                 args = [self.generate_expression(arg) for arg in expr.args]
             args_str = ", ".join(args)
             full_name = f"{obj}.{expr.method}"
+            if self.is_scoped_value_name(obj):
+                return f"{obj}.{expr.method}({args_str})"
             func_name = self.map_function(full_name)
             if func_name != full_name:
                 return f"{func_name}({args_str})"
@@ -706,4 +758,6 @@ class MojoToCrossGLConverter:
         return f" {semantic}" if semantic else ""
 
     def map_function(self, func_name):
+        if self.is_user_defined_function(func_name):
+            return func_name
         return self.function_map.get(func_name, func_name)

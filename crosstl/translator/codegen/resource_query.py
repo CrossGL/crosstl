@@ -358,6 +358,7 @@ class ResourceQueryMixin:
         """Return dimension/mip/sample metadata for a queryable resource type."""
         specs = {
             "sampler1D": (("width",), True, False),
+            "sampler1DArray": (("width", "elements"), True, False),
             "sampler2D": (("width", "height"), True, False),
             "sampler2DShadow": (("width", "height"), True, False),
             "sampler2DArray": (("width", "height", "elements"), True, False),

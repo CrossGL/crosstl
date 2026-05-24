@@ -118,6 +118,7 @@ class RustCodeGen:
             "dmat4x4": "Mat4<f64>",
             # Texture Types
             "sampler2D": "Texture2D<f32>",
+            "sampler3D": "Texture3D<f32>",
             "samplerCube": "TextureCube<f32>",
             "sampler": "Sampler",
         }
@@ -189,6 +190,12 @@ class RustCodeGen:
         self.for_contexts = []
         self.loop_depth = 0
         self.do_while_counter = 0
+        self.user_function_names = set()
+        self.user_function_return_types = {}
+        self.user_function_param_types = {}
+        self.swizzle_temp_counter = 0
+        self.vector_arg_temp_counter = 0
+        self.matrix_arg_temp_counter = 0
 
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
@@ -199,6 +206,12 @@ class RustCodeGen:
         self.for_contexts = []
         self.loop_depth = 0
         self.do_while_counter = 0
+        self.user_function_names = self.collect_user_function_names(ast)
+        self.user_function_return_types = self.collect_user_function_return_types(ast)
+        self.user_function_param_types = self.collect_user_function_param_types(ast)
+        self.swizzle_temp_counter = 0
+        self.vector_arg_temp_counter = 0
+        self.matrix_arg_temp_counter = 0
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -211,7 +224,7 @@ class RustCodeGen:
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
             if isinstance(node, ArrayNode):
-                code += self.generate_array_declaration(node)
+                code += self.generate_global_array_declaration(node)
             else:
                 # Handle both old and new AST variable structures
                 if hasattr(node, "var_type"):
@@ -224,15 +237,19 @@ class RustCodeGen:
                 initial_value = getattr(
                     node, "initial_value", getattr(node, "value", None)
                 )
+                rust_type = self.map_type(var_type)
                 if initial_value is not None:
                     init_expr = self.generate_expression_with_type(
-                        initial_value, var_type
+                        initial_value, var_type, static_context=True
+                    )
+                    lazy_lock = self.static_array_literal_requires_lazy_lock(
+                        var_type, initial_value
                     )
                 else:
-                    init_expr = "Default::default()"
-                code += (
-                    f"static {node.name}: {self.map_type(var_type)} = "
-                    f"{init_expr};\n"
+                    init_expr = self.rust_static_default_initializer(rust_type)
+                    lazy_lock = False
+                code += self.generate_static_declaration(
+                    node.name, rust_type, init_expr, lazy_lock=lazy_lock
                 )
 
         cbuffers = self.get_cbuffer_nodes(ast)
@@ -275,12 +292,121 @@ class RustCodeGen:
 
         return code
 
+    def collect_user_function_names(self, node):
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode):
+                names.add(current.name)
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        names.discard(None)
+        return names
+
+    def is_user_defined_function(self, func_name):
+        return isinstance(func_name, str) and func_name in self.user_function_names
+
+    def collect_user_function_return_types(self, node):
+        return_types = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode):
+                return_type = getattr(current, "return_type", None)
+                if current.name and return_type is not None:
+                    return_types[current.name] = self.convert_type_node_to_string(
+                        return_type
+                    )
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return return_types
+
+    def collect_user_function_param_types(self, node):
+        param_types = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode) and current.name:
+                params = getattr(current, "parameters", getattr(current, "params", []))
+                param_types[current.name] = [
+                    self.function_parameter_type(param) for param in params
+                ]
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return param_types
+
+    def derive_traits_for_members(self, members, include_default=False):
+        traits = ["Debug", "Clone"]
+        if not self.members_have_unsized_arrays(members):
+            traits.append("Copy")
+        if include_default:
+            traits.append("Default")
+        return ", ".join(traits)
+
+    def members_have_unsized_arrays(self, members):
+        return any(self.member_has_unsized_array(member) for member in members)
+
+    def member_has_unsized_array(self, member):
+        if isinstance(member, ArrayNode):
+            return getattr(member, "size", None) is None
+
+        member_type = getattr(member, "member_type", None)
+        if member_type is not None and member_type.__class__.__name__ == "ArrayType":
+            return getattr(member_type, "size", None) is None
+
+        vtype = getattr(member, "vtype", None)
+        return isinstance(vtype, str) and vtype.endswith("[]")
+
     def generate_struct(self, node):
-        code = f"#[repr(C)]\n#[derive(Debug, Clone, Copy, Default)]\n"
+        members = getattr(node, "members", [])
+        derive_traits = self.derive_traits_for_members(members, include_default=True)
+        code = f"#[repr(C)]\n#[derive({derive_traits})]\n"
         code += f"pub struct {node.name} {{\n"
         member_types = {}
 
-        members = getattr(node, "members", [])
         for member in members:
             if isinstance(member, ArrayNode):
                 element_type = getattr(
@@ -453,9 +579,11 @@ class RustCodeGen:
         cbuffers = self.get_cbuffer_nodes(ast)
         for node in cbuffers:
             if isinstance(node, StructNode):
-                code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
+                members = getattr(node, "members", [])
+                derive_traits = self.derive_traits_for_members(members)
+                code += f"#[repr(C)]\n#[derive({derive_traits})]\n"
                 code += f"pub struct {node.name} {{\n"
-                for member in node.members:
+                for member in members:
                     if isinstance(member, ArrayNode):
                         if member.size:
                             code += f"    pub {member.name}: [{self.map_type(member.element_type)}; {member.size}],\n"
@@ -464,11 +592,13 @@ class RustCodeGen:
                     else:
                         code += f"    pub {member.name}: {self.map_type(self.get_member_type(member))},\n"
                 code += "}\n\n"
-                code += self.generate_cbuffer_member_statics(node.members)
+                code += self.generate_cbuffer_member_statics(members)
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
-                code += f"#[repr(C)]\n#[derive(Debug, Clone, Copy)]\n"
+                members = getattr(node, "members", [])
+                derive_traits = self.derive_traits_for_members(members)
+                code += f"#[repr(C)]\n#[derive({derive_traits})]\n"
                 code += f"pub struct {node.name} {{\n"
-                for member in node.members:
+                for member in members:
                     if isinstance(member, ArrayNode):
                         if member.size:
                             code += f"    pub {member.name}: [{self.map_type(member.element_type)}; {member.size}],\n"
@@ -477,7 +607,7 @@ class RustCodeGen:
                     else:
                         code += f"    pub {member.name}: {self.map_type(self.get_member_type(member))},\n"
                 code += "}\n\n"
-                code += self.generate_cbuffer_member_statics(node.members)
+                code += self.generate_cbuffer_member_statics(members)
         return code
 
     def generate_cbuffer_member_statics(self, members):
@@ -492,8 +622,142 @@ class RustCodeGen:
                     member_type = f"Vec<{self.map_type(member.element_type)}>"
             else:
                 member_type = self.map_type(self.get_member_type(member))
-            code += f"static {member.name}: {member_type} = Default::default();\n"
+            initializer = self.rust_static_default_initializer(member_type)
+            code += f"static {member.name}: {member_type} = {initializer};\n"
         return code
+
+    def generate_global_array_declaration(self, node):
+        element_type_name = self.convert_type_node_to_string(
+            getattr(node, "element_type", "float")
+        )
+        element_type = self.map_type(element_type_name)
+        size = self.format_array_size(getattr(node, "size", None))
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+
+        if size is None:
+            rust_type = f"Vec<{element_type}>"
+            if isinstance(initial_value, ArrayLiteralNode):
+                target_type = f"{element_type_name}[]"
+                initializer = self.generate_expression_with_type(
+                    initial_value, target_type, static_context=True
+                )
+                lazy_lock = self.static_array_literal_requires_lazy_lock(
+                    target_type, initial_value
+                )
+            else:
+                initializer = self.rust_static_default_initializer(rust_type)
+                lazy_lock = False
+        else:
+            rust_type = f"[{element_type}; {size}]"
+            if isinstance(initial_value, ArrayLiteralNode):
+                target_type = f"{element_type_name}[{size}]"
+                initializer = self.generate_expression_with_type(
+                    initial_value, target_type, static_context=True
+                )
+                lazy_lock = self.static_array_literal_requires_lazy_lock(
+                    target_type, initial_value
+                )
+            else:
+                initializer = self.rust_static_default_initializer(rust_type)
+                lazy_lock = False
+
+        return self.generate_static_declaration(
+            node.name, rust_type, initializer, lazy_lock=lazy_lock
+        )
+
+    def generate_static_declaration(
+        self, name, rust_type, initializer, lazy_lock=False
+    ):
+        if lazy_lock:
+            return (
+                f"static {name}: std::sync::LazyLock<{rust_type}> = "
+                f"std::sync::LazyLock::new(|| {initializer});\n"
+            )
+        return f"static {name}: {rust_type} = {initializer};\n"
+
+    def static_array_literal_requires_lazy_lock(self, target_type, initial_value):
+        if not isinstance(initial_value, ArrayLiteralNode):
+            return False
+        if not self.is_array_type_name(target_type):
+            return False
+
+        base_type, size = parse_array_type(str(target_type))
+        if size is None:
+            return True
+
+        return self.is_rust_shader_pod_value_type(self.map_type(base_type))
+
+    def rust_static_default_initializer(self, rust_type):
+        rust_type = str(rust_type)
+
+        if rust_type.startswith("Vec<"):
+            return "Vec::new()"
+
+        array_type = self.parse_rust_array_type(rust_type)
+        if array_type is not None:
+            element_type, size = array_type
+            element_initializer = self.rust_scalar_default_literal(element_type)
+            if element_initializer is not None:
+                return f"[{element_initializer}; {size}]"
+            if self.is_rust_shader_pod_value_type(element_type):
+                return "unsafe { std::mem::zeroed() }"
+            return "Default::default()"
+
+        scalar_initializer = self.rust_scalar_default_literal(rust_type)
+        if scalar_initializer is not None:
+            return scalar_initializer
+
+        return "Default::default()"
+
+    def parse_rust_array_type(self, rust_type):
+        if not (rust_type.startswith("[") and rust_type.endswith("]")):
+            return None
+        body = rust_type[1:-1]
+        if ";" not in body:
+            return None
+        element_type, size = body.rsplit(";", 1)
+        return element_type.strip(), size.strip()
+
+    def rust_scalar_default_literal(self, rust_type):
+        if rust_type in {"f16", "f32", "f64"}:
+            return "0.0"
+        if rust_type in {
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "i128",
+            "isize",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "u128",
+            "usize",
+        }:
+            return "0"
+        if rust_type == "bool":
+            return "false"
+        if rust_type == "char":
+            return r"'\0'"
+        if rust_type == "&'static str":
+            return '""'
+        return None
+
+    def is_rust_shader_pod_value_type(self, rust_type):
+        return str(rust_type).startswith(
+            (
+                "Vec2<",
+                "Vec3<",
+                "Vec4<",
+                "Mat2<",
+                "Mat3<",
+                "Mat4<",
+                "Mat2x",
+                "Mat3x",
+                "Mat4x",
+            )
+        ) and str(rust_type).endswith(">")
 
     def generate_function(self, func, indent=0, shader_type=None):
         """Render one CrossGL function or shader entry point as Rust code."""
@@ -505,13 +769,7 @@ class RustCodeGen:
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
         for p in param_list:
-            if hasattr(p, "param_type"):
-                param_type = self.convert_type_node_to_string(p.param_type)
-            elif hasattr(p, "vtype"):
-                param_type = p.vtype
-            else:
-                param_type = "float"
-
+            param_type = self.function_parameter_type(p)
             self.register_variable_type(p.name, param_type)
             params.append(f"{p.name}: {self.map_type(param_type)}")
 
@@ -544,6 +802,16 @@ class RustCodeGen:
         self.variable_types = saved_variable_types
         self.current_return_type = saved_return_type
         return code
+
+    def function_parameter_type(self, param):
+        if hasattr(param, "param_type"):
+            return self.convert_type_node_to_string(param.param_type)
+        if hasattr(param, "vtype"):
+            vtype = param.vtype
+            if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+                return self.convert_type_node_to_string(vtype)
+            return vtype
+        return "float"
 
     def generate_param_attributes(self, param):
         """Generate Rust GPU parameter attributes based on semantic"""
@@ -588,6 +856,9 @@ class RustCodeGen:
                 if increment_init is not None:
                     return increment_init
                 init_expr = self.generate_expression_with_type(initial_value, vtype)
+                init_expr = self.normalize_assignment_rhs(
+                    vtype, initial_value, init_expr, "="
+                )
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
             elif self.is_generated_struct_type(vtype):
                 return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = Default::default();\n"
@@ -635,14 +906,13 @@ class RustCodeGen:
                     return f"{indent_str}return ({values});\n"
                 else:
                     # Single return value
-                    if isinstance(stmt.value, ArrayLiteralNode):
-                        return_expr = self.generate_expression_with_type(
-                            stmt.value, self.current_return_type
-                        )
-                        return f"{indent_str}return {return_expr};\n"
-                    return (
-                        f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                    return_expr = self.generate_expression_with_type(
+                        stmt.value, self.current_return_type
                     )
+                    return_expr = self.normalize_assignment_rhs(
+                        self.current_return_type, stmt.value, return_expr, "="
+                    )
+                    return f"{indent_str}return {return_expr};\n"
             else:
                 # Void return
                 return f"{indent_str}return;\n"
@@ -825,11 +1095,18 @@ class RustCodeGen:
         else:
             return None
 
-        if vtype is None:
-            return None
-        if isinstance(vtype, str) and vtype.strip() in {"", "None"}:
+        if self.is_inferred_declaration_type(vtype):
             return None
         return vtype
+
+    def is_inferred_declaration_type(self, type_name):
+        if type_name is None:
+            return True
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+        return type_name.strip() in {"", "None", "auto"}
 
     def variable_declaration_type(self, node, initial_value=None):
         declared_type = self.get_variable_type(node)
@@ -857,27 +1134,316 @@ class RustCodeGen:
         else:
             return f"{indent_str}let {node.name}: [{element_type}; {size}] = [Default::default(); {size}];\n"
 
-    def generate_expression_with_type(self, expr, target_type):
+    def generate_expression_with_type(self, expr, target_type, static_context=False):
         if isinstance(expr, ArrayLiteralNode):
-            return self.generate_array_literal_expression(expr, target_type)
+            return self.generate_array_literal_expression(
+                expr, target_type, static_context=static_context
+            )
+        if isinstance(expr, BinaryOpNode):
+            return self.generate_binary_expression(expr, target_type)
+        if isinstance(expr, TernaryOpNode):
+            return self.generate_ternary_expression(expr, target_type)
         return self.generate_expression(expr)
+
+    def generate_binary_expression(self, expr, target_type=None):
+        left_expr = getattr(expr, "left", "")
+        right_expr = getattr(expr, "right", "")
+        op = getattr(expr, "operator", getattr(expr, "op", "+"))
+        mapped_op = self.map_operator(op)
+
+        left_type = self.expression_result_type(left_expr)
+        right_type = self.expression_result_type(right_expr)
+        bool_vector_logical = self.generate_bool_vector_logical_expression(
+            left_expr, right_expr, left_type, right_type, mapped_op
+        )
+        if bool_vector_logical is not None:
+            return bool_vector_logical
+
+        if mapped_op in {"&&", "||"}:
+            left = self.generate_condition_expression(left_expr)
+            right = self.generate_condition_expression(right_expr)
+            return f"({left} {mapped_op} {right})"
+
+        vector_comparison = self.generate_vector_comparison_expression(
+            left_expr, right_expr, left_type, right_type, mapped_op
+        )
+        if vector_comparison is not None:
+            return vector_comparison
+
+        matrix_vector_plan = self.binary_matrix_vector_plan(
+            left_type, right_type, mapped_op, target_type
+        )
+        if matrix_vector_plan is not None:
+            left = self.generate_binary_composite_operand(
+                left_expr, left_type, matrix_vector_plan["left_target_type"]
+            )
+            right = self.generate_binary_composite_operand(
+                right_expr, right_type, matrix_vector_plan["right_target_type"]
+            )
+            return f"({left} {mapped_op} {right})"
+
+        composite_operand_type = self.binary_composite_operand_type(
+            left_type, right_type, mapped_op
+        )
+        if composite_operand_type is not None:
+            left = self.generate_binary_composite_operand(
+                left_expr, left_type, composite_operand_type
+            )
+            right = self.generate_binary_composite_operand(
+                right_expr, right_type, composite_operand_type
+            )
+            return f"({left} {mapped_op} {right})"
+
+        operand_type = self.binary_scalar_operand_type(
+            left_type,
+            right_type,
+            mapped_op,
+        )
+        left = self.generate_expression(left_expr)
+        right = self.generate_expression(right_expr)
+        if operand_type is not None:
+            left = self.normalize_binary_scalar_operand(
+                left_expr,
+                left,
+                left_type,
+                operand_type,
+            )
+            right = self.normalize_binary_scalar_operand(
+                right_expr,
+                right,
+                right_type,
+                operand_type,
+            )
+
+        return f"({left} {mapped_op} {right})"
+
+    def generate_binary_composite_operand(self, expr, source_type, composite_type):
+        if self.vector_type_info(source_type) or self.matrix_type_info(source_type):
+            operand = self.generate_expression_with_type(expr, composite_type)
+            return self.normalize_typed_expression_value(expr, operand, composite_type)
+
+        component_type = self.composite_component_type(composite_type)
+        if component_type is not None and self.normalize_scalar_type(source_type):
+            operand = self.generate_expression_with_type(expr, component_type)
+            return self.normalize_scalar_assignment_value(
+                expr, operand, source_type, component_type
+            )
+
+        return self.generate_expression(expr)
+
+    def composite_component_type(self, composite_type):
+        vector_info = self.vector_type_info(composite_type)
+        if vector_info is not None:
+            return vector_info["component_type"]
+
+        matrix_info = self.matrix_type_info(composite_type)
+        if matrix_info is not None:
+            return matrix_info["component_type"]
+
+        return None
+
+    def generate_bool_vector_logical_expression(
+        self, left_expr, right_expr, left_type, right_type, operator
+    ):
+        plan = self.bool_vector_logical_plan(left_type, right_type, operator)
+        if plan is None:
+            return None
+
+        temp_bindings = []
+        left_lanes = self.vector_comparison_operand_lanes(
+            left_expr, left_type, "bool", plan["size"], temp_bindings
+        )
+        right_lanes = self.vector_comparison_operand_lanes(
+            right_expr, right_type, "bool", plan["size"], temp_bindings
+        )
+        lanes = [
+            f"({left_lane} {operator} {right_lane})"
+            for left_lane, right_lane in zip(left_lanes, right_lanes)
+        ]
+        return self.generate_constructor_call(
+            self.map_type(plan["result_type"]), lanes, temp_bindings
+        )
+
+    def generate_bool_vector_not_expression(self, expr, operator):
+        if operator != "!":
+            return None
+
+        vector_info = self.vector_type_info(self.expression_result_type(expr))
+        if vector_info is None or vector_info["component_type"] != "bool":
+            return None
+
+        temp_bindings = []
+        lanes = self.vector_argument_lane_expressions(
+            expr, vector_info, temp_bindings, "bool"
+        )
+        lanes = [f"(!{lane})" for lane in lanes[: vector_info["size"]]]
+        result_type = self.vector_type_for_components("bool", vector_info["size"])
+        return self.generate_constructor_call(
+            self.map_type(result_type), lanes, temp_bindings
+        )
+
+    def generate_vector_comparison_expression(
+        self, left_expr, right_expr, left_type, right_type, operator
+    ):
+        plan = self.vector_comparison_plan(left_type, right_type, operator)
+        if plan is None:
+            return None
+
+        temp_bindings = []
+        left_lanes = self.vector_comparison_operand_lanes(
+            left_expr,
+            left_type,
+            plan["component_type"],
+            plan["size"],
+            temp_bindings,
+        )
+        right_lanes = self.vector_comparison_operand_lanes(
+            right_expr,
+            right_type,
+            plan["component_type"],
+            plan["size"],
+            temp_bindings,
+        )
+        lanes = [
+            f"({left_lane} {operator} {right_lane})"
+            for left_lane, right_lane in zip(left_lanes, right_lanes)
+        ]
+        return self.generate_constructor_call(
+            self.map_type(plan["result_type"]), lanes, temp_bindings
+        )
+
+    def vector_comparison_operand_lanes(
+        self, expr, source_type, target_component_type, size, temp_bindings
+    ):
+        source_info = self.vector_type_info(source_type)
+        if source_info is not None:
+            return self.vector_argument_lane_expressions(
+                expr, source_info, temp_bindings, target_component_type
+            )
+
+        scalar_expr = self.generate_expression_with_type(expr, target_component_type)
+        scalar_expr = self.normalize_scalar_assignment_value(
+            expr, scalar_expr, source_type, target_component_type
+        )
+        if not self.is_repeat_safe_expression(expr):
+            temp_name = self.next_vector_arg_temp_name()
+            temp_bindings.append((temp_name, scalar_expr))
+            scalar_expr = temp_name
+        return [scalar_expr] * size
+
+    def generate_condition_expression(self, expr):
+        if isinstance(expr, UnaryOpNode):
+            op = self.map_operator(getattr(expr, "operator", getattr(expr, "op", "")))
+            if op == "!":
+                operand = getattr(expr, "operand", "")
+                return f"!({self.generate_condition_expression(operand)})"
+
+        condition = self.generate_expression(expr)
+        return self.normalize_condition_expression(expr, condition)
+
+    def normalize_condition_expression(self, expr, generated_expr):
+        condition_type = self.normalize_scalar_type(self.expression_result_type(expr))
+        if condition_type is None or condition_type == "bool":
+            return generated_expr
+
+        zero_literal = "0.0" if condition_type in {"f16", "f32", "f64"} else "0"
+        return f"({generated_expr} != {zero_literal})"
+
+    def generate_ternary_expression(self, expr, target_type=None):
+        condition_expr = getattr(expr, "condition", "")
+        true_expr = getattr(expr, "true_expr", "")
+        false_expr = getattr(expr, "false_expr", "")
+
+        bool_vector_ternary = self.generate_bool_vector_ternary_expression(
+            condition_expr, true_expr, false_expr, target_type
+        )
+        if bool_vector_ternary is not None:
+            return bool_vector_ternary
+
+        condition = self.generate_condition_expression(condition_expr)
+        branch_type = target_type or self.expression_result_type(expr)
+
+        true_value = self.generate_expression_with_type(true_expr, branch_type)
+        false_value = self.generate_expression_with_type(false_expr, branch_type)
+        true_value = self.normalize_typed_expression_value(
+            true_expr, true_value, branch_type
+        )
+        false_value = self.normalize_typed_expression_value(
+            false_expr, false_value, branch_type
+        )
+        return f"(if {condition} {{ {true_value} }} else {{ {false_value} }})"
+
+    def generate_bool_vector_ternary_expression(
+        self, condition_expr, true_expr, false_expr, target_type=None
+    ):
+        plan = self.bool_vector_ternary_plan(
+            condition_expr, true_expr, false_expr, target_type
+        )
+        if plan is None:
+            return None
+
+        temp_bindings = []
+        condition_info = self.vector_type_info(
+            self.expression_result_type(condition_expr)
+        )
+        condition_lanes = self.vector_argument_lane_expressions(
+            condition_expr, condition_info, temp_bindings, "bool"
+        )
+        true_lanes = self.vector_comparison_operand_lanes(
+            true_expr,
+            self.expression_result_type(true_expr),
+            plan["component_type"],
+            plan["size"],
+            temp_bindings,
+        )
+        false_lanes = self.vector_comparison_operand_lanes(
+            false_expr,
+            self.expression_result_type(false_expr),
+            plan["component_type"],
+            plan["size"],
+            temp_bindings,
+        )
+        lanes = [
+            f"(if {condition_lane} {{ {true_lane} }} else {{ {false_lane} }})"
+            for condition_lane, true_lane, false_lane in zip(
+                condition_lanes, true_lanes, false_lanes
+            )
+        ]
+        return self.generate_constructor_call(
+            self.map_type(plan["result_type"]), lanes, temp_bindings
+        )
 
     def is_array_type_name(self, type_name):
         return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
 
-    def generate_array_literal_expression(self, expr, target_type=None):
+    def generate_array_literal_expression(
+        self, expr, target_type=None, static_context=False
+    ):
         elements = [self.generate_expression(element) for element in expr.elements]
 
         if self.is_array_type_name(target_type):
-            _, size = parse_array_type(str(target_type))
+            base_type, size = parse_array_type(str(target_type))
             if size is None:
                 return f"vec![{', '.join(elements)}]"
 
             elements = elements[:size]
+            padding = self.rust_array_padding_expression(
+                base_type, static_context=static_context
+            )
             while len(elements) < size:
-                elements.append("Default::default()")
+                elements.append(padding)
 
         return f"[{', '.join(elements)}]"
+
+    def rust_array_padding_expression(self, base_type, static_context=False):
+        if static_context:
+            rust_type = self.map_type(base_type)
+            scalar_initializer = self.rust_scalar_default_literal(rust_type)
+            if scalar_initializer is not None:
+                return scalar_initializer
+            if self.is_rust_shader_pod_value_type(rust_type):
+                return "unsafe { std::mem::zeroed() }"
+        return "Default::default()"
 
     def generate_assignment(self, node):
         # Handle both old and new AST assignment structures
@@ -886,18 +1452,116 @@ class RustCodeGen:
             lhs = self.generate_expression(node.target)
             lhs_type = self.expression_result_type(node.target)
             rhs = self.generate_expression_with_type(node.value, lhs_type)
+            rhs = self.normalize_assignment_rhs(
+                lhs_type, node.value, rhs, getattr(node, "operator", "=")
+            )
             op = getattr(node, "operator", "=")
         else:
             # Old AST structure
             lhs = self.generate_expression(node.left)
             lhs_type = self.expression_result_type(node.left)
             rhs = self.generate_expression_with_type(node.right, lhs_type)
+            rhs = self.normalize_assignment_rhs(
+                lhs_type, node.right, rhs, getattr(node, "operator", "=")
+            )
             op = getattr(node, "operator", "=")
         return f"{lhs} {op} {rhs}"
 
+    def normalize_assignment_rhs(self, lhs_type, rhs_expr, generated_rhs, operator):
+        if operator == "=":
+            return self.normalize_typed_expression_value(
+                rhs_expr, generated_rhs, lhs_type
+            )
+
+        compound_ops = {
+            "+=",
+            "-=",
+            "*=",
+            "/=",
+            "%=",
+            "^=",
+            "|=",
+            "&=",
+            "<<=",
+            ">>=",
+        }
+        if operator not in compound_ops:
+            return generated_rhs
+
+        target_type = self.normalize_scalar_type(lhs_type)
+        source_type = self.expression_result_type(rhs_expr)
+        if target_type is None or self.normalize_scalar_type(source_type) is None:
+            return generated_rhs
+        return self.normalize_binary_scalar_operand(
+            rhs_expr, generated_rhs, source_type, target_type
+        )
+
+    def normalize_typed_expression_value(self, expr, generated_expr, target_type):
+        if isinstance(expr, TernaryOpNode):
+            return generated_expr
+        if self.generated_binary_expression_matches_target(expr, target_type):
+            return generated_expr
+
+        vector_expr = self.normalize_vector_typed_expression(expr, target_type)
+        if vector_expr is not None:
+            return vector_expr
+        matrix_expr = self.normalize_matrix_typed_expression(expr, target_type)
+        if matrix_expr is not None:
+            return matrix_expr
+        return self.normalize_scalar_assignment_value(
+            expr, generated_expr, self.expression_result_type(expr), target_type
+        )
+
+    def generated_binary_expression_matches_target(self, expr, target_type):
+        if not isinstance(expr, BinaryOpNode) or target_type is None:
+            return False
+
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        operator = self.map_operator(
+            getattr(expr, "operator", getattr(expr, "op", None))
+        )
+        matrix_vector_plan = self.binary_matrix_vector_plan(
+            left_type, right_type, operator, target_type
+        )
+        if matrix_vector_plan is None:
+            return False
+        return self.type_names_match(matrix_vector_plan["result_type"], target_type)
+
+    def type_names_match(self, left_type, right_type):
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_scalar = self.normalize_scalar_type(right_type)
+        if left_scalar is not None or right_scalar is not None:
+            return left_scalar == right_scalar
+        return self.map_type(left_type) == self.map_type(right_type)
+
+    def normalize_scalar_assignment_value(
+        self, expr, generated_expr, source_type, target_type
+    ):
+        source_type = self.normalize_scalar_type(source_type)
+        target_type = self.normalize_scalar_type(target_type)
+        if source_type is None or target_type is None or source_type == target_type:
+            return generated_expr
+
+        if target_type == "bool":
+            zero_literal = "0.0" if source_type in {"f16", "f32", "f64"} else "0"
+            return f"({generated_expr} != {zero_literal})"
+
+        if source_type == "bool" and target_type in {"f16", "f32", "f64"}:
+            return f"(if {generated_expr} {{ 1.0 }} else {{ 0.0 }})"
+
+        if self.is_integer_literal_expression(expr):
+            if target_type in {"f32", "f64"}:
+                return f"{expr.value}.0"
+            if target_type == "f16":
+                return f"({generated_expr} as f16)"
+            return generated_expr
+
+        return f"({generated_expr} as {target_type})"
+
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(
+        condition = self.generate_condition_expression(
             node.condition if hasattr(node, "condition") else node.if_condition
         )
         code = f"{indent_str}if {condition} {{\n"
@@ -916,7 +1580,7 @@ class RustCodeGen:
         if else_branch:
             if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
                 # Generate else if by recursively generating the nested if with else if prefix
-                elif_condition = self.generate_expression(
+                elif_condition = self.generate_condition_expression(
                     else_branch.condition
                     if hasattr(else_branch, "condition")
                     else else_branch.if_condition
@@ -985,7 +1649,7 @@ class RustCodeGen:
         init = self.generate_statement(node.init, 0).strip()
         if init.endswith(";"):
             init = init[:-1]
-        condition = self.generate_expression(node.condition)
+        condition = self.generate_condition_expression(node.condition)
         update = self.generate_expression(node.update)
 
         code = f"{indent_str}{init};\n"
@@ -1035,7 +1699,7 @@ class RustCodeGen:
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(node.condition)
+        condition = self.generate_condition_expression(node.condition)
 
         code = f"{indent_str}while {condition} {{\n"
 
@@ -1067,7 +1731,7 @@ class RustCodeGen:
         indent_str = "    " * indent
         break_flag = f"__cgl_do_break_{self.do_while_counter}"
         self.do_while_counter += 1
-        condition = self.generate_expression(node.condition)
+        condition = self.generate_condition_expression(node.condition)
 
         code = f"{indent_str}let mut {break_flag}: bool = false;\n"
         code += f"{indent_str}loop {{\n"
@@ -1122,27 +1786,29 @@ class RustCodeGen:
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
-            left = self.generate_expression(getattr(expr, "left", ""))
-            right = self.generate_expression(getattr(expr, "right", ""))
-            op = getattr(expr, "operator", getattr(expr, "op", "+"))
-            return f"({left} {self.map_operator(op)} {right})"
+            return self.generate_binary_expression(expr)
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_array_literal_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
-            operand = self.generate_expression(getattr(expr, "operand", ""))
+            operand_expr = getattr(expr, "operand", "")
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             op = self.map_operator(op)
             if op in ["++", "--"]:
+                operand = self.generate_expression(operand_expr)
                 assignment_op = "+=" if op == "++" else "-="
                 return f"{operand} {assignment_op} 1"
+            bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
+            if bool_vector_not is not None:
+                return bool_vector_not
+            operand = self.generate_expression(operand_expr)
             return f"({op}{operand})"
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
             array = self.generate_expression(array_expr)
-            index = self.generate_expression(index_expr)
+            index = self.generate_array_index_expression(index_expr)
             return f"{array}[{index}]"
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
@@ -1157,6 +1823,12 @@ class RustCodeGen:
                 callee = self.generate_expression(func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
+            if self.is_user_defined_function(func_name):
+                args_str = ", ".join(
+                    self.generate_user_function_call_args(func_name, args)
+                )
+                return f"{callee}({args_str})"
+
             func_name = self.function_map.get(func_name, func_name)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
@@ -1168,12 +1840,9 @@ class RustCodeGen:
 
             vector_info = self.vector_type_info(func_name)
             if vector_info:
-                rust_type = self.map_type(func_name)
-                generated_args = self.generate_vector_constructor_args(
-                    vector_info, args
+                return self.generate_vector_constructor_call(
+                    func_name, vector_info, args
                 )
-                args_str = ", ".join(generated_args)
-                return f"{self.rust_constructor_path(rust_type)}::new({args_str})"
 
             if func_name in [
                 "mat2",
@@ -1201,24 +1870,73 @@ class RustCodeGen:
                 "dmat4x3",
                 "dmat4x4",
             ]:
-                rust_type = self.map_type(func_name)
-                args_str = ", ".join(self.generate_expression(arg) for arg in args)
-                return f"{self.rust_constructor_path(rust_type)}::new({args_str})"
+                return self.generate_matrix_constructor_call(func_name, args)
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{func_name or callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
-            obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
-            member = getattr(expr, "member", "")
-            obj = self.generate_expression(obj_expr)
-            return f"{obj}.{member}"
+            return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
-            condition = self.generate_expression(getattr(expr, "condition", ""))
-            true_expr = self.generate_expression(getattr(expr, "true_expr", ""))
-            false_expr = self.generate_expression(getattr(expr, "false_expr", ""))
-            return f"(if {condition} {{ {true_expr} }} else {{ {false_expr} }})"
+            return self.generate_ternary_expression(expr)
         else:
             return str(expr)
+
+    def generate_user_function_call_args(self, func_name, args):
+        param_types = self.user_function_param_types.get(func_name, [])
+        generated_args = []
+        for index, arg in enumerate(args):
+            param_type = param_types[index] if index < len(param_types) else None
+            if param_type is None:
+                generated_args.append(self.generate_expression(arg))
+                continue
+
+            arg_expr = self.generate_expression_with_type(arg, param_type)
+            arg_expr = self.normalize_user_function_call_arg(arg, arg_expr, param_type)
+            generated_args.append(arg_expr)
+        return generated_args
+
+    def normalize_user_function_call_arg(self, arg, generated_arg, param_type):
+        return self.normalize_typed_expression_value(arg, generated_arg, param_type)
+
+    def normalize_vector_typed_expression(self, expr, target_type):
+        target_info = self.vector_type_info(target_type)
+        source_info = self.vector_type_info(self.expression_result_type(expr))
+        if target_info is None or source_info is None:
+            return None
+        if target_info["size"] != source_info["size"]:
+            return None
+        if target_info["component_type"] == source_info["component_type"]:
+            return None
+
+        temp_bindings = []
+        lanes = self.vector_argument_lane_expressions(
+            expr, source_info, temp_bindings, target_info["component_type"]
+        )
+        lanes = lanes[: target_info["size"]]
+        return self.generate_constructor_call(
+            self.map_type(target_type), lanes, temp_bindings
+        )
+
+    def normalize_matrix_typed_expression(self, expr, target_type):
+        target_info = self.matrix_type_info(target_type)
+        source_info = self.matrix_type_info(self.expression_result_type(expr))
+        if target_info is None or source_info is None:
+            return None
+        if (
+            target_info["columns"] != source_info["columns"]
+            or target_info["rows"] != source_info["rows"]
+        ):
+            return None
+        if target_info["component_type"] == source_info["component_type"]:
+            return None
+
+        temp_bindings = []
+        lanes = self.matrix_argument_lane_expressions(
+            expr, source_info, temp_bindings, target_info["component_type"]
+        )
+        return self.generate_constructor_call(
+            self.map_type(target_type), lanes, temp_bindings
+        )
 
     def generate_scalar_constructor_call(self, func_name, args):
         rust_type = self.scalar_constructor_type(func_name)
@@ -1237,38 +1955,260 @@ class RustCodeGen:
 
         return f"({arg_expr} as {rust_type})"
 
-    def generate_vector_constructor_args(self, vector_info, args):
-        if len(args) == 1:
-            arg_type = self.expression_result_type(args[0])
-            if arg_type is not None and not self.vector_type_info(arg_type):
-                arg_expr = self.generate_expression(args[0])
-                return [arg_expr] * vector_info["size"]
+    def generate_vector_constructor_call(self, func_name, vector_info, args):
+        rust_type = self.map_type(func_name)
+        generated_args, temp_bindings = self.generate_vector_constructor_args(
+            vector_info, args
+        )
+        return self.generate_constructor_call(rust_type, generated_args, temp_bindings)
 
+    def generate_matrix_constructor_call(self, func_name, args):
+        rust_type = self.map_type(func_name)
+        matrix_info = self.matrix_type_info(func_name)
+        generated_args, temp_bindings = self.generate_matrix_constructor_args(
+            matrix_info, args
+        )
+        return self.generate_constructor_call(rust_type, generated_args, temp_bindings)
+
+    def generate_constructor_call(self, rust_type, generated_args, temp_bindings):
+        args_str = ", ".join(generated_args)
+        constructor = f"{self.rust_constructor_path(rust_type)}::new({args_str})"
+        if not temp_bindings:
+            return constructor
+
+        bindings = " ".join(f"let {name} = {expr};" for name, expr in temp_bindings)
+        return f"{{ {bindings} {constructor} }}"
+
+    def generate_matrix_constructor_args(self, matrix_info, args):
         generated_args = []
+        temp_bindings = []
+        expected_count = matrix_info["columns"] * matrix_info["rows"]
+        component_type = matrix_info["component_type"]
+
         for arg in args:
-            arg_expr = self.generate_expression(arg)
             arg_info = self.vector_type_info(self.expression_result_type(arg))
             if arg_info is None:
+                arg_expr = self.generate_expression(arg)
+                arg_expr = self.normalize_constructor_scalar_lane(
+                    arg,
+                    arg_expr,
+                    self.expression_result_type(arg),
+                    component_type,
+                )
                 generated_args.append(arg_expr)
             else:
                 generated_args.extend(
-                    self.vector_argument_lane_expressions(arg, arg_expr, arg_info)
+                    self.vector_argument_lane_expressions(
+                        arg, arg_info, temp_bindings, component_type
+                    )
+                )
+
+            if len(generated_args) >= expected_count:
+                return generated_args[:expected_count], temp_bindings
+
+        return generated_args, temp_bindings
+
+    def generate_vector_constructor_args(self, vector_info, args):
+        component_type = vector_info["component_type"]
+        if len(args) == 1:
+            arg_type = self.expression_result_type(args[0])
+            if arg_type is not None and not self.vector_type_info(arg_type):
+                temp_bindings = []
+                arg_expr = self.generate_expression(args[0])
+                arg_expr = self.normalize_constructor_scalar_lane(
+                    args[0], arg_expr, arg_type, component_type
+                )
+                if not self.is_repeat_safe_expression(args[0]):
+                    temp_name = self.next_vector_arg_temp_name()
+                    temp_bindings.append((temp_name, arg_expr))
+                    arg_expr = temp_name
+                return [arg_expr] * vector_info["size"], temp_bindings
+
+        generated_args = []
+        temp_bindings = []
+        for arg in args:
+            arg_info = self.vector_type_info(self.expression_result_type(arg))
+            if arg_info is None:
+                arg_expr = self.generate_expression(arg)
+                arg_expr = self.normalize_constructor_scalar_lane(
+                    arg,
+                    arg_expr,
+                    self.expression_result_type(arg),
+                    component_type,
+                )
+                generated_args.append(arg_expr)
+            else:
+                generated_args.extend(
+                    self.vector_argument_lane_expressions(
+                        arg, arg_info, temp_bindings, component_type
+                    )
                 )
 
             if len(generated_args) >= vector_info["size"]:
-                return generated_args[: vector_info["size"]]
+                return generated_args[: vector_info["size"]], temp_bindings
 
-        return generated_args
+        return generated_args, temp_bindings
 
-    def vector_argument_lane_expressions(self, arg, arg_expr, arg_info):
+    def vector_argument_lane_expressions(
+        self, arg, arg_info, temp_bindings, target_component_type=None
+    ):
         swizzle_components = self.member_swizzle_components(arg)
         if swizzle_components is not None:
             object_expr = getattr(arg, "object_expr", getattr(arg, "object", None))
-            object_value = self.generate_expression(object_expr)
-            return [f"{object_value}.{component}" for component in swizzle_components]
+            object_value = self.generate_vector_lane_source(
+                object_expr, self.generate_expression(object_expr), temp_bindings
+            )
+            return [
+                self.normalize_constructor_scalar_lane(
+                    None,
+                    f"{object_value}.{component}",
+                    arg_info["component_type"],
+                    target_component_type or arg_info["component_type"],
+                )
+                for component in swizzle_components
+            ]
 
+        arg_expr = self.generate_expression(arg)
+        arg_expr = self.generate_vector_lane_source(arg, arg_expr, temp_bindings)
         components = ("x", "y", "z", "w")[: arg_info["size"]]
-        return [f"{arg_expr}.{component}" for component in components]
+        return [
+            self.normalize_constructor_scalar_lane(
+                None,
+                f"{arg_expr}.{component}",
+                arg_info["component_type"],
+                target_component_type or arg_info["component_type"],
+            )
+            for component in components
+        ]
+
+    def normalize_constructor_scalar_lane(
+        self, expr, generated_expr, source_type, target_type
+    ):
+        source_type = self.normalize_scalar_type(source_type)
+        target_type = self.normalize_scalar_type(target_type)
+        if (
+            isinstance(expr, LiteralNode)
+            and isinstance(expr.value, float)
+            and source_type in {"f32", "f64"}
+            and target_type in {"f32", "f64"}
+        ):
+            return generated_expr
+        return self.normalize_scalar_assignment_value(
+            expr, generated_expr, source_type, target_type
+        )
+
+    def matrix_argument_lane_expressions(
+        self, arg, matrix_info, temp_bindings, target_component_type=None
+    ):
+        arg_expr = self.generate_expression(arg)
+        arg_expr = self.generate_matrix_lane_source(arg, arg_expr, temp_bindings)
+        target_component_type = target_component_type or matrix_info["component_type"]
+        components = ("x", "y", "z", "w")[: matrix_info["rows"]]
+        lanes = []
+        for column in range(matrix_info["columns"]):
+            for component in components:
+                lanes.append(
+                    self.normalize_constructor_scalar_lane(
+                        None,
+                        f"{arg_expr}.c{column}.{component}",
+                        matrix_info["component_type"],
+                        target_component_type,
+                    )
+                )
+        return lanes
+
+    def generate_matrix_lane_source(self, expr, generated_expr, temp_bindings):
+        if self.is_repeat_safe_expression(expr):
+            return generated_expr
+        temp_name = self.next_matrix_arg_temp_name()
+        temp_bindings.append((temp_name, generated_expr))
+        return temp_name
+
+    def generate_vector_lane_source(self, expr, generated_expr, temp_bindings):
+        if self.is_repeat_safe_expression(expr):
+            return generated_expr
+        temp_name = self.next_vector_arg_temp_name()
+        temp_bindings.append((temp_name, generated_expr))
+        return temp_name
+
+    def generate_member_access_expression(self, expr):
+        obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
+        member = getattr(expr, "member", "")
+        obj = self.generate_expression(obj_expr)
+
+        swizzle_components = self.member_swizzle_components(expr)
+        if swizzle_components is None:
+            return f"{obj}.{member}"
+
+        if len(swizzle_components) == 1:
+            return f"{obj}.{swizzle_components[0]}"
+
+        rust_type = self.swizzle_constructor_type(obj_expr, len(swizzle_components))
+        if not self.is_repeat_safe_expression(obj_expr):
+            temp_name = self.next_swizzle_temp_name()
+            args = ", ".join(
+                f"{temp_name}.{component}" for component in swizzle_components
+            )
+            return (
+                f"{{ let {temp_name} = {obj}; "
+                f"{self.rust_constructor_path(rust_type)}::new({args}) }}"
+            )
+
+        args = ", ".join(f"{obj}.{component}" for component in swizzle_components)
+        return f"{self.rust_constructor_path(rust_type)}::new({args})"
+
+    def swizzle_constructor_type(self, obj_expr, component_count):
+        object_type = self.expression_result_type(obj_expr)
+        vector_info = self.vector_type_info(object_type)
+        component_type = vector_info["component_type"]
+        result_type = self.vector_type_for_components(component_type, component_count)
+        return self.map_type(result_type)
+
+    def next_swizzle_temp_name(self):
+        name = f"__cgl_swizzle_{self.swizzle_temp_counter}"
+        self.swizzle_temp_counter += 1
+        return name
+
+    def next_vector_arg_temp_name(self):
+        name = f"__cgl_vec_arg_{self.vector_arg_temp_counter}"
+        self.vector_arg_temp_counter += 1
+        return name
+
+    def next_matrix_arg_temp_name(self):
+        name = f"__cgl_mat_arg_{self.matrix_arg_temp_counter}"
+        self.matrix_arg_temp_counter += 1
+        return name
+
+    def is_repeat_safe_expression(self, expr):
+        if isinstance(expr, (IdentifierNode, VariableNode, LiteralNode)):
+            return True
+        if isinstance(expr, str):
+            return True
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+            return self.is_repeat_safe_expression(object_expr)
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
+            return self.is_repeat_safe_expression(
+                array_expr
+            ) and self.is_repeat_safe_expression(index_expr)
+        return False
+
+    def generate_array_index_expression(self, index_expr):
+        index = self.generate_expression(index_expr)
+        if self.is_usize_compatible_index(index_expr, index):
+            return index
+        return f"{index} as usize"
+
+    def is_usize_compatible_index(self, index_expr, generated_index):
+        if isinstance(index_expr, LiteralNode) and isinstance(index_expr.value, int):
+            return index_expr.value >= 0
+        if isinstance(index_expr, int):
+            return index_expr >= 0
+        if isinstance(index_expr, str) and index_expr.isdigit():
+            return True
+        return generated_index.endswith(" as usize")
 
     def member_swizzle_components(self, expr):
         if not isinstance(expr, MemberAccessNode):
@@ -1319,6 +2259,432 @@ class RustCodeGen:
         }
         return scalar_types.get(func_name)
 
+    def binary_scalar_result_type(self, left_type, right_type, operator=None):
+        comparison_ops = {"<", ">", "<=", ">=", "==", "!="}
+        logical_ops = {"&&", "||"}
+        if operator in comparison_ops or operator in logical_ops:
+            return "bool"
+
+        return self.promoted_scalar_type(left_type, right_type)
+
+    def binary_scalar_operand_type(self, left_type, right_type, operator=None):
+        if operator in {"&&", "||"}:
+            return None
+        return self.promoted_scalar_type(left_type, right_type)
+
+    def binary_composite_operand_type(self, left_type, right_type, operator=None):
+        arithmetic_ops = {"+", "-", "*", "/", "%"}
+        bitwise_ops = {"&", "|", "^", "<<", ">>"}
+
+        vector_type = self.promoted_vector_type(left_type, right_type)
+        if vector_type is not None:
+            vector_info = self.vector_type_info(vector_type)
+            component_type = self.normalize_scalar_type(vector_info["component_type"])
+            if operator in arithmetic_ops:
+                return vector_type
+            if operator in bitwise_ops and component_type in {
+                "i16",
+                "u16",
+                "i32",
+                "u32",
+                "i64",
+                "u64",
+            }:
+                return vector_type
+            return None
+
+        matrix_type = self.promoted_matrix_type(left_type, right_type)
+        if matrix_type is not None and operator in {"+", "-", "*", "/"}:
+            return matrix_type
+
+        vector_scalar_type = self.promoted_vector_scalar_type(left_type, right_type)
+        if vector_scalar_type is not None:
+            vector_info = self.vector_type_info(vector_scalar_type)
+            component_type = self.normalize_scalar_type(vector_info["component_type"])
+            if operator in arithmetic_ops:
+                return vector_scalar_type
+            if operator in bitwise_ops and component_type in {
+                "i16",
+                "u16",
+                "i32",
+                "u32",
+                "i64",
+                "u64",
+            }:
+                return vector_scalar_type
+            return None
+
+        matrix_scalar_type = self.promoted_matrix_scalar_type(left_type, right_type)
+        if matrix_scalar_type is not None and operator in {"+", "-", "*", "/"}:
+            return matrix_scalar_type
+        return None
+
+    def bool_vector_logical_plan(self, left_type, right_type, operator=None):
+        if operator not in {"&&", "||"}:
+            return None
+
+        left_vector = self.vector_type_info(left_type)
+        right_vector = self.vector_type_info(right_type)
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_scalar = self.normalize_scalar_type(right_type)
+
+        if left_vector is not None and left_vector["component_type"] != "bool":
+            return None
+        if right_vector is not None and right_vector["component_type"] != "bool":
+            return None
+
+        if left_vector is not None and right_vector is not None:
+            if left_vector["size"] != right_vector["size"]:
+                return None
+            size = left_vector["size"]
+        elif left_vector is not None and right_scalar == "bool":
+            size = left_vector["size"]
+        elif right_vector is not None and left_scalar == "bool":
+            size = right_vector["size"]
+        else:
+            return None
+
+        result_type = self.vector_type_for_components("bool", size)
+        if result_type is None:
+            return None
+        return {"size": size, "result_type": result_type}
+
+    def bool_vector_ternary_plan(
+        self, condition_expr, true_expr, false_expr, target_type=None
+    ):
+        condition_info = self.vector_type_info(
+            self.expression_result_type(condition_expr)
+        )
+        if condition_info is None or condition_info["component_type"] != "bool":
+            return None
+
+        size = condition_info["size"]
+        true_type = self.expression_result_type(true_expr)
+        false_type = self.expression_result_type(false_expr)
+        result_type = self.bool_vector_ternary_result_type(
+            true_type, false_type, size, target_type
+        )
+        result_info = self.vector_type_info(result_type)
+        if result_info is None or result_info["size"] != size:
+            return None
+        return {
+            "size": size,
+            "result_type": result_type,
+            "component_type": result_info["component_type"],
+        }
+
+    def bool_vector_ternary_result_type(
+        self, true_type, false_type, condition_size, target_type=None
+    ):
+        target_info = self.vector_type_info(target_type)
+        if target_info is not None and target_info["size"] == condition_size:
+            return target_type
+
+        true_info = self.vector_type_info(true_type)
+        false_info = self.vector_type_info(false_type)
+        true_scalar = self.normalize_scalar_type(true_type)
+        false_scalar = self.normalize_scalar_type(false_type)
+
+        if true_info is not None and true_info["size"] == condition_size:
+            if false_info is not None and false_info["size"] == condition_size:
+                return self.promoted_vector_type(true_type, false_type)
+            if false_scalar is not None:
+                return self.vector_type_for_promoted_scalar(true_info, false_scalar)
+            return true_type
+
+        if false_info is not None and false_info["size"] == condition_size:
+            if true_scalar is not None:
+                return self.vector_type_for_promoted_scalar(false_info, true_scalar)
+            return false_type
+
+        if true_scalar is None or false_scalar is None:
+            return None
+        component_type = self.promoted_scalar_type(true_scalar, false_scalar)
+        if component_type is None:
+            return None
+        return self.vector_type_for_components(component_type, condition_size)
+
+    def vector_comparison_plan(self, left_type, right_type, operator=None):
+        if operator not in {"<", ">", "<=", ">=", "==", "!="}:
+            return None
+
+        left_vector = self.vector_type_info(left_type)
+        right_vector = self.vector_type_info(right_type)
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_scalar = self.normalize_scalar_type(right_type)
+
+        if left_vector is not None and right_vector is not None:
+            if left_vector["size"] != right_vector["size"]:
+                return None
+            component_type = self.promoted_scalar_type(
+                left_vector["component_type"], right_vector["component_type"]
+            )
+            size = left_vector["size"]
+        elif left_vector is not None and right_scalar is not None:
+            component_type = self.promoted_scalar_type(
+                left_vector["component_type"], right_scalar
+            )
+            size = left_vector["size"]
+        elif right_vector is not None and left_scalar is not None:
+            component_type = self.promoted_scalar_type(
+                left_scalar, right_vector["component_type"]
+            )
+            size = right_vector["size"]
+        else:
+            return None
+
+        if component_type is None:
+            return None
+        component_type = self.normalize_scalar_type(component_type)
+        if component_type == "bool" and operator not in {"==", "!="}:
+            return None
+
+        result_type = self.vector_type_for_components("bool", size)
+        if result_type is None:
+            return None
+        return {
+            "component_type": component_type,
+            "size": size,
+            "result_type": result_type,
+        }
+
+    def binary_matrix_vector_plan(
+        self, left_type, right_type, operator=None, target_type=None
+    ):
+        if operator != "*":
+            return None
+
+        left_matrix = self.matrix_type_info(left_type)
+        right_matrix = self.matrix_type_info(right_type)
+        left_vector = self.vector_type_info(left_type)
+        right_vector = self.vector_type_info(right_type)
+
+        if left_matrix is not None and right_vector is not None:
+            if right_vector["size"] != left_matrix["columns"]:
+                return None
+            return self.build_matrix_vector_plan(
+                left_matrix,
+                right_vector,
+                result_size=left_matrix["rows"],
+                target_type=target_type,
+                matrix_on_left=True,
+            )
+
+        if left_vector is not None and right_matrix is not None:
+            if left_vector["size"] != right_matrix["rows"]:
+                return None
+            return self.build_matrix_vector_plan(
+                right_matrix,
+                left_vector,
+                result_size=right_matrix["columns"],
+                target_type=target_type,
+                matrix_on_left=False,
+            )
+
+        return None
+
+    def build_matrix_vector_plan(
+        self, matrix_info, vector_info, result_size, target_type, matrix_on_left
+    ):
+        component_type = self.promoted_scalar_type(
+            matrix_info["component_type"], vector_info["component_type"]
+        )
+        if component_type is None:
+            return None
+
+        operation_component_type = self.promoted_component_with_target(
+            component_type, target_type, result_size
+        )
+        result_type = self.vector_type_for_components(
+            operation_component_type, result_size
+        )
+        matrix_type = self.matrix_type_for_dimensions(
+            operation_component_type, matrix_info["columns"], matrix_info["rows"]
+        )
+        vector_type = self.vector_type_for_components(
+            operation_component_type, vector_info["size"]
+        )
+        if result_type is None or matrix_type is None or vector_type is None:
+            return None
+
+        if matrix_on_left:
+            left_target_type = matrix_type
+            right_target_type = vector_type
+        else:
+            left_target_type = vector_type
+            right_target_type = matrix_type
+
+        return {
+            "result_type": result_type,
+            "left_target_type": left_target_type,
+            "right_target_type": right_target_type,
+        }
+
+    def promoted_component_with_target(self, component_type, target_type, result_size):
+        target_info = self.vector_type_info(target_type)
+        if target_info is None or target_info["size"] != result_size:
+            return component_type
+
+        target_component_type = self.normalize_scalar_type(
+            target_info["component_type"]
+        )
+        promoted_type = self.promoted_scalar_type(component_type, target_component_type)
+        if promoted_type == target_component_type:
+            return promoted_type
+        return component_type
+
+    def promoted_vector_scalar_type(self, left_type, right_type):
+        left_vector = self.vector_type_info(left_type)
+        right_vector = self.vector_type_info(right_type)
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_scalar = self.normalize_scalar_type(right_type)
+
+        if left_vector is not None and right_scalar is not None:
+            return self.vector_type_for_promoted_scalar(left_vector, right_scalar)
+        if right_vector is not None and left_scalar is not None:
+            return self.vector_type_for_promoted_scalar(right_vector, left_scalar)
+        return None
+
+    def vector_type_for_promoted_scalar(self, vector_info, scalar_type):
+        component_type = self.promoted_scalar_type(
+            vector_info["component_type"], scalar_type
+        )
+        if component_type is None:
+            return None
+        return self.vector_type_for_components(component_type, vector_info["size"])
+
+    def promoted_matrix_scalar_type(self, left_type, right_type):
+        left_matrix = self.matrix_type_info(left_type)
+        right_matrix = self.matrix_type_info(right_type)
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_scalar = self.normalize_scalar_type(right_type)
+
+        if left_matrix is not None and right_scalar is not None:
+            return self.matrix_type_for_promoted_scalar(left_matrix, right_scalar)
+        if right_matrix is not None and left_scalar is not None:
+            return self.matrix_type_for_promoted_scalar(right_matrix, left_scalar)
+        return None
+
+    def matrix_type_for_promoted_scalar(self, matrix_info, scalar_type):
+        component_type = self.promoted_scalar_type(
+            matrix_info["component_type"], scalar_type
+        )
+        if component_type is None:
+            return None
+        return self.matrix_type_for_dimensions(
+            component_type, matrix_info["columns"], matrix_info["rows"]
+        )
+
+    def promoted_scalar_type(self, left_type, right_type):
+        left = self.normalize_scalar_type(left_type)
+        right = self.normalize_scalar_type(right_type)
+        if left is None or right is None:
+            return None
+
+        ranks = {
+            "bool": 0,
+            "i16": 1,
+            "u16": 2,
+            "i32": 3,
+            "u32": 4,
+            "i64": 5,
+            "u64": 6,
+            "f16": 7,
+            "f32": 8,
+            "f64": 9,
+        }
+        return left if ranks[left] >= ranks[right] else right
+
+    def promoted_vector_type(self, left_type, right_type):
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None or right_info is None:
+            return None
+        if left_info["size"] != right_info["size"]:
+            return None
+
+        component_type = self.promoted_scalar_type(
+            left_info["component_type"], right_info["component_type"]
+        )
+        if component_type is None:
+            return None
+        return self.vector_type_for_components(component_type, left_info["size"])
+
+    def promoted_matrix_type(self, left_type, right_type):
+        left_info = self.matrix_type_info(left_type)
+        right_info = self.matrix_type_info(right_type)
+        if left_info is None or right_info is None:
+            return None
+        if (
+            left_info["columns"] != right_info["columns"]
+            or left_info["rows"] != right_info["rows"]
+        ):
+            return None
+
+        component_type = self.promoted_scalar_type(
+            left_info["component_type"], right_info["component_type"]
+        )
+        if component_type is None:
+            return None
+        return self.matrix_type_for_dimensions(
+            component_type, left_info["columns"], left_info["rows"]
+        )
+
+    def normalize_binary_scalar_operand(
+        self, expr, generated_expr, source_type, target_type
+    ):
+        source_type = self.normalize_scalar_type(source_type)
+        if source_type is None or source_type == target_type:
+            return generated_expr
+
+        if self.is_integer_literal_expression(expr):
+            if target_type in {"f32", "f64"}:
+                return f"{expr.value}.0"
+            if target_type == "f16":
+                return f"({generated_expr} as f16)"
+            return generated_expr
+
+        return f"({generated_expr} as {target_type})"
+
+    def is_integer_literal_expression(self, expr):
+        return (
+            isinstance(expr, LiteralNode)
+            and isinstance(expr.value, int)
+            and not isinstance(expr.value, bool)
+        )
+
+    def normalize_scalar_type(self, type_name):
+        if type_name is None:
+            return None
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+
+        aliases = {
+            "bool": "bool",
+            "char": "i32",
+            "short": "i16",
+            "ushort": "u16",
+            "int": "i32",
+            "uint": "u32",
+            "long": "i64",
+            "ulong": "u64",
+            "half": "f16",
+            "float": "f32",
+            "double": "f64",
+            "i16": "i16",
+            "u16": "u16",
+            "i32": "i32",
+            "u32": "u32",
+            "i64": "i64",
+            "u64": "u64",
+            "f16": "f16",
+            "f32": "f32",
+            "f64": "f64",
+        }
+        return aliases.get(type_name)
+
     def format_literal(self, value, literal_type=None):
         if isinstance(value, bool):
             return "true" if value else "false"
@@ -1367,7 +2733,9 @@ class RustCodeGen:
     def expression_result_type(self, expr):
         if expr is None:
             return None
-        if isinstance(expr, (IdentifierNode, VariableNode, ArrayAccessNode)):
+        if isinstance(expr, ArrayAccessNode):
+            return self.array_access_element_type(expr)
+        if isinstance(expr, (IdentifierNode, VariableNode)):
             return self.variable_types.get(self.get_expression_name(expr))
         if isinstance(expr, LiteralNode):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
@@ -1385,21 +2753,85 @@ class RustCodeGen:
             func_name = getattr(func_expr, "name", func_expr)
             if isinstance(func_name, str) and self.vector_type_info(func_name):
                 return func_name
+            if isinstance(func_name, str) and self.matrix_type_info(func_name):
+                return func_name
+            scalar_type = self.scalar_constructor_type(func_name)
+            if scalar_type is not None:
+                return scalar_type
+            return_type = self.user_function_return_types.get(func_name)
+            if return_type and return_type != "void":
+                return return_type
             return None
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
+            operator = self.map_operator(
+                getattr(expr, "operator", getattr(expr, "op", None))
+            )
+            bool_vector_logical_plan = self.bool_vector_logical_plan(
+                left_type, right_type, operator
+            )
+            if bool_vector_logical_plan is not None:
+                return bool_vector_logical_plan["result_type"]
+            vector_comparison_plan = self.vector_comparison_plan(
+                left_type, right_type, operator
+            )
+            if vector_comparison_plan is not None:
+                return vector_comparison_plan["result_type"]
+            matrix_vector_plan = self.binary_matrix_vector_plan(
+                left_type, right_type, operator
+            )
+            if matrix_vector_plan is not None:
+                return matrix_vector_plan["result_type"]
+            composite_type = self.binary_composite_operand_type(
+                left_type, right_type, operator
+            )
+            if composite_type is not None:
+                return composite_type
             if self.vector_type_info(left_type):
                 return left_type
             if self.vector_type_info(right_type):
                 return right_type
+            if self.matrix_type_info(left_type):
+                return left_type
+            if self.matrix_type_info(right_type):
+                return right_type
+            scalar_type = self.binary_scalar_result_type(
+                left_type,
+                right_type,
+                operator,
+            )
+            if scalar_type is not None:
+                return scalar_type
             return left_type or right_type
         if isinstance(expr, UnaryOpNode):
             return self.expression_result_type(expr.operand)
         if isinstance(expr, TernaryOpNode):
-            return self.expression_result_type(
-                expr.true_expr
-            ) or self.expression_result_type(expr.false_expr)
+            vector_ternary_plan = self.bool_vector_ternary_plan(
+                expr.condition, expr.true_expr, expr.false_expr
+            )
+            if vector_ternary_plan is not None:
+                return vector_ternary_plan["result_type"]
+            true_type = self.expression_result_type(expr.true_expr)
+            false_type = self.expression_result_type(expr.false_expr)
+            vector_type = self.promoted_vector_type(true_type, false_type)
+            if vector_type is not None:
+                return vector_type
+            if self.vector_type_info(true_type):
+                return true_type
+            if self.vector_type_info(false_type):
+                return false_type
+            matrix_type = self.promoted_matrix_type(true_type, false_type)
+            if matrix_type is not None:
+                return matrix_type
+            if self.matrix_type_info(true_type):
+                return true_type
+            if self.matrix_type_info(false_type):
+                return false_type
+            scalar_type = self.promoted_scalar_type(true_type, false_type)
+            if scalar_type is not None:
+                return scalar_type
+            return true_type or false_type
         if isinstance(expr, MemberAccessNode):
             object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
             object_type = self.expression_result_type(object_expr)
@@ -1426,6 +2858,20 @@ class RustCodeGen:
                     vector_info["component_type"], len(member)
                 )
         return None
+
+    def array_access_element_type(self, expr):
+        array_name = self.get_expression_name(expr)
+        array_type = self.variable_types.get(array_name)
+        if array_type is None:
+            return None
+        if hasattr(array_type, "name") or hasattr(array_type, "element_type"):
+            array_type = self.convert_type_node_to_string(array_type)
+        else:
+            array_type = str(array_type)
+        if "[" not in array_type or "]" not in array_type:
+            return None
+        base_type, _ = parse_array_type(array_type)
+        return base_type or None
 
     def vector_type_info(self, type_name):
         if type_name is None:
@@ -1459,7 +2905,80 @@ class RustCodeGen:
         component_type, size = details
         return {"component_type": component_type, "size": size}
 
+    def matrix_type_info(self, type_name):
+        if type_name is None:
+            return None
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+
+        matrix_details = {
+            "mat2": (2, 2),
+            "mat3": (3, 3),
+            "mat4": (4, 4),
+            "mat2x2": (2, 2),
+            "mat2x3": (2, 3),
+            "mat2x4": (2, 4),
+            "mat3x2": (3, 2),
+            "mat3x3": (3, 3),
+            "mat3x4": (3, 4),
+            "mat4x2": (4, 2),
+            "mat4x3": (4, 3),
+            "mat4x4": (4, 4),
+            "dmat2": (2, 2),
+            "dmat3": (3, 3),
+            "dmat4": (4, 4),
+            "dmat2x2": (2, 2),
+            "dmat2x3": (2, 3),
+            "dmat2x4": (2, 4),
+            "dmat3x2": (3, 2),
+            "dmat3x3": (3, 3),
+            "dmat3x4": (3, 4),
+            "dmat4x2": (4, 2),
+            "dmat4x3": (4, 3),
+            "dmat4x4": (4, 4),
+        }
+        details = matrix_details.get(type_name)
+        if details is None:
+            return None
+        columns, rows = details
+        component_type = "double" if type_name.startswith("dmat") else "float"
+        return {"columns": columns, "rows": rows, "component_type": component_type}
+
+    def scalar_type_for_type_constructor(self, scalar_type):
+        scalar_type = self.normalize_scalar_type(scalar_type)
+        aliases = {
+            "bool": "bool",
+            "i16": "short",
+            "u16": "ushort",
+            "i32": "int",
+            "u32": "uint",
+            "i64": "long",
+            "u64": "ulong",
+            "f16": "half",
+            "f32": "float",
+            "f64": "double",
+        }
+        return aliases.get(scalar_type)
+
+    def matrix_type_for_dimensions(self, component_type, columns, rows):
+        component_type = self.scalar_type_for_type_constructor(component_type)
+        if component_type == "double":
+            prefix = "dmat"
+        elif component_type == "float":
+            prefix = "mat"
+        else:
+            return None
+
+        if columns == rows:
+            return f"{prefix}{columns}"
+        return f"{prefix}{columns}x{rows}"
+
     def vector_type_for_components(self, component_type, component_count):
+        component_type = self.scalar_type_for_type_constructor(component_type)
+        if component_type is None:
+            return None
         if component_count < 2 or component_count > 4:
             return component_type
         prefixes = {

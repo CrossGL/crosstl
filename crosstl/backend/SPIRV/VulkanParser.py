@@ -354,6 +354,7 @@ class VulkanParser:
             self.eat(self.current_token[0])
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+            name += self.parse_array_suffixes_as_text()
             params.append(VariableNode(vtype, name, qualifiers=qualifiers))
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")

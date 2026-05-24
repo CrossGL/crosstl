@@ -74,12 +74,14 @@ class SlangCodeGen:
         self.helper_functions = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
+        self.user_function_names = set()
         self._generating = False
         self.function_map = {
             "mix": "lerp",
             "mod": "fmod",
             "fract": "frac",
             "inversesqrt": "rsqrt",
+            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
         }
 
     def indent(self):
@@ -96,6 +98,7 @@ class SlangCodeGen:
             self.helper_functions = {}
             self.current_function_return_type = None
             self.current_expression_expected_type = None
+            self.user_function_names = self.collect_user_function_names(ast)
 
         if isinstance(ast, list):
             result = ""
@@ -174,6 +177,32 @@ class SlangCodeGen:
         if not self.helper_functions:
             return ""
         return "\n\n".join(self.helper_functions.values()) + "\n\n"
+
+    def collect_user_function_names(self, node):
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode):
+                names.add(current.name)
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        names.discard(None)
+        return names
 
     def generate_shader(self, node):
         """Render a full CrossGL shader AST as a Slang translation unit."""
@@ -807,12 +836,20 @@ class SlangCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
-            resource_call = self.generate_resource_call(callee, node.args)
-            if resource_call is not None:
-                return resource_call
+            if callee not in self.user_function_names:
+                resource_call = self.generate_resource_call(callee, node.args)
+                if resource_call is not None:
+                    return resource_call
             args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
-            callee = self.function_map.get(callee, callee)
+            if (
+                callee == "saturate"
+                and len(node.args) == 1
+                and callee not in self.user_function_names
+            ):
+                return f"clamp({args}, 0.0, 1.0)"
+            if callee not in self.user_function_names:
+                callee = self.function_map.get(callee, callee)
             return f"{callee}({args})"
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand)

@@ -60,6 +60,35 @@ class HipParser:
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"__RESTRICT__"}
     TYPE_REFERENCE_TOKENS = {"AMPERSAND", "AND"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
+    ATOMIC_FUNCTION_TOKENS = {
+        "ATOMICADD",
+        "ATOMICSUB",
+        "ATOMICMAX",
+        "ATOMICMIN",
+        "ATOMICEXCH",
+        "ATOMICCAS",
+    }
+    FLAT_BUILTIN_TOKEN_MAP = {
+        "HIPTHREADIDX": "threadIdx",
+        "HIPBLOCKIDX": "blockIdx",
+        "HIPBLOCKDIM": "blockDim",
+        "HIPGRIDDIM": "gridDim",
+    }
+    FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
+    ATOMIC_FUNCTION_NAMES = {
+        "atomicAdd",
+        "hipAtomicAdd",
+        "atomicSub",
+        "hipAtomicSub",
+        "atomicMax",
+        "hipAtomicMax",
+        "atomicMin",
+        "hipAtomicMin",
+        "atomicExch",
+        "hipAtomicExch",
+        "atomicCAS",
+        "hipAtomicCAS",
+    }
     BUILTIN_TYPE_TOKENS = {
         "INT",
         "FLOAT",
@@ -118,6 +147,61 @@ class HipParser:
         self.current_token = self.tokens[0] if tokens else None
         self.block_depth = 0
         self.type_aliases = set()
+        self.user_function_names = self.collect_user_function_names()
+
+    def collect_user_function_names(self):
+        names = set()
+        depth = 0
+        index = 0
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == "LBRACE":
+                depth += 1
+                index += 1
+                continue
+            if token_type == "RBRACE":
+                depth = max(0, depth - 1)
+                index += 1
+                continue
+
+            if depth == 0:
+                name_index = self.function_name_index_at(index)
+                if name_index is not None:
+                    names.add(self.tokens[name_index].value)
+                    index = name_index + 1
+                    continue
+
+            index += 1
+
+        return names
+
+    def function_name_index_at(self, index):
+        function_qualifiers = {
+            *self.FUNCTION_SPECIFIER_TOKENS,
+            "__DEVICE__",
+            "__HOST__",
+            "__GLOBAL__",
+            "__FORCEINLINE__",
+            "__NOINLINE__",
+        }
+        while (
+            index < len(self.tokens) and self.tokens[index].type in function_qualifiers
+        ):
+            index += 1
+
+        index = self.skip_type_at_pos(index)
+        if index is None:
+            return None
+
+        if (
+            index + 1 < len(self.tokens)
+            and self.is_function_name_token(self.tokens[index])
+            and self.tokens[index + 1].type == "LPAREN"
+        ):
+            return index
+
+        return None
 
     def error(self, message: str):
         """Raise a syntax error annotated with the current token."""
@@ -160,6 +244,26 @@ class HipParser:
         if not self.current_token:
             return False
         return self.current_token.type in token_types
+
+    def is_function_name_token(self, token=None):
+        token = token or self.current_token
+        return bool(token and token.type in self.FUNCTION_NAME_TOKENS)
+
+    def consume_function_name(self):
+        if not self.is_function_name_token():
+            token_type = self.current_token.type if self.current_token else "EOF"
+            self.error(f"Expected function name, got {token_type}")
+
+        name = self.current_token.value
+        self.advance()
+        return name
+
+    def parse_flat_builtin_node(self):
+        token = self.current_token
+        builtin_name = self.FLAT_BUILTIN_TOKEN_MAP[token.type]
+        component = token.value.rsplit("_", 1)[-1]
+        self.advance()
+        return HipBuiltinNode(builtin_name, component)
 
     def skip_newlines(self):
         """Advance past newline tokens between declarations/statements."""
@@ -400,7 +504,8 @@ class HipParser:
             self.advance()
 
         return_type = self.parse_type()
-        name = self.consume("IDENTIFIER").value
+        name = self.consume_function_name()
+        self.user_function_names.add(name)
 
         self.consume("LPAREN")
         params = self.parse_parameter_list()
@@ -427,7 +532,8 @@ class HipParser:
             self.advance()
 
         return_type = self.parse_type()
-        name = self.consume("IDENTIFIER").value
+        name = self.consume_function_name()
+        self.user_function_names.add(name)
 
         self.consume("LPAREN")
         params = self.parse_parameter_list()
@@ -1335,7 +1441,17 @@ class HipParser:
         if named_cast is not None:
             return named_cast
 
-        if function_name == "hipLaunchKernelGGL" and len(args) >= 5:
+        if (
+            function_name in self.ATOMIC_FUNCTION_NAMES
+            and function_name not in self.user_function_names
+        ):
+            return AtomicOperationNode(function_name, args)
+
+        if (
+            function_name == "hipLaunchKernelGGL"
+            and len(args) >= 5
+            and function_name not in self.user_function_names
+        ):
             return KernelLaunchNode(
                 args[0],
                 args[1],
@@ -1424,6 +1540,18 @@ class HipParser:
                     self.advance()
 
             return HipBuiltinNode(name, component)
+
+        elif self.match(*self.FLAT_BUILTIN_TOKEN_MAP):
+            return self.parse_flat_builtin_node()
+
+        elif self.match("WARPSIZE"):
+            self.advance()
+            return HipBuiltinNode("warpSize")
+
+        elif self.match(*self.ATOMIC_FUNCTION_TOKENS):
+            name = self.current_token.value
+            self.advance()
+            return name
 
         elif self.match("INTEGER", "FLOAT_NUM", "FLOAT", "STRING"):
             value = self.current_token.value
@@ -1608,7 +1736,7 @@ class HipParser:
         if index is not None:
             if (
                 index + 1 < len(self.tokens)
-                and self.tokens[index].type == "IDENTIFIER"
+                and self.is_function_name_token(self.tokens[index])
                 and self.tokens[index + 1].type == "LPAREN"
             ):
                 return True

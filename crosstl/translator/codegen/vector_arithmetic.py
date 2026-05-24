@@ -34,6 +34,14 @@ class VectorArithmeticMixin:
 
         return function_return_types
 
+    def is_user_defined_function(self, func_name):
+        """Return whether a call target names a CrossGL-defined function."""
+        return isinstance(func_name, str) and func_name in getattr(
+            self,
+            "function_return_types",
+            {},
+        )
+
     def resource_call_result_type(self, func_name, raw_args):
         """Infer the result type of resource-related intrinsic calls."""
         if not isinstance(func_name, str):
@@ -121,6 +129,8 @@ class VectorArithmeticMixin:
                     if len(raw_args) > 1
                     else None
                 )
+            if func_name in self.scalar_float_math_functions() and raw_args:
+                return self.expression_result_type(raw_args[0])
             if isinstance(func_name, str):
                 return self.function_return_types.get(func_name)
             return None
@@ -206,6 +216,56 @@ class VectorArithmeticMixin:
             "component_type": component_type,
             "components": components,
         }
+
+    def is_repeat_safe_expression(self, expr):
+        """Return whether an expression can be safely emitted more than once."""
+        if isinstance(expr, (IdentifierNode, VariableNode, LiteralNode)):
+            return True
+        if isinstance(expr, str):
+            return True
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+            return self.is_repeat_safe_expression(object_expr)
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
+            return self.is_repeat_safe_expression(
+                array_expr
+            ) and self.is_repeat_safe_expression(index_expr)
+        return False
+
+    def generate_vector_scalar_splat_call(self, vector_info, raw_args, args):
+        """Return a single-evaluation helper call for complex scalar splats."""
+        if len(args) != 1:
+            return None
+
+        arg_type = self.expression_result_type(raw_args[0])
+        if arg_type is None or self.vector_type_info(arg_type):
+            return None
+        if self.is_repeat_safe_expression(raw_args[0]):
+            return None
+
+        helper_name = self.require_vector_splat_helper(vector_info)
+        return f"{helper_name}({args[0]})"
+
+    def require_vector_splat_helper(self, vector_info):
+        """Register a helper that splats one scalar into a CUDA/HIP vector."""
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_splat"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        scalar_type = self.vector_scalar_parameter_type(vector_info)
+        constructor = vector_info["constructor"]
+        args = ["value"] * len(vector_info["components"])
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({scalar_type} value)\n"
+            "{\n"
+            f"    return {constructor}({', '.join(args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
 
     def vector_type_for_components(self, component_type, component_count):
         """Return a vector type name for a component type/count pair."""
@@ -808,6 +868,121 @@ class VectorArithmeticMixin:
         if component_type == "uint":
             return value
         return f"abs({value})"
+
+    def generate_sign_call(self, raw_args, args):
+        """Lower sign with scalar type awareness and vector helper support."""
+        if len(raw_args) != 1 or len(args) != 1:
+            return None
+
+        arg_type = self.expression_result_type(raw_args[0])
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            helper_name = self.require_vector_sign_helper(vector_info)
+            if helper_name is not None:
+                return f"{helper_name}({args[0]})"
+            return None
+
+        component_type = self.scalar_component_type(arg_type) or "float"
+        if component_type == "bool":
+            return None
+        return self.format_sign_component(component_type, args[0])
+
+    def require_vector_sign_helper(self, vector_info):
+        component_type = vector_info["component_type"]
+        if component_type == "bool":
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_sign"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = [
+            self.format_sign_component(component_type, f"value.{component}")
+            for component in vector_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_sign_component(self, component_type, value):
+        if component_type == "uint":
+            return f"(({value}) > 0u ? 1u : 0u)"
+
+        if component_type == "double":
+            zero = "0.0"
+            one = "1.0"
+            minus_one = "-1.0"
+        elif component_type == "float" or component_type is None:
+            zero = "0.0f"
+            one = "1.0f"
+            minus_one = "-1.0f"
+        else:
+            zero = "0"
+            one = "1"
+            minus_one = "-1"
+
+        return (
+            f"(({value}) > {zero} ? {one} : "
+            f"(({value}) < {zero} ? {minus_one} : {zero}))"
+        )
+
+    def generate_scalar_math_call(self, func_name, raw_args, args):
+        """Lower scalar float/double math builtins with precision-aware names."""
+        function_map = self.scalar_float_math_functions()
+        signatures = function_map.get(func_name)
+        if signatures is None or len(raw_args) != len(args):
+            return None
+
+        expected_arity = 2 if func_name == "pow" else 1
+        if len(raw_args) != expected_arity:
+            return None
+
+        component_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type not in {"float", "double", None}:
+                return None
+            component_types.append(component_type)
+
+        scalar_type = "double" if "double" in component_types else "float"
+        if func_name == "inversesqrt" and scalar_type == "double":
+            return f"(1.0 / sqrt({args[0]}))"
+
+        target = signatures[scalar_type]
+        return f"{target}({', '.join(args)})"
+
+    def scalar_float_math_functions(self):
+        return {
+            "sqrt": {"float": "sqrtf", "double": "sqrt"},
+            "pow": {"float": "powf", "double": "pow"},
+            "sin": {"float": "sinf", "double": "sin"},
+            "cos": {"float": "cosf", "double": "cos"},
+            "tan": {"float": "tanf", "double": "tan"},
+            "asin": {"float": "asinf", "double": "asin"},
+            "acos": {"float": "acosf", "double": "acos"},
+            "atan": {"float": "atanf", "double": "atan"},
+            "sinh": {"float": "sinhf", "double": "sinh"},
+            "cosh": {"float": "coshf", "double": "cosh"},
+            "tanh": {"float": "tanhf", "double": "tanh"},
+            "exp": {"float": "expf", "double": "exp"},
+            "exp2": {"float": "exp2f", "double": "exp2"},
+            "log": {"float": "logf", "double": "log"},
+            "log2": {"float": "log2f", "double": "log2"},
+            "floor": {"float": "floorf", "double": "floor"},
+            "ceil": {"float": "ceilf", "double": "ceil"},
+            "round": {"float": "roundf", "double": "round"},
+            "trunc": {"float": "truncf", "double": "trunc"},
+            "inversesqrt": {"float": "rsqrtf", "double": "sqrt"},
+        }
 
     def abs_component_type(self, type_name):
         if type_name is None:

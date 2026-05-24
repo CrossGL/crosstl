@@ -5,6 +5,7 @@ from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.CudaAst import (
     AssignmentNode,
+    AtomicOperationNode,
     BinaryOpNode,
     CastNode,
     CudaBuiltinNode,
@@ -977,6 +978,60 @@ class TestCudaParser:
 
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
+
+    def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
+        """Test user-defined atomic names shadow CUDA atomic parsing."""
+        code = """
+        int atomicExch(int value) {
+            return value + 1;
+        }
+
+        __global__ void kernel(int* out, int* expected) {
+            int value = atomicExch(7);
+            atomicCAS(expected, 0, 3);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].name == "atomicExch"
+        shadow_call = ast.kernels[0].body[0].value
+        builtin_call = ast.kernels[0].body[1]
+
+        assert isinstance(shadow_call, FunctionCallNode)
+        assert not isinstance(shadow_call, AtomicOperationNode)
+        assert shadow_call.name == "atomicExch"
+        assert isinstance(builtin_call, AtomicOperationNode)
+
+    def test_user_defined_atomic_name_declared_later_is_not_parsed_as_builtin_atomic(
+        self,
+    ):
+        """Test later user-defined atomic names shadow CUDA atomic parsing."""
+        code = """
+        __global__ void kernel(int* out, int* expected) {
+            int value = atomicExch(7);
+            atomicCAS(expected, 0, 3);
+        }
+
+        int atomicExch(int value) {
+            return value + 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].name == "atomicExch"
+        shadow_call = ast.kernels[0].body[0].value
+        builtin_call = ast.kernels[0].body[1]
+
+        assert isinstance(shadow_call, FunctionCallNode)
+        assert not isinstance(shadow_call, AtomicOperationNode)
+        assert shadow_call.name == "atomicExch"
+        assert isinstance(builtin_call, AtomicOperationNode)
 
     def test_sync_parsing(self):
         """Test parsing synchronization functions"""

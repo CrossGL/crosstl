@@ -465,6 +465,33 @@ def test_loop_statement_lowers_to_while_true():
     assert "LoopNode(" not in generated_code
 
 
+def test_do_while_statement_lowers_to_c_style_syntax():
+    shader = """
+    shader DoWhileNodeSmoke {
+        int helper(int limit) {
+            int i = 0;
+            do {
+                i = i + 1;
+                if (i >= limit) {
+                    break;
+                }
+            } while (i < 4);
+            return i;
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "do {" in generated_code
+    assert "i = i + 1;" in generated_code
+    assert "if (i >= limit)" in generated_code
+    assert "break;" in generated_code
+    assert "} while (i < 4);" in generated_code
+    assert "return i;" in generated_code
+    assert "DoWhileNode(" not in generated_code
+
+
 def test_for_in_statement_lowers_to_counted_loop():
     shader = """
     shader ForInNodeSmoke {
@@ -580,8 +607,8 @@ def test_switch_fallthrough_and_nested_switch_emit_c_style_syntax():
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "switch (mode)" in generated_code
-    assert "case 0:\n        case 1:" in generated_code
-    assert "case 2:\n            switch (submode)" in generated_code
+    assert "case 0:\n        case 1: {" in generated_code
+    assert "case 2: {\n            switch (submode)" in generated_code
     assert generated_code.count("default:") == 2
     assert "value = value + 1;" in generated_code
     assert "value = value + 2;" in generated_code
@@ -590,6 +617,47 @@ def test_switch_fallthrough_and_nested_switch_emit_c_style_syntax():
     assert "return value;" in generated_code
     assert "SwitchNode(" not in generated_code
     assert "CaseNode(" not in generated_code
+
+
+def test_switch_and_match_case_blocks_scope_local_declarations():
+    shader = """
+    shader CaseScopeSmoke {
+        int switchHelper(int mode) {
+            int value = 0;
+            switch (mode) {
+                case 0:
+                case 1:
+                    int scoped = value + 1;
+                    value = scoped;
+                    break;
+                default:
+                    int scoped = value + 2;
+                    value = scoped;
+                    break;
+            }
+            return value;
+        }
+
+        int matchHelper(int mode) {
+            int value = 0;
+            match mode {
+                0 => { int scoped = value + 1; value = scoped; }
+                1 => { int scoped = value + 2; value = scoped; }
+                _ => { int scoped = value + 3; value = scoped; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "case 0:\n        case 1: {" in generated_code
+    assert generated_code.count("case 0: {") == 1
+    assert generated_code.count("int scoped") == 5
+    assert "default: {" in generated_code
+    assert "MatchNode(" not in generated_code
+    assert "SwitchNode(" not in generated_code
 
 
 def test_match_literal_and_wildcard_arms_lower_to_switch():
@@ -14674,17 +14742,34 @@ def test_metal_sampler_1d_array_sampling_and_queries():
         sampler1DArray lineArray;
         sampler linearSampler;
 
-        vec4 sampleLineArray(sampler1DArray tex, sampler samp, vec2 uvLayer, int lod) {
+        vec4 sampleLineArray(
+            sampler1DArray tex,
+            sampler samp,
+            vec2 uvLayer,
+            ivec2 pixelLayer,
+            int lod,
+            int offset
+        ) {
             ivec2 dims = textureSize(tex, lod);
             int levels = textureQueryLevels(tex);
+            vec2 lodInfo = textureQueryLod(tex, samp, uvLayer);
             return texture(tex, samp, uvLayer)
                 + textureLod(tex, samp, uvLayer, lod)
-                + vec4(dims.x, dims.y, levels, 0.0);
+                + texelFetch(tex, pixelLayer, lod)
+                + texelFetchOffset(tex, pixelLayer, lod, offset)
+                + vec4(dims.x, dims.y, levels, lodInfo.x + lodInfo.y);
         }
 
         fragment {
             vec4 main() @gl_FragColor {
-                return sampleLineArray(lineArray, linearSampler, vec2(0.5, 0.0), 0);
+                return sampleLineArray(
+                    lineArray,
+                    linearSampler,
+                    vec2(0.5, 0.0),
+                    ivec2(4, 0),
+                    0,
+                    1
+                );
             }
         }
     }
@@ -14696,13 +14781,24 @@ def test_metal_sampler_1d_array_sampling_and_queries():
     assert "texture1d_array<float> lineArray [[texture(0)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
     assert (
-        "float4 sampleLineArray(texture1d_array<float> tex, sampler samp, float2 uvLayer, int lod)"
+        "float4 sampleLineArray(texture1d_array<float> tex, sampler samp, float2 uvLayer, int2 pixelLayer, int lod, int offset)"
         in generated_code
     )
     assert "int2(tex.get_width(uint(lod)), tex.get_array_size())" in generated_code
     assert "int(tex.get_num_mip_levels())" in generated_code
+    assert (
+        "float2 lodInfo = float2(tex.calculate_unclamped_lod(samp, uvLayer.x), tex.calculate_clamped_lod(samp, uvLayer.x));"
+        in generated_code
+    )
     assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y))" in generated_code
     assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y), level(lod))" in generated_code
+    assert "tex.read(pixelLayer.x, uint(pixelLayer.y), lod)" in generated_code
+    assert (
+        "tex.read((pixelLayer.x + offset), uint(pixelLayer.y), lod)" in generated_code
+    )
+    assert "tex.read(pixelLayer.xy" not in generated_code
+    assert "tex.read((pixelLayer.xy" not in generated_code
+    assert "calculate_unclamped_lod(samp, uvLayer)" not in generated_code
 
 
 def test_metal_image_1d_and_1d_array_storage_operations():
@@ -14733,6 +14829,10 @@ def test_metal_image_1d_and_1d_array_storage_operations():
             return imageAtomicExchange(image, coord, value);
         }
 
+        uint compareLayer(uimage1DArray image @r32ui, ivec2 coord, uint expected, uint value) {
+            return imageAtomicCompSwap(image, coord, expected, value);
+        }
+
         compute {
             void main() {
                 int sizeLine = imageSize(line);
@@ -14741,6 +14841,7 @@ def test_metal_image_1d_and_1d_array_storage_operations():
                 vec4 b = touchLayer(layers, ivec2(2, 3), vec4(1.0));
                 uint c = addCounter(counters, 4, 7u);
                 uint d = exchangeLayer(layerCounters, ivec2(5, 6), 8u);
+                uint e = compareLayer(layerCounters, ivec2(7, 8), d, c);
             }
         }
     }
@@ -14778,6 +14879,92 @@ def test_metal_image_1d_and_1d_array_storage_operations():
     assert (
         "image.atomic_exchange(uint(coord.x), uint(coord.y), value).x" in generated_code
     )
+    assert (
+        "uint imageAtomicCompSwap_uimage1DArray(texture1d_array<uint, access::read_write> image, int2 coord, uint compareValue, uint value)"
+        in generated_code
+    )
+    assert (
+        "image.atomic_compare_exchange_weak(uint(coord.x), uint(coord.y), &original, value)"
+        in generated_code
+    )
+    assert (
+        "return imageAtomicCompSwap_uimage1DArray(image, coord, expected, value);"
+        in generated_code
+    )
+
+
+def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
+    shader = """
+    shader MetalMultisampleStorageImages {
+        image2DMS colorImage @rgba16f;
+        uimage2DMS counters @r32ui;
+        image2DMSArray layered @rgba16f;
+
+        vec4 touch(image2DMS image @rgba16f, uimage2DMS counterImage @r32ui, ivec2 pixel, int sampleIndex, vec4 value, uint count) {
+            vec4 oldColor = imageLoad(image, pixel, sampleIndex);
+            uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
+            imageStore(image, pixel, sampleIndex, oldColor + value);
+            imageStore(counterImage, pixel, sampleIndex, oldCount + count);
+            uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
+            return oldColor + vec4(float(oldCount + atomicOld));
+        }
+
+        vec4 touchLayer(image2DMSArray image @rgba16f, ivec3 pixelLayer, int sampleIndex) {
+            return imageLoad(image, pixelLayer, sampleIndex);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return touch(colorImage, counters, ivec2(0), 1, vec4(1.0), 2u)
+                    + touchLayer(layered, ivec3(0, 1, 2), 3);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "texture2d_ms<float, access::read> colorImage [[texture(0)]]" in generated_code
+    )
+    assert "texture2d_ms<uint, access::read> counters [[texture(1)]]" in generated_code
+    assert (
+        "texture2d_ms_array<float, access::read> layered [[texture(2)]]"
+        in generated_code
+    )
+    assert (
+        "float4 touch(texture2d_ms<float, access::read> image, texture2d_ms<uint, access::read> counterImage"
+        in generated_code
+    )
+    assert (
+        "float4 oldColor = image.read(uint2(pixel), uint(sampleIndex));"
+        in generated_code
+    )
+    assert (
+        "uint oldCount = counterImage.read(uint2(pixel), uint(sampleIndex)).x;"
+        in generated_code
+    )
+    assert (
+        "return image.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
+        in generated_code
+    )
+    assert (
+        "unsupported Metal multisample image store: imageStore on texture2d_ms<float"
+        in generated_code
+    )
+    assert (
+        "unsupported Metal multisample image store: imageStore on texture2d_ms<uint"
+        in generated_code
+    )
+    assert (
+        "unsupported Metal multisample image atomic: imageAtomicAdd on texture2d_ms<uint"
+        in generated_code
+    )
+    assert "texture2d_ms<float, access::read_write>" not in generated_code
+    assert "texture2d_ms<uint, access::read_write>" not in generated_code
+    assert "texture2d_ms_array<float, access::read_write>" not in generated_code
+    assert ".write(" not in generated_code
 
 
 def test_metal_storage_image_access_attributes_select_texture_access():

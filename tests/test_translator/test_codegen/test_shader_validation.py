@@ -55,6 +55,175 @@ shader FragmentStructInputValidation {
 """
 
 
+SWITCH_MATCH_CASE_SCOPE_FRAGMENT_SHADER = """
+shader SwitchMatchCaseScopeValidation {
+    int chooseSwitch(int mode) {
+        int value = 0;
+        switch (mode) {
+            case 0:
+            case 1:
+                int scoped = value + 1;
+                value = scoped;
+                break;
+            default:
+                int scoped = value + 2;
+                value = scoped;
+                break;
+        }
+        return value;
+    }
+
+    int chooseMatch(int mode) {
+        int value = 0;
+        match mode {
+            0 => { int scoped = value + 3; value = scoped; }
+            _ => { int scoped = value + 4; value = scoped; }
+        }
+        return value;
+    }
+
+    fragment {
+        vec4 main() @ gl_FragColor {
+            int total = chooseSwitch(1) + chooseMatch(2);
+            return vec4(float(total), 0.0, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+
+SWITCH_MATCH_TEXTURE_CASE_SCOPE_FRAGMENT_SHADER = """
+shader SwitchMatchTextureCaseScopeValidation {
+    sampler2D textures[4];
+    sampler samplers[4];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+    };
+
+    vec4 chooseSwitch(sampler2D textures[4], sampler samplers[4], int mode, vec2 uv) {
+        vec4 color = vec4(0.0);
+        switch (mode) {
+            case 0:
+            case 1:
+                vec4 scoped = texture(textures[0], samplers[0], uv);
+                color = scoped;
+                break;
+            default:
+                vec4 scoped = texture(textures[1], samplers[1], uv);
+                color = scoped;
+                break;
+        }
+        return color;
+    }
+
+    vec4 chooseMatch(sampler2D textures[4], sampler samplers[4], int mode, vec2 uv) {
+        vec4 color = vec4(0.0);
+        match mode {
+            0 => { vec4 scoped = texture(textures[2], samplers[2], uv); color = scoped; }
+            _ => { vec4 scoped = texture(textures[3], samplers[3], uv); color = scoped; }
+        }
+        return color;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return chooseSwitch(textures, samplers, 1, input.uv) + chooseMatch(textures, samplers, 2, input.uv);
+        }
+    }
+}
+"""
+
+
+SWITCH_MATCH_IMAGE_CASE_SCOPE_COMPUTE_SHADER = """
+shader SwitchMatchImageCaseScopeValidation {
+    image2D rgFloatImages @rg32f[4];
+
+    vec2 chooseSwitch(image2D images[4] @rg32f, int mode, ivec2 pixel) {
+        vec2 color = vec2(0.0);
+        switch (mode) {
+            case 0:
+            case 1:
+                vec2 scoped = imageLoad(images[0], pixel);
+                imageStore(images[1], pixel, scoped + vec2(1.0));
+                color = scoped;
+                break;
+            default:
+                vec2 scoped = imageLoad(images[2], pixel);
+                imageStore(images[3], pixel, scoped + vec2(2.0));
+                color = scoped;
+                break;
+        }
+        return color;
+    }
+
+    vec2 chooseMatch(image2D images[4] @rg32f, int mode, ivec2 pixel) {
+        vec2 color = vec2(0.0);
+        match mode {
+            0 => {
+                vec2 scoped = imageLoad(images[0], pixel);
+                imageStore(images[1], pixel, scoped + vec2(3.0));
+                color = scoped;
+            }
+            _ => {
+                vec2 scoped = imageLoad(images[2], pixel);
+                imageStore(images[3], pixel, scoped + vec2(4.0));
+                color = scoped;
+            }
+        }
+        return color;
+    }
+
+    compute {
+        void main() {
+            vec2 first = chooseSwitch(rgFloatImages, 1, ivec2(0, 1));
+            vec2 second = chooseMatch(rgFloatImages, 2, ivec2(2, 3));
+            imageStore(rgFloatImages[0], ivec2(4, 5), first + second);
+        }
+    }
+}
+"""
+
+
+DO_WHILE_SWITCH_MATCH_IMAGE_COMPUTE_SHADER = """
+shader DoWhileSwitchMatchImageValidation {
+    image2D rgFloatImages @rg32f[4];
+
+    vec2 chooseImage(image2D images[4] @rg32f, int mode, ivec2 pixel) {
+        vec2 color = vec2(0.0);
+        do {
+            switch (mode) {
+                case 0:
+                    vec2 scoped = imageLoad(images[0], pixel);
+                    imageStore(images[1], pixel, scoped + vec2(1.0));
+                    color = scoped;
+                    break;
+                default:
+                    break;
+            }
+            match mode {
+                1 => {
+                    vec2 scoped = imageLoad(images[2], pixel);
+                    imageStore(images[3], pixel, scoped + vec2(2.0));
+                    color = color + scoped;
+                }
+                _ => {
+                }
+            }
+        } while (false);
+        return color;
+    }
+
+    compute {
+        void main() {
+            vec2 result = chooseImage(rgFloatImages, 1, ivec2(0, 1));
+            imageStore(rgFloatImages[0], ivec2(2, 3), result);
+        }
+    }
+}
+"""
+
+
 SPIRV_COMPLEX_RESOURCE_COMPUTE_SHADER = """
 struct SampleEnvelope {
     vec4 color;
@@ -731,6 +900,20 @@ shader ComputeStageValidation {
         void main() {
             int value = 1;
             uint unsignedValue = 7u;
+        }
+    }
+}
+"""
+
+
+COMPUTE_DO_WHILE_SHADER = """
+shader ComputeDoWhileValidation {
+    compute {
+        void main() {
+            int value = 0;
+            do {
+                value = value + 1;
+            } while (value < 3);
         }
     }
 }
@@ -1502,6 +1685,19 @@ def test_generated_spirv_codegen_examples_validate_with_spirv_tools(tmp_path):
     if spirv_as is None or spirv_val is None:
         pytest.skip("spirv-as and spirv-val are not installed")
 
+    def expects_codegen_error(function_node):
+        for child in ast.walk(function_node):
+            if not isinstance(child, ast.With):
+                continue
+            for item in child.items:
+                context_expr = item.context_expr
+                if not isinstance(context_expr, ast.Call):
+                    continue
+                callee = context_expr.func
+                if isinstance(callee, ast.Attribute) and callee.attr == "raises":
+                    return True
+        return False
+
     test_file = Path(__file__).with_name("test_SPIRV_codegen.py")
     module = ast.parse(test_file.read_text(encoding="utf-8"))
     failures = []
@@ -1509,6 +1705,8 @@ def test_generated_spirv_codegen_examples_validate_with_spirv_tools(tmp_path):
 
     for node in ast.walk(module):
         if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+        if expects_codegen_error(node):
             continue
 
         source_code = None
@@ -1600,6 +1798,46 @@ def test_generated_metal_fragment_smoke_compiles_with_metal(tmp_path):
     source = tmp_path / "fragment_range.metal"
     output = tmp_path / "fragment_range.air"
     code = MetalCodeGen().generate(crosstl.translator.parse(FRAGMENT_RANGE_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_switch_match_case_scope_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_switch_match_case_scope.metal"
+    output = tmp_path / "fragment_switch_match_case_scope.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_CASE_SCOPE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_switch_match_texture_case_scope_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_switch_match_texture_case_scope.metal"
+    output = tmp_path / "fragment_switch_match_texture_case_scope.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_TEXTURE_CASE_SCOPE_FRAGMENT_SHADER),
+        "fragment",
+    )
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -1986,6 +2224,25 @@ def test_generated_metal_compute_stage_with_builtins_compiles_with_metal(tmp_pat
     )
 
 
+def test_generated_metal_compute_do_while_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_do_while.metal"
+    output = tmp_path / "compute_do_while.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(COMPUTE_DO_WHILE_SHADER), "compute"
+    )
+    assert "do {" in code
+    assert "DoWhileNode(" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
 def test_generated_metal_compute_scalar_image_compiles_with_metal(tmp_path):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
@@ -2030,6 +2287,49 @@ def test_generated_metal_compute_rg_image_array_compiles_with_metal(tmp_path):
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(RG_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_switch_match_image_case_scope_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_switch_match_image_case_scope.metal"
+    output = tmp_path / "compute_switch_match_image_case_scope.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_IMAGE_CASE_SCOPE_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_do_while_switch_match_image_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_do_while_switch_match_image.metal"
+    output = tmp_path / "compute_do_while_switch_match_image.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(DO_WHILE_SWITCH_MATCH_IMAGE_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "do {" in code
+    assert "case 0: {" in code
+    assert "DoWhileNode(" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -2246,6 +2546,40 @@ def test_generated_glsl_fragment_smoke_validates_with_glslang(tmp_path):
 
     source = tmp_path / "fragment_range.frag"
     code = GLSLCodeGen().generate(crosstl.translator.parse(FRAGMENT_RANGE_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_switch_match_case_scope_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_switch_match_case_scope.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_CASE_SCOPE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fragment_switch_match_texture_case_scope_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_switch_match_texture_case_scope.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_TEXTURE_CASE_SCOPE_FRAGMENT_SHADER),
+        "fragment",
+    )
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])
@@ -2569,6 +2903,22 @@ def test_generated_glsl_compute_stage_validates_with_glslang(tmp_path):
     run_validator([glslang, "-S", "comp", str(source)])
 
 
+def test_generated_glsl_compute_do_while_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_do_while.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(COMPUTE_DO_WHILE_SHADER), "compute"
+    )
+    assert "do {" in code
+    assert "DoWhileNode(" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
 def test_generated_glsl_compute_default_float_image_validates_with_glslang(tmp_path):
     glslang = shutil.which("glslangValidator")
     if glslang is None:
@@ -2606,6 +2956,43 @@ def test_generated_glsl_compute_rg_image_array_validates_with_glslang(tmp_path):
     code = GLSLCodeGen().generate_stage(
         crosstl.translator.parse(RG_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_switch_match_image_case_scope_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_switch_match_image_case_scope.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_IMAGE_CASE_SCOPE_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_generated_glsl_compute_do_while_switch_match_image_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_do_while_switch_match_image.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(DO_WHILE_SWITCH_MATCH_IMAGE_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "do {" in code
+    assert "case 0: {" in code
+    assert "DoWhileNode(" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "comp", str(source)])
@@ -2802,6 +3189,46 @@ def test_generated_hlsl_combined_stages_validate_separately_with_dxc(tmp_path):
         run_validator(
             [dxc, "-T", target, "-E", entry_point, str(source), "-Fo", str(output)]
         )
+
+
+def test_generated_hlsl_fragment_switch_match_case_scope_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_switch_match_case_scope.hlsl"
+    output = tmp_path / "fragment_switch_match_case_scope.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_CASE_SCOPE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_switch_match_texture_case_scope_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_switch_match_texture_case_scope.hlsl"
+    output = tmp_path / "fragment_switch_match_texture_case_scope.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_TEXTURE_CASE_SCOPE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
 
 
 def test_generated_hlsl_fragment_sampled_texture_array_validates_with_dxc(tmp_path):
@@ -3127,6 +3554,25 @@ def test_generated_hlsl_compute_stage_validates_with_dxc(tmp_path):
     )
 
 
+def test_generated_hlsl_compute_do_while_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_do_while.hlsl"
+    output = tmp_path / "compute_do_while.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(COMPUTE_DO_WHILE_SHADER), "compute"
+    )
+    assert "do {" in code
+    assert "DoWhileNode(" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
 def test_generated_hlsl_compute_default_float_image_validates_with_dxc(tmp_path):
     dxc = shutil.which("dxc")
     if dxc is None:
@@ -3171,6 +3617,49 @@ def test_generated_hlsl_compute_rg_image_array_validates_with_dxc(tmp_path):
     code = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(RG_IMAGE_ARRAY_COMPUTE_SHADER), "compute"
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_switch_match_image_case_scope_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_switch_match_image_case_scope.hlsl"
+    output = tmp_path / "compute_switch_match_image_case_scope.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(SWITCH_MATCH_IMAGE_CASE_SCOPE_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_do_while_switch_match_image_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_do_while_switch_match_image.hlsl"
+    output = tmp_path / "compute_do_while_switch_match_image.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(DO_WHILE_SWITCH_MATCH_IMAGE_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "do {" in code
+    assert "case 0: {" in code
+    assert "DoWhileNode(" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

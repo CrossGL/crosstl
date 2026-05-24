@@ -611,9 +611,10 @@ def test_mojo_generated_builtin_names_lower_to_crossgl():
         let b = math.lerp(0.0, 1.0, 0.75)
         let c = power(2.0, 3.0)
         let d = rsqrt(x)
-        let e = dot_product(lhs, rhs)
-        let f = cross_product(lhs, rhs)
-        let g = magnitude(lhs)
+        let e = math.rsqrt(x)
+        let f = dot_product(lhs, rhs)
+        let g = cross_product(lhs, rhs)
+        let h = magnitude(lhs)
     """
 
     tokens = tokenize_code(code)
@@ -624,16 +625,51 @@ def test_mojo_generated_builtin_names_lower_to_crossgl():
     assert "let b = mix(0.0, 1.0, 0.75);" in generated_code
     assert "let c = pow(2.0, 3.0);" in generated_code
     assert "let d = inversesqrt(x);" in generated_code
-    assert "let e = dot(lhs, rhs);" in generated_code
-    assert "let f = cross(lhs, rhs);" in generated_code
-    assert "let g = length(lhs);" in generated_code
+    assert "let e = inversesqrt(x);" in generated_code
+    assert "let f = dot(lhs, rhs);" in generated_code
+    assert "let g = cross(lhs, rhs);" in generated_code
+    assert "let h = length(lhs);" in generated_code
     assert "lerp(" not in generated_code
     assert "math.lerp(" not in generated_code
     assert "power(" not in generated_code
     assert "rsqrt(" not in generated_code
+    assert "math.rsqrt(" not in generated_code
     assert "dot_product(" not in generated_code
     assert "cross_product(" not in generated_code
     assert "magnitude(" not in generated_code
+
+
+def test_user_defined_lerp_call_does_not_lower_to_mix():
+    code = """
+    fn lerp(x: Float32) -> Float32:
+        return x
+
+    fn main():
+        let y = lerp(1.0)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float lerp(float x)" in generated_code
+    assert "let y = lerp(1.0);" in generated_code
+    assert "let y = mix(1.0);" not in generated_code
+
+
+def test_mojo_method_call_on_math_parameter_does_not_lower_to_builtin():
+    code = """
+    fn main(math: Mixer):
+        let blended = math.lerp(0.0, 1.0, 0.25)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void main(Mixer math)" in generated_code
+    assert "let blended = math.lerp(0.0, 1.0, 0.25);" in generated_code
+    assert "let blended = mix(0.0, 1.0, 0.25);" not in generated_code
 
 
 def test_logical_ops_codegen():
@@ -964,7 +1000,9 @@ def test_import_codegen():
     fn vertex_main() -> float4:
         let result = math.sin(0.5)
         let wrapped = math.fract(1.25)
-        return float4(result, wrapped, 0.0, 1.0)
+        let logged = math.log(4.0)
+        let raised = math.exp(1.0)
+        return float4(result, wrapped, logged, raised)
     """
     try:
         tokens = tokenize_code(code)
@@ -976,7 +1014,11 @@ def test_import_codegen():
         assert "// from tensor import Tensor" in generated_code
         assert "let result = sin(0.5);" in generated_code
         assert "let wrapped = fract(1.25);" in generated_code
+        assert "let logged = log(4.0);" in generated_code
+        assert "let raised = exp(1.0);" in generated_code
         assert "math.fract(" not in generated_code
+        assert "math.log(" not in generated_code
+        assert "math.exp(" not in generated_code
     except SyntaxError:
         pytest.fail("Import parsing or code generation not implemented.")
 
