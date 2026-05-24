@@ -5714,6 +5714,205 @@ def test_codegen_vector_return_helper_assignment_infers_image_size():
         GLSLCodeGen().generate(fixed_ast)
 
 
+def test_codegen_ternary_vector_return_helper_infers_sampled_size():
+    crossgl = """
+    shader TernaryVectorReturnSampled {
+        sampler2D textures[];
+        sampler samplers[];
+        sampler2D afterTexture;
+
+        ivec2 chooseLayer(ivec2 layers, bool choose) {
+            return choose
+                ? ivec2(layers.x + 5, layers.y + 1)
+                : ivec2(layers.x + 2, layers.y + 4);
+        }
+
+        vec4 sampleLayer(sampler2D textures[], sampler samplers[], vec2 uv, bool choose) {
+            ivec2 layers = ivec2(0, 1);
+            layers = chooseLayer(layers, choose);
+            return texture(textures[layers.x + layers.y], samplers[layers.x + layers.y], uv);
+        }
+
+        fragment {
+            vec4 main(vec2 uv, bool choose) @ gl_FragColor {
+                return sampleLayer(textures, samplers, uv, choose) + texture(afterTexture, uv);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "Texture2D textures[11] : register(t0);" in hlsl
+    assert "SamplerState samplers[11] : register(s0);" in hlsl
+    assert "Texture2D afterTexture : register(t11);" in hlsl
+    assert "int2 chooseLayer(int2 layers, bool choose)" in hlsl
+    assert (
+        "return (choose ? int2((layers.x + 5), (layers.y + 1)) : "
+        "int2((layers.x + 2), (layers.y + 4)));" in hlsl
+    )
+    assert (
+        "float4 sampleLayer(Texture2D textures[11], SamplerState samplers[11], "
+        "float2 uv, bool choose)" in hlsl
+    )
+    assert "layers = chooseLayer(layers, choose);" in hlsl
+    assert (
+        "return textures[(layers.x + layers.y)].Sample("
+        "samplers[(layers.x + layers.y)], uv);" in hlsl
+    )
+    assert "Texture2D textures[1]" not in hlsl
+
+    assert "array<texture2d<float>, 11> textures [[texture(0)]]" in metal
+    assert "array<sampler, 11> samplers [[sampler(0)]]" in metal
+    assert "texture2d<float> afterTexture [[texture(11)]]" in metal
+    assert "int2 chooseLayer(int2 layers, bool choose)" in metal
+    assert (
+        "return choose ? int2(layers.x + 5, layers.y + 1) : "
+        "int2(layers.x + 2, layers.y + 4);" in metal
+    )
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, 11> textures, "
+        "array<sampler, 11> samplers, float2 uv, bool choose)" in metal
+    )
+    assert "layers = chooseLayer(layers, choose);" in metal
+    assert (
+        "return textures[layers.x + layers.y].sample("
+        "samplers[layers.x + layers.y], uv);" in metal
+    )
+    assert "array<texture2d<float>, 1> textures" not in metal
+
+    assert "layout(binding = 0) uniform sampler2D textures[11];" in glsl
+    assert "layout(binding = 11) uniform sampler2D afterTexture;" in glsl
+    assert "ivec2 chooseLayer(ivec2 layers, bool choose)" in glsl
+    assert (
+        "return (choose ? ivec2((layers.x + 5), (layers.y + 1)) : "
+        "ivec2((layers.x + 2), (layers.y + 4)));" in glsl
+    )
+    assert "vec4 sampleLayer(sampler2D textures[11], vec2 uv, bool choose)" in glsl
+    assert "layers = chooseLayer(layers, choose);" in glsl
+    assert "return texture(textures[(layers.x + layers.y)], uv);" in glsl
+    assert "sampler2D textures[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "sampler2D textures[];\n        sampler samplers[];",
+        "sampler2D textures[10];\n        sampler samplers[10];",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = "Conflicting fixed resource array sizes for 'textures': 10 and 11"
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
+def test_codegen_branch_vector_return_helper_infers_image_size():
+    crossgl = """
+    shader BranchVectorReturnImage {
+        image2D rgFloatImages @rg32f[];
+        image2D afterImage @rg32f;
+
+        ivec2 chooseLayer(ivec2 layers, bool choose) {
+            if (choose) {
+                return ivec2(layers.x + 3, layers.y + 2);
+            }
+            return ivec2(layers.x + 1, layers.y + 5);
+        }
+
+        int pickLayer(ivec2 layers, int extra) {
+            return layers.x + layers.y + extra;
+        }
+
+        vec2 readLayer(image2D images[] @rg32f, ivec2 pixel, bool choose) {
+            ivec2 layers = ivec2(0, 1);
+            layers = chooseLayer(layers, choose);
+            return imageLoad(images[pickLayer(layers, 1)], pixel);
+        }
+
+        compute {
+            void main() {
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), true);
+                imageStore(afterImage, ivec2(1, 2), result);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWTexture2D<float2> rgFloatImages[11] : register(u0);" in hlsl
+    assert "RWTexture2D<float2> afterImage : register(u11);" in hlsl
+    assert "int2 chooseLayer(int2 layers, bool choose)" in hlsl
+    assert "return int2((layers.x + 3), (layers.y + 2));" in hlsl
+    assert "return int2((layers.x + 1), (layers.y + 5));" in hlsl
+    assert "int pickLayer(int2 layers, int extra)" in hlsl
+    assert (
+        "float2 readLayer(RWTexture2D<float2> images[11], int2 pixel, "
+        "bool choose)" in hlsl
+    )
+    assert "layers = chooseLayer(layers, choose);" in hlsl
+    assert "return images[pickLayer(layers, 1)][pixel];" in hlsl
+    assert "RWTexture2D<float2> rgFloatImages[1]" not in hlsl
+
+    assert (
+        "array<texture2d<float, access::read_write>, 11> rgFloatImages "
+        "[[texture(0)]]" in metal
+    )
+    assert "texture2d<float, access::read_write> afterImage [[texture(11)]]" in metal
+    assert "int2 chooseLayer(int2 layers, bool choose)" in metal
+    assert "return int2(layers.x + 3, layers.y + 2);" in metal
+    assert "return int2(layers.x + 1, layers.y + 5);" in metal
+    assert "int pickLayer(int2 layers, int extra)" in metal
+    assert (
+        "float2 readLayer(array<texture2d<float, access::read_write>, 11> "
+        "images, int2 pixel, bool choose)" in metal
+    )
+    assert "layers = chooseLayer(layers, choose);" in metal
+    assert "return images[pickLayer(layers, 1)].read(uint2(pixel)).xy;" in metal
+    assert "array<texture2d<float, access::read_write>, 1> rgFloatImages" not in metal
+
+    assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[11];" in glsl
+    assert "layout(rg32f, binding = 11) uniform image2D afterImage;" in glsl
+    assert "ivec2 chooseLayer(ivec2 layers, bool choose)" in glsl
+    assert "return ivec2((layers.x + 3), (layers.y + 2));" in glsl
+    assert "return ivec2((layers.x + 1), (layers.y + 5));" in glsl
+    assert "int pickLayer(ivec2 layers, int extra)" in glsl
+    assert "vec2 readLayer(image2D images[11], ivec2 pixel, bool choose)" in glsl
+    assert "layers = chooseLayer(layers, choose);" in glsl
+    assert "return imageLoad(images[pickLayer(layers, 1)], pixel).xy;" in glsl
+    assert "image2D rgFloatImages[1]" not in glsl
+
+    fixed_crossgl = crossgl.replace(
+        "image2D rgFloatImages @rg32f[];",
+        "image2D rgFloatImages[10] @rg32f;",
+    )
+    fixed_ast = parse_crossgl(fixed_crossgl)
+    assert fixed_ast is not None
+
+    expected_error = (
+        "Conflicting fixed resource array sizes for 'rgFloatImages': 10 and 11"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        HLSLCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate(fixed_ast)
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate(fixed_ast)
+
+
 def test_codegen_vector_component_match_assignment_infers_image_size():
     crossgl = """
     shader VectorComponentMatchImageIndex {

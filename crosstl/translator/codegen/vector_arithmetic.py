@@ -267,6 +267,132 @@ class VectorArithmeticMixin:
         self.helper_functions[helper_name] = helper
         return helper_name
 
+    def generate_vector_constructor_single_eval_call(self, vector_info, raw_args, args):
+        """Return a helper call for constructors that flatten complex vector inputs."""
+        pieces, helper_needed = self.vector_constructor_helper_pieces(
+            vector_info, raw_args, args
+        )
+        if not helper_needed:
+            return None
+
+        helper_name = self.require_vector_constructor_helper(vector_info, pieces)
+        return f"{helper_name}({', '.join(piece['arg_expr'] for piece in pieces)})"
+
+    def vector_constructor_helper_pieces(self, vector_info, raw_args, args):
+        target_size = len(vector_info["components"])
+        pieces = []
+        helper_needed = False
+        emitted_lanes = 0
+
+        for raw_arg, arg_expr in zip(raw_args, args):
+            if emitted_lanes >= target_size:
+                break
+
+            swizzle_components = self.member_swizzle_components(raw_arg)
+            if swizzle_components is not None:
+                object_node = getattr(
+                    raw_arg,
+                    "object_expr",
+                    getattr(raw_arg, "object", None),
+                )
+                object_info = self.vector_type_info(
+                    self.expression_result_type(object_node)
+                )
+                if object_info is not None:
+                    components = swizzle_components[: target_size - emitted_lanes]
+                    pieces.append(
+                        {
+                            "kind": "vector",
+                            "param_type": object_info["type"],
+                            "arg_expr": self.visit(object_node),
+                            "components": components,
+                        }
+                    )
+                    helper_needed = helper_needed or not self.is_repeat_safe_expression(
+                        object_node
+                    )
+                    emitted_lanes += len(components)
+                    continue
+
+            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            if arg_info is not None:
+                components = arg_info["components"][: target_size - emitted_lanes]
+                pieces.append(
+                    {
+                        "kind": "vector",
+                        "param_type": arg_info["type"],
+                        "arg_expr": arg_expr,
+                        "components": components,
+                    }
+                )
+                helper_needed = helper_needed or not self.is_repeat_safe_expression(
+                    raw_arg
+                )
+                emitted_lanes += len(components)
+                continue
+
+            pieces.append(
+                {
+                    "kind": "scalar",
+                    "param_type": self.vector_constructor_scalar_parameter_type(
+                        self.expression_result_type(raw_arg),
+                        vector_info["component_type"],
+                    ),
+                    "arg_expr": arg_expr,
+                    "components": (),
+                }
+            )
+            emitted_lanes += 1
+
+        return pieces, helper_needed
+
+    def vector_constructor_scalar_parameter_type(self, type_name, fallback_type):
+        component_type = self.scalar_component_type(type_name) or fallback_type
+        if component_type == "uint":
+            return "unsigned int"
+        return component_type
+
+    def require_vector_constructor_helper(self, vector_info, pieces):
+        vector_type = vector_info["type"]
+        signature = "_".join(
+            self.vector_constructor_piece_signature(piece) for piece in pieces
+        )
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{vector_type}_construct_{signature}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        constructor = vector_info["constructor"]
+        params = [
+            f"{piece['param_type']} arg{index}" for index, piece in enumerate(pieces)
+        ]
+        lanes = []
+        for index, piece in enumerate(pieces):
+            if piece["kind"] == "vector":
+                lanes.extend(
+                    f"arg{index}.{component}" for component in piece["components"]
+                )
+            else:
+                lanes.append(f"arg{index}")
+
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({', '.join(params)})\n"
+            "{\n"
+            f"    return {constructor}({', '.join(lanes)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def vector_constructor_piece_signature(self, piece):
+        if piece["kind"] == "vector":
+            return f"{piece['param_type']}_{''.join(piece['components'])}"
+        return piece["param_type"]
+
+    def sanitize_helper_name(self, value):
+        return "".join(character if character.isalnum() else "_" for character in value)
+
     def vector_type_for_components(self, component_type, component_count):
         """Return a vector type name for a component type/count pair."""
         if component_count < 2 or component_count > 4:

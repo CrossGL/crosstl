@@ -628,6 +628,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if splat_call is not None:
                 return splat_call
+            constructor_call = self.generate_vector_constructor_single_eval_call(
+                vector_info, raw_args, args
+            )
+            if constructor_call is not None:
+                return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
         scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)

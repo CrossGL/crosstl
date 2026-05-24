@@ -571,6 +571,76 @@ class TestCudaCodeGen:
         assert "make_uchar4(nextFlag(), nextFlag()" not in cuda_code
         assert "make_uchar2(nextIndex(), nextIndex())" not in cuda_code
 
+    def test_complex_composite_vector_constructors_use_cuda_helpers(self):
+        """Test CUDA composite vector constructors evaluate vector inputs once."""
+        source_code = """
+        shader TestShader {
+            compute {
+                vec2 makeUv() {
+                    return vec2(0.25, 0.5);
+                }
+
+                vec3 makeNormal() {
+                    return vec3(0.0, 1.0, 0.0);
+                }
+
+                vec4 makeColor() {
+                    return vec4(1.0, 2.0, 3.0, 4.0);
+                }
+
+                float makeWeight() {
+                    return 0.75;
+                }
+
+                void main() {
+                    vec4 color = vec4(makeUv(), 0.0, 1.0);
+                    vec4 packed = vec4(makeNormal(), makeWeight());
+                    vec3 rgb = vec3(makeColor().rgb);
+                    vec2 uv = vec2(0.25, 0.5);
+                    vec4 simple = vec4(uv, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "__device__ inline float4 "
+            "cgl_float4_construct_float2_xy_float_float"
+            "(float2 arg0, float arg1, float arg2)" in cuda_code
+        )
+        assert "return make_float4(arg0.x, arg0.y, arg1, arg2);" in cuda_code
+        assert (
+            "__device__ inline float4 cgl_float4_construct_float3_xyz_float"
+            "(float3 arg0, float arg1)" in cuda_code
+        )
+        assert "return make_float4(arg0.x, arg0.y, arg0.z, arg1);" in cuda_code
+        assert (
+            "__device__ inline float3 cgl_float3_construct_float4_xyz(float4 arg0)"
+            in cuda_code
+        )
+        assert "return make_float3(arg0.x, arg0.y, arg0.z);" in cuda_code
+        assert (
+            "float4 color = "
+            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 packed = "
+            "cgl_float4_construct_float3_xyz_float(makeNormal(), makeWeight());"
+            in cuda_code
+        )
+        assert "float3 rgb = cgl_float3_construct_float4_xyz(makeColor());" in cuda_code
+        assert "float4 simple = make_float4(uv.x, uv.y, 0.0, 1.0);" in cuda_code
+        assert "make_float4(makeUv().x, makeUv().y, 0.0, 1.0)" not in cuda_code
+        assert "make_float4(makeNormal().x, makeNormal().y" not in cuda_code
+        assert "make_float3(makeColor().x, makeColor().y, makeColor().z)" not in cuda_code
+
     def test_vector_scalar_arithmetic_expands_cuda_components(self):
         """Test CUDA lowers vector math through component-wise helpers."""
         source_code = """
