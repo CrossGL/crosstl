@@ -134,6 +134,17 @@ def collect_stage_local_variables(ast, target_stage=None, predicate=None):
     return variables
 
 
+def collect_stage_local_structs(ast, target_stage=None):
+    """Return stage-local struct declarations for matching stages."""
+    structs = []
+    for stage_type, stage in getattr(ast, "stages", {}).items():
+        stage_name = normalize_stage_name(stage_type)
+        if not stage_matches(target_stage, stage_name):
+            continue
+        structs.extend(getattr(stage, "local_structs", []) or [])
+    return structs
+
+
 def deduplicate_named_declarations(nodes, kind):
     """Deduplicate named declarations and reject conflicting same-name entries."""
     declarations = []

@@ -310,6 +310,130 @@ def generate_enum_constructor_call(generator, path, args):
     return f"{constructor}({', '.join(rendered_args)})"
 
 
+def generate_enum_constructor_expression(generator, expr):
+    constructor_type = getattr(expr, "constructor_type", None)
+    path = generator_type_name_string(generator, constructor_type)
+    if "::" not in str(path):
+        return None
+
+    constructor = getattr(generator, "enum_variant_constructors", {}).get(path)
+    fields = getattr(generator, "enum_variant_constructor_fields", {}).get(path)
+    if constructor is not None and fields is not None:
+        rendered_args = render_enum_constructor_arguments(
+            generator,
+            path,
+            expr,
+            fields,
+        )
+        return f"{constructor}({', '.join(rendered_args)})"
+
+    return generate_generic_enum_constructor_expression(generator, path, expr)
+
+
+def generate_generic_enum_constructor_expression(generator, path, expr):
+    enum_name, variant_name = str(path).split("::", 1)
+    expected_type = getattr(generator, "current_expression_expected_type", None)
+    specialization = resolve_generic_enum_specialization(
+        generator,
+        expected_type,
+        expected_base=enum_name,
+    )
+    if specialization is None:
+        return None
+
+    fields = generic_enum_specialized_variant_fields(
+        generator,
+        specialization,
+        variant_name,
+    )
+    if fields is None:
+        return None
+
+    rendered_args = render_enum_constructor_arguments(
+        generator,
+        path,
+        expr,
+        fields,
+    )
+    constructor = enum_variant_constructor_name(
+        specialization["struct_name"],
+        variant_name,
+    )
+    return f"{constructor}({', '.join(rendered_args)})"
+
+
+def infer_enum_constructor_type(generator, expr):
+    constructor_type = getattr(expr, "constructor_type", None)
+    path = generator_type_name_string(generator, constructor_type)
+    if "::" not in str(path):
+        return None
+
+    enum_name, variant_name = str(path).split("::", 1)
+    if path in getattr(generator, "enum_variant_constructor_fields", {}):
+        return enum_name
+
+    expected_type = getattr(generator, "current_expression_expected_type", None)
+    specialization = resolve_generic_enum_specialization(
+        generator,
+        expected_type,
+        expected_base=enum_name,
+    )
+    if specialization is None:
+        return None
+    fields = generic_enum_specialized_variant_fields(
+        generator,
+        specialization,
+        variant_name,
+    )
+    if fields is None:
+        return None
+    return specialization["type_name"]
+
+
+def render_enum_constructor_arguments(generator, path, expr, fields):
+    positional_args = list(getattr(expr, "arguments", []) or [])
+    named_args = dict(getattr(expr, "named_arguments", {}) or {})
+    field_names = [field_name for field_name, _field_type in fields]
+
+    if len(positional_args) > len(fields):
+        raise ValueError(
+            f"Enum constructor {path} expects at most {len(fields)} arguments, "
+            f"got {len(positional_args)}"
+        )
+    unknown_names = sorted(set(named_args) - set(field_names))
+    if unknown_names:
+        raise ValueError(
+            f"Enum constructor {path} has no field {', '.join(unknown_names)}"
+        )
+
+    rendered_args = []
+    missing_names = []
+    for index, (field_name, field_type) in enumerate(fields):
+        if index < len(positional_args):
+            rendered_args.append(
+                generator.generate_expression_with_expected(
+                    positional_args[index],
+                    field_type,
+                )
+            )
+            continue
+        if field_name in named_args:
+            rendered_args.append(
+                generator.generate_expression_with_expected(
+                    named_args[field_name],
+                    field_type,
+                )
+            )
+            continue
+        missing_names.append(field_name)
+
+    if missing_names:
+        raise ValueError(
+            f"Enum constructor {path} is missing field {', '.join(missing_names)}"
+        )
+    return rendered_args
+
+
 def generate_generic_enum_constructor_call(generator, path, args):
     if "::" not in str(path):
         return None

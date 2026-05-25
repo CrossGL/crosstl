@@ -64,8 +64,10 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
+    deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -85,6 +87,7 @@ from .enum_utils import (
     collect_plain_enums,
     collect_struct_payload_enums,
     enum_value_expression,
+    generate_enum_constructor_expression,
     generate_generic_enum_constructor_functions,
     generate_generic_enum_constants,
     generate_generic_enum_structs,
@@ -93,6 +96,7 @@ from .enum_utils import (
     generate_enum_constants,
     generate_enum_structs,
     generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -251,8 +255,10 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
 )
 from .match_utils import (
+    generate_match_expression_assignment,
     generate_ordered_conditional_match,
     generate_switch_match,
+    infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
 
@@ -741,14 +747,19 @@ class GLSLCodeGen:
         self.current_structured_buffer_array_parameters = {}
         self.structured_buffer_instance_members = {}
         self.glsl_buffer_block_struct_names = set()
+        structs = deduplicate_named_declarations(
+            list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage),
+            "struct",
+        )
         self.struct_member_types = collect_struct_member_types(
-            getattr(ast, "structs", []), self.type_name_string
+            structs, self.type_name_string
         )
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
-            getattr(ast, "structs", [])
+            structs
         )
         self.generic_struct_definitions = collect_generic_struct_definitions(
-            getattr(ast, "structs", []),
+            structs,
             excluded_names=set(self.generic_enum_struct_definitions),
         )
         self.generic_enum_specializations = collect_generic_enum_specializations(
@@ -773,10 +784,8 @@ class GLSLCodeGen:
                 self.generic_struct_specializations,
             )
         )
-        self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
-        self.struct_payload_enums = collect_struct_payload_enums(
-            getattr(ast, "structs", [])
-        )
+        self.plain_enums = collect_plain_enums(structs)
+        self.struct_payload_enums = collect_struct_payload_enums(structs)
         self.enum_type_names = collect_enum_type_names(self.plain_enums)
         self.enum_struct_type_names = (
             collect_enum_type_names(self.struct_payload_enums)
@@ -856,7 +865,6 @@ class GLSLCodeGen:
             self.generic_enum_specializations,
         )
 
-        structs = getattr(ast, "structs", [])
         global_vars = list(getattr(ast, "global_variables", []) or [])
         stage_local_resource_vars = collect_stage_local_variables(
             ast, target_stage, self.is_stage_local_resource_variable
@@ -1302,8 +1310,7 @@ class GLSLCodeGen:
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
             raise ValueError(
-                "Cbuffer name(s) conflict with existing OpenGL declaration(s): "
-                f"{names}"
+                f"Cbuffer name(s) conflict with existing OpenGL declaration(s): {names}"
             )
 
         duplicate_members = collect_duplicate_cbuffer_member_names(cbuffers)
@@ -1420,9 +1427,7 @@ class GLSLCodeGen:
     def generate_compute_layout(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
         return (
-            f"layout(local_size_x = {x}, "
-            f"local_size_y = {y}, "
-            f"local_size_z = {z}) in;\n"
+            f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
         )
 
     def generate_function(
@@ -2606,23 +2611,19 @@ class GLSLCodeGen:
     def generate_stage_struct_constructor_return(self, expr, indent):
         if not self.current_stage_output_member_map:
             return None
-        if not isinstance(expr, FunctionCallNode):
-            return None
-        if self.function_call_name(expr) != self.current_stage_return_type:
-            return None
 
         struct = self.structs_by_name.get(self.current_stage_return_type)
         if struct is None:
             return None
 
-        args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
         members = getattr(struct, "members", []) or []
-        if len(args) != len(members):
+        field_values = self.stage_struct_constructor_field_values(expr, members)
+        if field_values is None:
             return None
 
         indent_str = "    " * indent
         code = ""
-        for member, value_expr in zip(members, args):
+        for member, value_expr in field_values:
             output_name = self.current_stage_output_member_map.get(member.name)
             if output_name is None:
                 continue
@@ -2632,6 +2633,38 @@ class GLSLCodeGen:
             code += f"{indent_str}{output_name} = {value};\n"
         code += f"{indent_str}return;\n"
         return code
+
+    def stage_struct_constructor_field_values(self, expr, members):
+        if isinstance(expr, FunctionCallNode):
+            if self.function_call_name(expr) != self.current_stage_return_type:
+                return None
+            args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            if len(args) != len(members):
+                return None
+            return list(zip(members, args))
+
+        if isinstance(expr, ConstructorNode):
+            constructor_type = self.type_name_string(
+                getattr(expr, "constructor_type", None)
+            )
+            if constructor_type != self.current_stage_return_type:
+                return None
+            args = list(getattr(expr, "arguments", []) or [])
+            named_args = dict(getattr(expr, "named_arguments", {}) or {})
+            if len(args) > len(members):
+                return None
+
+            values = []
+            for index, member in enumerate(members):
+                if index < len(args):
+                    values.append((member, args[index]))
+                    continue
+                if member.name not in named_args:
+                    return None
+                values.append((member, named_args[member.name]))
+            return values
+
+        return None
 
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as GLSL source."""
@@ -2647,9 +2680,21 @@ class GLSLCodeGen:
                 self.map_type(var_type), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
-            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+            initial_value = getattr(stmt, "initial_value", None)
+            if isinstance(initial_value, MatchNode):
+                code = f"{indent_str}{declaration};\n"
+                code += generate_match_expression_assignment(
+                    self,
+                    initial_value,
+                    stmt.name,
+                    var_type,
+                    indent,
+                    "GLSL",
+                )
+                return code
+            if initial_value is not None:
                 init_expr = self.generate_expression_with_expected(
-                    stmt.initial_value, var_type
+                    initial_value, var_type
                 )
                 return f"{indent_str}{declaration} = {init_expr};\n"
             else:
@@ -2718,6 +2763,9 @@ class GLSLCodeGen:
             type(stmt)
         ):
             # Handle ExpressionStatementNode
+            tail_return = self.generate_tail_expression_statement(stmt, indent)
+            if tail_return is not None:
+                return tail_return
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
         else:
@@ -2727,6 +2775,36 @@ class GLSLCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_tail_expression_statement(self, stmt, indent=0):
+        if not getattr(stmt, "is_tail_expression", False):
+            return None
+        value_expr = getattr(stmt, "expression", None)
+
+        stage_struct_return = self.generate_stage_struct_constructor_return(
+            value_expr,
+            indent,
+        )
+        if stage_struct_return is not None:
+            return stage_struct_return
+
+        indent_str = "    " * indent
+        if self.current_stage_output is not None:
+            value = self.generate_expression_with_expected(
+                value_expr,
+                self.current_function_return_type,
+            )
+            return (
+                f"{indent_str}{self.current_stage_output['name']} = {value};\n"
+                f"{indent_str}return;\n"
+            )
+
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            return None
+
+        value = self.generate_expression_with_expected(value_expr, return_type)
+        return f"{indent_str}return {value};\n"
 
     def local_variable_declared_type(self, stmt):
         var_type = getattr(stmt, "var_type", None)
@@ -2937,7 +3015,11 @@ class GLSLCodeGen:
                 return next(iter(member_types))
             return None
         if isinstance(expr, ConstructorNode):
-            return infer_struct_constructor_type(self, expr)
+            return infer_enum_constructor_type(
+                self, expr
+            ) or infer_struct_constructor_type(self, expr)
+        if isinstance(expr, MatchNode):
+            return infer_match_expression_result_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
@@ -3259,6 +3341,9 @@ class GLSLCodeGen:
             else:
                 return str(expr)
         elif isinstance(expr, ConstructorNode):
+            enum_constructor = generate_enum_constructor_expression(self, expr)
+            if enum_constructor is not None:
+                return enum_constructor
             constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
@@ -3340,8 +3425,7 @@ class GLSLCodeGen:
             )
         if func_name == "buffer_append" and len(args) >= 2:
             return (
-                "/* unsupported GLSL buffer append: requires explicit "
-                "counter buffer */"
+                "/* unsupported GLSL buffer append: requires explicit counter buffer */"
             )
         if func_name == "buffer_consume" and args:
             return (
@@ -6087,9 +6171,7 @@ class GLSLCodeGen:
         mapped_return_type = self.map_type(return_type)
         if mapped_return_type == "void" or self.current_stage_output is not None:
             return f"{code}{indent_str}return;\n"
-        return (
-            f"{code}{indent_str}return " f"{self.zero_value_expression(return_type)};\n"
-        )
+        return f"{code}{indent_str}return {self.zero_value_expression(return_type)};\n"
 
     def zero_value_expression(self, vtype):
         mapped_type = self.map_type(vtype)

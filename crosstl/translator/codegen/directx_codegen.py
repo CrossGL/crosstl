@@ -64,6 +64,7 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
@@ -86,6 +87,7 @@ from .enum_utils import (
     collect_plain_enums,
     collect_struct_payload_enums,
     enum_value_expression,
+    generate_enum_constructor_expression,
     generate_generic_enum_constructor_functions,
     generate_generic_enum_constants,
     generate_generic_enum_structs,
@@ -94,6 +96,7 @@ from .enum_utils import (
     generate_enum_constants,
     generate_enum_structs,
     generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -272,8 +275,10 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
 )
 from .match_utils import (
+    generate_match_expression_assignment,
     generate_ordered_conditional_match,
     generate_switch_match,
+    infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
 
@@ -585,16 +590,19 @@ class HLSLCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        structs = deduplicate_named_declarations(
+            list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage),
+            "struct",
+        )
         self.structs_by_name = {
-            node.name: node
-            for node in getattr(ast, "structs", [])
-            if isinstance(node, StructNode)
+            node.name: node for node in structs if isinstance(node, StructNode)
         }
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
-            getattr(ast, "structs", [])
+            structs
         )
         self.generic_struct_definitions = collect_generic_struct_definitions(
-            getattr(ast, "structs", []),
+            structs,
             excluded_names=set(self.generic_enum_struct_definitions),
         )
         self.generic_enum_specializations = collect_generic_enum_specializations(
@@ -607,10 +615,8 @@ class HLSLCodeGen:
             self.generic_struct_definitions,
             self.type_name_string,
         )
-        self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
-        self.struct_payload_enums = collect_struct_payload_enums(
-            getattr(ast, "structs", [])
-        )
+        self.plain_enums = collect_plain_enums(structs)
+        self.struct_payload_enums = collect_struct_payload_enums(structs)
         self.enum_type_names = collect_enum_type_names(self.plain_enums)
         self.enum_struct_type_names = (
             collect_enum_type_names(self.struct_payload_enums)
@@ -677,7 +683,7 @@ class HLSLCodeGen:
             self.glsl_buffer_block_struct_lowering_failures
         )
         self.struct_member_types = collect_struct_member_types(
-            getattr(ast, "structs", []), self.type_name_string
+            structs, self.type_name_string
         )
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -762,7 +768,6 @@ class HLSLCodeGen:
             self.generic_enum_specializations,
         )
 
-        structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
                 if node.name in self.generic_enum_struct_definitions:
@@ -1920,10 +1925,20 @@ class HLSLCodeGen:
                 self.map_type(vtype), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
-            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
-                init_expr = self.generate_expression_with_expected(
-                    stmt.initial_value, vtype
+            initial_value = getattr(stmt, "initial_value", None)
+            if isinstance(initial_value, MatchNode):
+                code = f"{indent_str}{declaration};\n"
+                code += generate_match_expression_assignment(
+                    self,
+                    initial_value,
+                    stmt.name,
+                    vtype,
+                    indent,
+                    "HLSL",
                 )
+                return code
+            if initial_value is not None:
+                init_expr = self.generate_expression_with_expected(initial_value, vtype)
                 return f"{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
@@ -2002,6 +2017,9 @@ class HLSLCodeGen:
         ):
             # Handle ExpressionStatementNode
             if hasattr(stmt, "expression"):
+                tail_return = self.generate_tail_expression_statement(stmt, indent)
+                if tail_return is not None:
+                    return tail_return
                 expression = self.generate_expression(stmt.expression)
                 if isinstance(getattr(stmt, "expression", None), AssignmentNode):
                     return self.generate_statement_code(expression, indent)
@@ -2012,6 +2030,17 @@ class HLSLCodeGen:
         else:
             # Try to generate as expression
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
+    def generate_tail_expression_statement(self, stmt, indent=0):
+        if not getattr(stmt, "is_tail_expression", False):
+            return None
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            return None
+
+        indent_str = "    " * indent
+        value = self.generate_expression_with_expected(stmt.expression, return_type)
+        return f"{indent_str}return {value};\n"
 
     def local_variable_declared_type(self, stmt):
         vtype = getattr(stmt, "var_type", None)
@@ -2213,7 +2242,11 @@ class HLSLCodeGen:
                 return next(iter(member_types))
             return None
         if isinstance(expr, ConstructorNode):
-            return infer_struct_constructor_type(self, expr)
+            return infer_enum_constructor_type(
+                self, expr
+            ) or infer_struct_constructor_type(self, expr)
+        if isinstance(expr, MatchNode):
+            return infer_match_expression_result_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
@@ -2761,6 +2794,9 @@ class HLSLCodeGen:
             index = self.generate_expression(index_expr)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
+            enum_constructor = generate_enum_constructor_expression(self, expr)
+            if enum_constructor is not None:
+                return enum_constructor
             constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
@@ -3874,10 +3910,11 @@ class HLSLCodeGen:
                         args[0], global_resource_types
                     )
                 texture_func = self.expression_name(func_expr)
-                if self.texture_call_is_diagnostic_only(
-                    texture_func, texture_type
-                ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
-                    texture_func, texture_type
+                if (
+                    self.texture_call_is_diagnostic_only(texture_func, texture_type)
+                    and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
+                        texture_func, texture_type
+                    )
                 ):
                     continue
                 sampler_name = self.expression_name(args[1])
@@ -5306,7 +5343,7 @@ class HLSLCodeGen:
         if missing_attributes:
             missing = ", ".join(missing_attributes)
             raise ValueError(
-                f"DirectX {shader_type} stage requires HLSL attribute(s): " f"{missing}"
+                f"DirectX {shader_type} stage requires HLSL attribute(s): {missing}"
             )
         self.validate_hlsl_tessellation_domain(func, shader_type)
         self.validate_hlsl_tessellation_output_topology(func, shader_type)
@@ -7131,8 +7168,7 @@ class HLSLCodeGen:
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
             return (
-                f"{texture_name}.SampleLevel("
-                f"{sampler_name}, {coord}, {lod}, {offset})"
+                f"{texture_name}.SampleLevel({sampler_name}, {coord}, {lod}, {offset})"
             )
 
         if is_texture_sample_grad_offset_operation(func_name):
@@ -7269,8 +7305,7 @@ class HLSLCodeGen:
                 return self.unsupported_texture_projected_call(func_name, count_error)
             lod = self.generate_expression(extra_args[0])
             return (
-                f"{texture_name}.SampleLevel("
-                f"{sampler_name}, {projected_coord}, {lod})"
+                f"{texture_name}.SampleLevel({sampler_name}, {projected_coord}, {lod})"
             )
 
         if is_projected_texture_lod_offset_operation(func_name):
@@ -9195,8 +9230,7 @@ class HLSLCodeGen:
                 coord_x = self.vector_component(coord, "x")
                 layer = self.vector_component(coord, "y")
                 return (
-                    f"{texture_name}.Load("
-                    f"int3(({coord_x} + {offset}), {layer}, {lod}))"
+                    f"{texture_name}.Load(int3(({coord_x} + {offset}), {layer}, {lod}))"
                 )
             return f"{texture_name}.Load(int3(({coord} + {offset}), {lod}))"
 

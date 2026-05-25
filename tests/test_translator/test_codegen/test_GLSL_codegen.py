@@ -4295,6 +4295,140 @@ def test_generic_enum_local_function_call_type_infers_match_subject():
     assert "MatchNode(" not in generated_code
 
 
+def test_generic_enum_match_expression_initializes_vector_local():
+    shader = """
+    shader MatchExpressionValue {
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Result<vec3, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(vec3(1.0, 2.0, 3.0)); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        vec3 read(bool ok, vec3 fallback) {
+            let value = match make_result(ok) {
+                Result::Ok(actual) => actual,
+                Result::Err(_) => fallback
+            };
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Result_vec3_MathError make_result(bool ok)" in generated_code
+    assert "vec3 read(bool ok, vec3 fallback)" in generated_code
+    assert "vec3 value;" in generated_code
+    assert (
+        "Result_vec3_MathError __crossgl_match_subject_0 = make_result(ok);"
+        in generated_code
+    )
+    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert (
+        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
+    )
+    assert "vec3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert "value = actual;" in generated_code
+    assert "value = fallback;" in generated_code
+    assert "float value = MatchNode" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_enum_struct_variant_constructor_expression():
+    shader = """
+    shader EnumStructVariantConstructor {
+        enum RenderOutput {
+            Clear { color: vec4, depth: float },
+            StateSet
+        }
+
+        RenderOutput clear(vec4 color, float depth) {
+            return RenderOutput::Clear { color, depth };
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "RenderOutput RenderOutput_Clear_make(vec4 payload0, float payload1)"
+        in generated_code
+    )
+    assert "RenderOutput clear(vec4 color, float depth)" in generated_code
+    assert "return RenderOutput_Clear_make(color, depth);" in generated_code
+    assert "ConstructorNode(" not in generated_code
+    assert "RenderOutput::" not in generated_code
+
+
+def test_tail_expression_returns_struct_constructor_and_vector():
+    shader = """
+    shader TailExpressionReturn {
+        struct Pair {
+            value: vec3,
+            weight: float
+        }
+
+        Pair make_pair(vec3 value, float weight) {
+            Pair { value, weight }
+        }
+
+        vec4 make_color(vec3 color) {
+            vec4(color, 1.0)
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Pair make_pair(vec3 value, float weight)" in generated_code
+    assert "return Pair(value, weight);" in generated_code
+    assert "vec4 make_color(vec3 color)" in generated_code
+    assert "return vec4(color, 1.0);" in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
+def test_stage_tail_struct_constructor_returns_stage_output():
+    shader = """
+    shader StageTailReturn {
+        vertex {
+            struct VertexInput {
+                position: vec3,
+                color: vec4
+            }
+            struct VertexOutput {
+                position: vec4,
+                color: vec4
+            }
+            VertexOutput main(VertexInput input) {
+                VertexOutput {
+                    position: vec4(input.position, 1.0),
+                    color: input.color
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct VertexOutput {" in generated_code
+    assert "void main()" in generated_code
+    assert "out_position = vec4(position, 1.0);" in generated_code
+    assert "out_color = color;" in generated_code
+    assert "return;" in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {
@@ -5645,9 +5779,7 @@ def test_opengl_rejects_wrong_offset_dimension_for_resource_operation(call, oper
 
     with pytest.raises(
         ValueError,
-        match=(
-            f"OpenGL resource operation '{operation}' requires a " "2D integer offset"
-        ),
+        match=(f"OpenGL resource operation '{operation}' requires a 2D integer offset"),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
@@ -5711,9 +5843,7 @@ def test_opengl_rejects_wrong_offset_dimension_for_extended_resource_operation(
 
     with pytest.raises(
         ValueError,
-        match=(
-            f"OpenGL resource operation '{operation}' requires a " "2D integer offset"
-        ),
+        match=(f"OpenGL resource operation '{operation}' requires a 2D integer offset"),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
@@ -14274,8 +14404,7 @@ def test_opengl_non_multisample_texture_samples_emit_diagnostics():
     )
 
     diagnostic = (
-        "/* unsupported GLSL texture samples query: "
-        "requires multisample sampler */ 0"
+        "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
     )
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
@@ -14335,8 +14464,7 @@ def test_opengl_storage_image_samples_queries_emit_diagnostics():
     )
 
     diagnostic = (
-        "/* unsupported GLSL texture samples query: "
-        "requires multisample sampler */ 0"
+        "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
     )
     assert "layout(rgba32f, binding = 0) uniform image2D colorImage;" in generated_code
     assert "layout(rgba32f, binding = 1) uniform image3D volumeImage;" in generated_code

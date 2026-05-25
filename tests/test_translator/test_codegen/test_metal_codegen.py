@@ -2226,6 +2226,145 @@ def test_generic_enum_local_function_call_type_infers_match_subject():
     assert "MatchNode(" not in generated_code
 
 
+def test_generic_enum_match_expression_initializes_vector_local():
+    shader = """
+    shader MatchExpressionValue {
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Result<vec3, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(vec3(1.0, 2.0, 3.0)); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        vec3 read(bool ok, vec3 fallback) {
+            let value = match make_result(ok) {
+                Result::Ok(actual) => actual,
+                Result::Err(_) => fallback
+            };
+            return value;
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Result_float3_MathError make_result(bool ok)" in generated_code
+    assert "float3 read(bool ok, float3 fallback)" in generated_code
+    assert "float3 value;" in generated_code
+    assert (
+        "Result_float3_MathError __crossgl_match_subject_0 = make_result(ok);"
+        in generated_code
+    )
+    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert (
+        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
+    )
+    assert "float3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert "value = actual;" in generated_code
+    assert "value = fallback;" in generated_code
+    assert "float value = MatchNode" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_enum_struct_variant_constructor_expression():
+    shader = """
+    shader EnumStructVariantConstructor {
+        enum RenderOutput {
+            Clear { color: vec4, depth: float },
+            StateSet
+        }
+
+        RenderOutput clear(vec4 color, float depth) {
+            return RenderOutput::Clear { color, depth };
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "RenderOutput RenderOutput_Clear_make(float4 payload0, float payload1)"
+        in generated_code
+    )
+    assert "RenderOutput clear(float4 color, float depth)" in generated_code
+    assert "return RenderOutput_Clear_make(color, depth);" in generated_code
+    assert "ConstructorNode(" not in generated_code
+    assert "RenderOutput::" not in generated_code
+
+
+def test_tail_expression_returns_struct_constructor_and_vector():
+    shader = """
+    shader TailExpressionReturn {
+        struct Pair {
+            value: vec3,
+            weight: float
+        }
+
+        Pair make_pair(vec3 value, float weight) {
+            Pair { value, weight }
+        }
+
+        vec4 make_color(vec3 color) {
+            vec4(color, 1.0)
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Pair make_pair(float3 value, float weight)" in generated_code
+    assert "return Pair{value, weight};" in generated_code
+    assert "float4 make_color(float3 color)" in generated_code
+    assert "return float4(color, 1.0);" in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
+def test_stage_tail_struct_constructor_returns_stage_output():
+    shader = """
+    shader StageTailReturn {
+        vertex {
+            struct VertexInput {
+                position: vec3,
+                color: vec4
+            }
+            struct VertexOutput {
+                position: vec4,
+                color: vec4
+            }
+            VertexOutput main(VertexInput input) {
+                VertexOutput {
+                    position: vec4(input.position, 1.0),
+                    color: input.color
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct VertexInput {" in generated_code
+    assert "struct VertexOutput {" in generated_code
+    assert (
+        "vertex VertexOutput vertex_main(VertexInput input [[stage_in]])"
+        in generated_code
+    )
+    assert (
+        "return VertexOutput{float4(input.position, 1.0), input.color};"
+        in generated_code
+    )
+    assert "ConstructorNode(" not in generated_code
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {
@@ -4609,9 +4748,7 @@ def test_metal_rejects_wrong_offset_dimension_for_resource_operation(call, opera
 
     with pytest.raises(
         ValueError,
-        match=(
-            f"Metal resource operation '{operation}' requires a " "2D integer offset"
-        ),
+        match=(f"Metal resource operation '{operation}' requires a 2D integer offset"),
     ):
         MetalCodeGen().generate(crosstl.translator.parse(shader))
 
@@ -4675,9 +4812,7 @@ def test_metal_rejects_wrong_offset_dimension_for_extended_resource_operation(
 
     with pytest.raises(
         ValueError,
-        match=(
-            f"Metal resource operation '{operation}' requires a " "2D integer offset"
-        ),
+        match=(f"Metal resource operation '{operation}' requires a 2D integer offset"),
     ):
         MetalCodeGen().generate(crosstl.translator.parse(shader))
 
@@ -14268,8 +14403,7 @@ def test_metal_non_multisample_texture_samples_emit_diagnostics():
     )
 
     diagnostic = (
-        "/* unsupported Metal texture samples query: "
-        "requires multisample texture */ 0"
+        "/* unsupported Metal texture samples query: requires multisample texture */ 0"
     )
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
     assert "texture2d_array<float> layerMap [[texture(1)]]" in generated_code
@@ -14330,8 +14464,7 @@ def test_metal_storage_image_samples_queries_emit_diagnostics():
     )
 
     diagnostic = (
-        "/* unsupported Metal texture samples query: "
-        "requires multisample texture */ 0"
+        "/* unsupported Metal texture samples query: requires multisample texture */ 0"
     )
     assert (
         "texture2d<float, access::read_write> colorImage [[texture(0)]]"

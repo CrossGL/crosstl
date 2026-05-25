@@ -52,6 +52,26 @@ def generate_ordered_conditional_match(generator, node, indent, target_name):
     )
 
 
+def generate_match_expression_assignment(
+    generator,
+    node,
+    target_variable,
+    target_type,
+    indent,
+    target_name,
+):
+    """Lower a value-position match into assignments to an existing local."""
+    return generate_match_expression_assignment_arms(
+        generator,
+        list(getattr(node, "arms", []) or []),
+        getattr(node, "expression", ""),
+        target_variable,
+        target_type,
+        indent,
+        target_name,
+    )
+
+
 def generate_ordered_conditional_match_arms(
     generator,
     arms,
@@ -122,6 +142,100 @@ def generate_ordered_conditional_match_arms(
         code += f"{indent_str}{prefix} ({condition}) {{\n"
         code += generate_bound_match_body(
             generator, bindings, binding_types, body, indent + 1
+        )
+        code += f"{indent_str}}}\n"
+        emitted_arm = True
+
+    return code
+
+
+def generate_match_expression_assignment_arms(
+    generator,
+    arms,
+    expression_node,
+    target_variable,
+    target_type,
+    indent,
+    target_name,
+):
+    indent_str = "    " * indent
+    expression = generator.generate_expression(expression_node)
+    expression_type = expression_result_type(generator, expression_node)
+
+    code = ""
+    if match_subject_requires_temp(expression_node, expression_type):
+        temp_name = next_match_temp_variable(generator)
+        declaration = format_c_style_array_declaration(
+            generator.map_type(expression_type),
+            temp_name,
+        )
+        code += f"{indent_str}{declaration} = {expression};\n"
+        expression = temp_name
+
+    emitted_arm = False
+    for index, arm in enumerate(arms):
+        pattern_condition, bindings, binding_types = match_arm_pattern_lowering(
+            generator,
+            expression,
+            expression_type,
+            arm,
+            target_name,
+        )
+        guard = getattr(arm, "guard", None)
+        guard_condition = (
+            None
+            if guard is None
+            else generate_match_guard_condition(generator, guard, binding_types)
+        )
+
+        if bindings and guard is not None:
+            code += generate_guarded_bound_match_assignment_arm(
+                generator,
+                arms[index + 1 :],
+                expression_node,
+                pattern_condition,
+                bindings,
+                binding_types,
+                guard,
+                arm,
+                target_variable,
+                target_type,
+                indent,
+                emitted_arm,
+                target_name,
+            )
+            break
+
+        condition = combine_match_conditions(pattern_condition, guard_condition)
+        if condition is None:
+            if emitted_arm:
+                code += f"{indent_str}else {{\n"
+            else:
+                code += f"{indent_str}{{\n"
+            code += generate_match_expression_assignment_body(
+                generator,
+                bindings,
+                binding_types,
+                arm,
+                target_variable,
+                target_type,
+                indent + 1,
+                target_name,
+            )
+            code += f"{indent_str}}}\n"
+            break
+
+        prefix = "if" if not emitted_arm else "else if"
+        code += f"{indent_str}{prefix} ({condition}) {{\n"
+        code += generate_match_expression_assignment_body(
+            generator,
+            bindings,
+            binding_types,
+            arm,
+            target_variable,
+            target_type,
+            indent + 1,
+            target_name,
         )
         code += f"{indent_str}}}\n"
         emitted_arm = True
@@ -246,6 +360,117 @@ def generate_guarded_bound_match_body(
             generator,
             rest_arms,
             expression_node,
+            indent + 1,
+            target_name,
+        )
+        code += f"{indent_str}}}"
+    code += "\n"
+    return code
+
+
+def generate_guarded_bound_match_assignment_arm(
+    generator,
+    rest_arms,
+    expression_node,
+    pattern_condition,
+    bindings,
+    binding_types,
+    guard,
+    arm,
+    target_variable,
+    target_type,
+    indent,
+    emitted_arm,
+    target_name,
+):
+    indent_str = "    " * indent
+
+    if pattern_condition is None:
+        code = f"{indent_str}else {{\n" if emitted_arm else f"{indent_str}{{\n"
+        code += generate_guarded_bound_match_assignment_body(
+            generator,
+            rest_arms,
+            expression_node,
+            bindings,
+            binding_types,
+            guard,
+            arm,
+            target_variable,
+            target_type,
+            indent + 1,
+            target_name,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    prefix = "if" if not emitted_arm else "else if"
+    code = f"{indent_str}{prefix} ({pattern_condition}) {{\n"
+    code += generate_guarded_bound_match_assignment_body(
+        generator,
+        rest_arms,
+        expression_node,
+        bindings,
+        binding_types,
+        guard,
+        arm,
+        target_variable,
+        target_type,
+        indent + 1,
+        target_name,
+    )
+    code += f"{indent_str}}}\n"
+    if rest_arms:
+        code += f"{indent_str}else {{\n"
+        code += generate_match_expression_assignment_arms(
+            generator,
+            rest_arms,
+            expression_node,
+            target_variable,
+            target_type,
+            indent + 1,
+            target_name,
+        )
+        code += f"{indent_str}}}\n"
+    return code
+
+
+def generate_guarded_bound_match_assignment_body(
+    generator,
+    rest_arms,
+    expression_node,
+    bindings,
+    binding_types,
+    guard,
+    arm,
+    target_variable,
+    target_type,
+    indent,
+    target_name,
+):
+    indent_str = "    " * indent
+    guard_condition = generate_match_guard_condition(generator, guard, binding_types)
+
+    code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
+    code += f"{indent_str}if ({guard_condition}) {{\n"
+    code += generate_match_expression_assignment_body(
+        generator,
+        [],
+        binding_types,
+        arm,
+        target_variable,
+        target_type,
+        indent + 1,
+        target_name,
+    )
+    code += f"{indent_str}}}"
+    if rest_arms:
+        code += " else {\n"
+        code += generate_match_expression_assignment_arms(
+            generator,
+            rest_arms,
+            expression_node,
+            target_variable,
+            target_type,
             indent + 1,
             target_name,
         )
@@ -603,6 +828,48 @@ def generate_bound_match_body(generator, bindings, binding_types, body, indent):
     return code
 
 
+def generate_match_expression_assignment_body(
+    generator,
+    bindings,
+    binding_types,
+    arm,
+    target_variable,
+    target_type,
+    indent,
+    target_name,
+):
+    indent_str = "    " * indent
+    value = match_arm_value_expression(getattr(arm, "body", None))
+    if value is None:
+        raise ValueError(
+            f"Unsupported match expression for {target_name} codegen; arms must "
+            "end in a value expression"
+        )
+
+    code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
+    saved_types = getattr(generator, "local_variable_types", None)
+    if saved_types is not None:
+        saved_types = dict(saved_types)
+        generator.local_variable_types.update(binding_types)
+    try:
+        if getattr(value, "__class__", None).__name__ == "MatchNode":
+            code += generate_match_expression_assignment(
+                generator,
+                value,
+                target_variable,
+                target_type,
+                indent,
+                target_name,
+            )
+        else:
+            rhs = generator.generate_expression_with_expected(value, target_type)
+            code += f"{indent_str}{target_variable} = {rhs};\n"
+    finally:
+        if saved_types is not None:
+            generator.local_variable_types = saved_types
+    return code
+
+
 def generate_body_with_binding_types(generator, binding_types, body, indent):
     saved_types = getattr(generator, "local_variable_types", None)
     if saved_types is not None:
@@ -655,6 +922,86 @@ def expression_result_type(generator, expression):
     if result_type is None:
         return None
     return result_type(expression)
+
+
+def infer_match_expression_result_type(generator, node):
+    expression_node = getattr(node, "expression", None)
+    expression_type = expression_result_type(generator, expression_node)
+    result_type = None
+
+    for arm in getattr(node, "arms", []) or []:
+        _condition, _bindings, binding_types = match_arm_pattern_lowering(
+            generator,
+            "__crossgl_match_subject",
+            expression_type,
+            arm,
+            "match expression",
+        )
+        value = match_arm_value_expression(getattr(arm, "body", None))
+        if value is None:
+            continue
+
+        saved_types = getattr(generator, "local_variable_types", None)
+        if saved_types is not None:
+            saved_types = dict(saved_types)
+            generator.local_variable_types.update(binding_types)
+        try:
+            arm_type = expression_result_type(generator, value)
+        finally:
+            if saved_types is not None:
+                generator.local_variable_types = saved_types
+
+        if arm_type is None:
+            continue
+        if result_type is None:
+            result_type = arm_type
+            continue
+        result_type = compatible_match_result_type(generator, result_type, arm_type)
+
+    return result_type
+
+
+def compatible_match_result_type(generator, left_type, right_type):
+    left_name = type_name_string(generator, left_type)
+    right_name = type_name_string(generator, right_type)
+    if left_name == right_name:
+        return left_name
+    if getattr(generator, "is_vector_value_type", lambda _type: False)(left_name):
+        return left_name
+    if getattr(generator, "is_vector_value_type", lambda _type: False)(right_name):
+        return right_name
+    if "float" in {left_name, right_name}:
+        return "float"
+    if "double" in {left_name, right_name}:
+        return "double"
+    left_mapped = generator.map_type(left_name) if left_name else None
+    right_mapped = generator.map_type(right_name) if right_name else None
+    if left_mapped == right_mapped:
+        return left_name
+    return left_name or right_name
+
+
+def match_arm_value_expression(body):
+    statements = statement_list(body)
+    if not statements:
+        return None
+
+    tail = statements[-1]
+    if hasattr(tail, "expression"):
+        return tail.expression
+    if getattr(tail, "__class__", None).__name__ == "MatchNode":
+        return tail
+    return None
+
+
+def statement_list(body):
+    if hasattr(body, "statements"):
+        return list(getattr(body, "statements", []) or [])
+    if isinstance(body, list):
+        return body
+    if body is None:
+        return []
+    return [body]
 
 
 def struct_field_type(generator, struct_name, field_name):

@@ -64,6 +64,7 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_structs,
     collect_stage_local_variables,
     deduplicate_named_declarations,
     normalize_stage_name,
@@ -85,6 +86,7 @@ from .enum_utils import (
     collect_plain_enums,
     collect_struct_payload_enums,
     enum_value_expression,
+    generate_enum_constructor_expression,
     generate_generic_enum_constructor_functions,
     generate_generic_enum_constants,
     generate_generic_enum_structs,
@@ -93,6 +95,7 @@ from .enum_utils import (
     generate_enum_constants,
     generate_enum_structs,
     generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -276,8 +279,10 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
 )
 from .match_utils import (
+    generate_match_expression_assignment,
     generate_ordered_conditional_match,
     generate_switch_match,
+    infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
 
@@ -723,16 +728,19 @@ class MetalCodeGen:
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        structs = deduplicate_named_declarations(
+            list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage),
+            "struct",
+        )
         self.structs_by_name = {
-            node.name: node
-            for node in getattr(ast, "structs", [])
-            if isinstance(node, StructNode)
+            node.name: node for node in structs if isinstance(node, StructNode)
         }
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
-            getattr(ast, "structs", [])
+            structs
         )
         self.generic_struct_definitions = collect_generic_struct_definitions(
-            getattr(ast, "structs", []),
+            structs,
             excluded_names=set(self.generic_enum_struct_definitions),
         )
         self.generic_enum_specializations = collect_generic_enum_specializations(
@@ -745,10 +753,8 @@ class MetalCodeGen:
             self.generic_struct_definitions,
             self.type_name_string,
         )
-        self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
-        self.struct_payload_enums = collect_struct_payload_enums(
-            getattr(ast, "structs", [])
-        )
+        self.plain_enums = collect_plain_enums(structs)
+        self.struct_payload_enums = collect_struct_payload_enums(structs)
         self.enum_type_names = collect_enum_type_names(self.plain_enums)
         self.enum_struct_type_names = (
             collect_enum_type_names(self.struct_payload_enums)
@@ -835,7 +841,7 @@ class MetalCodeGen:
             self.collect_unsupported_glsl_buffer_block_functions(all_functions)
         )
         self.struct_member_types = collect_struct_member_types(
-            getattr(ast, "structs", []), self.type_name_string
+            structs, self.type_name_string
         )
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -882,7 +888,6 @@ class MetalCodeGen:
             self.generic_enum_specializations,
         )
 
-        structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
                 if node.name in self.generic_enum_struct_definitions:
@@ -1259,8 +1264,7 @@ class MetalCodeGen:
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
             raise ValueError(
-                "Cbuffer name(s) conflict with existing Metal declaration(s): "
-                f"{names}"
+                f"Cbuffer name(s) conflict with existing Metal declaration(s): {names}"
             )
 
         global_member_conflicts = collect_cbuffer_member_global_conflicts(ast)
@@ -2101,9 +2105,21 @@ class MetalCodeGen:
                 self.map_type(var_type), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
-            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+            initial_value = getattr(stmt, "initial_value", None)
+            if isinstance(initial_value, MatchNode):
+                code = f"{indent_str}{declaration};\n"
+                code += generate_match_expression_assignment(
+                    self,
+                    initial_value,
+                    stmt.name,
+                    var_type,
+                    indent,
+                    "Metal",
+                )
+                return code
+            if initial_value is not None:
                 init_expr = self.generate_expression_with_expected(
-                    stmt.initial_value, var_type
+                    initial_value, var_type
                 )
                 return f"{indent_str}{declaration} = {init_expr};\n"
             else:
@@ -2172,10 +2188,32 @@ class MetalCodeGen:
             type(stmt)
         ):
             # Handle ExpressionStatementNode
+            tail_return = self.generate_tail_expression_statement(stmt, indent)
+            if tail_return is not None:
+                return tail_return
             expr_code = self.generate_expression_statement(stmt)
             return self.generate_statement_code(expr_code, indent)
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
+    def generate_tail_expression_statement(self, stmt, indent=0):
+        if not getattr(stmt, "is_tail_expression", False):
+            return None
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            return None
+
+        indent_str = "    " * indent
+        return_wrapper = self.current_function_return_wrapper
+        if return_wrapper is not None:
+            value = self.generate_expression_with_expected(
+                stmt.expression,
+                return_wrapper["source_type"],
+            )
+            return f"{indent_str}return {return_wrapper['struct_name']}{{{value}}};\n"
+
+        value = self.generate_expression_with_expected(stmt.expression, return_type)
+        return f"{indent_str}return {value};\n"
 
     def generate_statement_code(self, code, indent=0):
         indent_str = "    " * indent
@@ -2340,7 +2378,11 @@ class MetalCodeGen:
                 return next(iter(member_types))
             return None
         if isinstance(expr, ConstructorNode):
-            return infer_struct_constructor_type(self, expr)
+            return infer_enum_constructor_type(
+                self, expr
+            ) or infer_struct_constructor_type(self, expr)
+        if isinstance(expr, MatchNode):
+            return infer_match_expression_result_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
@@ -2913,6 +2955,9 @@ class MetalCodeGen:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
+            enum_constructor = generate_enum_constructor_expression(self, expr)
+            if enum_constructor is not None:
+                return enum_constructor
             constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
@@ -6116,7 +6161,7 @@ class MetalCodeGen:
             f"{self.vector_component(coord, divisor)}"
         )
         if texture_type == "texture2d_array<float>":
-            return f"{projected_coord}, " f"uint({self.vector_component(coord, 'z')})"
+            return f"{projected_coord}, uint({self.vector_component(coord, 'z')})"
         return projected_coord
 
     def projected_texture_offset_supported(self, texture_type):
@@ -6169,8 +6214,7 @@ class MetalCodeGen:
             if len(extra_args) == 1:
                 offset = self.generate_expression(extra_args[0])
                 return (
-                    f"{texture_name}.sample("
-                    f"{sampler_arg}, {projected_coord}, {offset})"
+                    f"{texture_name}.sample({sampler_arg}, {projected_coord}, {offset})"
                 )
             if len(extra_args) == 2:
                 offset = self.generate_expression(extra_args[0])
@@ -6188,8 +6232,7 @@ class MetalCodeGen:
                 return self.unsupported_texture_projected_call(func_name, count_error)
             lod = self.generate_expression(extra_args[0])
             return (
-                f"{texture_name}.sample("
-                f"{sampler_arg}, {projected_coord}, level({lod}))"
+                f"{texture_name}.sample({sampler_arg}, {projected_coord}, level({lod}))"
             )
 
         if is_projected_texture_lod_offset_operation(func_name):

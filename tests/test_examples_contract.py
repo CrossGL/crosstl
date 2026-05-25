@@ -18,43 +18,12 @@ FULL_BACKEND_EXAMPLES = (
     "graphics/SimpleShader.cgl",
 )
 
-KNOWN_PRIMARY_GRAPHICS_GAPS = (
-    pytest.param(
-        "advanced/GenericPatternMatching.cgl",
-        "directx",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "match expressions and enum-variant struct constructors are not "
-                "fully lowerable to HLSL yet"
-            ),
-        ),
-    ),
-    pytest.param(
-        "advanced/GenericPatternMatching.cgl",
-        "metal",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "match expressions and enum-variant struct constructors are not "
-                "fully lowerable to Metal yet"
-            ),
-        ),
-    ),
-    pytest.param(
-        "advanced/GenericPatternMatching.cgl",
-        "opengl",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "match expressions and enum-variant struct constructors are not "
-                "fully lowerable to GLSL yet"
-            ),
-        ),
-    ),
-)
+KNOWN_PRIMARY_GRAPHICS_GAPS = ()
 
 PRIMARY_GRAPHICS_FIXED_CASES = (
+    ("advanced/GenericPatternMatching.cgl", "directx"),
+    ("advanced/GenericPatternMatching.cgl", "metal"),
+    ("advanced/GenericPatternMatching.cgl", "opengl"),
     ("cross_platform/UniversalPBRShader.cgl", "directx"),
     ("cross_platform/UniversalPBRShader.cgl", "metal"),
     ("cross_platform/UniversalPBRShader.cgl", "opengl"),
