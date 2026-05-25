@@ -18,7 +18,6 @@ import time
 import urllib.error
 import urllib.request
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORT_DIR = ROOT / "support"
 BACKENDS_PATH = SUPPORT_DIR / "backends.json"
@@ -112,7 +111,9 @@ def count_unsupported_markers(paths):
             files = [path]
         elif path.is_dir():
             files = sorted(
-                child for child in path.rglob("*.py") if "__pycache__" not in child.parts
+                child
+                for child in path.rglob("*.py")
+                if "__pycache__" not in child.parts
             )
         else:
             files = []
@@ -129,7 +130,9 @@ def unsupported_marker_samples(paths, limit=20):
             files = [path]
         elif path.is_dir():
             files = sorted(
-                child for child in path.rglob("*.py") if "__pycache__" not in child.parts
+                child
+                for child in path.rglob("*.py")
+                if "__pycache__" not in child.parts
             )
         else:
             files = []
@@ -166,7 +169,9 @@ def backend_paths(backend):
 def validate_backend_catalog(backends_data):
     backends = backends_data.get("backends")
     if not isinstance(backends, list) or not backends:
-        raise SupportMatrixError("support/backends.json must contain a non-empty 'backends' list")
+        raise SupportMatrixError(
+            "support/backends.json must contain a non-empty 'backends' list"
+        )
 
     ids = set()
     for backend in backends:
@@ -271,7 +276,9 @@ def validate_feature_catalog(features_data, backend_ids):
 
     features = features_data.get("features")
     if not isinstance(features, list) or not features:
-        raise SupportMatrixError("support/features.json must contain a non-empty 'features' list")
+        raise SupportMatrixError(
+            "support/features.json must contain a non-empty 'features' list"
+        )
 
     feature_ids = set()
     for feature in features:
@@ -530,8 +537,7 @@ def render_docs(matrix):
     for backend in matrix["backends"]:
         counts = matrix["summary"]["status_counts"][backend["id"]]
         summary_rows.append(
-            [backend["name"]]
-            + [counts.get(status, 0) for status in STATUS_ORDER]
+            [backend["name"]] + [counts.get(status, 0) for status in STATUS_ORDER]
         )
     lines.extend(
         render_csv_table(
@@ -789,7 +795,9 @@ def parse_args(argv):
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("update", help="Regenerate checked-in support artifacts")
-    subparsers.add_parser("check", help="Validate catalogs and fail if generated artifacts are stale")
+    subparsers.add_parser(
+        "check", help="Validate catalogs and fail if generated artifacts are stale"
+    )
 
     audit_parser = subparsers.add_parser("audit", help="Print current support backlog")
     audit_parser.add_argument(

@@ -592,9 +592,7 @@ def test_for_loop_enumerate_iter_side_effect_source_conversion():
         assert result.count("next_values()") == 1
         assert "next_values().iter().enumerate()" not in result
     except Exception as e:
-        pytest.fail(
-            f"For loop enumerate side-effect source conversion failed: {e}"
-        )
+        pytest.fail(f"For loop enumerate side-effect source conversion failed: {e}")
 
 
 def test_for_loop_step_by_range_conversion():

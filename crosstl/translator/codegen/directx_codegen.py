@@ -4701,9 +4701,7 @@ class HLSLCodeGen:
                 getattr(member, "name", "<anonymous>"),
             )
 
-    def validate_hlsl_stage_output_semantic(
-        self, shader_type, semantic, context, name
-    ):
+    def validate_hlsl_stage_output_semantic(self, shader_type, semantic, context, name):
         if semantic is None:
             return
 
@@ -4842,7 +4840,9 @@ class HLSLCodeGen:
             if stream_type_name is None:
                 continue
 
-            stream_type_name = stream_type_name.split("<", 1)[0].split("[", 1)[0].strip()
+            stream_type_name = (
+                stream_type_name.split("<", 1)[0].split("[", 1)[0].strip()
+            )
             stream_struct = self.structs_by_name.get(stream_type_name)
             if stream_struct is None:
                 continue

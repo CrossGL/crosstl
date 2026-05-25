@@ -1751,8 +1751,8 @@ class GLSLCodeGen:
     def validate_function_return_semantic_stage(self, stage_name, semantic):
         mapped_semantic = self.map_semantic(semantic)
         semantic_text = str(semantic)
-        is_fragment_output = semantic_text == "gl_FragDepth" or semantic_text.startswith(
-            "gl_FragColor"
+        is_fragment_output = (
+            semantic_text == "gl_FragDepth" or semantic_text.startswith("gl_FragColor")
         )
         is_vertex_output = self.is_vertex_builtin_output(mapped_semantic)
 
