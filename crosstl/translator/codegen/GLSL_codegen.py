@@ -74,9 +74,14 @@ from .resource_arrays import collect_resource_array_size_hints
 from .enum_utils import (
     collect_enum_type_names,
     collect_enum_struct_variant_fields,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
     collect_enum_variant_constants,
     collect_plain_enums,
     collect_struct_payload_enums,
+    enum_value_expression,
+    generate_enum_constructor_call,
+    generate_enum_constructor_functions,
     generate_enum_constants,
     generate_enum_structs,
 )
@@ -726,6 +731,12 @@ class GLSLCodeGen:
         self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
             self.struct_payload_enums
         )
+        self.enum_variant_constructors = collect_enum_variant_constructors(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
+            self.struct_payload_enums
+        )
         self.enum_variant_constants = collect_enum_variant_constants(
             self.plain_enums + self.struct_payload_enums
         )
@@ -769,6 +780,7 @@ class GLSLCodeGen:
         )
         code += self.generate_constants(ast)
         code += generate_enum_structs(self, self.struct_payload_enums)
+        code += generate_enum_constructor_functions(self, self.struct_payload_enums)
 
         structs = getattr(ast, "structs", [])
         global_vars = list(getattr(ast, "global_variables", []) or [])
@@ -3110,13 +3122,13 @@ class GLSLCodeGen:
         elif hasattr(expr, "__class__") and "VariableNode" in str(type(expr)):
             if hasattr(expr, "name"):
                 if expr.name in getattr(self, "enum_variant_constants", {}):
-                    return self.enum_variant_constants[expr.name]
+                    return enum_value_expression(self, expr.name)
                 return self.current_stage_parameter_aliases.get(expr.name, expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
             if expr.name in getattr(self, "enum_variant_constants", {}):
-                return self.enum_variant_constants[expr.name]
+                return enum_value_expression(self, expr.name)
             return self.current_stage_parameter_aliases.get(expr.name, expr.name)
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
@@ -3175,6 +3187,12 @@ class GLSLCodeGen:
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
             func_name = self.function_map.get(func_name, func_name)
+
+            enum_constructor = generate_enum_constructor_call(
+                self, original_func_name, expr.args
+            )
+            if enum_constructor is not None:
+                return enum_constructor
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:

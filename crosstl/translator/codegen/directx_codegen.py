@@ -75,9 +75,14 @@ from .resource_arrays import collect_resource_array_size_hints
 from .enum_utils import (
     collect_enum_type_names,
     collect_enum_struct_variant_fields,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
     collect_enum_variant_constants,
     collect_plain_enums,
     collect_struct_payload_enums,
+    enum_value_expression,
+    generate_enum_constructor_call,
+    generate_enum_constructor_functions,
     generate_enum_constants,
     generate_enum_structs,
 )
@@ -573,6 +578,12 @@ class HLSLCodeGen:
         self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
             self.struct_payload_enums
         )
+        self.enum_variant_constructors = collect_enum_variant_constructors(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
+            self.struct_payload_enums
+        )
         self.enum_variant_constants = collect_enum_variant_constants(
             self.plain_enums + self.struct_payload_enums
         )
@@ -672,6 +683,7 @@ class HLSLCodeGen:
         )
         code += self.generate_constants(ast)
         code += generate_enum_structs(self, self.struct_payload_enums)
+        code += generate_enum_constructor_functions(self, self.struct_payload_enums)
 
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -2607,12 +2619,12 @@ class HLSLCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             name = getattr(expr, "name", str(expr))
-            return getattr(self, "enum_variant_constants", {}).get(name, name)
+            return enum_value_expression(self, name)
         elif isinstance(expr, VariableNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
-            return getattr(self, "enum_variant_constants", {}).get(expr.name, expr.name)
+            return enum_value_expression(self, expr.name)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             left = self.generate_expression(getattr(expr, "left", ""))
             right = self.generate_expression(getattr(expr, "right", ""))
@@ -2670,6 +2682,10 @@ class HLSLCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+
+            enum_constructor = generate_enum_constructor_call(self, func_name, args)
+            if enum_constructor is not None:
+                return enum_constructor
 
             unsupported_call = self.unsupported_glsl_buffer_block_function_call(
                 func_name

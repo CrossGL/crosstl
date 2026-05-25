@@ -74,9 +74,14 @@ from .resource_arrays import collect_resource_array_size_hints
 from .enum_utils import (
     collect_enum_type_names,
     collect_enum_struct_variant_fields,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
     collect_enum_variant_constants,
     collect_plain_enums,
     collect_struct_payload_enums,
+    enum_value_expression,
+    generate_enum_constructor_call,
+    generate_enum_constructor_functions,
     generate_enum_constants,
     generate_enum_structs,
 )
@@ -705,6 +710,12 @@ class MetalCodeGen:
         self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
             self.struct_payload_enums
         )
+        self.enum_variant_constructors = collect_enum_variant_constructors(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
+            self.struct_payload_enums
+        )
         self.enum_variant_constants = collect_enum_variant_constants(
             self.plain_enums + self.struct_payload_enums
         )
@@ -791,6 +802,7 @@ class MetalCodeGen:
         )
         code += self.generate_constants(ast)
         code += generate_enum_structs(self, self.struct_payload_enums)
+        code += generate_enum_constructor_functions(self, self.struct_payload_enums)
 
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -2773,9 +2785,7 @@ class MetalCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             if hasattr(expr, "name"):
-                return getattr(self, "enum_variant_constants", {}).get(
-                    expr.name, expr.name
-                )
+                return enum_value_expression(self, expr.name)
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -2831,6 +2841,12 @@ class MetalCodeGen:
             )
             if unsupported_call is not None:
                 return unsupported_call
+
+            enum_constructor = generate_enum_constructor_call(
+                self, func_name, expr.args
+            )
+            if enum_constructor is not None:
+                return enum_constructor
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
@@ -3067,7 +3083,7 @@ class MetalCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             if name in getattr(self, "enum_variant_constants", {}):
-                return self.enum_variant_constants[name]
+                return enum_value_expression(self, name)
             if (
                 name not in self.local_variable_types
                 and name in self.ambiguous_cbuffer_members

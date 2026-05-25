@@ -271,7 +271,13 @@ def lower_match_pattern(generator, pattern, expression, expression_type, target_
         )
 
     if isinstance(pattern, ConstructorPatternNode):
-        return lower_constructor_pattern(pattern, target_name)
+        return lower_constructor_pattern(
+            generator,
+            pattern,
+            expression,
+            expression_type,
+            target_name,
+        )
 
     raise ValueError(
         f"Unsupported match arm for {target_name} codegen; only literal, "
@@ -354,12 +360,21 @@ def split_enum_path(path):
     return enum_name, variant_name
 
 
-def lower_constructor_pattern(pattern, target_name):
+def lower_constructor_pattern(
+    generator,
+    pattern,
+    expression,
+    expression_type,
+    target_name,
+):
     pattern_type = getattr(pattern, "type_name", "")
     if "::" in pattern_type:
-        raise ValueError(
-            f"Unsupported match arm for {target_name} codegen; enum constructor "
-            "patterns are not supported"
+        return lower_enum_constructor_pattern(
+            generator,
+            pattern,
+            expression,
+            expression_type,
+            target_name,
         )
 
     raise ValueError(
@@ -466,6 +481,66 @@ def lower_enum_struct_pattern(
     return condition, bindings, binding_types
 
 
+def lower_enum_constructor_pattern(
+    generator,
+    pattern,
+    expression,
+    expression_type,
+    target_name,
+):
+    pattern_type = getattr(pattern, "type_name", "")
+    enum_name, variant_name = split_enum_path(pattern_type)
+    subject_type = base_type_name(type_name_string(generator, expression_type))
+    if subject_type and enum_name != subject_type:
+        raise ValueError(
+            f"Unsupported match arm for {target_name} codegen; enum constructor "
+            f"pattern {pattern_type} cannot match expression type {subject_type}"
+        )
+
+    fields_by_variant = getattr(generator, "enum_struct_variant_fields", {})
+    variant_fields = fields_by_variant.get(enum_name, {}).get(variant_name)
+    if variant_fields is None:
+        raise ValueError(
+            f"Unsupported match arm for {target_name} codegen; enum constructor "
+            "patterns are not supported"
+        )
+
+    field_items = list(variant_fields.items())
+    arguments = getattr(pattern, "arguments", []) or []
+    if len(arguments) != len(field_items):
+        raise ValueError(
+            f"Unsupported match arm for {target_name} codegen; enum constructor "
+            f"pattern {pattern_type} expects {len(field_items)} arguments"
+        )
+
+    condition = enum_variant_condition(
+        generator,
+        pattern_type,
+        expression,
+        expression_type,
+        target_name,
+    )
+    bindings = []
+    binding_types = {}
+    for field_pattern, (field_name, field_type) in zip(arguments, field_items):
+        field_expr = f"{expression}.{field_name}"
+        field_condition, field_bindings, field_binding_types = (
+            lower_struct_field_pattern(
+                generator,
+                field_pattern,
+                field_expr,
+                field_type,
+                target_name,
+            )
+        )
+        if field_condition:
+            condition = f"({condition}) && ({field_condition})"
+        bindings.extend(field_bindings)
+        binding_types.update(field_binding_types)
+
+    return condition, bindings, binding_types
+
+
 def lower_struct_field_pattern(
     generator,
     pattern,
@@ -482,7 +557,13 @@ def lower_struct_field_pattern(
             target_name,
         )
     if isinstance(
-        pattern, (LiteralPatternNode, WildcardPatternNode, StructPatternNode)
+        pattern,
+        (
+            LiteralPatternNode,
+            WildcardPatternNode,
+            StructPatternNode,
+            ConstructorPatternNode,
+        ),
     ):
         return lower_match_pattern(
             generator,

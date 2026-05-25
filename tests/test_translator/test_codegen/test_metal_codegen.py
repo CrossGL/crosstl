@@ -1982,6 +1982,75 @@ def test_match_struct_enum_pattern_binds_named_payload_fields():
     assert "MatchNode(" not in generated_code
 
 
+def test_match_tuple_enum_pattern_binds_payload_fields():
+    shader = """
+    shader MatchTupleEnumPattern {
+        enum MaybeInt {
+            Value(int),
+            Pair(int, float),
+            Missing
+        }
+
+        int read(MaybeInt item) {
+            match item {
+                MaybeInt::Value(value) => { return value; },
+                MaybeInt::Pair(left, scale) => { return left + int(scale); },
+                MaybeInt::Missing => { return 0; }
+            }
+        }
+
+        MaybeInt make(int value) {
+            return MaybeInt::Value(value);
+        }
+
+        MaybeInt none() {
+            return MaybeInt::Missing;
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "static const int MaybeInt_Value = 0;" in generated_code
+    assert "static const int MaybeInt_Pair = 1;" in generated_code
+    assert "static const int MaybeInt_Missing = 2;" in generated_code
+    assert "struct MaybeInt {" in generated_code
+    assert "int Value_0;" in generated_code
+    assert "int Pair_0;" in generated_code
+    assert "float Pair_1;" in generated_code
+    assert "MaybeInt MaybeInt_Value_make(int payload0)" in generated_code
+    assert "MaybeInt MaybeInt_Missing_make()" in generated_code
+    assert "if ((item.variant == MaybeInt_Value))" in generated_code
+    assert "else if ((item.variant == MaybeInt_Pair))" in generated_code
+    assert "int value = item.Value_0;" in generated_code
+    assert "int left = item.Pair_0;" in generated_code
+    assert "float scale = item.Pair_1;" in generated_code
+    assert "return MaybeInt_Value_make(value);" in generated_code
+    assert "return MaybeInt_Missing_make();" in generated_code
+    assert "MaybeInt::" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_tuple_enum_constructor_wrong_arity_raises():
+    shader = """
+    shader TupleEnumConstructorArity {
+        enum MaybeInt {
+            Value(int),
+            Missing
+        }
+
+        MaybeInt make() {
+            return MaybeInt::Value();
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError, match="Enum constructor MaybeInt::Value expects 1 arguments, got 0"
+    ):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_ray_payload_semantics():
     code = """
     shader rt {
