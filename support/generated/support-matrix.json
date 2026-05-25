@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 369,
+        "unsupported_marker_count": 367,
         "unsupported_marker_samples": [
           {
             "line": 219,
@@ -132,7 +132,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 441
+        "test_count": 442
       },
       "translator_codegen": {
         "exists": true,
@@ -161,7 +161,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 996,
+        "unsupported_marker_count": 994,
         "unsupported_marker_samples": [
           {
             "line": 202,
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 641
+        "test_count": 642
       },
       "translator_codegen": {
         "exists": true,
@@ -300,7 +300,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 377,
+        "unsupported_marker_count": 375,
         "unsupported_marker_samples": [
           {
             "line": 223,
@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 390
+        "test_count": 391
       },
       "translator_codegen": {
         "exists": true,

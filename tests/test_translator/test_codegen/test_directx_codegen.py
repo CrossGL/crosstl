@@ -2084,12 +2084,13 @@ def test_match_guarded_literal_and_wildcard_arms_lower_to_if_chain():
     assert "MatchNode(" not in generated_code
 
 
-def test_match_unsupported_binding_arm_raises():
+def test_match_identifier_binding_arm_lowers_to_scoped_else_body():
     shader = """
     shader MatchBindingPattern {
         int helper(int mode) {
             int value = 0;
             match mode {
+                0 => { value = 1; }
                 other => { value = other; }
             }
             return value;
@@ -2097,8 +2098,40 @@ def test_match_unsupported_binding_arm_raises():
     }
     """
 
-    with pytest.raises(ValueError, match="Unsupported match arm"):
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int other = mode;" in generated_code
+    assert "value = other;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_plain_struct_pattern_binds_fields():
+    shader = """
+    shader MatchStructPattern {
+        struct Pair {
+            int left;
+            int right;
+        };
+
+        int helper(Pair pair) {
+            int value = 0;
+            match pair {
+                Pair { left, right } => { value = left + right; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int left = pair.left;" in generated_code
+    assert "int right = pair.right;" in generated_code
+    assert "value = (left + right);" in generated_code
+    assert "MatchNode(" not in generated_code
 
 
 def test_ray_payload_semantics():
