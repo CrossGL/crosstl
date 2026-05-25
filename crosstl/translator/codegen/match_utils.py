@@ -64,6 +64,15 @@ def generate_ordered_conditional_match_arms(
     expression_type = expression_result_type(generator, expression_node)
 
     code = ""
+    if match_subject_requires_temp(expression_node, expression_type):
+        temp_name = next_match_temp_variable(generator)
+        declaration = format_c_style_array_declaration(
+            generator.map_type(expression_type),
+            temp_name,
+        )
+        code += f"{indent_str}{declaration} = {expression};\n"
+        expression = temp_name
+
     emitted_arm = False
     for index, arm in enumerate(arms):
         pattern_condition, bindings, binding_types = match_arm_pattern_lowering(
@@ -604,6 +613,24 @@ def generate_body_with_binding_types(generator, binding_types, body, indent):
     finally:
         if saved_types is not None:
             generator.local_variable_types = saved_types
+
+
+def match_subject_requires_temp(expression_node, expression_type):
+    if expression_type is None:
+        return False
+    class_name = expression_node.__class__.__name__
+    return "FunctionCall" in class_name
+
+
+def next_match_temp_variable(generator):
+    if hasattr(generator, "next_hlsl_temp_variable"):
+        return generator.next_hlsl_temp_variable("match_subject")
+    if hasattr(generator, "next_metal_temp_variable"):
+        return generator.next_metal_temp_variable("match_subject")
+
+    index = getattr(generator, "match_temp_variable_index", 0)
+    generator.match_temp_variable_index = index + 1
+    return f"__crossgl_match_subject_{index}"
 
 
 def binding_declaration(generator, binding_type, name, expression):

@@ -132,7 +132,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 448
+        "test_count": 449
       },
       "translator_codegen": {
         "exists": true,
@@ -259,7 +259,7 @@
             "text": "self.unsupported_structured_buffer_array_functions = {}"
           },
           {
-            "line": 781,
+            "line": 783,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "self.unsupported_structured_buffer_array_functions = ("
           }
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 648
+        "test_count": 649
       },
       "translator_codegen": {
         "exists": true,
@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 397
+        "test_count": 398
       },
       "translator_codegen": {
         "exists": true,

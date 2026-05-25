@@ -2402,6 +2402,51 @@ def test_generic_enum_struct_concrete_match_and_constructors():
     assert "Result::" not in generated_code
 
 
+def test_generic_enum_function_call_match_infers_result_type_once():
+    shader = """
+    shader FunctionCallResultMatch {
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Result<int, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(7); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        int read(bool ok) {
+            match make_result(ok) {
+                Result::Ok(value) => { return value; },
+                Result::Err(_) => { return -1; }
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Result_int_MathError make_result(bool ok)" in generated_code
+    assert (
+        "Result_int_MathError __crossgl_match_subject_0 = make_result(ok);"
+        in generated_code
+    )
+    assert generated_code.count("make_result(ok)") == 1
+    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert (
+        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
+    )
+    assert "int value = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert "Result::" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
 def test_ray_payload_semantics():
     code = """
     shader rt {

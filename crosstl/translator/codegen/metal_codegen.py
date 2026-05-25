@@ -312,6 +312,7 @@ class MetalCodeGen:
         self.cbuffers_by_name = {}
         self.user_function_names = set()
         self.function_parameter_names = {}
+        self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
@@ -663,6 +664,11 @@ class MetalCodeGen:
         all_functions = self.all_functions(ast)
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
+        }
+        self.function_return_types = {
+            func.name: self.type_name_string(getattr(func, "return_type", "void"))
+            for func in all_functions
+            if getattr(func, "name", None)
         }
         self.function_parameter_names = collect_function_parameter_names(all_functions)
         self.function_image_access_requirements = (
@@ -2303,6 +2309,8 @@ class MetalCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in getattr(self, "function_return_types", {}):
+                return self.function_return_types[func_name]
             unsupported_functions = getattr(
                 self, "unsupported_glsl_buffer_block_functions", {}
             )

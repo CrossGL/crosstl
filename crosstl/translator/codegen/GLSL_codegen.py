@@ -292,6 +292,7 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_stage_return_type = None
         self.current_expression_expected_type = None
+        self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
         self.struct_member_types = {}
@@ -723,6 +724,7 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_stage_return_type = None
         self.current_expression_expected_type = None
+        self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
         self.structured_buffer_instance_members = {}

@@ -293,6 +293,7 @@ class HLSLCodeGen:
         self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_names = {}
+        self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
@@ -618,6 +619,11 @@ class HLSLCodeGen:
         global_vars = self.global_resource_declaration_nodes(ast, target_stage)
         self.current_global_resource_declaration_nodes = global_vars
         functions = self.collect_functions(ast)
+        self.function_return_types = {
+            func.name: self.type_name_string(getattr(func, "return_type", "void"))
+            for func in functions
+            if getattr(func, "name", None)
+        }
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(
                 list(global_vars) + self.collect_function_parameters(functions)
@@ -2177,6 +2183,8 @@ class HLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in getattr(self, "function_return_types", {}):
+                return self.function_return_types[func_name]
             unsupported_functions = getattr(
                 self, "unsupported_glsl_buffer_block_functions", {}
             )
