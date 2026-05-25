@@ -4455,6 +4455,30 @@ def test_trait_self_return_does_not_emit_generic_enum_specialization():
     assert "int passthrough(int value)" in generated_code
 
 
+def test_generic_function_call_emits_concrete_specialization():
+    shader = """
+    shader GenericFunctionSpecialization {
+        generic<T> fn add_one(value: T) -> T {
+            return value.add(T::one());
+        }
+
+        float use_add_one(float value) {
+            return add_one(value);
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float add_one_float(float value)" in generated_code
+    assert "return (value + 1.0);" in generated_code
+    assert "return add_one_float(value);" in generated_code
+    assert "T add_one(T value)" not in generated_code
+    assert "return add_one(value);" not in generated_code
+    assert ".add(" not in generated_code
+    assert "T::one" not in generated_code
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {

@@ -106,6 +106,15 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+)
 from .glsl_buffer_layout import (
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
@@ -345,11 +354,16 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_function_return_wrapper = None
         self.current_expression_expected_type = None
+        self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
+        self.generic_function_definitions = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
         self.struct_constructor_uses_braces = True
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -855,6 +869,25 @@ class MetalCodeGen:
                 self.generic_struct_specializations,
             )
         )
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            all_functions,
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
+        self.user_function_names.update(
+            func.name for func in generic_function_specializations.values()
+        )
+        if generic_function_specializations:
+            self.function_parameter_names.update(
+                collect_function_parameter_names(
+                    generic_function_specializations.values()
+                )
+            )
         code = "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
@@ -1179,6 +1212,11 @@ class MetalCodeGen:
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
 
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    functions_code += self.generate_function(specialized_func)
+                continue
+
             if qualifier_name == "vertex":
                 functions_code += "// Vertex Shader\n"
                 functions_code += self.generate_function(
@@ -1216,7 +1254,14 @@ class MetalCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
-                    functions_code += self.generate_function(func)
+                    if generic_function_parameters(func):
+                        for specialized_func in generic_function_emission_list(
+                            self,
+                            func,
+                        ):
+                            functions_code += self.generate_function(specialized_func)
+                    else:
+                        functions_code += self.generate_function(func)
 
                 if hasattr(stage, "entry_point"):
                     functions_code += f"// {stage_name.title()} Shader\n"
@@ -1351,6 +1396,9 @@ class MetalCodeGen:
         previous_function_return_type = self.current_function_return_type
         previous_function_return_wrapper = self.current_function_return_wrapper
         previous_local_variable_types = self.local_variable_types
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         previous_cbuffer_parameter_names = self.cbuffer_parameter_names
         previous_cbuffer_member_references = self.cbuffer_member_references
         previous_ambiguous_cbuffer_members = self.ambiguous_cbuffer_members
@@ -1371,6 +1419,9 @@ class MetalCodeGen:
         )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
+        self.current_generic_function_substitutions = (
+            getattr(func, "_generic_substitutions", {}) or {}
+        )
         (
             self.current_glsl_buffer_block_parameters,
             self.current_glsl_buffer_block_parameter_failures,
@@ -1485,6 +1536,9 @@ class MetalCodeGen:
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
             self.local_variable_types = previous_local_variable_types
+            self.current_generic_function_substitutions = (
+                previous_generic_function_substitutions
+            )
             self.cbuffer_parameter_names = previous_cbuffer_parameter_names
             self.cbuffer_member_references = previous_cbuffer_member_references
             self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
@@ -1593,6 +1647,9 @@ class MetalCodeGen:
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
         self.local_variable_types = previous_local_variable_types
+        self.current_generic_function_substitutions = (
+            previous_generic_function_substitutions
+        )
         self.cbuffer_parameter_names = previous_cbuffer_parameter_names
         self.cbuffer_member_references = previous_cbuffer_member_references
         self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
@@ -2387,8 +2444,14 @@ class MetalCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type:
+                return numeric_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            specialized_func_name = generic_function_call_name(self, func_name, args)
+            if specialized_func_name in getattr(self, "function_return_types", {}):
+                return self.function_return_types[specialized_func_name]
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             unsupported_functions = getattr(
@@ -2967,6 +3030,14 @@ class MetalCodeGen:
             func_expr = getattr(expr, "function", None)
             if func_expr is None:
                 func_expr = expr.name
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                expr.args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
             func_name = None
             if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
@@ -2976,6 +3047,10 @@ class MetalCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+
+            static_generic_call = generate_static_generic_numeric_call(self, func_name)
+            if static_generic_call is not None:
+                return static_generic_call
 
             unsupported_call = self.unsupported_glsl_buffer_block_function_call(
                 func_name
@@ -2996,16 +3071,24 @@ class MetalCodeGen:
             buffer_call = self.generate_buffer_call(func_name, expr.args)
             if buffer_call is not None:
                 return buffer_call
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                expr.args,
+            )
+            if specialized_func_name is not None:
+                callee = specialized_func_name
+                func_name = specialized_func_name
             # Special handling for common GLSL functions
-            elif func_name == "normalize":
+            if func_name == "normalize":
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"normalize({args})"
-            elif func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
+            if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
                 # These function names are the same in GLSL and Metal
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"
             # Vector constructors
-            elif func_name in [
+            if func_name in [
                 "float",
                 "half",
                 "float16",
@@ -3171,20 +3254,17 @@ class MetalCodeGen:
                     for arg in expr.args
                 )
                 return f"{metal_type}({args})"
-            else:
-                # Standard function call
-                self.validate_function_image_access_arguments(func_name, expr.args)
-                args = [self.generate_expression(arg) for arg in expr.args]
-                if func_name in self.user_function_names:
-                    args.extend(
-                        self.cbuffer_parameter_name(cbuffer)
-                        for cbuffer in self.required_function_cbuffers(func_name)
-                    )
-                    args.extend(
-                        self.required_function_resource_argument_names(func_name)
-                    )
-                args = ", ".join(args)
-                return f"{callee}({args})"
+            # Standard function call
+            self.validate_function_image_access_arguments(func_name, expr.args)
+            args = [self.generate_expression(arg) for arg in expr.args]
+            if func_name in self.user_function_names:
+                args.extend(
+                    self.cbuffer_parameter_name(cbuffer)
+                    for cbuffer in self.required_function_cbuffers(func_name)
+                )
+                args.extend(self.required_function_resource_argument_names(func_name))
+            args = ", ".join(args)
+            return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:

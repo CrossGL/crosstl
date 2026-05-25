@@ -107,6 +107,15 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+)
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
     TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
@@ -308,12 +317,17 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_stage_return_type = None
         self.current_expression_expected_type = None
+        self.current_generic_function_substitutions = {}
         self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
         self.struct_member_types = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
+        self.generic_function_definitions = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
         self.structured_buffer_instance_members = {}
         self.glsl_buffer_block_struct_names = set()
         self.semantic_map = {
@@ -784,6 +798,32 @@ class GLSLCodeGen:
                 self.generic_struct_specializations,
             )
         )
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            functions,
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
+        if generic_function_specializations:
+            self.function_parameter_names.update(
+                collect_function_parameter_names(
+                    generic_function_specializations.values()
+                )
+            )
+            self.function_parameter_types.update(
+                self.collect_function_parameter_types(
+                    generic_function_specializations.values()
+                )
+            )
+            self.function_parameter_infos.update(
+                self.collect_function_parameter_infos(
+                    generic_function_specializations.values()
+                )
+            )
         self.plain_enums = collect_plain_enums(structs)
         self.struct_payload_enums = collect_struct_payload_enums(structs)
         self.enum_type_names = collect_enum_type_names(self.plain_enums)
@@ -1155,6 +1195,11 @@ class GLSLCodeGen:
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
 
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    code += self.generate_function(specialized_func)
+                continue
+
             if qualifier_name == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(
@@ -1193,7 +1238,14 @@ class GLSLCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
-                    stage_code += self.generate_function(func)
+                    if generic_function_parameters(func):
+                        for specialized_func in generic_function_emission_list(
+                            self,
+                            func,
+                        ):
+                            stage_code += self.generate_function(specialized_func)
+                    else:
+                        stage_code += self.generate_function(func)
 
                 if hasattr(stage, "entry_point"):
                     stage_code += self.generate_function(
@@ -1456,10 +1508,16 @@ class GLSLCodeGen:
         )
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         previous_structured_buffer_array_parameters = (
             self.current_structured_buffer_array_parameters
         )
         self.local_variable_types = {}
+        self.current_generic_function_substitutions = (
+            getattr(func, "_generic_substitutions", {}) or {}
+        )
         self.current_structured_buffer_array_parameters = {}
         for index, p in enumerate(param_list):
             if hasattr(p, "param_type"):
@@ -1632,6 +1690,9 @@ class GLSLCodeGen:
         self.current_stage_return_type = previous_stage_return_type
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
+        self.current_generic_function_substitutions = (
+            previous_generic_function_substitutions
+        )
         self.current_structured_buffer_array_parameters = (
             previous_structured_buffer_array_parameters
         )
@@ -3024,8 +3085,14 @@ class GLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type:
+                return numeric_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            specialized_func_name = generic_function_call_name(self, func_name, args)
+            if specialized_func_name in self.function_return_types:
+                return self.function_return_types[specialized_func_name]
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
             if func_name == "imageLoad" and args:
@@ -3351,8 +3418,16 @@ class GLSLCodeGen:
         elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
             # Map function names to GLSL equivalents
             func_expr = getattr(expr, "function", getattr(expr, "name", expr))
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                expr.args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
             func_name = None
-            if hasattr(func_expr, "name"):
+            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
                 callee = func_name
             elif isinstance(func_expr, str):
@@ -3362,6 +3437,13 @@ class GLSLCodeGen:
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
             func_name = self.function_map.get(func_name, func_name)
+
+            static_generic_call = generate_static_generic_numeric_call(
+                self,
+                original_func_name,
+            )
+            if static_generic_call is not None:
+                return static_generic_call
 
             enum_constructor = generate_enum_constructor_call(
                 self, original_func_name, expr.args
@@ -3376,6 +3458,15 @@ class GLSLCodeGen:
             buffer_call = self.generate_buffer_call(func_name, expr.args)
             if buffer_call is not None:
                 return buffer_call
+
+            specialized_func_name = generic_function_call_name(
+                self,
+                original_func_name,
+                expr.args,
+            )
+            if specialized_func_name is not None:
+                func_name = specialized_func_name
+                callee = specialized_func_name
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:

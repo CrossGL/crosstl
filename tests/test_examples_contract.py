@@ -82,6 +82,20 @@ def test_primary_graphics_examples_with_stage_local_resources_translate(
     )
 
     _assert_generated_output_is_usable(generated)
+    if relative_path == "advanced/GenericPatternMatching.cgl":
+        for marker in (
+            "Option_Self",
+            "Vec3_T",
+            "Result_Vec3_T_MathError",
+            "Result_T_MathError",
+            "None(",
+            ".add(",
+            ".mul(",
+            "T::one",
+            "T::zero",
+            "safe_divide(",
+        ):
+            assert marker not in generated
 
 
 @pytest.mark.parametrize(

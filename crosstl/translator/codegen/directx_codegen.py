@@ -107,6 +107,15 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+)
 from .glsl_buffer_layout import (
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
@@ -317,11 +326,16 @@ class HLSLCodeGen:
         self.literal_int_constants = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
+        self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
+        self.generic_function_definitions = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_domain = None
@@ -697,6 +711,16 @@ class HLSLCodeGen:
                 self.generic_struct_specializations,
             )
         )
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            functions,
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
         self.comparison_sampler_parameters = self.collect_comparison_sampler_parameters(
             ast
         )
@@ -712,6 +736,12 @@ class HLSLCodeGen:
             self.regular_texture_function_names(),
         )
         self.function_parameter_names = collect_function_parameter_names(functions)
+        if generic_function_specializations:
+            self.function_parameter_names.update(
+                collect_function_parameter_names(
+                    generic_function_specializations.values()
+                )
+            )
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -1371,6 +1401,11 @@ class HLSLCodeGen:
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
 
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    functions_code += self.generate_function(specialized_func)
+                continue
+
             if qualifier_name == "vertex":
                 functions_code += self.generate_function(
                     func,
@@ -1415,7 +1450,14 @@ class HLSLCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
-                    functions_code += self.generate_function(func)
+                    if generic_function_parameters(func):
+                        for specialized_func in generic_function_emission_list(
+                            self,
+                            func,
+                        ):
+                            functions_code += self.generate_function(specialized_func)
+                    else:
+                        functions_code += self.generate_function(func)
 
                 if hasattr(stage, "entry_point"):
                     previous_available_functions = self.current_hlsl_available_functions
@@ -1629,6 +1671,9 @@ class HLSLCodeGen:
         param_names = {getattr(param, "name", None) for param in param_list}
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         previous_glsl_buffer_block_parameters = (
             self.current_glsl_buffer_block_parameters
         )
@@ -1653,6 +1698,9 @@ class HLSLCodeGen:
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
         self.current_unsupported_glsl_buffer_block_local_variables = set()
+        self.current_generic_function_substitutions = (
+            getattr(func, "_generic_substitutions", {}) or {}
+        )
         self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
@@ -1781,6 +1829,9 @@ class HLSLCodeGen:
             )
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
+            self.current_generic_function_substitutions = (
+                previous_generic_function_substitutions
+            )
             self.current_glsl_buffer_block_parameters = (
                 previous_glsl_buffer_block_parameters
             )
@@ -1886,6 +1937,9 @@ class HLSLCodeGen:
         )
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
+        self.current_generic_function_substitutions = (
+            previous_generic_function_substitutions
+        )
         self.current_glsl_buffer_block_parameters = (
             previous_glsl_buffer_block_parameters
         )
@@ -2251,8 +2305,14 @@ class HLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type:
+                return numeric_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            specialized_func_name = generic_function_call_name(self, func_name, args)
+            if specialized_func_name in getattr(self, "function_return_types", {}):
+                return self.function_return_types[specialized_func_name]
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             unsupported_functions = getattr(
@@ -2803,8 +2863,17 @@ class HLSLCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
             func_name = None
-            if hasattr(func_expr, "name"):
+            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
                 callee = func_name
             elif isinstance(func_expr, str):
@@ -2812,7 +2881,10 @@ class HLSLCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
-            args = getattr(expr, "arguments", getattr(expr, "args", []))
+
+            static_generic_call = generate_static_generic_numeric_call(self, func_name)
+            if static_generic_call is not None:
+                return static_generic_call
 
             enum_constructor = generate_enum_constructor_call(self, func_name, args)
             if enum_constructor is not None:
@@ -2831,6 +2903,12 @@ class HLSLCodeGen:
             buffer_call = self.generate_buffer_call(func_name, args)
             if buffer_call is not None:
                 return buffer_call
+
+            call_argument_func_name = func_name
+            specialized_func_name = generic_function_call_name(self, func_name, args)
+            if specialized_func_name is not None:
+                callee = specialized_func_name
+                func_name = specialized_func_name
 
             if func_name in [
                 "float",
@@ -2979,7 +3057,9 @@ class HLSLCodeGen:
                 )
                 return f"{mapped_type}({args_str})"
             self.validate_function_image_access_arguments(func_name, args)
-            args_str = ", ".join(self.generate_call_arguments(func_name, args))
+            args_str = ", ".join(
+                self.generate_call_arguments(call_argument_func_name, args)
+            )
             return f"{callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
@@ -3910,10 +3990,11 @@ class HLSLCodeGen:
                         args[0], global_resource_types
                     )
                 texture_func = self.expression_name(func_expr)
-                if self.texture_call_is_diagnostic_only(
-                    texture_func, texture_type
-                ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
-                    texture_func, texture_type
+                if (
+                    self.texture_call_is_diagnostic_only(texture_func, texture_type)
+                    and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
+                        texture_func, texture_type
+                    )
                 ):
                     continue
                 sampler_name = self.expression_name(args[1])
