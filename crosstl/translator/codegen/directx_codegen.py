@@ -99,9 +99,10 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
-    generate_generic_struct_constructor_expression,
     generate_generic_structs,
+    generate_struct_constructor_expression,
     generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import (
     byte_offset_expression,
@@ -1904,12 +1905,7 @@ class HLSLCodeGen:
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
-            if hasattr(stmt, "var_type"):
-                vtype = stmt.var_type
-            elif hasattr(stmt, "vtype"):
-                vtype = stmt.vtype
-            else:
-                vtype = "float"
+            vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
             if self.is_unsupported_glsl_buffer_block_struct_type(vtype):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
@@ -2016,6 +2012,14 @@ class HLSLCodeGen:
         else:
             # Try to generate as expression
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
+    def local_variable_declared_type(self, stmt):
+        vtype = getattr(stmt, "var_type", None)
+        if vtype is None:
+            vtype = getattr(stmt, "vtype", None)
+        if vtype is None:
+            vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
+        return vtype or "float"
 
     def local_variable_qualifier(self, node):
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
@@ -2208,10 +2212,14 @@ class HLSLCodeGen:
             if len(member_types) == 1:
                 return next(iter(member_types))
             return None
+        if isinstance(expr, ConstructorNode):
+            return infer_struct_constructor_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in {"normalize", "reflect"} and args:
+                return self.expression_result_type(args[0])
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             unsupported_functions = getattr(
@@ -2753,7 +2761,7 @@ class HLSLCodeGen:
             index = self.generate_expression(index_expr)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
-            constructor = generate_generic_struct_constructor_expression(self, expr)
+            constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
             return str(expr)

@@ -98,9 +98,10 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
-    generate_generic_struct_constructor_expression,
     generate_generic_structs,
+    generate_struct_constructor_expression,
     generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import (
     byte_offset_expression,
@@ -2085,12 +2086,7 @@ class MetalCodeGen:
         """Render a single CrossGL AST statement as Metal source."""
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
-            if hasattr(stmt, "var_type"):
-                var_type = self.convert_type_node_to_string(stmt.var_type)
-            elif hasattr(stmt, "vtype"):
-                var_type = stmt.vtype
-            else:
-                var_type = "float"
+            var_type = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = var_type
             if self.is_unsupported_glsl_buffer_block_struct_type(var_type):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
@@ -2192,6 +2188,14 @@ class MetalCodeGen:
             terminator = "" if line.endswith((";", "}")) else ";"
             result += f"{indent_str}{line}{terminator}\n"
         return result
+
+    def local_variable_declared_type(self, stmt):
+        var_type = getattr(stmt, "var_type", None)
+        if var_type is None:
+            var_type = getattr(stmt, "vtype", None)
+        if var_type is None:
+            var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
+        return self.type_name_string(var_type) or "float"
 
     def local_variable_qualifier(self, node):
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
@@ -2335,10 +2339,14 @@ class MetalCodeGen:
             if len(member_types) == 1:
                 return next(iter(member_types))
             return None
+        if isinstance(expr, ConstructorNode):
+            return infer_struct_constructor_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in {"normalize", "reflect"} and args:
+                return self.expression_result_type(args[0])
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             unsupported_functions = getattr(
@@ -2905,7 +2913,7 @@ class MetalCodeGen:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
-            constructor = generate_generic_struct_constructor_expression(self, expr)
+            constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
             return str(expr)

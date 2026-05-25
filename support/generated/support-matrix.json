@@ -25,102 +25,102 @@
         "unsupported_marker_count": 367,
         "unsupported_marker_samples": [
           {
-            "line": 250,
+            "line": 251,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_image_atomic_expression,"
           },
           {
-            "line": 251,
+            "line": 252,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_image_atomic_expression,"
           },
           {
-            "line": 252,
+            "line": 253,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_image_store_expression,"
           },
           {
-            "line": 253,
+            "line": 254,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 254,
+            "line": 255,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 255,
+            "line": 256,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 256,
+            "line": 257,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 257,
+            "line": 258,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 258,
+            "line": 259,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 259,
+            "line": 260,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 260,
+            "line": 261,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 261,
+            "line": 262,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 262,
+            "line": 263,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 263,
+            "line": 264,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 264,
+            "line": 265,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 265,
+            "line": 266,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 266,
+            "line": 267,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 267,
+            "line": 268,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
           },
           {
-            "line": 268,
+            "line": 269,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 269,
+            "line": 270,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           }
@@ -132,7 +132,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 450
+        "test_count": 452
       },
       "translator_codegen": {
         "exists": true,
@@ -164,102 +164,102 @@
         "unsupported_marker_count": 994,
         "unsupported_marker_samples": [
           {
-            "line": 233,
+            "line": 234,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 234,
+            "line": 235,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 235,
+            "line": 236,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 236,
+            "line": 237,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 237,
+            "line": 238,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 238,
+            "line": 239,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 239,
+            "line": 240,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 240,
+            "line": 241,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 241,
+            "line": 242,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 242,
+            "line": 243,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 243,
+            "line": 244,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 244,
+            "line": 245,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 245,
+            "line": 246,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 246,
+            "line": 247,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 247,
+            "line": 248,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 248,
+            "line": 249,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           },
           {
-            "line": 249,
+            "line": 250,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_query_lod_expression,"
           },
           {
-            "line": 250,
+            "line": 251,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_samples_query_call_expression,"
           },
           {
-            "line": 278,
+            "line": 279,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "self.unsupported_structured_buffer_array_functions = {}"
           },
           {
-            "line": 809,
+            "line": 810,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "self.unsupported_structured_buffer_array_functions = ("
           }
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 650
+        "test_count": 652
       },
       "translator_codegen": {
         "exists": true,
@@ -303,102 +303,102 @@
         "unsupported_marker_count": 375,
         "unsupported_marker_samples": [
           {
-            "line": 254,
+            "line": 255,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_image_atomic_expression,"
           },
           {
-            "line": 255,
+            "line": 256,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 256,
+            "line": 257,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_atomic_expression,"
           },
           {
-            "line": 257,
+            "line": 258,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_store_expression,"
           },
           {
-            "line": 258,
+            "line": 259,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 259,
+            "line": 260,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 260,
+            "line": 261,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 261,
+            "line": 262,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 262,
+            "line": 263,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 263,
+            "line": 264,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 264,
+            "line": 265,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 265,
+            "line": 266,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 266,
+            "line": 267,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 267,
+            "line": 268,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 268,
+            "line": 269,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 269,
+            "line": 270,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 270,
+            "line": 271,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 271,
+            "line": 272,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
           },
           {
-            "line": 272,
+            "line": 273,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 273,
+            "line": 274,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           }
@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 399
+        "test_count": 401
       },
       "translator_codegen": {
         "exists": true,

@@ -98,9 +98,10 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
-    generate_generic_struct_constructor_expression,
     generate_generic_structs,
+    generate_struct_constructor_expression,
     generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
@@ -2639,12 +2640,7 @@ class GLSLCodeGen:
         if isinstance(stmt, VariableNode):
             if stmt.name in self.flattened_stage_variables:
                 return ""
-            if hasattr(stmt, "var_type"):
-                var_type = self.convert_type_node_to_string(stmt.var_type)
-            elif hasattr(stmt, "vtype"):
-                var_type = stmt.vtype
-            else:
-                var_type = "float"
+            var_type = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = var_type
 
             declaration = format_c_style_array_declaration(
@@ -2731,6 +2727,14 @@ class GLSLCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def local_variable_declared_type(self, stmt):
+        var_type = getattr(stmt, "var_type", None)
+        if var_type is None:
+            var_type = getattr(stmt, "vtype", None)
+        if var_type is None:
+            var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
+        return self.type_name_string(var_type) or "float"
 
     def local_variable_qualifier(self, node):
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
@@ -2932,10 +2936,14 @@ class GLSLCodeGen:
             if len(member_types) == 1:
                 return next(iter(member_types))
             return None
+        if isinstance(expr, ConstructorNode):
+            return infer_struct_constructor_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in {"normalize", "reflect"} and args:
+                return self.expression_result_type(args[0])
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
             if func_name == "imageLoad" and args:
@@ -3251,7 +3259,7 @@ class GLSLCodeGen:
             else:
                 return str(expr)
         elif isinstance(expr, ConstructorNode):
-            constructor = generate_generic_struct_constructor_expression(self, expr)
+            constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
             return str(expr)

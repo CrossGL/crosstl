@@ -24,7 +24,10 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "directx",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="enum constructor match patterns are not lowerable to HLSL yet",
+            reason=(
+                "match expressions and enum-variant struct constructors are not "
+                "fully lowerable to HLSL yet"
+            ),
         ),
     ),
     pytest.param(
@@ -32,7 +35,10 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "metal",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="enum constructor match patterns are not lowerable to Metal yet",
+            reason=(
+                "match expressions and enum-variant struct constructors are not "
+                "fully lowerable to Metal yet"
+            ),
         ),
     ),
     pytest.param(
@@ -40,7 +46,10 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "opengl",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="enum constructor match patterns are not lowerable to GLSL yet",
+            reason=(
+                "match expressions and enum-variant struct constructors are not "
+                "fully lowerable to GLSL yet"
+            ),
         ),
     ),
 )
@@ -54,26 +63,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "opengl"),
 )
 
-KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "directx",
-        ValueError,
-        "Unsupported match arm for HLSL codegen; enum constructor patterns are not supported",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "metal",
-        ValueError,
-        "Unsupported match arm for Metal codegen; enum constructor patterns are not supported",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "opengl",
-        ValueError,
-        "Unsupported match arm for GLSL codegen; enum constructor patterns are not supported",
-    ),
-)
+KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = ()
 
 
 def _example_path(relative_path):
@@ -86,6 +76,8 @@ def _assert_generated_output_is_usable(generated):
     assert "Traceback" not in generated
     assert "NotImplemented" not in generated
     assert "<crosstl." not in generated
+    assert "MatchNode(" not in generated
+    assert "ConstructorNode(" not in generated
 
 
 @pytest.mark.parametrize("example_path", sorted(EXAMPLES_ROOT.rglob("*.cgl")))

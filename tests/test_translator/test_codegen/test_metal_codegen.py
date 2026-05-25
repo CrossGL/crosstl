@@ -2185,6 +2185,47 @@ def test_generic_enum_function_call_match_infers_result_type_once():
     assert "MatchNode(" not in generated_code
 
 
+def test_generic_enum_local_function_call_type_infers_match_subject():
+    shader = """
+    shader LocalResultMatch {
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Result<int, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(7); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        int read(bool ok) {
+            let item = make_result(ok);
+            match item {
+                Result::Ok(value) => { return value; },
+                Result::Err(_) => { return -1; }
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Result_int_MathError item = make_result(ok);" in generated_code
+    assert "float item = make_result(ok);" not in generated_code
+    assert "if ((item.variant == Result_Ok))" in generated_code
+    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "int value = item.Ok_0;" in generated_code
+    assert "Result<" not in generated_code
+    assert "ConstructorNode(" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {
@@ -2237,6 +2278,45 @@ def test_generic_struct_concrete_constructor_and_member_access():
     assert "item.first.value + item.second" in generated_code
     assert "Box<" not in generated_code
     assert "PairBox<" not in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
+def test_struct_constructor_and_inferred_generic_constructor_local():
+    shader = """
+    shader StructConstructors {
+        struct Geometry {
+            center: vec3;
+            normal: vec3;
+        }
+
+        generic<T> struct Box {
+            value: T;
+        }
+
+        Geometry make_geometry(vec3 center, vec3 normal) {
+            return Geometry { center: center, normal: normal };
+        }
+
+        Box<float> make_box(vec3 value) {
+            let normalized = normalize(value);
+            let wrapped = Box { value: normalized.x };
+            return wrapped;
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Geometry {" in generated_code
+    assert "struct Box_float {" in generated_code
+    assert "Geometry make_geometry(float3 center, float3 normal)" in generated_code
+    assert "return Geometry{center, normal};" in generated_code
+    assert "Box_float make_box(float3 value)" in generated_code
+    assert "float3 normalized = normalize(value);" in generated_code
+    assert "Box_float wrapped = Box_float{normalized.x};" in generated_code
+    assert "return wrapped;" in generated_code
+    assert "Option_Self normalized" not in generated_code
+    assert "Box<" not in generated_code
     assert "ConstructorNode(" not in generated_code
 
 
