@@ -4429,6 +4429,32 @@ def test_stage_tail_struct_constructor_returns_stage_output():
     assert "ConstructorNode(" not in generated_code
 
 
+def test_trait_self_return_does_not_emit_generic_enum_specialization():
+    shader = """
+    shader TraitSelfOption {
+        generic<T> struct Option {
+            enum OptionType { Some(T), None }
+            OptionType variant;
+        }
+
+        trait VectorOps {
+            fn normalize(self) -> Option<Self>;
+        }
+
+        int passthrough(int value) {
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Option_Self" not in generated_code
+    assert "Option_Self" not in generated_code
+    assert "Self Some_0" not in generated_code
+    assert "int passthrough(int value)" in generated_code
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {

@@ -144,7 +144,7 @@ def collect_generic_enum_specializations(nodes, definitions, type_name_string):
 
 
 def collect_generic_parameter_names(value):
-    names = set()
+    names = {"Self"}
     visited = set()
 
     def visit(current):
@@ -183,6 +183,8 @@ def collect_generic_parameter_names(value):
 def type_node_contains_generic_parameter(value, generic_names):
     if value is None:
         return False
+    if isinstance(value, str):
+        return value in generic_names
     name = getattr(value, "name", None)
     generic_args = getattr(value, "generic_args", None)
     if name in generic_names and not generic_args:
