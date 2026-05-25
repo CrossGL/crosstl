@@ -73,9 +73,12 @@ from .stage_utils import (
 from .resource_arrays import collect_resource_array_size_hints
 from .enum_utils import (
     collect_enum_type_names,
+    collect_enum_struct_variant_fields,
     collect_enum_variant_constants,
     collect_plain_enums,
+    collect_struct_payload_enums,
     generate_enum_constants,
+    generate_enum_structs,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
@@ -715,8 +718,17 @@ class GLSLCodeGen:
             getattr(ast, "structs", []), self.type_name_string
         )
         self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
+        self.struct_payload_enums = collect_struct_payload_enums(
+            getattr(ast, "structs", [])
+        )
         self.enum_type_names = collect_enum_type_names(self.plain_enums)
-        self.enum_variant_constants = collect_enum_variant_constants(self.plain_enums)
+        self.enum_struct_type_names = collect_enum_type_names(self.struct_payload_enums)
+        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constants = collect_enum_variant_constants(
+            self.plain_enums + self.struct_payload_enums
+        )
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -750,8 +762,13 @@ class GLSLCodeGen:
         code += f"{version_line}\n"
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
-        code += generate_enum_constants(self, self.plain_enums, qualifier="const")
+        code += generate_enum_constants(
+            self,
+            self.plain_enums + self.struct_payload_enums,
+            qualifier="const",
+        )
         code += self.generate_constants(ast)
+        code += generate_enum_structs(self, self.struct_payload_enums)
 
         structs = getattr(ast, "structs", [])
         global_vars = list(getattr(ast, "global_variables", []) or [])
@@ -6372,6 +6389,9 @@ class GLSLCodeGen:
 
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"
+
+        if vtype_str in getattr(self, "enum_struct_type_names", set()):
+            return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
 

@@ -1934,6 +1934,54 @@ def test_match_enum_path_pattern_lowers_to_integer_constants():
     assert "MatchNode(" not in generated_code
 
 
+def test_match_struct_enum_pattern_binds_named_payload_fields():
+    shader = """
+    shader MatchStructEnumPattern {
+        enum LightingModel {
+            Phong {
+                ambient: vec3,
+                diffuse: vec3,
+                shininess: float
+            },
+            Toon {
+                base_color: vec3,
+                levels: int
+            }
+        }
+
+        vec3 shade(LightingModel model) {
+            vec3 result = vec3(0.0);
+            match model {
+                LightingModel::Phong { ambient, diffuse, shininess } => {
+                    result = ambient + diffuse * shininess;
+                },
+                LightingModel::Toon { base_color, .. } => {
+                    result = base_color;
+                }
+            }
+            return result;
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "static const int LightingModel_Phong = 0;" in generated_code
+    assert "static const int LightingModel_Toon = 1;" in generated_code
+    assert "struct LightingModel {" in generated_code
+    assert "int variant;" in generated_code
+    assert "float3 ambient;" in generated_code
+    assert "float3 base_color;" in generated_code
+    assert "float3 shade(LightingModel model)" in generated_code
+    assert "if ((model.variant == LightingModel_Phong))" in generated_code
+    assert "else if ((model.variant == LightingModel_Toon))" in generated_code
+    assert "float3 ambient = model.ambient;" in generated_code
+    assert "float shininess = model.shininess;" in generated_code
+    assert "float3 base_color = model.base_color;" in generated_code
+    assert "LightingModel::" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
 def test_ray_payload_semantics():
     code = """
     shader rt {

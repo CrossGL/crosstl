@@ -288,13 +288,14 @@ def lower_identifier_pattern(
 ):
     name = getattr(pattern, "name", "")
     if "::" in name:
-        enum_value = enum_variant_reference(
+        condition = enum_variant_condition(
             generator,
             name,
+            expression,
             expression_type,
             target_name,
         )
-        return f"({expression} == {enum_value})", [], {}
+        return condition, [], {}
 
     if name == "..":
         raise ValueError(
@@ -331,6 +332,23 @@ def enum_variant_reference(generator, path, expression_type, target_name):
     )
 
 
+def enum_variant_condition(generator, path, expression, expression_type, target_name):
+    enum_value = enum_variant_reference(generator, path, expression_type, target_name)
+    enum_name, _variant_name = split_enum_path(path)
+    tag_expression = enum_subject_tag_expression(
+        generator, expression, expression_type, enum_name
+    )
+    return f"({tag_expression} == {enum_value})"
+
+
+def enum_subject_tag_expression(generator, expression, expression_type, enum_name=None):
+    subject_type = base_type_name(type_name_string(generator, expression_type))
+    struct_enum_types = getattr(generator, "enum_struct_type_names", set())
+    if subject_type in struct_enum_types or enum_name in struct_enum_types:
+        return f"{expression}.variant"
+    return expression
+
+
 def split_enum_path(path):
     enum_name, variant_name = str(path).rsplit("::", 1)
     return enum_name, variant_name
@@ -353,9 +371,12 @@ def lower_constructor_pattern(pattern, target_name):
 def lower_struct_pattern(generator, pattern, expression, expression_type, target_name):
     pattern_type = getattr(pattern, "type_name", "")
     if "::" in pattern_type:
-        raise ValueError(
-            f"Unsupported match arm for {target_name} codegen; enum struct "
-            "patterns are not supported"
+        return lower_enum_struct_pattern(
+            generator,
+            pattern,
+            expression,
+            expression_type,
+            target_name,
         )
 
     subject_type = type_name_string(generator, expression_type) or pattern_type
@@ -384,6 +405,64 @@ def lower_struct_pattern(generator, pattern, expression, expression_type, target
         binding_types.update(field_binding_types)
 
     condition = " && ".join(f"({part})" for part in conditions) or None
+    return condition, bindings, binding_types
+
+
+def lower_enum_struct_pattern(
+    generator,
+    pattern,
+    expression,
+    expression_type,
+    target_name,
+):
+    pattern_type = getattr(pattern, "type_name", "")
+    enum_name, variant_name = split_enum_path(pattern_type)
+    subject_type = base_type_name(type_name_string(generator, expression_type))
+    if subject_type and enum_name != subject_type:
+        raise ValueError(
+            f"Unsupported match arm for {target_name} codegen; enum struct "
+            f"pattern {pattern_type} cannot match expression type {subject_type}"
+        )
+
+    fields_by_variant = getattr(generator, "enum_struct_variant_fields", {})
+    variant_fields = fields_by_variant.get(enum_name, {}).get(variant_name)
+    if variant_fields is None:
+        raise ValueError(
+            f"Unsupported match arm for {target_name} codegen; enum struct "
+            "patterns are not supported"
+        )
+
+    condition = enum_variant_condition(
+        generator,
+        pattern_type,
+        expression,
+        expression_type,
+        target_name,
+    )
+    bindings = []
+    binding_types = {}
+    for field_name, field_pattern in getattr(pattern, "field_patterns", {}).items():
+        field_type = variant_fields.get(field_name)
+        if field_type is None:
+            raise ValueError(
+                f"Unsupported match arm for {target_name} codegen; enum struct "
+                f"pattern {pattern_type} has no field '{field_name}'"
+            )
+        field_expr = f"{expression}.{field_name}"
+        field_condition, field_bindings, field_binding_types = (
+            lower_struct_field_pattern(
+                generator,
+                field_pattern,
+                field_expr,
+                field_type,
+                target_name,
+            )
+        )
+        if field_condition:
+            condition = f"({condition}) && ({field_condition})"
+        bindings.extend(field_bindings)
+        binding_types.update(field_binding_types)
+
     return condition, bindings, binding_types
 
 

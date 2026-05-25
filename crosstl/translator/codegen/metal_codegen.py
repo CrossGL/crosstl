@@ -73,9 +73,12 @@ from .stage_utils import (
 from .resource_arrays import collect_resource_array_size_hints
 from .enum_utils import (
     collect_enum_type_names,
+    collect_enum_struct_variant_fields,
     collect_enum_variant_constants,
     collect_plain_enums,
+    collect_struct_payload_enums,
     generate_enum_constants,
+    generate_enum_structs,
 )
 from .glsl_buffer_layout import (
     byte_offset_expression,
@@ -694,8 +697,17 @@ class MetalCodeGen:
             if isinstance(node, StructNode)
         }
         self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
+        self.struct_payload_enums = collect_struct_payload_enums(
+            getattr(ast, "structs", [])
+        )
         self.enum_type_names = collect_enum_type_names(self.plain_enums)
-        self.enum_variant_constants = collect_enum_variant_constants(self.plain_enums)
+        self.enum_struct_type_names = collect_enum_type_names(self.struct_payload_enums)
+        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constants = collect_enum_variant_constants(
+            self.plain_enums + self.struct_payload_enums
+        )
         global_vars = deduplicate_named_declarations(
             list(getattr(ast, "global_variables", []) or [])
             + collect_stage_local_variables(
@@ -774,8 +786,11 @@ class MetalCodeGen:
             code += "#include <metal_stdlib>\n"
         code += "using namespace metal;\n"
         code += "\n"
-        code += generate_enum_constants(self, self.plain_enums)
+        code += generate_enum_constants(
+            self, self.plain_enums + self.struct_payload_enums
+        )
         code += self.generate_constants(ast)
+        code += generate_enum_structs(self, self.struct_payload_enums)
 
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -7679,6 +7694,9 @@ class MetalCodeGen:
 
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"
+
+        if vtype_str in getattr(self, "enum_struct_type_names", set()):
+            return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
 
