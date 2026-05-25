@@ -24,6 +24,7 @@ BACKENDS_PATH = SUPPORT_DIR / "backends.json"
 FEATURES_PATH = SUPPORT_DIR / "features.json"
 GENERATED_DIR = SUPPORT_DIR / "generated"
 MATRIX_JSON_PATH = GENERATED_DIR / "support-matrix.json"
+GRAPHICS_ROADMAP_JSON_PATH = GENERATED_DIR / "graphics-backend-roadmap.json"
 DOCS_RST_PATH = ROOT / "docs" / "source" / "support-matrix.rst"
 DEFAULT_DOC_REPORT_PATH = GENERATED_DIR / "backend-docs-report.json"
 
@@ -53,6 +54,8 @@ BACKLOG_STATUSES = {
     "unknown",
 }
 
+GRAPHICS_BACKEND_IDS = ("directx", "opengl", "metal")
+
 TEST_PATTERN = re.compile(r"^\s*def\s+test_", re.MULTILINE)
 UNSUPPORTED_PATTERN = re.compile(
     r"unsupported|not support|does not support|notimplemented",
@@ -75,6 +78,13 @@ def stable_json(data):
 
 def relpath(path):
     return os.path.relpath(str(path), str(ROOT)).replace(os.sep, "/")
+
+
+def display_path(path):
+    try:
+        return str(path.relative_to(ROOT)).replace(os.sep, "/")
+    except ValueError:
+        return str(path)
 
 
 def read_text(path):
@@ -431,6 +441,105 @@ def build_matrix(backends_data, features_data):
     }
 
 
+def filtered_backlog(matrix, backend_ids=None, categories=None, statuses=None):
+    backend_filter = set(backend_ids or [])
+    category_filter = set(categories or [])
+    status_filter = set(statuses or [])
+
+    rows = []
+    for item in matrix["backlog"]:
+        if backend_filter and item["backend_id"] not in backend_filter:
+            continue
+        if category_filter and item["category"] not in category_filter:
+            continue
+        if status_filter and item["status"] not in status_filter:
+            continue
+        rows.append(item)
+    return rows
+
+
+def backlog_summary(rows):
+    summary = {
+        "backlog_count": len(rows),
+        "by_backend": {},
+        "by_category": {},
+        "by_status": {status: 0 for status in STATUS_ORDER},
+    }
+    for item in rows:
+        backend_id = item["backend_id"]
+        category = item["category"]
+        status = item["status"]
+        summary["by_backend"][backend_id] = summary["by_backend"].get(backend_id, 0) + 1
+        summary["by_category"][category] = summary["by_category"].get(category, 0) + 1
+        summary["by_status"][status] = summary["by_status"].get(status, 0) + 1
+    return summary
+
+
+def build_audit_report(matrix, rows, filters):
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py",
+        "filters": filters,
+        "summary": backlog_summary(rows),
+        "backlog": rows,
+    }
+
+
+def build_backend_view(matrix, view_id, title, backend_ids):
+    backend_id_set = set(backend_ids)
+    backend_names = {
+        backend["id"]: backend["name"]
+        for backend in matrix["backends"]
+        if backend["id"] in backend_id_set
+    }
+    features = []
+    for feature in matrix["features"]:
+        support = {
+            backend_id: feature["support"][backend_id] for backend_id in backend_ids
+        }
+        features.append(
+            {
+                "id": feature["id"],
+                "category": feature["category"],
+                "name": feature["name"],
+                "description": feature["description"],
+                "support": support,
+            }
+        )
+
+    rows = filtered_backlog(matrix, backend_ids=backend_ids)
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py",
+        "view": {
+            "id": view_id,
+            "title": title,
+            "backend_ids": list(backend_ids),
+            "backends": backend_names,
+        },
+        "summary": {
+            "feature_count": len(features),
+            "backend_count": len(backend_ids),
+            "status_counts": {
+                backend_id: matrix["summary"]["status_counts"][backend_id]
+                for backend_id in backend_ids
+            },
+            "backlog": backlog_summary(rows),
+        },
+        "features": features,
+        "backlog": rows,
+    }
+
+
+def build_graphics_backend_roadmap(matrix):
+    return build_backend_view(
+        matrix,
+        "graphics_backends",
+        "DirectX, OpenGL, and Metal support roadmap",
+        GRAPHICS_BACKEND_IDS,
+    )
+
+
 def rst_escape(text):
     if text is None:
         return ""
@@ -474,6 +583,8 @@ def grouped_features(features):
 def render_docs(matrix):
     backend_ids = [backend["id"] for backend in matrix["backends"]]
     backend_name = {backend["id"]: backend["name"] for backend in matrix["backends"]}
+    graphics_roadmap = build_graphics_backend_roadmap(matrix)
+    graphics_backend_names = graphics_roadmap["view"]["backends"]
     lines = [
         "Support Matrix",
         "==============",
@@ -544,6 +655,48 @@ def render_docs(matrix):
             "Summary by backend",
             ["Backend"] + [status for status in STATUS_ORDER],
             summary_rows,
+        )
+    )
+
+    lines.extend(
+        [
+            "Graphics Backend Focus",
+            "----------------------",
+            "",
+            "This view isolates the DirectX, OpenGL, and Metal rows that are in",
+            "scope for graphics backend completion work.",
+            "",
+        ]
+    )
+    graphics_summary_rows = []
+    for backend_id in GRAPHICS_BACKEND_IDS:
+        counts = graphics_roadmap["summary"]["status_counts"][backend_id]
+        graphics_summary_rows.append(
+            [graphics_backend_names[backend_id]]
+            + [counts.get(status, 0) for status in STATUS_ORDER]
+        )
+    lines.extend(
+        render_csv_table(
+            "Graphics backend status summary",
+            ["Backend"] + [status for status in STATUS_ORDER],
+            graphics_summary_rows,
+        )
+    )
+    graphics_backlog_rows = [
+        [
+            item["backend"],
+            item["category"],
+            item["feature"],
+            item["status"],
+            item.get("notes", ""),
+        ]
+        for item in graphics_roadmap["backlog"]
+    ]
+    lines.extend(
+        render_csv_table(
+            "DirectX/OpenGL/Metal backlog",
+            ["Backend", "Category", "Feature", "Status", "Notes"],
+            graphics_backlog_rows,
         )
     )
 
@@ -628,6 +781,9 @@ def render_docs(matrix):
 def write_generated(matrix):
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     MATRIX_JSON_PATH.write_text(stable_json(matrix), encoding="utf-8")
+    GRAPHICS_ROADMAP_JSON_PATH.write_text(
+        stable_json(build_graphics_backend_roadmap(matrix)), encoding="utf-8"
+    )
     DOCS_RST_PATH.write_text(render_docs(matrix), encoding="utf-8")
 
 
@@ -653,6 +809,10 @@ def check_generated(matrix):
     failures = []
     for path, expected in (
         (MATRIX_JSON_PATH, stable_json(matrix)),
+        (
+            GRAPHICS_ROADMAP_JSON_PATH,
+            stable_json(build_graphics_backend_roadmap(matrix)),
+        ),
         (DOCS_RST_PATH, render_docs(matrix)),
     ):
         diff = compare_file(path, expected)
@@ -673,36 +833,98 @@ def print_generated_failures(failures):
             print("... diff truncated ...", file=sys.stderr)
 
 
-def audit(matrix, fail_on):
+def split_filter_values(values):
+    result = []
+    for value in values or []:
+        for part in str(value).split(","):
+            part = part.strip()
+            if part:
+                result.append(part)
+    return result
+
+
+def validate_audit_filters(matrix, backend_ids, categories):
+    known_backend_ids = {backend["id"] for backend in matrix["backends"]}
+    unknown_backend_ids = set(backend_ids) - known_backend_ids
+    if unknown_backend_ids:
+        raise SupportMatrixError(
+            "Unknown backend filter(s): {}".format(
+                ", ".join(sorted(unknown_backend_ids))
+            )
+        )
+
+    known_categories = {feature["category"] for feature in matrix["features"]}
+    unknown_categories = set(categories) - known_categories
+    if unknown_categories:
+        raise SupportMatrixError(
+            "Unknown category filter(s): {}".format(
+                ", ".join(sorted(unknown_categories))
+            )
+        )
+
+
+def audit(
+    matrix, fail_on, backend_ids=None, categories=None, statuses=None, output=None
+):
     fail_on = set(fail_on or [])
+    backend_ids = split_filter_values(backend_ids)
+    categories = split_filter_values(categories)
+    statuses = split_filter_values(statuses)
+    validate_audit_filters(matrix, backend_ids, categories)
+
+    rows = filtered_backlog(
+        matrix, backend_ids=backend_ids, categories=categories, statuses=statuses
+    )
+    filters = {
+        "backend_ids": backend_ids,
+        "categories": categories,
+        "statuses": statuses,
+    }
+    report = build_audit_report(matrix, rows, filters)
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(stable_json(report), encoding="utf-8")
+        print("Wrote {}".format(display_path(output)))
+
     print(
         "Support matrix: {} features across {} backends".format(
             matrix["summary"]["feature_count"], matrix["summary"]["backend_count"]
         )
     )
-    print("Backlog rows: {}".format(matrix["summary"]["backlog_count"]))
+    print("Backlog rows: {}".format(report["summary"]["backlog_count"]))
+    if backend_ids or categories or statuses:
+        print(
+            "Filters: backend_ids={}, categories={}, statuses={}".format(
+                ",".join(backend_ids) or "*",
+                ",".join(categories) or "*",
+                ",".join(statuses) or "*",
+            )
+        )
     print("")
 
     for backend in matrix["backends"]:
+        if backend_ids and backend["id"] not in backend_ids:
+            continue
         counts = matrix["summary"]["status_counts"][backend["id"]]
         count_text = ", ".join(
             "{}={}".format(status, counts.get(status, 0)) for status in STATUS_ORDER
         )
         print("{}: {}".format(backend["name"], count_text))
 
-    if not matrix["backlog"]:
+    if not rows:
         return 0
 
     print("")
     print("Backlog:")
-    for item in matrix["backlog"]:
+    for item in rows:
         print(
             "- {backend}: {feature} [{status}]".format(
                 backend=item["backend"], feature=item["feature"], status=item["status"]
             )
         )
 
-    if any(item["status"] in fail_on for item in matrix["backlog"]):
+    if any(item["status"] in fail_on for item in rows):
         return 1
     return 0
 
@@ -807,6 +1029,30 @@ def parse_args(argv):
         default=[],
         help="Exit non-zero if the backlog contains this status. Can be repeated.",
     )
+    audit_parser.add_argument(
+        "--backend",
+        action="append",
+        default=[],
+        help="Filter backlog by backend id. Comma-separated values are accepted.",
+    )
+    audit_parser.add_argument(
+        "--category",
+        action="append",
+        default=[],
+        help="Filter backlog by feature category. Comma-separated values are accepted.",
+    )
+    audit_parser.add_argument(
+        "--status",
+        action="append",
+        choices=STATUS_ORDER,
+        default=[],
+        help="Filter backlog by support status. Can be repeated.",
+    )
+    audit_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Optional JSON report output path for the filtered backlog.",
+    )
 
     docs_parser = subparsers.add_parser(
         "docs", help="Fetch official backend documentation URLs and write a report"
@@ -838,6 +1084,7 @@ def main(argv=None):
     if args.command == "update":
         write_generated(matrix)
         print("Updated {}".format(relpath(MATRIX_JSON_PATH)))
+        print("Updated {}".format(relpath(GRAPHICS_ROADMAP_JSON_PATH)))
         print("Updated {}".format(relpath(DOCS_RST_PATH)))
         return 0
 
@@ -850,7 +1097,21 @@ def main(argv=None):
         return 0
 
     if args.command == "audit":
-        return audit(matrix, args.fail_on)
+        output = args.output
+        if output is not None and not output.is_absolute():
+            output = ROOT / output
+        try:
+            return audit(
+                matrix,
+                args.fail_on,
+                backend_ids=args.backend,
+                categories=args.category,
+                statuses=args.status,
+                output=output,
+            )
+        except SupportMatrixError as exc:
+            print("support matrix error: {}".format(exc), file=sys.stderr)
+            return 2
 
     if args.command == "docs":
         output_path = args.output

@@ -1,0 +1,1576 @@
+{
+  "backlog": [
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "source",
+      "feature": "Native preprocessor handling",
+      "feature_id": "source.preprocessing",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
+      "feature": "Geometry stage",
+      "feature_id": "stage.geometry",
+      "notes": "",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
+      "feature": "Tessellation stages",
+      "feature_id": "stage.tessellation",
+      "notes": "",
+      "status": "unsupported"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "stages",
+      "feature": "Mesh/task/amplification stages",
+      "feature_id": "stage.mesh_task",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "stages",
+      "feature": "Mesh/task/amplification stages",
+      "feature_id": "stage.mesh_task",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
+      "feature": "Mesh/task/amplification stages",
+      "feature_id": "stage.mesh_task",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "stages",
+      "feature": "Ray tracing stages",
+      "feature_id": "stage.ray_tracing",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "stages",
+      "feature": "Ray tracing stages",
+      "feature_id": "stage.ray_tracing",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "stages",
+      "feature": "Ray tracing stages",
+      "feature_id": "stage.ray_tracing",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "resources",
+      "feature": "Structured/storage buffers",
+      "feature_id": "resources.structured_buffers",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "resources",
+      "feature": "Structured/storage buffers",
+      "feature_id": "resources.structured_buffers",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "resources",
+      "feature": "Structured/storage buffers",
+      "feature_id": "resources.structured_buffers",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "resources",
+      "feature": "Resource arrays",
+      "feature_id": "resources.resource_arrays",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "resources",
+      "feature": "Resource arrays",
+      "feature_id": "resources.resource_arrays",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "resources",
+      "feature": "Resource arrays",
+      "feature_id": "resources.resource_arrays",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "resources",
+      "feature": "Texture and sampler object model",
+      "feature_id": "resources.texture_sampler_split",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "resources",
+      "feature": "Texture and sampler object model",
+      "feature_id": "resources.texture_sampler_split",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "resources",
+      "feature": "Texture and sampler object model",
+      "feature_id": "resources.texture_sampler_split",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "resources",
+      "feature": "GLSL buffer block lowering",
+      "feature_id": "resources.glsl_buffer_blocks",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "resources",
+      "feature": "GLSL buffer block lowering",
+      "feature_id": "resources.glsl_buffer_blocks",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "resources",
+      "feature": "Resource memory qualifiers",
+      "feature_id": "resources.memory_qualifiers",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "resources",
+      "feature": "Resource memory qualifiers",
+      "feature_id": "resources.memory_qualifiers",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "resources",
+      "feature": "Resource memory qualifiers",
+      "feature_id": "resources.memory_qualifiers",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Texture LOD, gradient, and offset operations",
+      "feature_id": "texture.lod_grad_offset",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Texture LOD, gradient, and offset operations",
+      "feature_id": "texture.lod_grad_offset",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Texture LOD, gradient, and offset operations",
+      "feature_id": "texture.lod_grad_offset",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Projected texture operations",
+      "feature_id": "texture.projected",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Projected texture operations",
+      "feature_id": "texture.projected",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Projected texture operations",
+      "feature_id": "texture.projected",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Texture gather operations",
+      "feature_id": "texture.gather",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Texture gather operations",
+      "feature_id": "texture.gather",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Texture gather operations",
+      "feature_id": "texture.gather",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Shadow compare texture operations",
+      "feature_id": "texture.shadow_compare",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Shadow compare texture operations",
+      "feature_id": "texture.shadow_compare",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Shadow compare texture operations",
+      "feature_id": "texture.shadow_compare",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Texture query operations",
+      "feature_id": "texture.query",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Texture query operations",
+      "feature_id": "texture.query",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Texture query operations",
+      "feature_id": "texture.query",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Texel fetch operations",
+      "feature_id": "texture.texel_fetch",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Texel fetch operations",
+      "feature_id": "texture.texel_fetch",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Texel fetch operations",
+      "feature_id": "texture.texel_fetch",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Multisample texture operations",
+      "feature_id": "texture.multisample",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Multisample texture operations",
+      "feature_id": "texture.multisample",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Multisample texture operations",
+      "feature_id": "texture.multisample",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "textures",
+      "feature": "Advanced texture operations",
+      "feature_id": "texture.advanced_sampling",
+      "notes": "Several unsupported combinations intentionally emit diagnostics.",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "textures",
+      "feature": "Advanced texture operations",
+      "feature_id": "texture.advanced_sampling",
+      "notes": "Several unsupported combinations intentionally emit diagnostics.",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "textures",
+      "feature": "Advanced texture operations",
+      "feature_id": "texture.advanced_sampling",
+      "notes": "Several unsupported combinations intentionally emit diagnostics.",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "images",
+      "feature": "Storage image load/store",
+      "feature_id": "image.storage",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "images",
+      "feature": "Storage image load/store",
+      "feature_id": "image.storage",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "images",
+      "feature": "Storage image load/store",
+      "feature_id": "image.storage",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "images",
+      "feature": "Image atomics",
+      "feature_id": "image.atomics",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "images",
+      "feature": "Image atomics",
+      "feature_id": "image.atomics",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "images",
+      "feature": "Image atomics",
+      "feature_id": "image.atomics",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "images",
+      "feature": "Multisample storage images",
+      "feature_id": "image.multisample_storage",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "images",
+      "feature": "Multisample storage images",
+      "feature_id": "image.multisample_storage",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "images",
+      "feature": "Multisample storage images",
+      "feature_id": "image.multisample_storage",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "language",
+      "feature": "Match/pattern lowering",
+      "feature_id": "language.match",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "language",
+      "feature": "Match/pattern lowering",
+      "feature_id": "language.match",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "language",
+      "feature": "Match/pattern lowering",
+      "feature_id": "language.match",
+      "notes": "",
+      "status": "partial"
+    }
+  ],
+  "features": [
+    {
+      "category": "target",
+      "description": "Emit target-language source or target representation from CrossGL.",
+      "id": "target.codegen",
+      "name": "CrossGL to target code generation",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "source",
+      "description": "Parse backend source language and regenerate CrossGL.",
+      "id": "source.native_to_crossgl",
+      "name": "Native source to CrossGL",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_backend/test_directx/test_parser.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_backend/test_metal/test_parser.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_parser.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "source",
+      "description": "Tokenize backend source language constructs used by the native parser.",
+      "id": "source.lexing",
+      "name": "Native lexer coverage",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_backend/test_directx/test_lexer.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_backend/test_metal/test_lexer.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_lexer.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "source",
+      "description": "Handle native preprocessor directives, includes, defines, and conditional compilation where the backend language exposes them.",
+      "id": "source.preprocessing",
+      "name": "Native preprocessor handling",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_backend/test_directx/test_preprocessor.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_preprocessor.py::def test_"
+          ],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stages",
+      "description": "CrossGL vertex entry point lowering.",
+      "id": "stage.vertex",
+      "name": "Vertex stage",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stages",
+      "description": "CrossGL fragment entry point lowering.",
+      "id": "stage.fragment",
+      "name": "Fragment/pixel stage",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stages",
+      "description": "CrossGL compute entry point lowering.",
+      "id": "stage.compute",
+      "name": "Compute stage",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stages",
+      "description": "Geometry shader stage and primitive stream shape validation.",
+      "id": "stage.geometry",
+      "name": "Geometry stage",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "crosstl/translator/codegen/metal_codegen.py::does not support stage type"
+          ],
+          "notes": "",
+          "status": "unsupported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stages",
+      "description": "Tessellation control/hull and tessellation evaluation/domain stages.",
+      "id": "stage.tessellation",
+      "name": "Tessellation stages",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::unsupported_geometry_and_tessellation"
+          ],
+          "notes": "",
+          "status": "unsupported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stages",
+      "description": "Modern mesh-style stage entry points.",
+      "id": "stage.mesh_task",
+      "name": "Mesh/task/amplification stages",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "category": "stages",
+      "description": "Ray generation, hit, miss, callable, and intersection stages.",
+      "id": "stage.ray_tracing",
+      "name": "Ray tracing stages",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "category": "stage I/O",
+      "description": "Input parameter semantics and target builtin attributes.",
+      "id": "io.stage_parameters",
+      "name": "Stage parameter semantics",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stage I/O",
+      "description": "Function return semantics, wrapper output structs, and invalid-return validation.",
+      "id": "io.return_semantics",
+      "name": "Direct function return semantics",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "stage I/O",
+      "description": "Input/output struct member semantics and builtin type validation.",
+      "id": "io.struct_semantics",
+      "name": "Struct member semantics",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "resources",
+      "description": "Resource binding/register/location assignment and collision avoidance.",
+      "id": "resources.bindings",
+      "name": "Explicit and automatic resource bindings",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "resources",
+      "description": "CrossGL cbuffer/uniform block lowering.",
+      "id": "resources.constant_buffers",
+      "name": "Constant/uniform buffers",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "resources",
+      "description": "StructuredBuffer, RWStructuredBuffer, SSBO-style storage, and access helpers.",
+      "id": "resources.structured_buffers",
+      "name": "Structured/storage buffers",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "resources",
+      "description": "Fixed and unsized texture, sampler, image, and buffer arrays.",
+      "id": "resources.resource_arrays",
+      "name": "Resource arrays",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "resources",
+      "description": "Represent combined and separate texture/sampler models without binding collisions.",
+      "id": "resources.texture_sampler_split",
+      "name": "Texture and sampler object model",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "resources",
+      "description": "Lower GLSL-style buffer blocks and preserve deterministic diagnostics for unsupported target shapes.",
+      "id": "resources.glsl_buffer_blocks",
+      "name": "GLSL buffer block lowering",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "resources",
+      "description": "Translate readonly/writeonly/coherent/volatile/restrict-style resource qualifiers where the target has an equivalent.",
+      "id": "resources.memory_qualifiers",
+      "name": "Resource memory qualifiers",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Basic sampling with regular and shadow samplers.",
+      "id": "texture.sampling",
+      "name": "Texture sampling",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Lower explicit LOD, gradient, bias, and offset texture operations.",
+      "id": "texture.lod_grad_offset",
+      "name": "Texture LOD, gradient, and offset operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Lower projection-coordinate texture sampling and shadow comparison variants.",
+      "id": "texture.projected",
+      "name": "Projected texture operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Lower gather, gather-offset, and gather-offsets texture operations.",
+      "id": "texture.gather",
+      "name": "Texture gather operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Lower shadow sampler compare operations, including offset and LOD variants where target semantics allow them.",
+      "id": "texture.shadow_compare",
+      "name": "Shadow compare texture operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Lower size, LOD, levels, and sample-count resource query operations.",
+      "id": "texture.query",
+      "name": "Texture query operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Lower integer-coordinate texel fetch and fetch-offset operations.",
+      "id": "texture.texel_fetch",
+      "name": "Texel fetch operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "Lower multisample texture fetch, query, and comparison forms with deterministic diagnostics for unsupported combinations.",
+      "id": "texture.multisample",
+      "name": "Multisample texture operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "textures",
+      "description": "LOD, gradients, offsets, projected coordinates, gathers, compares, and resource queries.",
+      "id": "texture.advanced_sampling",
+      "name": "Advanced texture operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "Several unsupported combinations intentionally emit diagnostics.",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "Several unsupported combinations intentionally emit diagnostics.",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "Several unsupported combinations intentionally emit diagnostics.",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "images",
+      "description": "Readable and writable image resources with explicit formats and access qualifiers.",
+      "id": "image.storage",
+      "name": "Storage image load/store",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "images",
+      "description": "Atomic operations on image resources.",
+      "id": "image.atomics",
+      "name": "Image atomics",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "images",
+      "description": "Represent multisample storage images and report unsupported load/store/atomic combinations deterministically.",
+      "id": "image.multisample_storage",
+      "name": "Multisample storage images",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "Lower struct declarations, member access, initialization, and return values.",
+      "id": "language.structs",
+      "name": "Struct declarations and construction",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "Lower fixed arrays, array parameters, indexing, and array return diagnostics.",
+      "id": "language.arrays",
+      "name": "Array declarations and access",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "Lower helper functions, entry functions, call expressions, and return statements.",
+      "id": "language.functions",
+      "name": "Function declarations and calls",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "if/else, loops, switch, break, continue, and return statements.",
+      "id": "language.control_flow",
+      "name": "Control flow",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "CrossGL match expressions and pattern arms.",
+      "id": "language.match",
+      "name": "Match/pattern lowering",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "Vector/matrix constructors, arithmetic, swizzles, casts, and helper intrinsics.",
+      "id": "language.vector_matrix",
+      "name": "Vector and matrix expressions",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "Integer bitwise operators and assignment variants.",
+      "id": "language.bitwise",
+      "name": "Bitwise operations",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "validation",
+      "description": "Backend-specific validation for invalid semantics, stages, resource shapes, and builtin types.",
+      "id": "validation.invalid_shapes",
+      "name": "Invalid shader shape validation",
+      "support": {
+        "directx": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        }
+      }
+    }
+  ],
+  "generator": "tools/support_matrix.py",
+  "schema_version": 1,
+  "summary": {
+    "backend_count": 3,
+    "backlog": {
+      "backlog_count": 59,
+      "by_backend": {
+        "directx": 19,
+        "metal": 22,
+        "opengl": 18
+      },
+      "by_category": {
+        "images": 9,
+        "language": 3,
+        "resources": 14,
+        "source": 1,
+        "stages": 8,
+        "textures": 24
+      },
+      "by_status": {
+        "diagnostic": 0,
+        "partial": 54,
+        "supported": 0,
+        "unknown": 3,
+        "unsupported": 2,
+        "validated_rejection": 0
+      }
+    },
+    "feature_count": 41,
+    "status_counts": {
+      "directx": {
+        "diagnostic": 0,
+        "partial": 19,
+        "supported": 22,
+        "unknown": 0,
+        "unsupported": 0,
+        "validated_rejection": 0
+      },
+      "metal": {
+        "diagnostic": 0,
+        "partial": 19,
+        "supported": 19,
+        "unknown": 1,
+        "unsupported": 2,
+        "validated_rejection": 0
+      },
+      "opengl": {
+        "diagnostic": 0,
+        "partial": 16,
+        "supported": 23,
+        "unknown": 2,
+        "unsupported": 0,
+        "validated_rejection": 0
+      }
+    }
+  },
+  "view": {
+    "backend_ids": [
+      "directx",
+      "opengl",
+      "metal"
+    ],
+    "backends": {
+      "directx": "DirectX / HLSL",
+      "metal": "Metal",
+      "opengl": "OpenGL / GLSL"
+    },
+    "id": "graphics_backends",
+    "title": "DirectX, OpenGL, and Metal support roadmap"
+  }
+}

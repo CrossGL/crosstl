@@ -1044,7 +1044,9 @@ class HipParser:
         self.consume("LBRACE")
 
         cases = []
+        ordered_cases = []
         default_case = None
+        seen_default = False
 
         while self.current_token and not self.match("RBRACE"):
             if self.match("NEWLINE", "SEMICOLON"):
@@ -1062,8 +1064,13 @@ class HipParser:
                     stmt = self.parse_statement()
                     if stmt:
                         body.append(stmt)
-                cases.append(CaseNode(value, body))
+                case = CaseNode(value, body)
+                cases.append(case)
+                ordered_cases.append(case)
             elif self.match("DEFAULT"):
+                if seen_default:
+                    raise SyntaxError("duplicate default label in switch")
+                seen_default = True
                 self.advance()
                 self.consume("COLON")
                 default_case = []
@@ -1071,11 +1078,14 @@ class HipParser:
                     stmt = self.parse_statement()
                     if stmt:
                         default_case.append(stmt)
+                ordered_cases.append(CaseNode(None, default_case))
             else:
                 self.advance()
 
         self.consume("RBRACE")
-        return SwitchNode(expression, cases, default_case)
+        switch = SwitchNode(expression, cases, default_case)
+        switch.ordered_cases = ordered_cases
+        return switch
 
     def parse_sync_statement(self):
         sync_type = self.current_token.value

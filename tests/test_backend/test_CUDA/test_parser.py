@@ -1430,3 +1430,47 @@ class TestCudaParser:
         assert isinstance(switch, SwitchNode)
         assert len(switch.cases) == 1
         assert switch.default_case == []
+
+    def test_switch_parsing_preserves_default_before_later_case_order(self):
+        """Test source switch label order is retained when default is first."""
+        code = """
+        void f(int value) {
+            switch (value) {
+                default:
+                    value += 1;
+                case 1:
+                    value += 2;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        switch = ast.functions[0].body[0]
+        assert isinstance(switch, SwitchNode)
+        assert [case.value for case in switch.ordered_cases] == [None, "1"]
+        assert len(switch.cases) == 1
+        assert len(switch.default_case) == 1
+
+    def test_switch_parsing_rejects_duplicate_default_labels(self):
+        """Test duplicate switch default labels are rejected."""
+        code = """
+        void f(int value) {
+            switch (value) {
+                default:
+                    value += 1;
+                case 1:
+                    value += 2;
+                default:
+                    value += 3;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+
+        with pytest.raises(SyntaxError, match="duplicate default"):
+            parser.parse()

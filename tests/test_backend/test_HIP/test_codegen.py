@@ -2084,3 +2084,28 @@ class TestHipCodeGen:
         assert "case 0:" in result
         assert "default:" in result
         assert result.index("case 0:") < result.index("default:")
+
+    def test_switch_codegen_preserves_default_before_later_case_order(self):
+        """Test default labels are not reordered behind later case labels."""
+        code = """
+        void f(int value) {
+            switch (value) {
+                default:
+                    value += 1;
+                case 1:
+                    value += 2;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "switch (value) {" in result
+        assert "default:" in result
+        assert "case 1:" in result
+        assert result.index("default:") < result.index("case 1:")

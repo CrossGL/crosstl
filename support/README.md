@@ -10,6 +10,8 @@ The matrix is intentionally data-driven:
   status per backend.
 - `generated/support-matrix.json` and `docs/source/support-matrix.rst` are generated
   by `tools/support_matrix.py`.
+- `generated/graphics-backend-roadmap.json` is a focused generated view for the
+  DirectX, OpenGL, and Metal roadmap.
 - The generated JSON also records test counts and sampled unsupported markers
   with file/line references for each backend.
 
@@ -24,6 +26,8 @@ Run:
 python tools/support_matrix.py update
 python tools/support_matrix.py check
 python tools/support_matrix.py audit
+python tools/support_matrix.py audit --backend directx --backend opengl --backend metal
+python tools/support_matrix.py audit --backend directx --status partial --output /tmp/directx-partial.json
 ```
 
 The nightly CI job can also fetch official backend documentation URLs and report

@@ -1055,7 +1055,9 @@ class CudaParser:
         self.eat("LBRACE")
 
         cases = []
+        ordered_cases = []
         default_case = None
+        seen_default = False
 
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "CASE":
@@ -1065,18 +1067,26 @@ class CudaParser:
                 body = []
                 while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE"]:
                     body.append(self.parse_statement())
-                cases.append(CaseNode(value, body))
+                case = CaseNode(value, body)
+                cases.append(case)
+                ordered_cases.append(case)
             elif self.current_token[0] == "DEFAULT":
+                if seen_default:
+                    raise SyntaxError("duplicate default label in switch")
+                seen_default = True
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_case = []
                 while self.current_token[0] not in ["CASE", "RBRACE"]:
                     default_case.append(self.parse_statement())
+                ordered_cases.append(CaseNode(None, default_case))
             else:
                 self.eat(self.current_token[0])  # Skip unexpected tokens
 
         self.eat("RBRACE")
-        return SwitchNode(expression, cases, default_case)
+        switch = SwitchNode(expression, cases, default_case)
+        switch.ordered_cases = ordered_cases
+        return switch
 
     def parse_return_statement(self):
         """Parse return statement"""

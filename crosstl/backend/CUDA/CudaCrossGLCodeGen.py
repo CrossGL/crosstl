@@ -881,15 +881,27 @@ class CudaToCrossGLConverter:
         self.emit(f"switch ({expression}) {{")
 
         self.indent_level += 1
-        for case in node.cases:
-            self.visit(case)
+        ordered_cases = getattr(node, "ordered_cases", None)
+        if ordered_cases is not None:
+            for case in ordered_cases:
+                if case.value is None:
+                    self.emit("default:")
+                    self.indent_level += 1
+                    for stmt in case.body:
+                        self.emit_statement(stmt)
+                    self.indent_level -= 1
+                else:
+                    self.visit(case)
+        else:
+            for case in node.cases:
+                self.visit(case)
 
-        if node.default_case is not None:
-            self.emit("default:")
-            self.indent_level += 1
-            for stmt in node.default_case:
-                self.emit_statement(stmt)
-            self.indent_level -= 1
+            if node.default_case is not None:
+                self.emit("default:")
+                self.indent_level += 1
+                for stmt in node.default_case:
+                    self.emit_statement(stmt)
+                self.indent_level -= 1
 
         self.indent_level -= 1
         self.emit("}")
