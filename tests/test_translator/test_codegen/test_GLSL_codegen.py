@@ -4120,6 +4120,95 @@ def test_tuple_enum_constructor_wrong_arity_raises():
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_generic_enum_struct_concrete_match_and_constructors():
+    shader = """
+    shader GenericEnumConcrete {
+        generic<T> struct Option {
+            enum OptionType { Some(T), None }
+            OptionType variant;
+        }
+
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Option<int> some(int value) {
+            return Option::Some(value);
+        }
+
+        Option<int> none() {
+            return Option::None;
+        }
+
+        int read_option(Option<int> item) {
+            match item {
+                Option::Some(value) => { return value; },
+                Option::None => { return 0; }
+            }
+        }
+
+        Result<int, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(1); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        int read_result(Result<int, MathError> item) {
+            match item {
+                Result::Ok(value) => { return value; },
+                Result::Err(_) => { return 0; }
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int Option_Some = 0;" in generated_code
+    assert "const int Result_Ok = 0;" in generated_code
+    assert "struct Option_int {" in generated_code
+    assert "struct Result_int_MathError {" in generated_code
+    assert "struct Option {" not in generated_code
+    assert "struct Result {" not in generated_code
+    assert "Option_int Option_int_Some_make(int payload0)" in generated_code
+    assert "Option_int Option_int_None_make()" in generated_code
+    assert (
+        "Result_int_MathError Result_int_MathError_Ok_make(int payload0)"
+        in generated_code
+    )
+    assert (
+        "Result_int_MathError Result_int_MathError_Err_make(int payload0)"
+        in generated_code
+    )
+    assert "Option_int some(int value)" in generated_code
+    assert "Option_int none()" in generated_code
+    assert "Result_int_MathError make_result(bool ok)" in generated_code
+    assert "int read_result(Result_int_MathError item)" in generated_code
+    assert "return Option_int_Some_make(value);" in generated_code
+    assert "return Option_int_None_make();" in generated_code
+    assert "return Result_int_MathError_Ok_make(1);" in generated_code
+    assert (
+        "return Result_int_MathError_Err_make(MathError_DivisionByZero);"
+        in generated_code
+    )
+    assert "if ((item.variant == Option_Some))" in generated_code
+    assert "else if ((item.variant == Option_None))" in generated_code
+    assert "if ((item.variant == Result_Ok))" in generated_code
+    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "int value = item.Some_0;" in generated_code
+    assert "int value = item.Ok_0;" in generated_code
+    assert "Option<" not in generated_code
+    assert "Result<" not in generated_code
+    assert "Option::" not in generated_code
+    assert "Result::" not in generated_code
+
+
 def test_else_statement():
     code = """
     shader main {

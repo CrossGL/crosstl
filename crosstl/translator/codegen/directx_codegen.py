@@ -78,13 +78,21 @@ from .enum_utils import (
     collect_enum_variant_constructor_fields,
     collect_enum_variant_constructors,
     collect_enum_variant_constants,
+    collect_generic_enum_specialization_member_types,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_enum_variant_constants,
     collect_plain_enums,
     collect_struct_payload_enums,
     enum_value_expression,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_constants,
+    generate_generic_enum_structs,
     generate_enum_constructor_call,
     generate_enum_constructor_functions,
     generate_enum_constants,
     generate_enum_structs,
+    generic_enum_specialized_type_name,
 )
 from .glsl_buffer_layout import (
     byte_offset_expression,
@@ -569,12 +577,27 @@ class HLSLCodeGen:
             for node in getattr(ast, "structs", [])
             if isinstance(node, StructNode)
         }
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            getattr(ast, "structs", [])
+        )
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
         self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
         self.struct_payload_enums = collect_struct_payload_enums(
             getattr(ast, "structs", [])
         )
         self.enum_type_names = collect_enum_type_names(self.plain_enums)
-        self.enum_struct_type_names = collect_enum_type_names(self.struct_payload_enums)
+        self.enum_struct_type_names = (
+            collect_enum_type_names(self.struct_payload_enums)
+            | set(self.generic_enum_struct_definitions)
+            | {
+                specialization["struct_name"]
+                for specialization in self.generic_enum_specializations.values()
+            }
+        )
         self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
             self.struct_payload_enums
         )
@@ -584,9 +607,14 @@ class HLSLCodeGen:
         self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
             self.struct_payload_enums
         )
-        self.enum_variant_constants = collect_enum_variant_constants(
-            self.plain_enums + self.struct_payload_enums
-        )
+        self.enum_variant_constants = {
+            **collect_enum_variant_constants(
+                self.plain_enums + self.struct_payload_enums
+            ),
+            **collect_generic_enum_variant_constants(
+                self.generic_enum_struct_definitions
+            ),
+        }
         global_vars = self.global_resource_declaration_nodes(ast, target_stage)
         self.current_global_resource_declaration_nodes = global_vars
         functions = self.collect_functions(ast)
@@ -623,6 +651,12 @@ class HLSLCodeGen:
         )
         self.struct_member_types = collect_struct_member_types(
             getattr(ast, "structs", []), self.type_name_string
+        )
+        self.struct_member_types.update(
+            collect_generic_enum_specialization_member_types(
+                self,
+                self.generic_enum_specializations,
+            )
         )
         self.comparison_sampler_parameters = self.collect_comparison_sampler_parameters(
             ast
@@ -681,13 +715,24 @@ class HLSLCodeGen:
         code += generate_enum_constants(
             self, self.plain_enums + self.struct_payload_enums
         )
+        code += generate_generic_enum_constants(
+            self,
+            self.generic_enum_struct_definitions,
+        )
         code += self.generate_constants(ast)
         code += generate_enum_structs(self, self.struct_payload_enums)
+        code += generate_generic_enum_structs(self, self.generic_enum_specializations)
         code += generate_enum_constructor_functions(self, self.struct_payload_enums)
+        code += generate_generic_enum_constructor_functions(
+            self,
+            self.generic_enum_specializations,
+        )
 
         structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
+                if node.name in self.generic_enum_struct_definitions:
+                    continue
                 if node.name in self.lowered_glsl_buffer_block_struct_names:
                     continue
                 if node.name in self.glsl_buffer_block_struct_names:
@@ -9175,6 +9220,10 @@ class HLSLCodeGen:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
             base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
 
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"

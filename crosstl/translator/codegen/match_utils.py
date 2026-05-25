@@ -8,6 +8,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from .array_utils import format_c_style_array_declaration
+from .enum_utils import enum_variant_fields_for_type
 
 
 def is_switch_lowerable_match(node):
@@ -439,8 +440,12 @@ def lower_enum_struct_pattern(
             f"pattern {pattern_type} cannot match expression type {subject_type}"
         )
 
-    fields_by_variant = getattr(generator, "enum_struct_variant_fields", {})
-    variant_fields = fields_by_variant.get(enum_name, {}).get(variant_name)
+    variant_fields = enum_variant_fields_for_type(
+        generator,
+        enum_name,
+        variant_name,
+        expression_type,
+    )
     if variant_fields is None:
         raise ValueError(
             f"Unsupported match arm for {target_name} codegen; enum struct "
@@ -497,8 +502,12 @@ def lower_enum_constructor_pattern(
             f"pattern {pattern_type} cannot match expression type {subject_type}"
         )
 
-    fields_by_variant = getattr(generator, "enum_struct_variant_fields", {})
-    variant_fields = fields_by_variant.get(enum_name, {}).get(variant_name)
+    variant_fields = enum_variant_fields_for_type(
+        generator,
+        enum_name,
+        variant_name,
+        expression_type,
+    )
     if variant_fields is None:
         raise ValueError(
             f"Unsupported match arm for {target_name} codegen; enum constructor "
@@ -635,4 +644,6 @@ def type_name_string(generator, value):
 
 def base_type_name(type_name):
     type_name = str(type_name or "")
+    if type_name == "None":
+        return ""
     return type_name.split("<", 1)[0].strip()
