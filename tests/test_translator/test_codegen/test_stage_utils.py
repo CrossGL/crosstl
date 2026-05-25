@@ -4,7 +4,9 @@ from crosstl.translator.codegen.stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_variables,
     compute_local_size,
+    deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -30,10 +32,18 @@ class DummyCall:
         self.name = name
 
 
+class DummyVariable:
+    def __init__(self, name, var_type, attributes=None):
+        self.name = name
+        self.var_type = var_type
+        self.attributes = attributes or []
+
+
 class DummyStageNode:
-    def __init__(self, entry_point=None, local_functions=None):
+    def __init__(self, entry_point=None, local_functions=None, local_variables=None):
         self.entry_point = entry_point
         self.local_functions = local_functions or []
+        self.local_variables = local_variables or []
 
 
 class DummyAst:
@@ -143,6 +153,45 @@ def test_stage_entry_name_helpers_rename_single_default_when_reserved():
     )
 
     assert names[id(entry)] == "vertex_main"
+
+
+def test_collect_stage_local_variables_filters_by_stage_and_predicate():
+    vertex_tex = DummyVariable("vertexTex", "sampler2D")
+    fragment_tex = DummyVariable("fragmentTex", "sampler2D")
+    fragment_scalar = DummyVariable("exposure", "float")
+    ast = DummyAst(
+        stages={
+            "vertex": DummyStageNode(local_variables=[vertex_tex]),
+            "fragment": DummyStageNode(
+                local_variables=[fragment_tex, fragment_scalar]
+            ),
+        }
+    )
+
+    variables = collect_stage_local_variables(
+        ast, "fragment", lambda node: node.var_type == "sampler2D"
+    )
+
+    assert variables == [fragment_tex]
+
+
+def test_deduplicate_named_declarations_reuses_matching_stage_resources():
+    first = DummyVariable("sharedTex", "sampler2D")
+    second = DummyVariable("sharedTex", "sampler2D")
+
+    assert deduplicate_named_declarations([first, second], "resource") == [first]
+
+
+def test_deduplicate_named_declarations_rejects_conflicting_stage_resources():
+    first = DummyVariable("sharedTex", "sampler2D")
+    second = DummyVariable("sharedTex", "image2D")
+
+    try:
+        deduplicate_named_declarations([first, second], "resource")
+    except ValueError as exc:
+        assert str(exc) == "Conflicting resource declaration for 'sharedTex'"
+    else:
+        raise AssertionError("expected conflicting resource declaration")
 
 
 def test_order_functions_by_dependencies_places_callees_first():

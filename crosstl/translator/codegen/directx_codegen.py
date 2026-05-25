@@ -65,7 +65,9 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_variables,
     compute_local_size,
+    deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -533,6 +535,7 @@ class HLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.current_global_resource_declaration_nodes = None
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_domain = None
@@ -549,7 +552,8 @@ class HLSLCodeGen:
             for node in getattr(ast, "structs", [])
             if isinstance(node, StructNode)
         }
-        global_vars = getattr(ast, "global_variables", [])
+        global_vars = self.global_resource_declaration_nodes(ast, target_stage)
+        self.current_global_resource_declaration_nodes = global_vars
         functions = self.collect_functions(ast)
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(
@@ -3168,7 +3172,7 @@ class HLSLCodeGen:
 
     def collect_global_texture_names(self, root):
         texture_names = set()
-        for node in getattr(root, "global_variables", []) or []:
+        for node in self.global_resource_declaration_nodes(root):
             var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
             mapped_type = self.map_resource_type_with_format(var_type, node)
@@ -3178,7 +3182,7 @@ class HLSLCodeGen:
 
     def collect_global_texture_types(self, root):
         texture_types = {}
-        for node in getattr(root, "global_variables", []) or []:
+        for node in self.global_resource_declaration_nodes(root):
             var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
             mapped_type = self.map_resource_type_with_format(var_type, node)
@@ -3188,7 +3192,7 @@ class HLSLCodeGen:
 
     def collect_global_sampler_names(self, root):
         sampler_names = set()
-        for node in getattr(root, "global_variables", []) or []:
+        for node in self.global_resource_declaration_nodes(root):
             var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
             if var_name and self.is_sampler_type(var_type):
@@ -3197,12 +3201,36 @@ class HLSLCodeGen:
 
     def collect_global_resource_names(self, root):
         resource_names = set()
-        for node in getattr(root, "global_variables", []) or []:
+        for node in self.global_resource_declaration_nodes(root):
             var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
             if var_name and self.is_resource_parameter_type(var_type):
                 resource_names.add(var_name)
         return resource_names
+
+    def global_resource_declaration_nodes(self, root, target_stage=None):
+        current_nodes = getattr(self, "current_global_resource_declaration_nodes", None)
+        if current_nodes is not None and target_stage is None:
+            return current_nodes
+
+        global_vars = list(getattr(root, "global_variables", []) or [])
+        stage_resource_vars = collect_stage_local_variables(
+            root, target_stage, self.is_stage_local_resource_variable
+        )
+        return deduplicate_named_declarations(
+            global_vars + stage_resource_vars, "DirectX resource"
+        )
+
+    def is_stage_local_resource_variable(self, node):
+        vtype = self.type_name_string(
+            getattr(node, "var_type", getattr(node, "vtype", "float"))
+        )
+        return (
+            self.is_resource_parameter_type(vtype)
+            or self.is_hlsl_readonly_buffer_type(vtype)
+            or self.is_hlsl_uav_buffer_type(vtype)
+            or self.is_glsl_buffer_block_variable(node, vtype)
+        )
 
     def validate_global_resource_shadows(self, ast):
         conflicts = collect_non_resource_global_resource_shadows(
@@ -6700,6 +6728,7 @@ class HLSLCodeGen:
                 "RWTexture2DArray<",
                 "RWTexture2DMS<",
                 "RWTexture2DMSArray<",
+                "RWTextureCube<",
             )
         )
 
@@ -7884,6 +7913,10 @@ class HLSLCodeGen:
             (
                 "RWTexture3D<",
                 size_descriptor("int3", ("width", "height", "depth")),
+            ),
+            (
+                "RWTextureCube<",
+                size_descriptor("int2", ("width", "height")),
             ),
         )
         for prefix, descriptor in descriptors:

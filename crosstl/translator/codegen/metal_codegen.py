@@ -65,6 +65,8 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_variables,
+    deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -682,7 +684,13 @@ class MetalCodeGen:
             for node in getattr(ast, "structs", [])
             if isinstance(node, StructNode)
         }
-        global_vars = getattr(ast, "global_variables", [])
+        global_vars = deduplicate_named_declarations(
+            list(getattr(ast, "global_variables", []) or [])
+            + collect_stage_local_variables(
+                ast, target_stage, self.is_stage_local_resource_variable
+            ),
+            "Metal resource",
+        )
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(
                 list(global_vars) + self.collect_function_parameters(all_functions)
@@ -3779,6 +3787,14 @@ class MetalCodeGen:
             ):
                 resource_names.add(var_name)
         return resource_names
+
+    def is_stage_local_resource_variable(self, node):
+        vtype = self.type_name_string(
+            getattr(node, "var_type", getattr(node, "vtype", "float"))
+        )
+        return self.is_resource_parameter_type(
+            vtype
+        ) or self.is_glsl_buffer_block_variable(node, vtype)
 
     def validate_global_resource_shadows(self, ast):
         conflicts = collect_non_resource_global_resource_shadows(

@@ -1201,6 +1201,35 @@ def test_metal_stage_resource_binding_attributes_drive_indices():
     assert "sampler samp [[sampler(6)]]" in generated_code
 
 
+def test_metal_stage_local_resources_emit_entry_parameters():
+    code = """
+    shader StageLocalResourcesMetal {
+        fragment {
+            uniform sampler2D localTex @texture(2);
+            uniform sampler localSampler @sampler(4);
+            uniform image2D localImage @texture(5);
+
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(localImage, ivec2(0, 0));
+                return texture(localTex, localSampler, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "texture2d<float> localTex [[texture(2)]]" in generated_code
+    assert "sampler localSampler [[sampler(4)]]" in generated_code
+    assert (
+        "texture2d<float, access::read_write> localImage [[texture(5)]]"
+        in generated_code
+    )
+    assert "localTex.sample(localSampler, uv)" in generated_code
+
+
 def test_metal_stage_parameter_texture_array_binding_overlap_raises():
     code = """
     shader StageParameterTextureArrayOverlap {

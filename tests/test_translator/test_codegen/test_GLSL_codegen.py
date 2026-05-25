@@ -862,6 +862,30 @@ def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
     assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
 
 
+def test_glsl_stage_local_resources_emit_global_layout_bindings():
+    code = """
+    shader StageLocalResourcesGLSL {
+        fragment {
+            uniform sampler2D localTex @binding(2);
+            uniform image2D localImage @binding(5);
+
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(localImage, ivec2(0, 0));
+                return texture(localTex, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(binding = 2) uniform sampler2D localTex;" in generated_code
+    assert "layout(rgba32f, binding = 5) uniform image2D localImage;" in generated_code
+    assert "texture(localTex, uv)" in generated_code
+
+
 def test_glsl_stage_resource_parameters_emit_global_layout_bindings():
     code = """
     shader StageParameterResourceBindings {

@@ -120,6 +120,86 @@ def collect_stage_entry_reserved_function_names(
     return names
 
 
+def collect_stage_local_variables(ast, target_stage=None, predicate=None):
+    """Return stage-local variable declarations for matching stages."""
+    variables = []
+    for stage_type, stage in getattr(ast, "stages", {}).items():
+        stage_name = normalize_stage_name(stage_type)
+        if not stage_matches(target_stage, stage_name):
+            continue
+        for variable in getattr(stage, "local_variables", []) or []:
+            if predicate is not None and not predicate(variable):
+                continue
+            variables.append(variable)
+    return variables
+
+
+def deduplicate_named_declarations(nodes, kind):
+    """Deduplicate named declarations and reject conflicting same-name entries."""
+    declarations = []
+    declarations_by_name = {}
+
+    for node in nodes:
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if not name:
+            declarations.append(node)
+            continue
+
+        signature = declaration_signature(node)
+        existing = declarations_by_name.get(name)
+        if existing is None:
+            declarations_by_name[name] = signature
+            declarations.append(node)
+            continue
+
+        if existing != signature:
+            raise ValueError(f"Conflicting {kind} declaration for '{name}'")
+
+    return declarations
+
+
+def declaration_signature(node):
+    """Build a small structural signature for named declaration deduplication."""
+    node_type = node.__class__.__name__
+    declared_type = getattr(
+        node,
+        "var_type",
+        getattr(node, "vtype", getattr(node, "param_type", None)),
+    )
+    members = getattr(node, "members", None)
+    attributes = getattr(node, "attributes", None)
+
+    if members is not None:
+        member_signature = tuple(
+            (
+                getattr(member, "name", None),
+                repr(
+                    getattr(
+                        member,
+                        "member_type",
+                        getattr(
+                            member,
+                            "vtype",
+                            getattr(member, "element_type", None),
+                        ),
+                    )
+                ),
+                repr(getattr(member, "attributes", None)),
+                repr(getattr(member, "semantic", None)),
+            )
+            for member in members
+        )
+    else:
+        member_signature = None
+
+    return (
+        node_type,
+        repr(declared_type),
+        repr(attributes),
+        member_signature,
+    )
+
+
 def assign_stage_entry_names(
     entries,
     reserved_names,

@@ -65,6 +65,7 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_variables,
     compute_local_size,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -738,7 +739,10 @@ class GLSLCodeGen:
         code += self.generate_constants(ast)
 
         structs = getattr(ast, "structs", [])
-        global_vars = getattr(ast, "global_variables", [])
+        global_vars = list(getattr(ast, "global_variables", []) or [])
+        stage_local_resource_vars = collect_stage_local_variables(
+            ast, target_stage, self.is_stage_local_resource_variable
+        )
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
         }
@@ -746,7 +750,7 @@ class GLSLCodeGen:
             ast, target_stage
         )
         resource_declaration_nodes = self.deduplicate_resource_declaration_nodes(
-            global_vars + stage_resource_params
+            global_vars + stage_local_resource_vars + stage_resource_params
         )
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
@@ -1593,6 +1597,19 @@ class GLSLCodeGen:
                 add_parameters(entry_point)
 
         return parameters
+
+    def is_stage_local_resource_variable(self, node):
+        vtype = self.type_name_string(
+            getattr(node, "var_type", getattr(node, "vtype", "float"))
+        )
+        base_type = self.resource_base_type(vtype)
+        mapped_type = self.map_resource_type_with_format(base_type, node)
+        return (
+            mapped_type == "sampler"
+            or self.is_opaque_resource_type(mapped_type)
+            or self.is_structured_buffer_type(vtype)
+            or self.is_glsl_buffer_block_variable(node, vtype)
+        )
 
     def deduplicate_resource_declaration_nodes(self, nodes):
         declarations = []

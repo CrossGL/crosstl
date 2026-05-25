@@ -44,46 +44,6 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         ),
     ),
     pytest.param(
-        "cross_platform/UniversalPBRShader.cgl",
-        "directx",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="PBR example still uses texture identifiers missing resource declarations",
-        ),
-    ),
-    pytest.param(
-        "cross_platform/UniversalPBRShader.cgl",
-        "metal",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="PBR example still uses texture identifiers missing resource declarations",
-        ),
-    ),
-    pytest.param(
-        "cross_platform/UniversalPBRShader.cgl",
-        "opengl",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="PBR example still uses texture identifiers missing resource declarations",
-        ),
-    ),
-    pytest.param(
-        "graphics/ComplexShader.cgl",
-        "directx",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="complex graphics example still references undeclared texture resources",
-        ),
-    ),
-    pytest.param(
-        "graphics/ComplexShader.cgl",
-        "metal",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="complex graphics example still references undeclared texture resources",
-        ),
-    ),
-    pytest.param(
         "graphics/ComplexShader.cgl",
         "opengl",
         marks=pytest.mark.xfail(
@@ -91,6 +51,14 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
             reason="complex graphics example currently has overlapping fragment outputs",
         ),
     ),
+)
+
+PRIMARY_GRAPHICS_FIXED_CASES = (
+    ("cross_platform/UniversalPBRShader.cgl", "directx"),
+    ("cross_platform/UniversalPBRShader.cgl", "metal"),
+    ("cross_platform/UniversalPBRShader.cgl", "opengl"),
+    ("graphics/ComplexShader.cgl", "directx"),
+    ("graphics/ComplexShader.cgl", "metal"),
 )
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
@@ -119,51 +87,6 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         (
             "Unsupported match arm for GLSL codegen; only unguarded literal and "
             "wildcard patterns can be lowered to switch"
-        ),
-    ),
-    (
-        "cross_platform/UniversalPBRShader.cgl",
-        "directx",
-        ValueError,
-        (
-            "DirectX texture operation 'texture' requires a declared texture or "
-            "image resource argument: albedo_map"
-        ),
-    ),
-    (
-        "cross_platform/UniversalPBRShader.cgl",
-        "metal",
-        ValueError,
-        (
-            "Metal texture operation 'texture' requires a declared texture or "
-            "image resource argument: albedo_map"
-        ),
-    ),
-    (
-        "cross_platform/UniversalPBRShader.cgl",
-        "opengl",
-        ValueError,
-        (
-            "OpenGL texture operation 'texture' requires a declared texture or "
-            "image resource argument: albedo_map"
-        ),
-    ),
-    (
-        "graphics/ComplexShader.cgl",
-        "directx",
-        ValueError,
-        (
-            "DirectX texture operation 'texture' requires a declared texture or "
-            "image resource argument: shadowMap"
-        ),
-    ),
-    (
-        "graphics/ComplexShader.cgl",
-        "metal",
-        ValueError,
-        (
-            "Metal texture operation 'texture' requires a declared texture or "
-            "image resource argument: shadowMap"
         ),
     ),
     (
@@ -207,6 +130,17 @@ def test_portable_examples_translate_to_all_registered_backends(relative_path, b
 
 @pytest.mark.parametrize("relative_path,backend", KNOWN_PRIMARY_GRAPHICS_GAPS)
 def test_known_primary_graphics_example_gaps_are_tracked(relative_path, backend):
+    generated = crosstl.translate(
+        str(_example_path(relative_path)), backend=backend, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+
+
+@pytest.mark.parametrize("relative_path,backend", PRIMARY_GRAPHICS_FIXED_CASES)
+def test_primary_graphics_examples_with_stage_local_resources_translate(
+    relative_path, backend
+):
     generated = crosstl.translate(
         str(_example_path(relative_path)), backend=backend, format_output=False
     )

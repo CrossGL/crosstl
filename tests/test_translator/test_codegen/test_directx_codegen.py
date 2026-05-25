@@ -893,6 +893,54 @@ def test_hlsl_global_resource_binding_attributes_drive_registers():
     assert "Texture2D autoTex : register(t9);" in generated_code
 
 
+def test_hlsl_stage_local_resources_emit_global_registers():
+    code = """
+    shader StageLocalResources {
+        fragment {
+            uniform sampler2D localTex @texture(2);
+            uniform image2D localImage @binding(4);
+
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(localImage, ivec2(0, 0));
+                return texture(localTex, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "Texture2D localTex : register(t2);" in generated_code
+    assert "SamplerState localTexSampler : register(s0);" in generated_code
+    assert "RWTexture2D<float4> localImage : register(u4);" in generated_code
+    assert "localTex.Sample(localTexSampler, uv)" in generated_code
+
+
+def test_hlsl_stage_local_cube_image_size_uses_storage_image_helper():
+    code = """
+    shader StageLocalCubeImageSize {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            uniform imageCube cubeImage @texture(3);
+
+            void main() {
+                ivec2 size = imageSize(cubeImage);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "RWTextureCube<float4> cubeImage : register(u3);" in generated_code
+    assert "int2 imageSize(RWTextureCube<float4> image)" in generated_code
+    assert "int2 size = imageSize(cubeImage);" in generated_code
+
+
 def test_hlsl_generic_bindings_are_independent_between_register_namespaces():
     code = """
     shader GenericBindingNamespaces {
