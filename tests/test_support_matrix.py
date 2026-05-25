@@ -3,6 +3,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import crosstl.translator.codegen as codegen
+from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -43,6 +46,31 @@ def test_support_matrix_covers_all_cataloged_backends():
         counts = matrix["summary"]["status_counts"][backend_id]
         assert set(counts) == statuses
         assert sum(counts.values()) == matrix["summary"]["feature_count"]
+
+
+def test_support_backend_catalog_matches_codegen_registry():
+    backends_path = ROOT / "support" / "backends.json"
+    catalog = json.loads(backends_path.read_text(encoding="utf-8"))
+    register_default_sources()
+
+    backend_ids = {backend["id"] for backend in catalog["backends"]}
+    assert backend_ids == set(codegen.backend_names())
+    assert backend_ids.issubset(set(SOURCE_REGISTRY.names()))
+
+    for backend in catalog["backends"]:
+        backend_id = backend["id"]
+        spec = codegen.get_backend(backend_id)
+        assert spec is not None, f"{backend_id} is not registered"
+        assert codegen.get_backend_extension(backend_id) == backend["target_extension"]
+        assert SOURCE_REGISTRY.get_by_extension(backend["target_extension"]).name == backend_id
+
+        for alias in backend.get("aliases", []):
+            assert (
+                codegen.normalize_backend_name(alias) == backend_id
+            ), f"{backend_id} support alias is not accepted by codegen: {alias}"
+            assert (
+                SOURCE_REGISTRY.get(alias).name == backend_id
+            ), f"{backend_id} support alias is not accepted by source registry: {alias}"
 
 
 def test_graphics_backend_roadmap_is_focused_on_primary_graphics_targets():

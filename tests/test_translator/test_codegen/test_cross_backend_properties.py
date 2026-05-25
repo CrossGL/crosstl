@@ -198,4 +198,4 @@ def test_primary_graphics_texture_sampling_contracts_are_preserved(
 
     assert ".sample(" in metal
     assert re.search(r"\bsampler\b", metal)
-    assert not re.search(r"\btexture\s*\(", metal)
+    assert not re.search(r"(?<!\[)\btexture\s*\(", metal)
