@@ -24,7 +24,7 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "directx",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="guarded binding and enum match patterns are not lowerable to HLSL yet",
+            reason="enum match patterns are not lowerable to HLSL yet",
         ),
     ),
     pytest.param(
@@ -32,7 +32,7 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "metal",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="guarded binding and enum match patterns are not lowerable to Metal yet",
+            reason="enum match patterns are not lowerable to Metal yet",
         ),
     ),
     pytest.param(
@@ -40,7 +40,7 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "opengl",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="guarded binding and enum match patterns are not lowerable to GLSL yet",
+            reason="enum match patterns are not lowerable to GLSL yet",
         ),
     ),
 )
@@ -59,19 +59,19 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "advanced/GenericPatternMatching.cgl",
         "directx",
         ValueError,
-        "Unsupported match arm for HLSL codegen; guarded binding patterns are not supported",
+        "Unsupported match arm for HLSL codegen; enum path patterns are not supported",
     ),
     (
         "advanced/GenericPatternMatching.cgl",
         "metal",
         ValueError,
-        "Unsupported match arm for Metal codegen; guarded binding patterns are not supported",
+        "Unsupported match arm for Metal codegen; enum path patterns are not supported",
     ),
     (
         "advanced/GenericPatternMatching.cgl",
         "opengl",
         ValueError,
-        "Unsupported match arm for GLSL codegen; guarded binding patterns are not supported",
+        "Unsupported match arm for GLSL codegen; enum path patterns are not supported",
     ),
 )
 

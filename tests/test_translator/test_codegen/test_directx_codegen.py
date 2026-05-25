@@ -2108,6 +2108,33 @@ def test_match_identifier_binding_arm_lowers_to_scoped_else_body():
     assert "MatchNode(" not in generated_code
 
 
+def test_match_guarded_identifier_binding_falls_through_to_later_arm():
+    shader = """
+    shader MatchGuardedBindingPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 => { value = 1; }
+                candidate if candidate > 2 => { value = candidate; }
+                _ => { value = 7; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int candidate = mode;" in generated_code
+    assert "candidate > 2" in generated_code
+    assert "value = candidate;" in generated_code
+    assert "value = 7;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
 def test_match_plain_struct_pattern_binds_fields():
     shader = """
     shader MatchStructPattern {

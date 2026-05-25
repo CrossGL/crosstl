@@ -41,28 +41,61 @@ def generate_switch_match(generator, node, indent):
 
 def generate_ordered_conditional_match(generator, node, indent, target_name):
     """Lower a match to an ordered if/else chain."""
+    return generate_ordered_conditional_match_arms(
+        generator,
+        list(getattr(node, "arms", []) or []),
+        getattr(node, "expression", ""),
+        indent,
+        target_name,
+    )
+
+
+def generate_ordered_conditional_match_arms(
+    generator,
+    arms,
+    expression_node,
+    indent,
+    target_name,
+):
     indent_str = "    " * indent
-    expression = generator.generate_expression(getattr(node, "expression", ""))
-    expression_type = expression_result_type(generator, getattr(node, "expression", ""))
+    expression = generator.generate_expression(expression_node)
+    expression_type = expression_result_type(generator, expression_node)
 
     code = ""
     emitted_arm = False
-    for arm in getattr(node, "arms", []) or []:
-        condition, bindings, binding_types = match_arm_condition_and_bindings(
+    for index, arm in enumerate(arms):
+        pattern_condition, bindings, binding_types = match_arm_pattern_lowering(
             generator,
             expression,
             expression_type,
             arm,
             target_name,
         )
+        guard = getattr(arm, "guard", None)
+        guard_condition = (
+            None
+            if guard is None
+            else generate_match_guard_condition(generator, guard, binding_types)
+        )
         body = getattr(arm, "body", [])
 
-        if bindings and getattr(arm, "guard", None) is not None:
-            raise ValueError(
-                f"Unsupported match arm for {target_name} codegen; guarded "
-                "binding patterns are not supported"
+        if bindings and guard is not None:
+            code += generate_guarded_bound_match_arm(
+                generator,
+                arms[index + 1 :],
+                expression_node,
+                pattern_condition,
+                bindings,
+                binding_types,
+                guard,
+                body,
+                indent,
+                emitted_arm,
+                target_name,
             )
+            break
 
+        condition = combine_match_conditions(pattern_condition, guard_condition)
         if condition is None:
             if emitted_arm:
                 code += f"{indent_str}else {{\n"
@@ -85,7 +118,7 @@ def generate_ordered_conditional_match(generator, node, indent, target_name):
     return code
 
 
-def match_arm_condition_and_bindings(
+def match_arm_pattern_lowering(
     generator,
     expression,
     expression_type,
@@ -93,9 +126,7 @@ def match_arm_condition_and_bindings(
     target_name,
 ):
     pattern = getattr(arm, "pattern", None)
-    guard = getattr(arm, "guard", None)
-
-    pattern_condition, bindings, binding_types = lower_match_pattern(
+    return lower_match_pattern(
         generator,
         pattern,
         expression,
@@ -103,12 +134,113 @@ def match_arm_condition_and_bindings(
         target_name,
     )
 
-    guard_condition = (
-        generator.generate_expression(guard) if guard is not None else None
-    )
+
+def combine_match_conditions(pattern_condition, guard_condition):
     if pattern_condition and guard_condition:
-        return f"({pattern_condition} && ({guard_condition}))", bindings, binding_types
-    return pattern_condition or guard_condition, bindings, binding_types
+        return f"({pattern_condition} && ({guard_condition}))"
+    return pattern_condition or guard_condition
+
+
+def generate_match_guard_condition(generator, guard, binding_types):
+    saved_types = getattr(generator, "local_variable_types", None)
+    if saved_types is not None:
+        saved_types = dict(saved_types)
+        generator.local_variable_types.update(binding_types)
+    try:
+        return generator.generate_expression(guard)
+    finally:
+        if saved_types is not None:
+            generator.local_variable_types = saved_types
+
+
+def generate_guarded_bound_match_arm(
+    generator,
+    rest_arms,
+    expression_node,
+    pattern_condition,
+    bindings,
+    binding_types,
+    guard,
+    body,
+    indent,
+    emitted_arm,
+    target_name,
+):
+    indent_str = "    " * indent
+
+    if pattern_condition is None:
+        code = f"{indent_str}else {{\n" if emitted_arm else f"{indent_str}{{\n"
+        code += generate_guarded_bound_match_body(
+            generator,
+            rest_arms,
+            expression_node,
+            bindings,
+            binding_types,
+            guard,
+            body,
+            indent + 1,
+            target_name,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    prefix = "if" if not emitted_arm else "else if"
+    code = f"{indent_str}{prefix} ({pattern_condition}) {{\n"
+    code += generate_guarded_bound_match_body(
+        generator,
+        rest_arms,
+        expression_node,
+        bindings,
+        binding_types,
+        guard,
+        body,
+        indent + 1,
+        target_name,
+    )
+    code += f"{indent_str}}}\n"
+    if rest_arms:
+        code += f"{indent_str}else {{\n"
+        code += generate_ordered_conditional_match_arms(
+            generator,
+            rest_arms,
+            expression_node,
+            indent + 1,
+            target_name,
+        )
+        code += f"{indent_str}}}\n"
+    return code
+
+
+def generate_guarded_bound_match_body(
+    generator,
+    rest_arms,
+    expression_node,
+    bindings,
+    binding_types,
+    guard,
+    body,
+    indent,
+    target_name,
+):
+    indent_str = "    " * indent
+    guard_condition = generate_match_guard_condition(generator, guard, binding_types)
+
+    code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
+    code += f"{indent_str}if ({guard_condition}) {{\n"
+    code += generate_body_with_binding_types(generator, binding_types, body, indent + 1)
+    code += f"{indent_str}}}"
+    if rest_arms:
+        code += " else {\n"
+        code += generate_ordered_conditional_match_arms(
+            generator,
+            rest_arms,
+            expression_node,
+            indent + 1,
+            target_name,
+        )
+        code += f"{indent_str}}}"
+    code += "\n"
+    return code
 
 
 def lower_match_pattern(generator, pattern, expression, expression_type, target_name):
@@ -237,14 +369,18 @@ def lower_struct_field_pattern(
 
 def generate_bound_match_body(generator, bindings, binding_types, body, indent):
     indent_str = "    " * indent
+    code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
+    code += generate_body_with_binding_types(generator, binding_types, body, indent)
+    return code
+
+
+def generate_body_with_binding_types(generator, binding_types, body, indent):
     saved_types = getattr(generator, "local_variable_types", None)
     if saved_types is not None:
         saved_types = dict(saved_types)
         generator.local_variable_types.update(binding_types)
     try:
-        code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
-        code += generator.generate_scoped_statement_body(body, indent)
-        return code
+        return generator.generate_scoped_statement_body(body, indent)
     finally:
         if saved_types is not None:
             generator.local_variable_types = saved_types
