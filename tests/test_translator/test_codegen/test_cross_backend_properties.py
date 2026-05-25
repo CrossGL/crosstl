@@ -9,7 +9,6 @@ from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 
-
 IDENTIFIER_SUFFIXES = st.from_regex(r"[a-z][a-z0-9_]{0,10}", fullmatch=True)
 
 
@@ -87,9 +86,7 @@ def test_numeric_helper_codegen_is_total_and_deterministic_for_all_backends(
         width=32,
     ),
 )
-def test_control_flow_codegen_is_total_for_all_backends(
-    suffix, loop_bound, threshold
-):
+def test_control_flow_codegen_is_total_for_all_backends(suffix, loop_bound, threshold):
     threshold_literal = f"{threshold:.6f}"
     shader = f"""
     shader ControlFlow_{suffix} {{
@@ -138,7 +135,9 @@ def _texture_sampling_shader(suffix, arrayed, helper):
     else:
         index = "[1]" if arrayed else ""
         helper_source = ""
-        sample_expression = f"texture(tex_{suffix}{index}, smp_{suffix}{index}, input.uv)"
+        sample_expression = (
+            f"texture(tex_{suffix}{index}, smp_{suffix}{index}, input.uv)"
+        )
 
     return f"""
     shader TextureProperty_{suffix} {{

@@ -3,7 +3,6 @@ import inspect
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -84,4 +83,6 @@ def test_native_backend_packages_expose_core_frontend_classes():
         if not converter_classes:
             missing.append(f"{backend_id}: reverse CrossGL converter class")
 
-    assert not missing, "Missing native backend package contracts: " + ", ".join(missing)
+    assert not missing, "Missing native backend package contracts: " + ", ".join(
+        missing
+    )

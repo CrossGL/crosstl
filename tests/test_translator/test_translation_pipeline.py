@@ -1,4 +1,3 @@
-from pathlib import Path
 
 import pytest
 
@@ -6,7 +5,6 @@ import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
-
 
 NATIVE_SOURCE_SNIPPETS = {
     "directx": (

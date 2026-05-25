@@ -6,7 +6,6 @@ import crosstl
 import crosstl.translator
 import crosstl.translator.codegen as codegen
 
-
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_ROOT = ROOT / "examples"
 

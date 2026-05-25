@@ -62,7 +62,10 @@ def test_support_backend_catalog_matches_codegen_registry():
         spec = codegen.get_backend(backend_id)
         assert spec is not None, f"{backend_id} is not registered"
         assert codegen.get_backend_extension(backend_id) == backend["target_extension"]
-        assert SOURCE_REGISTRY.get_by_extension(backend["target_extension"]).name == backend_id
+        assert (
+            SOURCE_REGISTRY.get_by_extension(backend["target_extension"]).name
+            == backend_id
+        )
 
         for alias in backend.get("aliases", []):
             assert (
