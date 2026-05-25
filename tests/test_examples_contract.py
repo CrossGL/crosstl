@@ -43,14 +43,6 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
             reason="guarded match arms are not lowerable to GLSL switch yet",
         ),
     ),
-    pytest.param(
-        "graphics/ComplexShader.cgl",
-        "opengl",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="complex graphics example currently has overlapping fragment outputs",
-        ),
-    ),
 )
 
 PRIMARY_GRAPHICS_FIXED_CASES = (
@@ -59,6 +51,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("cross_platform/UniversalPBRShader.cgl", "opengl"),
     ("graphics/ComplexShader.cgl", "directx"),
     ("graphics/ComplexShader.cgl", "metal"),
+    ("graphics/ComplexShader.cgl", "opengl"),
 )
 
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
@@ -87,15 +80,6 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         (
             "Unsupported match arm for GLSL codegen; only unguarded literal and "
             "wildcard patterns can be lowered to switch"
-        ),
-    ),
-    (
-        "graphics/ComplexShader.cgl",
-        "opengl",
-        ValueError,
-        (
-            "Conflicting OpenGL fragment output location for 'normalBuffer': "
-            "location 0 overlaps 'color' location 0"
         ),
     ),
 )

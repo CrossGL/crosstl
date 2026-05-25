@@ -262,6 +262,7 @@ class GLSLCodeGen:
         self.fragment_input_member_names = set()
         self.fragment_output_struct_names = set()
         self.fragment_output_member_name_maps = {}
+        self.fragment_output_member_layout_maps = {}
         self.vertex_input_member_names = set()
         self.current_function_return_type = None
         self.current_stage_return_type = None
@@ -693,6 +694,7 @@ class GLSLCodeGen:
         self.stage_io_used_locations = {}
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
+        self.fragment_output_member_layout_maps = {}
         self.current_function_return_type = None
         self.current_stage_return_type = None
         self.current_expression_expected_type = None
@@ -781,6 +783,9 @@ class GLSLCodeGen:
             self.stage_value_parameter_input_names(ast, "fragment")
         )
         self.fragment_output_member_name_maps = self.fragment_output_member_maps()
+        self.fragment_output_member_layout_maps = (
+            self.fragment_output_member_layout_maps_for_outputs()
+        )
         emit_vertex_io = target_stage in {None, "vertex"}
         emit_fragment_io = target_stage in {None, "fragment"}
         emit_graphics_io = target_stage in {None, "vertex", "fragment"}
@@ -2018,6 +2023,79 @@ class GLSLCodeGen:
             maps[struct_name] = member_map
         return maps
 
+    def next_available_stage_io_layout(self, stage_name, direction, mapped_type):
+        count = self.stage_io_location_count(mapped_type)
+        ranges = sorted(self.stage_io_used_locations.get((stage_name, direction), []))
+        location = 0
+
+        while True:
+            end = location + count - 1
+            overlap = next(
+                (
+                    (used_start, used_end)
+                    for used_start, used_end, _ in ranges
+                    if location <= used_end and used_start <= end
+                ),
+                None,
+            )
+            if overlap is None:
+                return f"layout(location = {location})"
+            location = overlap[1] + 1
+
+    def fragment_output_member_layout_maps_for_outputs(self):
+        maps = {}
+
+        for struct_name, struct in self.structs_by_name.items():
+            if struct_name not in self.fragment_output_struct_names:
+                continue
+
+            member_layouts = {}
+            for member in getattr(struct, "members", []) or []:
+                output_name = self.fragment_output_member_name(member, struct_name)
+                mapped_semantic = self.map_semantic(self.semantic_from_node(member))
+                if mapped_semantic == "gl_FragDepth" or output_name == "gl_FragDepth":
+                    member_layouts[member.name] = "gl_FragDepth"
+                    continue
+                if not mapped_semantic.startswith("layout("):
+                    continue
+
+                self.reserve_stage_io_layout(
+                    self.stage_io_used_locations,
+                    "fragment",
+                    "output",
+                    mapped_semantic,
+                    self.member_type_name(member),
+                    output_name,
+                )
+                member_layouts[member.name] = mapped_semantic
+
+            maps[struct_name] = member_layouts
+
+        for struct_name, struct in self.structs_by_name.items():
+            if struct_name not in self.fragment_output_struct_names:
+                continue
+
+            member_layouts = maps.setdefault(struct_name, {})
+            for member in getattr(struct, "members", []) or []:
+                if member.name in member_layouts:
+                    continue
+
+                output_name = self.fragment_output_member_name(member, struct_name)
+                layout = self.next_available_stage_io_layout(
+                    "fragment", "output", self.member_type_name(member)
+                )
+                self.reserve_stage_io_layout(
+                    self.stage_io_used_locations,
+                    "fragment",
+                    "output",
+                    layout,
+                    self.member_type_name(member),
+                    output_name,
+                )
+                member_layouts[member.name] = layout
+
+        return maps
+
     def type_node_name(self, type_node):
         if type_node is None:
             return None
@@ -2114,10 +2192,13 @@ class GLSLCodeGen:
             output_name = self.fragment_output_member_name(member, node.name)
             if output_name == "gl_FragDepth":
                 continue
-            semantic = self.semantic_from_node(member)
-            layout = self.map_semantic(semantic)
-            if not layout.startswith("layout("):
-                layout = "layout(location = 0)"
+            layout = self.fragment_output_member_layout_maps.get(node.name, {}).get(
+                member.name
+            )
+            if layout is None:
+                layout = self.map_semantic(self.semantic_from_node(member))
+                if not layout.startswith("layout("):
+                    layout = "layout(location = 0)"
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",

@@ -259,7 +259,7 @@
             "text": "self.unsupported_structured_buffer_array_functions = {}"
           },
           {
-            "line": 710,
+            "line": 712,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "self.unsupported_structured_buffer_array_functions = ("
           }
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 639
+        "test_count": 640
       },
       "translator_codegen": {
         "exists": true,

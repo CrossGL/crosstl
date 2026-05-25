@@ -1823,6 +1823,32 @@ def test_glsl_psoutput_duplicate_fragment_output_location_raises():
         GLSLCodeGen().generate(crosstl.translator.parse(code))
 
 
+def test_glsl_unannotated_fragment_outputs_use_distinct_locations():
+    code = """
+    shader UnannotatedFragmentOutputs {
+        struct PSOutput {
+            vec4 color;
+            vec4 normalBuffer;
+            vec4 positionBuffer;
+            float depth;
+        };
+
+        fragment {
+            PSOutput main() {
+                return PSOutput(vec4(1.0), vec4(0.5), vec4(0.25), 0.75);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "layout(location = 0) out vec4 color;" in generated_code
+    assert "layout(location = 1) out vec4 normalBuffer;" in generated_code
+    assert "layout(location = 2) out vec4 positionBuffer;" in generated_code
+    assert "layout(location = 3) out float depth;" in generated_code
+
+
 def test_glsl_psoutput_fragcolor_zero_maps_to_location_zero():
     code = """
     shader PSOutputFragColorZero {
