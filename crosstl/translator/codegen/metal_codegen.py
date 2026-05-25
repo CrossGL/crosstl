@@ -5,6 +5,7 @@ from ..ast import (
     ArrayNode,
     ArrayAccessNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     ContinueNode,
     DoWhileNode,
@@ -61,7 +62,11 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from .stage_utils import (
+    assign_stage_entry_names,
+    collect_stage_entry_records,
+    collect_stage_entry_reserved_function_names,
     normalize_stage_name,
+    order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
 )
@@ -273,6 +278,7 @@ class MetalCodeGen:
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.cbuffer_variables = []
+        self.cbuffer_binding_indices = {}
         self.cbuffer_parameter_names = {}
         self.cbuffer_member_references = {}
         self.ambiguous_cbuffer_members = set()
@@ -324,8 +330,35 @@ class MetalCodeGen:
             "long": "int64_t",
             "signed long": "int64_t",
             "unsigned long": "uint64_t",
+            "ulong": "uint64_t",
             "float": "float",
             "half": "half",
+            "float16": "half",
+            "min16float": "half",
+            "min10float": "half",
+            "char": "int",
+            "signed char": "int",
+            "int8": "int",
+            "int8_t": "int",
+            "uchar": "uint",
+            "unsigned char": "uint",
+            "uint8": "uint",
+            "uint8_t": "uint",
+            "int16": "int",
+            "int16_t": "int",
+            "int32_t": "int",
+            "int64": "int64_t",
+            "int64_t": "int64_t",
+            "ptrdiff_t": "int64_t",
+            "uint16": "uint",
+            "uint16_t": "uint",
+            "uint32_t": "uint",
+            "uint64": "uint64_t",
+            "uint64_t": "uint64_t",
+            "size_t": "uint64_t",
+            "min16int": "int",
+            "min12int": "int",
+            "min16uint": "uint",
             "bool": "bool",
             # Vector Types
             "vec2": "float2",
@@ -340,6 +373,24 @@ class MetalCodeGen:
             "ushort2": "uint2",
             "ushort3": "uint3",
             "ushort4": "uint4",
+            "char2": "int2",
+            "char3": "int3",
+            "char4": "int4",
+            "uchar2": "uint2",
+            "uchar3": "uint3",
+            "uchar4": "uint4",
+            "packed_int2": "int2",
+            "packed_int3": "int3",
+            "packed_int4": "int4",
+            "simd_int2": "int2",
+            "simd_int3": "int3",
+            "simd_int4": "int4",
+            "packed_uint2": "uint2",
+            "packed_uint3": "uint3",
+            "packed_uint4": "uint4",
+            "simd_uint2": "uint2",
+            "simd_uint3": "uint3",
+            "simd_uint4": "uint4",
             "int2": "int2",
             "int3": "int3",
             "int4": "int4",
@@ -352,9 +403,48 @@ class MetalCodeGen:
             "float2": "float2",
             "float3": "float3",
             "float4": "float4",
+            "packed_float2": "float2",
+            "packed_float3": "float3",
+            "packed_float4": "float4",
+            "simd_float2": "float2",
+            "simd_float3": "float3",
+            "simd_float4": "float4",
             "half2": "half2",
             "half3": "half3",
             "half4": "half4",
+            "packed_half2": "half2",
+            "packed_half3": "half3",
+            "packed_half4": "half4",
+            "f16vec2": "half2",
+            "f16vec3": "half3",
+            "f16vec4": "half4",
+            "i8vec2": "int2",
+            "i8vec3": "int3",
+            "i8vec4": "int4",
+            "i16vec2": "int2",
+            "i16vec3": "int3",
+            "i16vec4": "int4",
+            "u8vec2": "uint2",
+            "u8vec3": "uint3",
+            "u8vec4": "uint4",
+            "u16vec2": "uint2",
+            "u16vec3": "uint3",
+            "u16vec4": "uint4",
+            "min16float2": "half2",
+            "min16float3": "half3",
+            "min16float4": "half4",
+            "min10float2": "half2",
+            "min10float3": "half3",
+            "min10float4": "half4",
+            "min16int2": "int2",
+            "min16int3": "int3",
+            "min16int4": "int4",
+            "min12int2": "int2",
+            "min12int3": "int3",
+            "min12int4": "int4",
+            "min16uint2": "uint2",
+            "min16uint3": "uint3",
+            "min16uint4": "uint4",
             "bvec2": "bool2",
             "bvec3": "bool3",
             "bvec4": "bool4",
@@ -410,8 +500,53 @@ class MetalCodeGen:
             "mat4x3": "float3x4",
             "mat4x4": "float4x4",
             "half2x2": "half2x2",
+            "half2x3": "half2x3",
+            "half2x4": "half2x4",
+            "half3x2": "half3x2",
             "half3x3": "half3x3",
+            "half3x4": "half3x4",
+            "half4x2": "half4x2",
+            "half4x3": "half4x3",
             "half4x4": "half4x4",
+            "f16mat2": "half2x2",
+            "f16mat3": "half3x3",
+            "f16mat4": "half4x4",
+            "f16mat2x2": "half2x2",
+            "f16mat2x3": "half3x2",
+            "f16mat2x4": "half4x2",
+            "f16mat3x2": "half2x3",
+            "f16mat3x3": "half3x3",
+            "f16mat3x4": "half4x3",
+            "f16mat4x2": "half2x4",
+            "f16mat4x3": "half3x4",
+            "f16mat4x4": "half4x4",
+            "simd_float2x2": "float2x2",
+            "simd_float2x3": "float2x3",
+            "simd_float2x4": "float2x4",
+            "simd_float3x2": "float3x2",
+            "simd_float3x3": "float3x3",
+            "simd_float3x4": "float3x4",
+            "simd_float4x2": "float4x2",
+            "simd_float4x3": "float4x3",
+            "simd_float4x4": "float4x4",
+            "min16float2x2": "half2x2",
+            "min16float2x3": "half2x3",
+            "min16float2x4": "half2x4",
+            "min16float3x2": "half3x2",
+            "min16float3x3": "half3x3",
+            "min16float3x4": "half3x4",
+            "min16float4x2": "half4x2",
+            "min16float4x3": "half4x3",
+            "min16float4x4": "half4x4",
+            "min10float2x2": "half2x2",
+            "min10float2x3": "half2x3",
+            "min10float2x4": "half2x4",
+            "min10float3x2": "half3x2",
+            "min10float3x3": "half3x3",
+            "min10float3x4": "half3x4",
+            "min10float4x2": "half4x2",
+            "min10float4x3": "half4x3",
+            "min10float4x4": "half4x4",
         }
 
         self.semantic_map = {
@@ -477,6 +612,7 @@ class MetalCodeGen:
     def generate_program(self, ast, target_stage=None):
         """Render an AST to Metal, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
+        self.validate_supported_stage_types(ast, target_stage)
 
         self.texture_variables = []
         self.sampler_variables = []
@@ -488,6 +624,7 @@ class MetalCodeGen:
         self.glsl_buffer_block_struct_lowering_failures = {}
         self.metal_temp_variable_index = 0
         self.cbuffer_variables = getattr(ast, "cbuffers", []) or []
+        self.cbuffer_binding_indices = {}
         self.cbuffers_by_name = {
             cbuffer.name: cbuffer
             for cbuffer in self.cbuffer_variables
@@ -645,26 +782,24 @@ class MetalCodeGen:
                         semantic = self.semantic_from_node(member)
                         if hasattr(member, "member_type"):
                             if str(type(member.member_type)).find("ArrayType") != -1:
-                                # Handle array types with C-style syntax for struct members
-                                element_type = self.convert_type_node_to_string(
-                                    member.member_type.element_type
+                                member_type_str = self.convert_type_node_to_string(
+                                    member.member_type
                                 )
-                                element_type = self.map_type(element_type)
-                                if member.member_type.size is not None:
-                                    size_str = self.expression_to_string(
-                                        member.member_type.size
+                                member_type = self.map_type(member_type_str)
+                                declaration = format_c_style_array_declaration(
+                                    member_type, member.name
+                                )
+                                semantic_attr = (
+                                    self.map_semantic(semantic) if semantic else ""
+                                )
+                                if member.member_type.size is None:
+                                    base_type, _ = split_array_type_suffix(member_type)
+                                    code += (
+                                        f"    array<{base_type}> {member.name}"
+                                        f"{semantic_attr};\n"
                                     )
-                                    # For Metal, use C-style array syntax: type name[size]
-                                    semantic_attr = (
-                                        self.map_semantic(semantic) if semantic else ""
-                                    )
-                                    code += f"    {element_type} {member.name}[{size_str}]{semantic_attr};\n"
                                 else:
-                                    # Dynamic arrays - use array<type> syntax
-                                    semantic_attr = (
-                                        self.map_semantic(semantic) if semantic else ""
-                                    )
-                                    code += f"    array<{element_type}> {member.name}{semantic_attr};\n"
+                                    code += f"    {declaration}{semantic_attr};\n"
                                 continue  # Skip the normal member_type handling
                             else:
                                 member_type_str = self.convert_type_node_to_string(
@@ -683,6 +818,11 @@ class MetalCodeGen:
         texture_register = 0
         sampler_register = 0
         buffer_register = 0
+        used_resource_bindings = {}
+        buffer_register = self.reserve_cbuffer_bindings(used_resource_bindings)
+        self.reserve_explicit_global_resource_bindings(
+            global_vars, used_resource_bindings
+        )
         for i, node in enumerate(global_vars):
             # Handle both old and new AST variable structures
             resource_count = 1
@@ -730,7 +870,20 @@ class MetalCodeGen:
                     node, {"binding", "buffer"}, ("b", "u", "t")
                 )
                 if binding is None:
-                    binding = buffer_register
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
                 self.glsl_buffer_block_variables.append(
                     (node, binding, lowered_block, array_size)
                 )
@@ -755,7 +908,20 @@ class MetalCodeGen:
                     node, {"binding", "buffer"}, ("b", "u", "t")
                 )
                 if binding is None:
-                    binding = buffer_register
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
                 self.structured_buffer_variables.append(
                     (node, binding, vtype, array_size)
                 )
@@ -802,7 +968,20 @@ class MetalCodeGen:
                     node, {"binding", "texture"}, ("t", "u")
                 )
                 if binding is None:
-                    binding = texture_register
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "texture",
+                        texture_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "texture",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
                 self.texture_variables.append((node, binding, mapped_type, array_size))
                 self.texture_variable_types[node.name] = mapped_type
                 record_explicit_image_metadata(
@@ -817,7 +996,20 @@ class MetalCodeGen:
                     node, {"binding", "sampler"}, ("s",)
                 )
                 if binding is None:
-                    binding = sampler_register
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "sampler",
+                        sampler_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "sampler",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
             else:
@@ -831,6 +1023,8 @@ class MetalCodeGen:
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
+
+        stage_entry_names = self.stage_entry_names(ast, target_stage)
 
         functions = getattr(ast, "functions", [])
         functions_code = ""
@@ -847,33 +1041,50 @@ class MetalCodeGen:
 
             if qualifier_name == "vertex":
                 functions_code += "// Vertex Shader\n"
-                functions_code += self.generate_function(func, shader_type="vertex")
+                functions_code += self.generate_function(
+                    func,
+                    shader_type="vertex",
+                    entry_name=stage_entry_names.get(id(func)),
+                )
             elif qualifier_name == "fragment":
                 functions_code += "// Fragment Shader\n"
-                functions_code += self.generate_function(func, shader_type="fragment")
+                functions_code += self.generate_function(
+                    func,
+                    shader_type="fragment",
+                    entry_name=stage_entry_names.get(id(func)),
+                )
             elif qualifier_name == "compute":
                 functions_code += "// Compute Shader\n"
-                functions_code += self.generate_function(func, shader_type="compute")
+                functions_code += self.generate_function(
+                    func,
+                    shader_type="compute",
+                    entry_name=stage_entry_names.get(id(func)),
+                )
             else:
                 functions_code += self.generate_function(func)
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
+                stage_name = normalize_stage_name(stage_type)
+                if not stage_matches(target_stage, stage_name):
+                    continue
+
+                for func in order_functions_by_dependencies(
+                    getattr(stage, "local_functions", []) or [],
+                    self.iter_ast_nodes,
+                    self.function_call_name,
+                    FunctionCallNode,
+                ):
+                    functions_code += self.generate_function(func)
+
                 if hasattr(stage, "entry_point"):
-                    stage_name = normalize_stage_name(stage_type)
-                    if not stage_matches(target_stage, stage_name):
-                        continue
                     functions_code += f"// {stage_name.title()} Shader\n"
                     functions_code += self.generate_function(
-                        stage.entry_point, shader_type=stage_name
+                        stage.entry_point,
+                        shader_type=stage_name,
+                        entry_name=stage_entry_names.get(id(stage.entry_point)),
                     )
-                if hasattr(stage, "local_functions"):
-                    stage_name = normalize_stage_name(stage_type)
-                    if not stage_matches(target_stage, stage_name):
-                        continue
-                    for func in stage.local_functions:
-                        functions_code += self.generate_function(func)
 
         code += self.generate_image_atomic_compare_helpers()
         code += functions_code
@@ -982,7 +1193,7 @@ class MetalCodeGen:
 
         return code
 
-    def generate_function(self, func, indent=0, shader_type=None):
+    def generate_function(self, func, indent=0, shader_type=None, entry_name=None):
         """Render a function or stage entry point with Metal attributes."""
         code = ""
         code += "  " * indent
@@ -1024,6 +1235,10 @@ class MetalCodeGen:
             self.current_glsl_buffer_block_parameter_failures,
             self.current_glsl_buffer_block_parameter_struct_failures,
         ) = self.collect_lowered_glsl_buffer_block_parameters(param_list)
+        if shader_type in {"vertex", "fragment", "compute"}:
+            self.validate_stage_parameter_resource_bindings(
+                param_list, self.current_function_name
+            )
         self.current_unsupported_glsl_buffer_block_parameters = (
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
@@ -1094,6 +1309,11 @@ class MetalCodeGen:
 
         if hasattr(func, "return_type"):
             raw_return_type = self.type_name_string(func.return_type)
+            if "[" in raw_return_type:
+                raise ValueError(
+                    "Metal output does not support C-style array return types; "
+                    "wrap the array in a struct or use an output parameter"
+                )
             return_type = self.map_type(raw_return_type)
         else:
             raw_return_type = "void"
@@ -1139,20 +1359,24 @@ class MetalCodeGen:
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name
             )
-            code += f"vertex {return_type} vertex_{func.name}({params_str}) {{\n"
+            function_name = entry_name or f"vertex_{func.name}"
+            code += f"vertex {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "fragment":
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name
             )
-            code += f"fragment {return_type} fragment_{func.name}({params_str}) {{\n"
+            function_name = entry_name or f"fragment_{func.name}"
+            code += f"fragment {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["compute", "ray_generation"]:
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name
             )
-            code += f"kernel {return_type} kernel_{func.name}({params_str}) {{\n"
+            function_name = entry_name or f"kernel_{func.name}"
+            code += f"kernel {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
-            code += f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
+            function_name = entry_name or f"{stage_keyword}_{func.name}"
+            code += f"{stage_keyword} {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in [
             "ray_intersection",
             "ray_any_hit",
@@ -1178,10 +1402,12 @@ class MetalCodeGen:
                 "callable": "callable",
             }
             stage_keyword = rt_stage_map.get(shader_type, shader_type)
-            code += f"{stage_keyword} {return_type} {stage_keyword}_{func.name}({params_str}) {{\n"
+            function_name = entry_name or f"{stage_keyword}_{func.name}"
+            code += f"{stage_keyword} {return_type} {function_name}({params_str}) {{\n"
         else:
             semantic = self.semantic_from_node(func)
-            code += f"{return_type} {func.name}({params_str}) {self.map_semantic(semantic)} {{\n"
+            function_name = entry_name or func.name
+            code += f"{return_type} {function_name}({params_str}) {self.map_semantic(semantic)} {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -1264,14 +1490,8 @@ class MetalCodeGen:
             else None
         )
         if self.cbuffer_variables:
-            buffer_index = 0
             for cbuffer in self.cbuffer_variables:
-                binding = self.explicit_resource_binding_index(
-                    cbuffer, {"binding", "buffer"}, ("b",)
-                )
-                if binding is None:
-                    binding = buffer_index
-                buffer_index = max(buffer_index, binding + 1)
+                binding = self.cbuffer_binding_indices.get(id(cbuffer), 0)
                 parameter_name = self.cbuffer_parameter_name(cbuffer)
                 resource_params.append(
                     f"constant {cbuffer.name}& {parameter_name} [[buffer({binding})]]"
@@ -1485,6 +1705,8 @@ class MetalCodeGen:
                 return f"{indent_str}array<{element_type}, {size}> {stmt.name};\n"
         elif isinstance(stmt, AssignmentNode):
             return self.generate_statement_code(self.generate_assignment(stmt), indent)
+        elif isinstance(stmt, BlockNode):
+            return self.generate_block(stmt, indent)
         elif isinstance(stmt, BreakNode):
             return f"{indent_str}break;\n"
         elif isinstance(stmt, ContinueNode):
@@ -1699,9 +1921,43 @@ class MetalCodeGen:
             if func_name in {
                 "float",
                 "half",
+                "float16",
+                "min16float",
+                "min10float",
                 "double",
                 "int",
+                "char",
+                "signed char",
+                "int8",
+                "int16",
+                "int8_t",
+                "int16_t",
+                "int32_t",
+                "int64",
+                "int64_t",
+                "long",
+                "signed long",
+                "ptrdiff_t",
+                "min16int",
+                "min12int",
                 "uint",
+                "uchar",
+                "unsigned char",
+                "uint8",
+                "uint16",
+                "uint8_t",
+                "uint16_t",
+                "uint32_t",
+                "uint64",
+                "uint64_t",
+                "ulong",
+                "unsigned long",
+                "size_t",
+                "min16uint",
+                "short",
+                "signed short",
+                "ushort",
+                "unsigned short",
                 "bool",
                 "vec2",
                 "vec3",
@@ -1718,15 +1974,120 @@ class MetalCodeGen:
                 "float2",
                 "float3",
                 "float4",
+                "packed_float2",
+                "packed_float3",
+                "packed_float4",
+                "simd_float2",
+                "simd_float3",
+                "simd_float4",
                 "int2",
                 "int3",
                 "int4",
+                "packed_int2",
+                "packed_int3",
+                "packed_int4",
+                "simd_int2",
+                "simd_int3",
+                "simd_int4",
                 "uint2",
                 "uint3",
                 "uint4",
+                "packed_uint2",
+                "packed_uint3",
+                "packed_uint4",
+                "simd_uint2",
+                "simd_uint3",
+                "simd_uint4",
                 "bool2",
                 "bool3",
                 "bool4",
+                "half2",
+                "half3",
+                "half4",
+                "packed_half2",
+                "packed_half3",
+                "packed_half4",
+                "f16vec2",
+                "f16vec3",
+                "f16vec4",
+                "f16mat2",
+                "f16mat3",
+                "f16mat4",
+                "f16mat2x2",
+                "f16mat2x3",
+                "f16mat2x4",
+                "f16mat3x2",
+                "f16mat3x3",
+                "f16mat3x4",
+                "f16mat4x2",
+                "f16mat4x3",
+                "f16mat4x4",
+                "simd_float2x2",
+                "simd_float2x3",
+                "simd_float2x4",
+                "simd_float3x2",
+                "simd_float3x3",
+                "simd_float3x4",
+                "simd_float4x2",
+                "simd_float4x3",
+                "simd_float4x4",
+                "char2",
+                "char3",
+                "char4",
+                "uchar2",
+                "uchar3",
+                "uchar4",
+                "i8vec2",
+                "i8vec3",
+                "i8vec4",
+                "u8vec2",
+                "u8vec3",
+                "u8vec4",
+                "short2",
+                "short3",
+                "short4",
+                "ushort2",
+                "ushort3",
+                "ushort4",
+                "i16vec2",
+                "i16vec3",
+                "i16vec4",
+                "u16vec2",
+                "u16vec3",
+                "u16vec4",
+                "min16float2",
+                "min16float3",
+                "min16float4",
+                "min10float2",
+                "min10float3",
+                "min10float4",
+                "min16int2",
+                "min16int3",
+                "min16int4",
+                "min12int2",
+                "min12int3",
+                "min12int4",
+                "min16uint2",
+                "min16uint3",
+                "min16uint4",
+                "min16float2x2",
+                "min16float2x3",
+                "min16float2x4",
+                "min16float3x2",
+                "min16float3x3",
+                "min16float3x4",
+                "min16float4x2",
+                "min16float4x3",
+                "min16float4x4",
+                "min10float2x2",
+                "min10float2x3",
+                "min10float2x4",
+                "min10float3x2",
+                "min10float3x3",
+                "min10float3x4",
+                "min10float4x2",
+                "min10float4x3",
+                "min10float4x4",
             }:
                 return str(func_name)
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
@@ -1789,12 +2150,7 @@ class MetalCodeGen:
         code = f"{indent_str}if ({condition}) {{\n"
 
         if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
-        if hasattr(if_body, "statements"):
-            for stmt in if_body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(if_body, list):
-            for stmt in if_body:
-                code += self.generate_statement(stmt, indent + 1)
+        code += self.generate_scoped_statement_body(if_body, indent + 1)
 
         code += f"{indent_str}}}"
 
@@ -1815,12 +2171,7 @@ class MetalCodeGen:
                 elif_body = getattr(
                     else_branch, "then_branch", getattr(else_branch, "if_body", None)
                 )
-                if hasattr(elif_body, "statements"):
-                    for stmt in elif_body.statements:
-                        code += self.generate_statement(stmt, indent + 1)
-                elif isinstance(elif_body, list):
-                    for stmt in elif_body:
-                        code += self.generate_statement(stmt, indent + 1)
+                code += self.generate_scoped_statement_body(elif_body, indent + 1)
 
                 code += f"{indent_str}}}"
 
@@ -1844,29 +2195,14 @@ class MetalCodeGen:
                     else:
                         # Final else clause
                         code += " else {\n"
-                        if hasattr(nested_else, "statements"):
-                            for stmt in nested_else.statements:
-                                code += self.generate_statement(stmt, indent + 1)
-                        elif isinstance(nested_else, list):
-                            for stmt in nested_else:
-                                code += self.generate_statement(stmt, indent + 1)
-                        else:
-                            code += self.generate_statement(nested_else, indent + 1)
+                        code += self.generate_scoped_statement_body(
+                            nested_else, indent + 1
+                        )
                         code += f"{indent_str}}}"
             else:
                 # Regular else clause
                 code += " else {\n"
-                if hasattr(else_branch, "statements"):
-                    # New AST BlockNode structure
-                    for stmt in else_branch.statements:
-                        code += self.generate_statement(stmt, indent + 1)
-                elif isinstance(else_branch, list):
-                    # Old AST structure
-                    for stmt in else_branch:
-                        code += self.generate_statement(stmt, indent + 1)
-                else:
-                    # Single statement
-                    code += self.generate_statement(else_branch, indent + 1)
+                code += self.generate_scoped_statement_body(else_branch, indent + 1)
                 code += f"{indent_str}}}"
 
         code += "\n"
@@ -1874,65 +2210,107 @@ class MetalCodeGen:
 
     def generate_for(self, node, indent):
         indent_str = "    " * indent
-
-        init = self.generate_for_initializer(getattr(node, "init", None))
-
-        condition = (
-            self.generate_expression(node.condition)
-            if getattr(node, "condition", None)
-            else ""
+        previous_local_variable_types = dict(self.local_variable_types)
+        previous_unsupported_locals = set(
+            self.current_unsupported_glsl_buffer_block_local_variables
         )
 
-        update = (
-            self.generate_expression(node.update)
-            if getattr(node, "update", None)
-            else ""
+        try:
+            init = self.generate_for_initializer(getattr(node, "init", None))
+
+            condition = (
+                self.generate_expression(node.condition)
+                if getattr(node, "condition", None)
+                else ""
+            )
+
+            update = (
+                self.generate_expression(node.update)
+                if getattr(node, "update", None)
+                else ""
+            )
+
+            code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
+
+            code += self.generate_scoped_statement_body(node.body, indent + 1)
+
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.local_variable_types = previous_local_variable_types
+            self.current_unsupported_glsl_buffer_block_local_variables = (
+                previous_unsupported_locals
+            )
+
+    def generate_block(self, node, indent):
+        indent_str = "    " * indent
+        code = f"{indent_str}{{\n"
+        code += self.generate_scoped_statement_body(
+            getattr(node, "statements", []), indent + 1
         )
-
-        code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
-
-        if hasattr(node.body, "statements"):
-            for stmt in node.body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(node.body, list):
-            for stmt in node.body:
-                code += self.generate_statement(stmt, indent + 1)
-        else:
-            code += self.generate_statement(node.body, indent + 1)
-
         code += f"{indent_str}}}\n"
         return code
+
+    def generate_scoped_statement_body(self, body, indent):
+        previous_local_variable_types = dict(self.local_variable_types)
+        previous_unsupported_locals = set(
+            self.current_unsupported_glsl_buffer_block_local_variables
+        )
+        try:
+            return self.generate_statement_body(body, indent)
+        finally:
+            self.local_variable_types = previous_local_variable_types
+            self.current_unsupported_glsl_buffer_block_local_variables = (
+                previous_unsupported_locals
+            )
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
         pattern = getattr(node, "pattern", "item")
         iterable_node = getattr(node, "iterable", "")
+        previous_local_variable_types = dict(self.local_variable_types)
+        previous_unsupported_locals = set(
+            self.current_unsupported_glsl_buffer_block_local_variables
+        )
 
-        if isinstance(iterable_node, RangeNode):
-            start = self.generate_expression(iterable_node.start)
-            end = self.generate_expression(iterable_node.end)
-            comparator = "<=" if iterable_node.inclusive else "<"
-            code = (
-                f"{indent_str}for (int {pattern} = {start}; "
-                f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
-            )
-        else:
-            iterable = self.generate_expression(iterable_node)
-            code = (
-                f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
-                f"++{pattern}) {{\n"
-            )
+        try:
+            self.local_variable_types[pattern] = "int"
+            self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
 
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
-        code += f"{indent_str}}}\n"
-        return code
+            if isinstance(iterable_node, RangeNode):
+                start = self.generate_expression(iterable_node.start)
+                end = self.generate_expression(iterable_node.end)
+                comparator = "<=" if iterable_node.inclusive else "<"
+                code = (
+                    f"{indent_str}for (int {pattern} = {start}; "
+                    f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
+                )
+            else:
+                iterable = self.generate_expression(iterable_node)
+                code = (
+                    f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
+                    f"++{pattern}) {{\n"
+                )
+
+            code += self.generate_scoped_statement_body(
+                getattr(node, "body", []), indent + 1
+            )
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.local_variable_types = previous_local_variable_types
+            self.current_unsupported_glsl_buffer_block_local_variables = (
+                previous_unsupported_locals
+            )
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(getattr(node, "condition", ""))
 
         code = f"{indent_str}while ({condition}) {{\n"
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []), indent + 1
+        )
         code += f"{indent_str}}}\n"
         return code
 
@@ -1941,7 +2319,9 @@ class MetalCodeGen:
         condition = self.generate_expression(getattr(node, "condition", ""))
 
         code = f"{indent_str}do {{\n"
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []), indent + 1
+        )
         code += f"{indent_str}}} while ({condition});\n"
         return code
 
@@ -1949,7 +2329,9 @@ class MetalCodeGen:
         indent_str = "    " * indent
 
         code = f"{indent_str}while (true) {{\n"
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []), indent + 1
+        )
         code += f"{indent_str}}}\n"
         return code
 
@@ -2035,7 +2417,7 @@ class MetalCodeGen:
             return f"{indent_str}{label}:\n"
 
         code = f"{indent_str}{label}: {{\n"
-        code += self.generate_statement_body(body, indent + 1)
+        code += self.generate_scoped_statement_body(body, indent + 1)
         if auto_break and not self.statement_body_terminates(body):
             code += f"{indent_str}    break;\n"
         code += f"{indent_str}}}\n"
@@ -2156,9 +2538,43 @@ class MetalCodeGen:
             elif func_name in [
                 "float",
                 "half",
+                "float16",
+                "min16float",
+                "min10float",
                 "double",
                 "int",
+                "char",
+                "signed char",
+                "int8",
+                "int16",
+                "int8_t",
+                "int16_t",
+                "int32_t",
+                "int64",
+                "int64_t",
+                "long",
+                "signed long",
+                "ptrdiff_t",
+                "min16int",
+                "min12int",
                 "uint",
+                "uchar",
+                "unsigned char",
+                "uint8",
+                "uint16",
+                "uint8_t",
+                "uint16_t",
+                "uint32_t",
+                "uint64",
+                "uint64_t",
+                "ulong",
+                "unsigned long",
+                "size_t",
+                "min16uint",
+                "short",
+                "signed short",
+                "ushort",
+                "unsigned short",
                 "bool",
                 "vec2",
                 "vec3",
@@ -2172,6 +2588,111 @@ class MetalCodeGen:
                 "bvec2",
                 "bvec3",
                 "bvec4",
+                "packed_float2",
+                "packed_float3",
+                "packed_float4",
+                "simd_float2",
+                "simd_float3",
+                "simd_float4",
+                "half2",
+                "half3",
+                "half4",
+                "packed_half2",
+                "packed_half3",
+                "packed_half4",
+                "f16vec2",
+                "f16vec3",
+                "f16vec4",
+                "f16mat2",
+                "f16mat3",
+                "f16mat4",
+                "f16mat2x2",
+                "f16mat2x3",
+                "f16mat2x4",
+                "f16mat3x2",
+                "f16mat3x3",
+                "f16mat3x4",
+                "f16mat4x2",
+                "f16mat4x3",
+                "f16mat4x4",
+                "char2",
+                "char3",
+                "char4",
+                "uchar2",
+                "uchar3",
+                "uchar4",
+                "packed_int2",
+                "packed_int3",
+                "packed_int4",
+                "packed_uint2",
+                "packed_uint3",
+                "packed_uint4",
+                "simd_int2",
+                "simd_int3",
+                "simd_int4",
+                "simd_uint2",
+                "simd_uint3",
+                "simd_uint4",
+                "simd_float2x2",
+                "simd_float2x3",
+                "simd_float2x4",
+                "simd_float3x2",
+                "simd_float3x3",
+                "simd_float3x4",
+                "simd_float4x2",
+                "simd_float4x3",
+                "simd_float4x4",
+                "i8vec2",
+                "i8vec3",
+                "i8vec4",
+                "u8vec2",
+                "u8vec3",
+                "u8vec4",
+                "short2",
+                "short3",
+                "short4",
+                "ushort2",
+                "ushort3",
+                "ushort4",
+                "i16vec2",
+                "i16vec3",
+                "i16vec4",
+                "u16vec2",
+                "u16vec3",
+                "u16vec4",
+                "min16float2",
+                "min16float3",
+                "min16float4",
+                "min10float2",
+                "min10float3",
+                "min10float4",
+                "min16int2",
+                "min16int3",
+                "min16int4",
+                "min12int2",
+                "min12int3",
+                "min12int4",
+                "min16uint2",
+                "min16uint3",
+                "min16uint4",
+                "min16float2x2",
+                "min16float2x3",
+                "min16float2x4",
+                "min16float3x2",
+                "min16float3x3",
+                "min16float3x4",
+                "min16float4x2",
+                "min16float4x3",
+                "min16float4x4",
+                "min10float2x2",
+                "min10float2x3",
+                "min10float2x4",
+                "min10float3x2",
+                "min10float3x3",
+                "min10float3x4",
+                "min10float4x2",
+                "min10float4x3",
+                "min10float4x4",
             ]:
                 # Map to Metal's float2, float3, float4
                 metal_type = self.map_type(func_name)
@@ -2506,6 +3027,131 @@ class MetalCodeGen:
             return " [[stage_in]]"
         return ""
 
+    def parameter_resource_binding_metadata(self, raw_param_type, node=None):
+        if node is None:
+            return None
+        if self.is_sampler_type(raw_param_type):
+            namespace = "sampler"
+            attribute_names = {"binding", "sampler"}
+            prefixes = ("s",)
+        elif self.is_structured_buffer_type(raw_param_type):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_texture_or_image_resource_type(raw_param_type):
+            namespace = "texture"
+            attribute_names = {"binding", "texture"}
+            prefixes = ("t", "u")
+        else:
+            return None
+
+        binding = self.explicit_resource_binding_index(node, attribute_names, prefixes)
+        if binding is None:
+            return None
+        return (
+            namespace,
+            binding,
+            self.parameter_resource_binding_count(raw_param_type, node),
+            getattr(node, "name", "<anonymous>"),
+        )
+
+    def parameter_resource_binding_count(self, raw_param_type, node=None):
+        array_size = None
+        if self.is_structured_buffer_type(raw_param_type):
+            array_size = self.structured_buffer_parameter_array_size(
+                raw_param_type, node
+            )
+        else:
+            array_type = self.resource_array_parameter(raw_param_type, node)
+            if array_type is not None:
+                _, array_size = array_type
+        return self.resource_array_count(array_size)
+
+    def parameter_raw_type(self, parameter):
+        if hasattr(parameter, "param_type"):
+            return (
+                self.type_name_string(parameter.param_type)
+                if getattr(parameter.param_type, "generic_args", None)
+                else parameter.param_type
+            )
+        if hasattr(parameter, "vtype"):
+            return parameter.vtype
+        return "float"
+
+    def validate_stage_parameter_resource_bindings(self, parameters, func_name=None):
+        used_bindings = {}
+        self.reserve_global_parameter_resource_bindings(used_bindings, func_name)
+        for parameter in parameters or []:
+            metadata = self.parameter_resource_binding_metadata(
+                self.parameter_raw_type(parameter), parameter
+            )
+            if metadata is None:
+                continue
+            namespace, binding, resource_count, name = metadata
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                namespace,
+                binding,
+                resource_count,
+                name,
+            )
+
+    def reserve_global_parameter_resource_bindings(self, used_bindings, func_name=None):
+        dependencies = (
+            self.function_global_resource_dependencies.get(func_name, set())
+            if func_name
+            else None
+        )
+        for cbuffer in self.cbuffer_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                self.cbuffer_binding_indices.get(id(cbuffer), 0),
+                1,
+                getattr(cbuffer, "name", "<anonymous>"),
+            )
+        for texture_variable, binding, _, _ in self.texture_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "texture",
+                binding,
+                self.global_resource_shape(texture_variable)[1],
+                getattr(texture_variable, "name", "<anonymous>"),
+            )
+        for buffer_variable, binding, _, _ in self.structured_buffer_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(buffer_variable)[1],
+                getattr(buffer_variable, "name", "<anonymous>"),
+            )
+        for buffer_variable, binding, _, _ in self.glsl_buffer_block_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(buffer_variable)[1],
+                getattr(buffer_variable, "name", "<anonymous>"),
+            )
+        for sampler_variable, binding, array_size in self.sampler_variables:
+            sampler_name = getattr(sampler_variable, "name", None)
+            if dependencies is not None and sampler_name not in dependencies:
+                continue
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "sampler",
+                binding,
+                self.resource_array_count(array_size),
+                sampler_name or "<anonymous>",
+            )
+
     def resource_parameter_attribute(self, raw_param_type, node=None):
         if node is None:
             return ""
@@ -2538,12 +3184,38 @@ class MetalCodeGen:
                 lowered_block, name, array_size
             )
         if self.is_structured_buffer_type(raw_param_type):
-            return self.format_structured_buffer_parameter(raw_param_type, name)
+            array_size = self.structured_buffer_parameter_array_size(
+                raw_param_type, node
+            )
+            return self.format_structured_buffer_parameter(
+                raw_param_type, name, array_size
+            )
         array_type = self.resource_array_parameter(raw_param_type, node)
         if array_type is not None:
             resource_type, array_size = array_type
             return self.format_resource_parameter(resource_type, name, array_size)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def structured_buffer_parameter_array_size(self, vtype, node=None):
+        param_name = getattr(node, "name", None)
+        function_hints = self.function_resource_array_size_hints.get(
+            self.current_function_name, {}
+        )
+        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+            return (
+                self.safe_expression_to_string(vtype.size)
+                if vtype.size is not None
+                else function_hints.get(param_name, "")
+            )
+
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            return None
+
+        type_string = str(vtype)
+        if "[" not in type_string or "]" not in type_string:
+            return None
+        _, array_size = parse_array_type(type_string)
+        return function_hints.get(param_name, "") if array_size is None else array_size
 
     def glsl_buffer_block_parameter_array_size(self, vtype, node=None):
         param_name = getattr(node, "name", None)
@@ -2704,6 +3376,83 @@ class MetalCodeGen:
             or str(self.resource_base_type(vtype))
             in self.glsl_buffer_block_struct_names
         )
+
+    def unsupported_stage_types(self):
+        return {"geometry", "tessellation_control", "tessellation_evaluation"}
+
+    def validate_supported_stage_types(self, ast, target_stage=None):
+        unsupported_stages = []
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name in self.unsupported_stage_types() and stage_matches(
+                target_stage, stage_name
+            ):
+                unsupported_stages.append(stage_name)
+
+        if unsupported_stages:
+            stage_list = ", ".join(sorted(unsupported_stages))
+            raise ValueError(
+                f"Metal output does not support stage type(s): {stage_list}"
+            )
+
+    def stage_entry_types(self):
+        return {
+            "vertex",
+            "fragment",
+            "compute",
+            "mesh",
+            "task",
+            "amplification",
+            "object",
+            "ray_generation",
+            "ray_intersection",
+            "ray_closest_hit",
+            "ray_any_hit",
+            "ray_miss",
+            "ray_callable",
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+        }
+
+    def stage_entry_base_name(self, stage_name, func):
+        func_name = getattr(func, "name", None) or "main"
+        if stage_name == "vertex":
+            return f"vertex_{func_name}"
+        if stage_name == "fragment":
+            return f"fragment_{func_name}"
+        if stage_name in {"compute", "ray_generation"}:
+            return f"kernel_{func_name}"
+        if stage_name in {"mesh", "object", "task", "amplification"}:
+            stage_keyword = "mesh" if stage_name == "mesh" else "object"
+            return f"{stage_keyword}_{func_name}"
+
+        rt_stage_map = {
+            "ray_intersection": "intersection",
+            "ray_any_hit": "anyhit",
+            "ray_closest_hit": "closesthit",
+            "ray_miss": "miss",
+            "ray_callable": "callable",
+            "intersection": "intersection",
+            "anyhit": "anyhit",
+            "closesthit": "closesthit",
+            "miss": "miss",
+            "callable": "callable",
+        }
+        stage_keyword = rt_stage_map.get(stage_name)
+        if stage_keyword:
+            return f"{stage_keyword}_{func_name}"
+        return func_name
+
+    def stage_entry_names(self, ast, target_stage=None):
+        stage_entry_types = self.stage_entry_types()
+        entries = collect_stage_entry_records(ast, target_stage, stage_entry_types)
+        used_names = collect_stage_entry_reserved_function_names(
+            ast, target_stage, stage_entry_types
+        )
+        return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
 
     def all_functions(self, ast):
         functions = list(getattr(ast, "functions", []) or [])
@@ -3550,6 +4299,8 @@ class MetalCodeGen:
             return self.metal_matrix_store(buffer_name, offset, value, access)
 
         if access["components"] == 1:
+            if access.get("layout_type") != access.get("type"):
+                value = f"{access['component_type']}({value})"
             return self.metal_scalar_store(
                 access["component_type"], buffer_name, offset, value
             )
@@ -3848,6 +4599,162 @@ class MetalCodeGen:
             return max(resolved_size, 1)
         size_str = str(size)
         return max(int(size_str), 1) if size_str.isdigit() else 1
+
+    def global_resource_shape(self, node):
+        resource_count = 1
+        if hasattr(node, "var_type"):
+            if hasattr(node.var_type, "name") or hasattr(node.var_type, "element_type"):
+                if (
+                    hasattr(node.var_type, "element_type")
+                    and str(type(node.var_type)).find("ArrayType") != -1
+                ):
+                    vtype = self.convert_type_node_to_string(node.var_type.element_type)
+                    array_size = (
+                        self.expression_to_string(node.var_type.size)
+                        if node.var_type.size
+                        else self.resource_array_size_hints.get(node.name, "")
+                    )
+                    resource_count = self.resource_array_count(
+                        node.var_type.size if node.var_type.size else array_size
+                    )
+                else:
+                    vtype = self.convert_type_node_to_string(node.var_type)
+            else:
+                vtype = str(node.var_type)
+        elif hasattr(node, "vtype"):
+            vtype = node.vtype
+        else:
+            vtype = "float"
+        return vtype, resource_count
+
+    def global_resource_binding_metadata(self, node):
+        var_name = getattr(node, "name", getattr(node, "variable_name", None))
+        if not var_name:
+            return None
+
+        vtype, resource_count = self.global_resource_shape(node)
+        lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
+        if lowered_block is not None:
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_glsl_buffer_block_variable(node, vtype):
+            return None
+        elif self.is_structured_buffer_type(vtype):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_texture_or_image_resource_type(vtype):
+            namespace = "texture"
+            attribute_names = {"binding", "texture"}
+            prefixes = ("t", "u")
+        elif self.is_sampler_type(vtype):
+            namespace = "sampler"
+            attribute_names = {"binding", "sampler"}
+            prefixes = ("s",)
+        else:
+            return None
+
+        binding = self.explicit_resource_binding_index(node, attribute_names, prefixes)
+        if binding is None:
+            return None
+        return namespace, binding, resource_count, var_name
+
+    def reserve_explicit_global_resource_bindings(self, global_vars, used_bindings):
+        for node in global_vars:
+            metadata = self.global_resource_binding_metadata(node)
+            if metadata is None:
+                continue
+            namespace, binding, resource_count, var_name = metadata
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                namespace,
+                binding,
+                resource_count,
+                var_name,
+            )
+
+    def next_available_resource_binding(
+        self, used_bindings, namespace, binding_index, count
+    ):
+        count = max(count or 1, 1)
+        ranges = used_bindings.get(namespace, [])
+        while True:
+            end = binding_index + count - 1
+            conflict_end = None
+            for used_start, used_end, _ in ranges:
+                if binding_index <= used_end and used_start <= end:
+                    conflict_end = (
+                        used_end
+                        if conflict_end is None
+                        else max(conflict_end, used_end)
+                    )
+            if conflict_end is None:
+                return binding_index
+            binding_index = conflict_end + 1
+
+    def reserve_cbuffer_bindings(self, used_bindings):
+        buffer_index = 0
+        for cbuffer in self.cbuffer_variables:
+            binding = self.explicit_resource_binding_index(
+                cbuffer, {"binding", "buffer"}, ("b",)
+            )
+            if binding is None:
+                continue
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                1,
+                getattr(cbuffer, "name", "<anonymous>"),
+            )
+        for cbuffer in self.cbuffer_variables:
+            binding = self.explicit_resource_binding_index(
+                cbuffer, {"binding", "buffer"}, ("b",)
+            )
+            if binding is None:
+                binding = self.next_available_resource_binding(
+                    used_bindings,
+                    "buffer",
+                    buffer_index,
+                    1,
+                )
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                1,
+                getattr(cbuffer, "name", "<anonymous>"),
+            )
+            self.cbuffer_binding_indices[id(cbuffer)] = binding
+            buffer_index = max(buffer_index, binding + 1)
+        return buffer_index
+
+    def reserve_resource_binding_range(
+        self, used_bindings, target, namespace, start, count, name
+    ):
+        count = max(count or 1, 1)
+        end = start + count - 1
+        ranges = used_bindings.setdefault(namespace, [])
+        for used_start, used_end, used_name in ranges:
+            if start <= used_end and used_start <= end:
+                if used_start == start and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    f"Conflicting {target} resource binding for '{name}': "
+                    f"{self.resource_binding_range_label(namespace, start, end)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.resource_binding_range_label(namespace, used_start, used_end)}"
+                )
+        ranges.append((start, end, name))
+
+    def resource_binding_range_label(self, namespace, start, end):
+        if start == end:
+            return f"{namespace}({start})"
+        return f"{namespace}({start}-{end})"
 
     def expression_name(self, expr):
         if isinstance(expr, str):

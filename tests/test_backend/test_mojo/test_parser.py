@@ -239,7 +239,7 @@ def test_for_in_iterable_parsing_preserves_loop_iterable():
 def test_for_in_range_parsing_preserves_range_call():
     code = """
     fn main():
-        for i in range(4):
+        for i in range(4, 0, -1):
             sink(i)
     """
     tokens = tokenize_code(code)
@@ -249,7 +249,10 @@ def test_for_in_range_parsing_preserves_range_call():
     assert isinstance(loop, RangeForNode)
     assert loop.name == "i"
     assert loop.iterable.name == "range"
-    assert loop.iterable.args == ["4"]
+    assert loop.iterable.args[:2] == ["4", "0"]
+    assert isinstance(loop.iterable.args[2], UnaryOpNode)
+    assert loop.iterable.args[2].op == "-"
+    assert loop.iterable.args[2].operand == "1"
 
 
 def test_while_parsing():
@@ -1020,6 +1023,29 @@ def test_switch_block_stops_at_dedent():
     assert len(function.body) == 3
     assert isinstance(function.body[1], SwitchNode)
     assert isinstance(function.body[2], ReturnNode)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        """
+        fn main():
+            pass
+        stray_token
+        """,
+        """
+        fn main():
+            pass
+        1 + 2
+        """,
+        """
+        return value
+        """,
+    ],
+)
+def test_rejects_unexpected_top_level_tokens(code):
+    with pytest.raises(SyntaxError, match="Unexpected top-level token"):
+        parse_code(tokenize_code(code))
 
 
 @pytest.mark.parametrize(

@@ -1,8 +1,12 @@
 from enum import Enum
 
 from crosstl.translator.codegen.stage_utils import (
+    assign_stage_entry_names,
+    collect_stage_entry_records,
+    collect_stage_entry_reserved_function_names,
     compute_local_size,
     normalize_stage_name,
+    order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
 )
@@ -11,6 +15,43 @@ from crosstl.translator.codegen.stage_utils import (
 class DummyStage(Enum):
     VERTEX = "vertex"
     FRAGMENT = "fragment"
+
+
+class DummyFunction:
+    def __init__(self, name, body=None, qualifiers=None):
+        self.name = name
+        self.body = body or []
+        self.parameters = []
+        self.qualifiers = qualifiers or []
+
+
+class DummyCall:
+    def __init__(self, name):
+        self.name = name
+
+
+class DummyStageNode:
+    def __init__(self, entry_point=None, local_functions=None):
+        self.entry_point = entry_point
+        self.local_functions = local_functions or []
+
+
+class DummyAst:
+    def __init__(self, functions=None, stages=None):
+        self.functions = functions or []
+        self.stages = stages or {}
+
+
+def walk_dummy_nodes(root):
+    if isinstance(root, list):
+        for item in root:
+            yield item
+    elif root is not None:
+        yield root
+
+
+def dummy_call_name(call):
+    return call.name
 
 
 def test_normalize_stage_name_accepts_strings_and_enums():
@@ -44,3 +85,75 @@ def test_compute_local_size_uses_common_config_keys():
         "8",
         "1",
     )
+
+
+def test_stage_entry_name_helpers_reserve_global_and_local_helpers():
+    helper = DummyFunction("PSMain")
+    local_helper = DummyFunction("PSMain_2")
+    entry = DummyFunction("main")
+    ast = DummyAst(
+        functions=[helper],
+        stages={"fragment": DummyStageNode(entry, [local_helper])},
+    )
+    stage_entry_types = {"fragment"}
+
+    entries = collect_stage_entry_records(ast, "fragment", stage_entry_types)
+    reserved = collect_stage_entry_reserved_function_names(
+        ast, "fragment", stage_entry_types
+    )
+    names = assign_stage_entry_names(
+        entries,
+        reserved,
+        lambda _stage_name, _func: "PSMain",
+    )
+
+    assert entries == [(id(entry), "fragment", entry)]
+    assert reserved == {"PSMain", "PSMain_2"}
+    assert names[id(entry)] == "PSMain_3"
+
+
+def test_stage_entry_name_helpers_can_keep_single_default_entry():
+    entry = DummyFunction("main")
+    ast = DummyAst(stages={"vertex": DummyStageNode(entry)})
+    entries = collect_stage_entry_records(ast, None, {"vertex"})
+    reserved = collect_stage_entry_reserved_function_names(ast, None, {"vertex"})
+
+    names = assign_stage_entry_names(
+        entries,
+        reserved,
+        lambda stage_name, _func: f"{stage_name}_main",
+        single_entry_default="main",
+    )
+
+    assert names == {}
+
+
+def test_stage_entry_name_helpers_rename_single_default_when_reserved():
+    helper = DummyFunction("main")
+    entry = DummyFunction("main")
+    ast = DummyAst(functions=[helper], stages={"vertex": DummyStageNode(entry)})
+    entries = collect_stage_entry_records(ast, None, {"vertex"})
+    reserved = collect_stage_entry_reserved_function_names(ast, None, {"vertex"})
+
+    names = assign_stage_entry_names(
+        entries,
+        reserved,
+        lambda stage_name, _func: f"{stage_name}_main",
+        single_entry_default="main",
+    )
+
+    assert names[id(entry)] == "vertex_main"
+
+
+def test_order_functions_by_dependencies_places_callees_first():
+    first = DummyFunction("first", [DummyCall("second")])
+    second = DummyFunction("second")
+
+    ordered = order_functions_by_dependencies(
+        [first, second],
+        walk_dummy_nodes,
+        dummy_call_name,
+        DummyCall,
+    )
+
+    assert ordered == [second, first]

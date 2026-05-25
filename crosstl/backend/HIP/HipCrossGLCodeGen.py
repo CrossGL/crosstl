@@ -181,6 +181,18 @@ class HipToCrossGLConverter:
             self.emit(comment)
         return True
 
+    def format_hip_runtime_status_expression(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        if self.is_user_defined_function(value.name):
+            return None
+
+        comments = self.format_hip_runtime_call(value)
+        if comments is None:
+            return None
+
+        return comments, "hipSuccess"
+
     def format_hip_runtime_call(self, node):
         args = [self.visit(arg) for arg in node.args]
         name = node.name
@@ -211,6 +223,8 @@ class HipToCrossGLConverter:
         elif name in {"hipStreamSynchronize"}:
             if args:
                 return [f"// HIP synchronize: {args[0]}"]
+        elif name == "hipDeviceSynchronize":
+            return ["// HIP device synchronize"]
         elif name in {"hipStreamCreate", "hipStreamDestroy"}:
             if args:
                 action = "create" if name == "hipStreamCreate" else "destroy"
@@ -462,6 +476,14 @@ class HipToCrossGLConverter:
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, getattr(node, "vtype", "int"))
         if hasattr(node, "value") and node.value:
+            runtime_status = self.format_hip_runtime_status_expression(node.value)
+            if runtime_status is not None:
+                comments, value = runtime_status
+                for comment in comments:
+                    self.emit(comment)
+                self.emit(f"var {node.name}: {var_type} = {value};")
+                return
+
             value = self.visit(node.value)
             self.emit(f"var {node.name}: {var_type} = {value};")
         else:
@@ -595,8 +617,20 @@ class HipToCrossGLConverter:
 
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)
-        right = self.visit(node.right)
         operator = getattr(node, "operator", "=")
+        runtime_status = (
+            self.format_hip_runtime_status_expression(node.right)
+            if operator == "="
+            else None
+        )
+        if runtime_status is not None:
+            comments, value = runtime_status
+            for comment in comments:
+                self.emit(comment)
+            self.emit(f"{left} = {value};")
+            return
+
+        right = self.visit(node.right)
         self.emit(f"{left} {operator} {right};")
 
     def visit_BinaryOpNode(self, node):
@@ -617,14 +651,6 @@ class HipToCrossGLConverter:
         if self.is_get_method_call(node):
             return self.visit(node.name.object)
 
-        args = []
-        if hasattr(node, "args") and node.args:
-            args = [self.visit(arg) for arg in node.args]
-        elif hasattr(node, "arguments") and node.arguments:
-            args = [self.visit(arg) for arg in node.arguments]
-
-        args_str = ", ".join(args)
-
         if hasattr(node, "name"):
             func_name = node.name
         else:
@@ -632,6 +658,17 @@ class HipToCrossGLConverter:
 
         if not isinstance(func_name, str):
             func_name = self.visit(func_name)
+
+        if func_name == "lambda":
+            return self.format_lambda_call(getattr(node, "args", []))
+
+        args = []
+        if hasattr(node, "args") and node.args:
+            args = [self.visit(arg) for arg in node.args]
+        elif hasattr(node, "arguments") and node.arguments:
+            args = [self.visit(arg) for arg in node.arguments]
+
+        args_str = ", ".join(args)
 
         make_unique = self.format_make_unique_call(func_name, args)
         if make_unique is not None:
@@ -647,6 +684,28 @@ class HipToCrossGLConverter:
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_lambda_call(self, args):
+        if not args:
+            return "lambda()"
+
+        rendered_args = [self.format_lambda_parameter(arg) for arg in args[:-1]] + [
+            self.format_lambda_body(args[-1])
+        ]
+        return f"lambda({', '.join(rendered_args)})"
+
+    def format_lambda_parameter(self, arg):
+        if isinstance(arg, VariableNode):
+            if arg.vtype:
+                param_type = self.convert_hip_type_to_crossgl(arg.vtype)
+                return f"{param_type} {arg.name}"
+            return arg.name
+        return self.format_lambda_body(arg)
+
+    def format_lambda_body(self, arg):
+        if isinstance(arg, str):
+            return arg
+        return self.visit(arg)
 
     def visit_AtomicOperationNode(self, node):
         args = [self.visit(arg) for arg in node.args]

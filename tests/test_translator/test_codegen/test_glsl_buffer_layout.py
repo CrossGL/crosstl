@@ -18,6 +18,7 @@ from crosstl.translator.codegen.glsl_buffer_layout import (
     glsl_buffer_block_node_type,
     matrix_column_offsets,
     std430_array_stride,
+    std430_layout_type_name,
     std430_value_type_info,
     vector_component_offsets,
 )
@@ -94,6 +95,14 @@ def test_std430_type_info_covers_vec3_and_non_square_matrix_strides():
 
     float3x2_alias = std430_value_type_info("float3x2")
     assert float3x2_alias == mat2x3
+
+
+def test_std430_type_info_normalizes_fixed_width_scalar_aliases():
+    assert std430_layout_type_name("int8_t") == "int"
+    assert std430_layout_type_name("uint16_t") == "uint"
+    assert std430_layout_type_name("size_t") == "uint"
+    assert std430_value_type_info("int64_t") == std430_value_type_info("int")
+    assert std430_value_type_info("uint64_t") == std430_value_type_info("uint")
 
 
 def test_byte_offset_expression_formats_literal_and_dynamic_indices():
@@ -194,6 +203,33 @@ def test_collect_lowered_glsl_buffer_blocks_lays_out_metadata_fixed_and_runtime_
     assert data["offset"] == 96
     assert data["stride"] == 4
     assert data["runtime_array"] is True
+
+
+def test_collect_lowered_glsl_buffer_blocks_accepts_fixed_width_alias_members():
+    struct = block_struct(
+        member("count", primitive("uint16_t")),
+        member("offsets", ArrayType(primitive("size_t"), size=None)),
+    )
+
+    blocks, var_failures, struct_failures = collect_for(struct)
+
+    assert not var_failures
+    assert not struct_failures
+    block = blocks["block"]
+    count = block["members"]["count"]
+    assert count["type"] == "uint16_t"
+    assert count["layout_type"] == "uint"
+    assert count["size"] == 4
+    assert count["align"] == 4
+    assert count["target_type"] == "mapped_uint16_t"
+
+    offsets = block["members"]["offsets"]
+    assert offsets["type"] == "size_t"
+    assert offsets["layout_type"] == "uint"
+    assert offsets["offset"] == 4
+    assert offsets["stride"] == 4
+    assert offsets["runtime_array"] is True
+    assert offsets["target_type"] == "mapped_size_t"
 
 
 def test_collect_lowered_glsl_buffer_blocks_tracks_readonly_qualifier():

@@ -1959,6 +1959,54 @@ def test_closure_return_type_parsing():
         pytest.fail(f"Closure return type parsing failed: {e}")
 
 
+def test_async_closure_expression_parsing():
+    code = """
+    fn test_async_closures(values: Values) {
+        let async_add = async |x| x + 1;
+        let async_moved = async move || true;
+        let async_typed = async move |value: Result<i32, i32>| -> Result<i32, i32> {
+            Ok(value?)
+        };
+        let mapped = values.map(async |x| x + 1);
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        async_add = body[0].value
+        assert isinstance(async_add, ClosureNode)
+        assert async_add.is_async is True
+        assert async_add.is_move is False
+        assert async_add.params[0].pattern == "x"
+        assert isinstance(async_add.body, BinaryOpNode)
+
+        async_moved = body[1].value
+        assert isinstance(async_moved, ClosureNode)
+        assert async_moved.is_async is True
+        assert async_moved.is_move is True
+        assert async_moved.params == []
+        assert async_moved.body == "true"
+
+        async_typed = body[2].value
+        assert isinstance(async_typed, ClosureNode)
+        assert async_typed.is_async is True
+        assert async_typed.is_move is True
+        assert async_typed.params[0].param_type == "Result<i32, i32>"
+        assert async_typed.return_type == "Result<i32, i32>"
+        assert isinstance(async_typed.body, BlockNode)
+        assert isinstance(async_typed.body.expression, FunctionCallNode)
+        assert isinstance(async_typed.body.expression.args[0], TryNode)
+
+        mapped = body[3].value
+        assert isinstance(mapped, FunctionCallNode)
+        assert mapped.name.member == "map"
+        assert isinstance(mapped.args[0], ClosureNode)
+        assert mapped.args[0].is_async is True
+    except Exception as e:
+        pytest.fail(f"Async closure expression parsing failed: {e}")
+
+
 def test_module_path_type_parsing():
     code = """
     fn sample(x: crate::math::Real) -> crate::math::Real {
@@ -2000,6 +2048,55 @@ def test_binary_operations_parsing():
         assert len(func.body) >= 10
     except Exception as e:
         pytest.fail(f"Binary operations parsing failed: {e}")
+
+
+def test_if_expression_operand_parsing():
+    code = """
+    fn test_if_operand(a: bool, b: bool, c: bool, d: bool) {
+        let x = a || if b { c } else { d };
+    }
+    """
+
+    ast = parse_code(code)
+    value = ast.functions[0].body[0].value
+
+    assert isinstance(value, BinaryOpNode)
+    assert value.op == "||"
+    assert isinstance(value.right, TernaryOpNode)
+    assert value.right.condition == "b"
+
+
+def test_match_loop_and_block_expression_operand_parsing():
+    code = """
+    fn test_expression_operands(a: bool, b: bool, v: i32) {
+        let matched = a || match v {
+            0 => false,
+            _ => true,
+        };
+        let looped = check(loop {
+            break true;
+        });
+        let blocked = a || { b };
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    matched = body[0].value
+    assert isinstance(matched, BinaryOpNode)
+    assert matched.op == "||"
+    assert isinstance(matched.right, MatchNode)
+    assert matched.right.expression == "v"
+
+    looped = body[1].value
+    assert isinstance(looped, FunctionCallNode)
+    assert isinstance(looped.args[0], LoopNode)
+
+    blocked = body[2].value
+    assert isinstance(blocked, BinaryOpNode)
+    assert isinstance(blocked.right, BlockNode)
+    assert blocked.right.expression == "b"
 
 
 def test_unary_operations_parsing():

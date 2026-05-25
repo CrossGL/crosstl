@@ -258,7 +258,10 @@ class VulkanToCrossGLConverter:
             if node.struct_fields:
                 block_name = node.block_name or node.variable_name or "UniformBuffer"
                 self.record_flattened_uniform_block_instance(node)
-                code += f"    cbuffer {block_name} {{\n"
+                push_constant_attr = (
+                    " @push_constant" if getattr(node, "push_constant", False) else ""
+                )
+                code += f"    cbuffer {block_name}{push_constant_attr} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
                 code += "    }\n\n"
@@ -593,18 +596,53 @@ class VulkanToCrossGLConverter:
         return f"{self.map_type(node.name)}({args})"
 
     def generate_for_loop(self, node, indent):
-        init = (
-            self.generate_expression(node.init)
-            if isinstance(node.init, (BinaryOpNode, AssignmentNode))
-            else node.init
-        )
-        condition = self.generate_expression(node.condition)
-        update = self.generate_expression(node.update)
+        init = self.generate_for_clause(node.init)
+        condition = self.generate_for_clause(node.condition)
+        update = self.generate_for_clause(node.update)
 
         code = f"for ({init}; {condition}; {update}) {{\n"
         code += self.generate_function_body(node.body, indent=indent + 1)
         code += "    " * indent + "}\n"
         return code
+
+    def generate_for_clause(self, clause):
+        if clause is None:
+            return ""
+        if isinstance(clause, list):
+            declaration_type = self.for_clause_declaration_type(clause[0])
+            return ", ".join(
+                self.generate_for_clause_item(item, declaration_type, index)
+                for index, item in enumerate(clause)
+            )
+        if isinstance(clause, str):
+            return clause
+        return self.generate_expression(clause)
+
+    def generate_for_clause_item(self, item, declaration_type, index):
+        if index > 0 and declaration_type:
+            if isinstance(item, AssignmentNode):
+                lhs_node = self.assignment_left(item)
+                if (
+                    isinstance(lhs_node, VariableNode)
+                    and self.variable_type(lhs_node) == declaration_type
+                ):
+                    rhs = self.generate_expression(self.assignment_right(item))
+                    operator = getattr(item, "operator", "=")
+                    return f"{lhs_node.name} {operator} {rhs}"
+            elif (
+                isinstance(item, VariableNode)
+                and self.variable_type(item) == declaration_type
+            ):
+                return item.name
+        return self.generate_for_clause(item)
+
+    def for_clause_declaration_type(self, item):
+        target = (
+            self.assignment_left(item) if isinstance(item, AssignmentNode) else item
+        )
+        if isinstance(target, VariableNode):
+            return self.variable_type(target)
+        return ""
 
     def generate_while_loop(self, node, indent):
         condition = self.generate_expression(node.condition)

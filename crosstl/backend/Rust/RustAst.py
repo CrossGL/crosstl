@@ -343,16 +343,18 @@ class ClosureParameterNode(ASTNode):
 class ClosureNode(ASTNode):
     """Node representing a Rust closure expression."""
 
-    def __init__(self, params, body, is_move=False, return_type=None):
+    def __init__(self, params, body, is_move=False, return_type=None, is_async=False):
         self.params = params
         self.body = body
         self.is_move = is_move
         self.return_type = return_type
+        self.is_async = is_async
 
     def __repr__(self):
+        async_prefix = "async " if self.is_async else ""
         move = "move " if self.is_move else ""
         return (
-            f"ClosureNode({move}params={self.params}, "
+            f"ClosureNode({async_prefix}{move}params={self.params}, "
             f"return_type={self.return_type}, body={self.body})"
         )
 

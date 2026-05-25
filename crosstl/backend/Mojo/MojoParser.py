@@ -87,7 +87,7 @@ class MojoParser:
         all_items = []
 
         while self.current_token[0] != "EOF":
-            if self.current_token[0] in ["NEWLINE", "DEDENT"]:
+            if self.current_token[0] in ["NEWLINE", "INDENT", "DEDENT"]:
                 self.eat(self.current_token[0])
                 continue
 
@@ -127,7 +127,10 @@ class MojoParser:
             else:
                 if attributes:
                     raise SyntaxError("Expected declaration after attribute")
-                self.eat(self.current_token[0])
+                token_type, token_value = self.current_token
+                raise SyntaxError(
+                    f"Unexpected top-level token: {token_type} {token_value!r}"
+                )
 
         return ShaderNode(
             includes=imports,

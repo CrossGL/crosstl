@@ -21,6 +21,12 @@ RUST_BYTE_CHAR_RE = re.compile(r"^b'((?:[^'\\]|\\.)*)'$", re.DOTALL)
 
 TRANSPARENT_BLOCK_NODE_TYPES = (AsyncBlockNode, UnsafeBlockNode, ConstBlockNode)
 BLOCK_EXPRESSION_NODE_TYPES = (BlockNode,) + TRANSPARENT_BLOCK_NODE_TYPES
+try:
+    from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+except ImportError:
+    CROSSGL_KEYWORDS = {}
+
+CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
 
 
 class RustToCrossGLConverter:
@@ -58,6 +64,7 @@ class RustToCrossGLConverter:
     }
     SCALAR_TWO_ARG_METHOD_MAP = {
         "clamp": "clamp",
+        "lerp": "mix",
     }
 
     def __init__(self):
@@ -231,10 +238,17 @@ class RustToCrossGLConverter:
         self.try_value_counter = 0
         self.try_block_value_counter = 0
         self.transparent_block_value_counter = 0
+        self.inline_expression_value_counter = 0
         self.current_function_return_type = None
         self.user_function_names = set()
         self.impl_method_names = {}
         self.value_type_scopes = []
+        self.closure_helper_counter = 0
+        self.closure_helper_names = set()
+        self.current_closure_helpers = None
+        self.closure_helper_generation_depth = 0
+        self.name_alias_scopes = []
+        self.local_binding_name_scopes = []
 
     def get_indent(self):
         """Return whitespace for the current indentation level."""
@@ -287,10 +301,17 @@ class RustToCrossGLConverter:
         self.try_value_counter = 0
         self.try_block_value_counter = 0
         self.transparent_block_value_counter = 0
+        self.inline_expression_value_counter = 0
         self.current_function_return_type = None
         self.user_function_names = self.collect_user_function_names(ast)
         self.impl_method_names = self.collect_impl_method_names(ast)
         self.value_type_scopes = []
+        self.closure_helper_counter = 0
+        self.closure_helper_names = set()
+        self.current_closure_helpers = None
+        self.closure_helper_generation_depth = 0
+        self.name_alias_scopes = []
+        self.local_binding_name_scopes = []
         code = "shader main {\n"
 
         for use_stmt in ast.use_statements:
@@ -333,14 +354,7 @@ class RustToCrossGLConverter:
             shader_type = self.get_shader_type_from_attributes(func.attributes)
             if shader_type:
                 code += f"    // {shader_type.title()} Shader\n"
-                code += f"    {shader_type} {{\n"
-                previous_return_type = self.current_function_return_type
-                self.current_function_return_type = func.return_type
-                try:
-                    code += self.generate_function_body(func.body, indent=2)
-                finally:
-                    self.current_function_return_type = previous_return_type
-                code += "    }\n\n"
+                code += self.generate_shader_stage_function(func, shader_type)
             else:
                 code += self.generate_function(func, indent=1)
 
@@ -361,6 +375,134 @@ class RustToCrossGLConverter:
                 names.add(getattr(func, "name", None))
         names.discard(None)
         return names
+
+    def push_name_alias_scope(self, aliases=None):
+        self.name_alias_scopes.append(dict(aliases or {}))
+
+    def current_name_alias_scope(self):
+        if not self.name_alias_scopes:
+            self.push_name_alias_scope()
+        return self.name_alias_scopes[-1]
+
+    def pop_name_alias_scope(self):
+        if self.name_alias_scopes:
+            self.name_alias_scopes.pop()
+
+    def resolve_name_alias(self, name):
+        if not isinstance(name, str):
+            return name
+
+        for scope in reversed(self.name_alias_scopes):
+            alias = scope.get(name)
+            if alias is not None:
+                return alias
+        return name
+
+    def crossgl_identifier(self, name, forbidden=None):
+        if not isinstance(name, str) or not name:
+            return name
+
+        forbidden = set(forbidden or ())
+        if self.is_valid_crossgl_identifier(name) and name not in forbidden:
+            return name
+
+        base = re.sub(r"\W+", "_", name).strip("_") or "value"
+        if base[0].isdigit():
+            base = f"_{base}"
+
+        candidate = f"{base}_"
+        suffix = 1
+        while not self.is_valid_crossgl_identifier(candidate) or candidate in forbidden:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        return candidate
+
+    def is_valid_crossgl_identifier(self, name):
+        return (
+            self.is_plain_identifier(name) and name not in CROSSGL_RESERVED_IDENTIFIERS
+        )
+
+    def prepare_function_parameters(
+        self, params, struct_name=None, extra_forbidden=None
+    ):
+        original_names = {
+            param.name for param in params if getattr(param, "name", None)
+        }
+        extra_forbidden = set(extra_forbidden or ())
+        used_names = set()
+        aliases = {}
+        declarations = []
+        param_types = []
+
+        for param in params:
+            forbidden = (original_names - {param.name}) | used_names | extra_forbidden
+            name = self.crossgl_identifier(param.name, forbidden)
+            aliases[param.name] = name
+            used_names.add(name)
+            declarations.append(self.format_typed_declarator(param.vtype, name))
+            param_type = self.normalize_receiver_type(param.vtype, struct_name)
+            param_types.append((name, param_type))
+
+        return ", ".join(declarations), param_types, aliases
+
+    def local_aliasing_enabled(self):
+        return bool(self.local_binding_name_scopes)
+
+    def collect_simple_local_binding_names(self, statements):
+        names = set()
+
+        def visit_statement(stmt):
+            if isinstance(stmt, LetNode):
+                if isinstance(stmt.name, str):
+                    names.add(stmt.name)
+                for child in (stmt.value, stmt.else_body):
+                    visit(child)
+                return
+            if isinstance(stmt, IfNode):
+                visit(stmt.if_body)
+                for _, body in getattr(stmt, "if_chain", []) or []:
+                    visit(body)
+                for _, body in getattr(stmt, "else_if_chain", []) or []:
+                    visit(body)
+                visit(stmt.else_body)
+                return
+            if isinstance(stmt, (ForNode, WhileNode, LoopNode)):
+                pattern = getattr(stmt, "pattern", None)
+                if isinstance(pattern, str):
+                    names.add(pattern)
+                visit(getattr(stmt, "body", None))
+                return
+            if isinstance(stmt, MatchNode):
+                for arm in getattr(stmt, "arms", []) or []:
+                    visit(getattr(arm, "body", None))
+
+        def visit(node):
+            if node is None:
+                return
+            if isinstance(node, list):
+                for item in node:
+                    visit_statement(item)
+                return
+            if isinstance(node, BlockNode):
+                visit(node.statements)
+                return
+            visit_statement(node)
+
+        visit(statements)
+        return names
+
+    def declare_local_alias(self, name):
+        if not self.local_aliasing_enabled() or not isinstance(name, str):
+            return name
+
+        forbidden = set(self.local_binding_name_scopes[-1])
+        forbidden.discard(name)
+        for scope in self.name_alias_scopes:
+            forbidden.update(scope.values())
+
+        alias = self.crossgl_identifier(name, forbidden)
+        self.current_name_alias_scope()[name] = alias
+        return alias
 
     def collect_impl_method_names(self, ast):
         methods_by_type = {}
@@ -508,119 +650,182 @@ class RustToCrossGLConverter:
             func_name = func.name
 
         previous_return_type = self.current_function_return_type
+        previous_helpers = self.current_closure_helpers
+        self.current_closure_helpers = []
         self.current_function_return_type = func.return_type
         self.push_value_type_scope(param_types)
         try:
+            body_code = self.generate_function_body(func.body, indent=indent + 1)
+            helper_code = "".join(self.current_closure_helpers)
+            code += helper_code
             code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
-            code += self.generate_function_body(func.body, indent=indent + 1)
+            code += body_code
             code += f"{indent_str}}}\n\n"
         finally:
             self.current_function_return_type = previous_return_type
+            self.current_closure_helpers = previous_helpers
             self.pop_value_type_scope()
 
+        return code
+
+    def generate_shader_stage_function(self, func, shader_type):
+        """Render a Rust shader attribute as a named CrossGL stage entry."""
+        local_binding_names = self.collect_simple_local_binding_names(func.body)
+        params_str, param_types, name_aliases = self.prepare_function_parameters(
+            func.params,
+            extra_forbidden=local_binding_names,
+        )
+        return_type = self.map_type(func.return_type)
+        stage_name = self.crossgl_identifier(func.name)
+        stage_header = (
+            shader_type if stage_name == "main" else f"{shader_type} {stage_name}"
+        )
+
+        previous_return_type = self.current_function_return_type
+        previous_helpers = self.current_closure_helpers
+        self.current_closure_helpers = []
+        self.current_function_return_type = func.return_type
+        self.push_value_type_scope(param_types)
+        self.push_name_alias_scope(name_aliases)
+        self.local_binding_name_scopes.append(local_binding_names)
+        try:
+            body_code = self.generate_function_body(func.body, indent=3)
+            helper_code = "".join(self.current_closure_helpers)
+        finally:
+            self.current_function_return_type = previous_return_type
+            self.current_closure_helpers = previous_helpers
+            self.local_binding_name_scopes.pop()
+            self.pop_name_alias_scope()
+            self.pop_value_type_scope()
+
+        code = helper_code
+        code += f"    {stage_header} {{\n"
+        code += f"        {return_type} main({params_str}) {{\n"
+        code += body_code
+        code += "        }\n"
+        code += "    }\n\n"
         return code
 
     def generate_function_body(self, body, indent=1, loop_contexts=None):
         code = ""
         indent_str = "    " * indent
         loop_contexts = loop_contexts or []
+        scoped_aliases = self.local_aliasing_enabled()
+        if scoped_aliases:
+            self.push_name_alias_scope()
 
-        for stmt in body:
-            if isinstance(stmt, ConstNode):
-                code += self.generate_const_statement(stmt, indent)
-            elif isinstance(stmt, StaticNode):
-                code += self.generate_static_statement(stmt, indent)
-            elif isinstance(stmt, LetNode):
-                code += self.generate_let_statement(stmt, indent, loop_contexts)
-            elif isinstance(stmt, AssignmentNode):
-                code += self.generate_assignment_statement(stmt, indent, loop_contexts)
-            elif isinstance(stmt, ReturnNode):
-                if isinstance(stmt.value, LoopNode):
-                    code += self.generate_loop_expression_return(
-                        stmt.value, indent, loop_contexts
+        try:
+            for stmt in body:
+                if isinstance(stmt, ConstNode):
+                    code += self.generate_const_statement(stmt, indent)
+                elif isinstance(stmt, StaticNode):
+                    code += self.generate_static_statement(stmt, indent)
+                elif isinstance(stmt, LetNode):
+                    code += self.generate_let_statement(stmt, indent, loop_contexts)
+                elif isinstance(stmt, AssignmentNode):
+                    code += self.generate_assignment_statement(
+                        stmt, indent, loop_contexts
                     )
-                elif self.is_block_expression_node(stmt.value):
-                    code += self.generate_block_expression_return(
-                        stmt.value, indent, loop_contexts
+                elif isinstance(stmt, ReturnNode):
+                    if isinstance(stmt.value, LoopNode):
+                        code += self.generate_loop_expression_return(
+                            stmt.value, indent, loop_contexts
+                        )
+                    elif self.is_block_expression_node(stmt.value):
+                        code += self.generate_block_expression_return(
+                            stmt.value, indent, loop_contexts
+                        )
+                    elif isinstance(stmt.value, IfNode):
+                        code += self.generate_if_expression_return(
+                            stmt.value, indent, loop_contexts
+                        )
+                    elif isinstance(stmt.value, MatchNode):
+                        code += self.generate_match_expression_return(
+                            stmt.value, indent, loop_contexts
+                        )
+                    elif isinstance(stmt.value, MatchesMacroNode):
+                        code += self.generate_matches_expression_return(
+                            stmt.value, indent, loop_contexts
+                        )
+                    elif isinstance(stmt.value, AssignmentNode):
+                        code += self.generate_assignment_expression_result(
+                            stmt.value,
+                            indent,
+                            self.return_result_target,
+                            loop_contexts,
+                        )
+                    elif self.expression_contains_try(stmt.value):
+                        code += self.generate_expression_result(
+                            stmt.value,
+                            indent,
+                            self.return_result_target,
+                            loop_contexts,
+                        )
+                    elif self.expression_contains_inline_result_expression(stmt.value):
+                        prelude, value = self.generate_materialized_expression(
+                            stmt.value,
+                            indent,
+                            loop_contexts,
+                        )
+                        code += prelude
+                        code += f"{indent_str}return {value};\n"
+                    elif stmt.value:
+                        code += f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                    else:
+                        code += f"{indent_str}return;\n"
+                elif isinstance(stmt, IfNode):
+                    code += self.generate_if_statement(stmt, indent, loop_contexts)
+                elif isinstance(stmt, ForNode):
+                    code += self.generate_for_loop(stmt, indent, loop_contexts)
+                elif isinstance(stmt, WhileNode):
+                    code += self.generate_while_loop(stmt, indent, loop_contexts)
+                elif isinstance(stmt, LoopNode):
+                    code += self.generate_loop(
+                        stmt, indent, loop_contexts=loop_contexts
                     )
-                elif isinstance(stmt.value, IfNode):
-                    code += self.generate_if_expression_return(
-                        stmt.value, indent, loop_contexts
+                elif isinstance(stmt, MatchNode):
+                    code += self.generate_match_statement(stmt, indent, loop_contexts)
+                elif isinstance(stmt, BreakNode):
+                    code += self.generate_break_statement(stmt, indent, loop_contexts)
+                elif isinstance(stmt, ContinueNode):
+                    code += self.generate_continue_statement(
+                        stmt, indent, loop_contexts
                     )
-                elif isinstance(stmt.value, MatchNode):
-                    code += self.generate_match_expression_return(
-                        stmt.value, indent, loop_contexts
-                    )
-                elif isinstance(stmt.value, MatchesMacroNode):
-                    code += self.generate_matches_expression_return(
-                        stmt.value, indent, loop_contexts
-                    )
-                elif isinstance(stmt.value, AssignmentNode):
-                    code += self.generate_assignment_expression_result(
-                        stmt.value,
-                        indent,
-                        self.return_result_target,
-                        loop_contexts,
-                    )
-                elif self.expression_contains_try(stmt.value):
+                elif isinstance(stmt, FunctionCallNode):
                     code += self.generate_expression_result(
-                        stmt.value,
+                        stmt,
                         indent,
-                        self.return_result_target,
+                        None,
                         loop_contexts,
                     )
-                elif stmt.value:
-                    code += (
-                        f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                elif isinstance(stmt, BinaryOpNode):
+                    code += self.generate_expression_result(
+                        stmt,
+                        indent,
+                        None,
+                        loop_contexts,
                     )
+                elif isinstance(stmt, str):
+                    code += f"{indent_str}{stmt};\n"
                 else:
-                    code += f"{indent_str}return;\n"
-            elif isinstance(stmt, IfNode):
-                code += self.generate_if_statement(stmt, indent, loop_contexts)
-            elif isinstance(stmt, ForNode):
-                code += self.generate_for_loop(stmt, indent, loop_contexts)
-            elif isinstance(stmt, WhileNode):
-                code += self.generate_while_loop(stmt, indent, loop_contexts)
-            elif isinstance(stmt, LoopNode):
-                code += self.generate_loop(stmt, indent, loop_contexts=loop_contexts)
-            elif isinstance(stmt, MatchNode):
-                code += self.generate_match_statement(stmt, indent, loop_contexts)
-            elif isinstance(stmt, BreakNode):
-                code += self.generate_break_statement(stmt, indent, loop_contexts)
-            elif isinstance(stmt, ContinueNode):
-                code += self.generate_continue_statement(stmt, indent, loop_contexts)
-            elif isinstance(stmt, FunctionCallNode):
-                code += self.generate_expression_result(
-                    stmt,
-                    indent,
-                    None,
-                    loop_contexts,
-                )
-            elif isinstance(stmt, BinaryOpNode):
-                code += self.generate_expression_result(
-                    stmt,
-                    indent,
-                    None,
-                    loop_contexts,
-                )
-            elif isinstance(stmt, str):
-                code += f"{indent_str}{stmt};\n"
-            else:
-                code += self.generate_expression_result(
-                    stmt,
-                    indent,
-                    None,
-                    loop_contexts,
-                )
+                    code += self.generate_expression_result(
+                        stmt,
+                        indent,
+                        None,
+                        loop_contexts,
+                    )
 
-            if self.statement_needs_labeled_control_propagation(
-                stmt,
-                loop_contexts,
-            ):
-                code += self.generate_labeled_control_propagation(
+                if self.statement_needs_labeled_control_propagation(
+                    stmt,
                     loop_contexts,
-                    indent,
-                )
+                ):
+                    code += self.generate_labeled_control_propagation(
+                        loop_contexts,
+                        indent,
+                    )
+        finally:
+            if scoped_aliases:
+                self.pop_name_alias_scope()
 
         return code
 
@@ -668,16 +873,50 @@ class RustToCrossGLConverter:
             return self.generate_matches_expression_let(stmt, indent, loop_contexts)
         if isinstance(stmt.value, AssignmentNode):
             code = ""
+            target_name = self.declare_local_alias(stmt.name)
             if stmt.vtype:
-                code += f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
+                code += (
+                    f"{indent_str}"
+                    f"{self.format_typed_declarator(stmt.vtype, target_name)};\n"
+                )
             return code + self.generate_assignment_expression_result(
                 stmt.value,
                 indent,
-                stmt.name,
+                target_name,
                 loop_contexts,
             )
         if self.expression_contains_try(stmt.value):
             return self.generate_try_let_statement(stmt, indent, loop_contexts)
+
+        if self.expression_contains_inline_result_expression(stmt.value):
+            prelude, value_str = self.generate_materialized_expression(
+                stmt.value,
+                indent,
+                loop_contexts,
+            )
+            target_name = self.declare_local_alias(stmt.name)
+            if stmt.vtype:
+                self.add_value_type(target_name, stmt.vtype)
+                type_str = self.format_typed_declarator(stmt.vtype, target_name)
+                return prelude + f"{indent_str}{type_str} = {value_str};\n"
+
+            inferred_type = self.infer_value_type(stmt.value)
+            if inferred_type:
+                self.add_value_type(target_name, inferred_type)
+            mutability = "mut " if stmt.is_mutable else ""
+            return (
+                prelude + f"{indent_str}let {mutability}{target_name} = {value_str};\n"
+            )
+
+        if isinstance(stmt.value, ClosureNode):
+            helper_name = self.try_generate_closure_helper(
+                stmt.value,
+                context_name=stmt.name,
+            )
+            if helper_name is not None:
+                target_name = self.declare_local_alias(stmt.name)
+                mutability = "mut " if stmt.is_mutable else ""
+                return f"{indent_str}let {mutability}{target_name} = {helper_name};\n"
 
         if stmt.vtype:
             type_str = self.format_typed_declarator(stmt.vtype, stmt.name)
@@ -686,19 +925,23 @@ class RustToCrossGLConverter:
 
         if stmt.value:
             value_str = self.generate_expression(stmt.value)
+            target_name = self.declare_local_alias(stmt.name)
             if stmt.vtype:
-                self.add_value_type(stmt.name, stmt.vtype)
+                self.add_value_type(target_name, stmt.vtype)
+                type_str = self.format_typed_declarator(stmt.vtype, target_name)
                 return f"{indent_str}{type_str} = {value_str};\n"
             inferred_type = self.infer_value_type(stmt.value)
             if inferred_type:
-                self.add_value_type(stmt.name, inferred_type)
+                self.add_value_type(target_name, inferred_type)
             mutability = "mut " if stmt.is_mutable else ""
-            return f"{indent_str}let {mutability}{stmt.name} = {value_str};\n"
+            return f"{indent_str}let {mutability}{target_name} = {value_str};\n"
         else:
+            target_name = self.declare_local_alias(stmt.name)
             if stmt.vtype:
-                self.add_value_type(stmt.name, stmt.vtype)
+                self.add_value_type(target_name, stmt.vtype)
+                type_str = self.format_typed_declarator(stmt.vtype, target_name)
                 return f"{indent_str}{type_str};\n"
-            return f"{indent_str}{stmt.name};\n"
+            return f"{indent_str}{target_name};\n"
 
     def generate_let_else_statement(self, stmt, indent, loop_contexts=None):
         if stmt.value is None:
@@ -1561,6 +1804,13 @@ class RustToCrossGLConverter:
                 result_target=result_target,
                 loop_contexts=loop_contexts,
             )
+        if isinstance(expression, TryBlockNode):
+            return self.generate_try_block_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
         if isinstance(expression, IfNode):
             return self.generate_if_expression_result(
                 expression,
@@ -1604,6 +1854,20 @@ class RustToCrossGLConverter:
                 return prelude + f"{indent_str}{value};\n"
             return prelude
 
+        if self.expression_contains_inline_result_expression(expression):
+            prelude, value = self.generate_materialized_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+            if result_target is self.return_result_target:
+                return prelude + f"{indent_str}return {value};\n"
+            if result_target:
+                return prelude + f"{indent_str}{result_target} = {value};\n"
+            if value:
+                return prelude + f"{indent_str}{value};\n"
+            return prelude
+
         value = self.generate_expression(expression)
         if result_target is self.return_result_target:
             return f"{indent_str}return {value};\n"
@@ -1622,7 +1886,7 @@ class RustToCrossGLConverter:
                 f"{indent_str}{self.format_typed_declarator(stmt.vtype, stmt.name)};\n"
             )
         else:
-            code += f"{indent_str}{stmt.name};\n"
+            code += f"{indent_str}auto {stmt.name};\n"
 
         code += self.generate_expression_result(
             stmt.value,
@@ -1653,6 +1917,14 @@ class RustToCrossGLConverter:
             )
         if self.expression_contains_try(stmt.right):
             return self.generate_try_assignment_statement(stmt, indent, loop_contexts)
+        if self.expression_contains_inline_result_expression(stmt.right):
+            prelude, value = self.generate_materialized_expression(
+                stmt.right,
+                indent,
+                loop_contexts,
+            )
+            target = self.generate_expression(stmt.left)
+            return prelude + f"{indent_str}{target} {stmt.operator} {value};\n"
         return f"{indent_str}{self.generate_assignment(stmt)};\n"
 
     def generate_assignment_expression_result(
@@ -1698,6 +1970,17 @@ class RustToCrossGLConverter:
             value_name = self.next_transparent_block_value_name()
             code = f"{indent_str}auto {value_name};\n"
             code += self.generate_block_expression_result(
+                expression,
+                indent,
+                value_name,
+                loop_contexts,
+            )
+            return code, value_name
+
+        if isinstance(expression, TryBlockNode):
+            value_name = self.next_try_block_value_name()
+            code = f"{indent_str}auto {value_name};\n"
+            code += self.generate_try_block_expression_result(
                 expression,
                 indent,
                 value_name,
@@ -1849,9 +2132,6 @@ class RustToCrossGLConverter:
                 indent,
                 loop_contexts,
             )
-        if isinstance(expression, TryBlockNode):
-            return "", self.generate_try_block_expression(expression)
-
         return "", self.generate_expression(expression)
 
     def generate_try_range_bound(self, bound, indent, loop_contexts=None):
@@ -1881,6 +2161,16 @@ class RustToCrossGLConverter:
     def generate_try_subject(self, expression, indent, loop_contexts=None):
         indent_str = "    " * indent
         subject_name = self.next_try_subject_name()
+
+        if isinstance(expression, TryBlockNode):
+            code = f"{indent_str}auto {subject_name};\n"
+            code += self.generate_try_block_expression_result(
+                expression,
+                indent,
+                subject_name,
+                loop_contexts,
+            )
+            return subject_name, code
 
         if isinstance(
             expression,
@@ -2041,6 +2331,12 @@ class RustToCrossGLConverter:
             and len(args) == 1
             and isinstance(arg_nodes[0], ClosureNode)
         ):
+            helper_name = self.try_generate_closure_helper(
+                arg_nodes[0],
+                context_name=method_name,
+            )
+            if helper_name is not None:
+                return f"{method_name}({obj}, {helper_name})"
             return f"{method_name}({obj}, {args[0]})"
 
         if (
@@ -2048,6 +2344,12 @@ class RustToCrossGLConverter:
             and len(args) == 2
             and isinstance(arg_nodes[1], ClosureNode)
         ):
+            helper_name = self.try_generate_closure_helper(
+                arg_nodes[1],
+                context_name=method_name,
+            )
+            if helper_name is not None:
+                return f"fold({obj}, {args[0]}, {helper_name})"
             return f"fold({obj}, {args[0]}, {args[1]})"
 
         if self.is_swizzle_member(method_name) and not args:
@@ -2145,6 +2447,50 @@ class RustToCrossGLConverter:
 
         return f"lambda({{ {self.compact_generated_block(code)} }})()"
 
+    def generate_try_block_expression_result(
+        self,
+        try_block,
+        indent,
+        result_target,
+        loop_contexts=None,
+    ):
+        if result_target is self.return_result_target:
+            previous_return_type = self.current_function_return_type
+            self.current_function_return_type = previous_return_type or "Result"
+            try:
+                return self.generate_try_block_body_code(try_block.block, indent)
+            finally:
+                self.current_function_return_type = previous_return_type
+
+        if not result_target:
+            result_target = self.next_try_block_value_name()
+
+        indent_str = "    " * indent
+        previous_return_type = self.current_function_return_type
+        self.current_function_return_type = previous_return_type or "Result"
+        try:
+            block_code = self.generate_try_block_body_code(try_block.block, indent + 1)
+        finally:
+            self.current_function_return_type = previous_return_type
+
+        code = f"{indent_str}do {{\n"
+        code += self.rewrite_try_block_returns_to_target(block_code, result_target)
+        code += f"{indent_str}}} while (false);\n"
+        return code
+
+    def rewrite_try_block_returns_to_target(self, code, result_target):
+        rewritten = []
+        for line in code.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("return ") and stripped.endswith(";"):
+                indent = line[: len(line) - len(line.lstrip())]
+                value = stripped[len("return ") : -1]
+                rewritten.append(f"{indent}{result_target} = {value};")
+                rewritten.append(f"{indent}continue;")
+            else:
+                rewritten.append(line)
+        return "\n".join(rewritten) + ("\n" if code.endswith("\n") else "")
+
     def generate_try_block_body_code(self, block_node, indent=0):
         code = self.generate_function_body(block_node.statements, indent=indent)
         expression = self.get_block_expression(block_node)
@@ -2193,6 +2539,8 @@ class RustToCrossGLConverter:
         if expression is None:
             return False
         if isinstance(expression, TryNode):
+            return True
+        if isinstance(expression, TryBlockNode):
             return True
         if isinstance(expression, BinaryOpNode):
             return self.expression_contains_try(
@@ -2994,6 +3342,11 @@ class RustToCrossGLConverter:
     def next_transparent_block_value_name(self):
         name = f"_rust_block_value_{self.transparent_block_value_counter}"
         self.transparent_block_value_counter += 1
+        return name
+
+    def next_inline_expression_value_name(self):
+        name = f"_rust_expr_value_{self.inline_expression_value_counter}"
+        self.inline_expression_value_counter += 1
         return name
 
     def generate_match_if_chain(
@@ -4926,12 +5279,463 @@ class RustToCrossGLConverter:
 
         return contexts[-1]["result_target"]
 
+    def is_inline_result_expression(self, expression):
+        if isinstance(expression, (LoopNode, IfNode, MatchNode, AssignmentNode)):
+            return True
+
+        if self.is_block_expression_node(expression):
+            block_node = self.get_block_expression_node(expression)
+            if block_node is None:
+                return False
+            if block_node.statements:
+                return True
+            return self.expression_contains_inline_result_expression(
+                self.get_block_expression(block_node)
+            )
+
+        return False
+
+    def expression_contains_inline_result_expression(self, expression):
+        if expression is None:
+            return False
+
+        if self.is_inline_result_expression(expression):
+            return True
+
+        if isinstance(expression, BinaryOpNode):
+            return self.expression_contains_inline_result_expression(
+                expression.left
+            ) or self.expression_contains_inline_result_expression(expression.right)
+        if isinstance(expression, UnaryOpNode):
+            return self.expression_contains_inline_result_expression(expression.operand)
+        if isinstance(expression, FunctionCallNode):
+            return self.expression_contains_inline_result_expression(
+                expression.name
+            ) or any(
+                self.expression_contains_inline_result_expression(arg)
+                for arg in expression.args
+            )
+        if isinstance(expression, MemberAccessNode):
+            return self.expression_contains_inline_result_expression(expression.object)
+        if isinstance(expression, ArrayAccessNode):
+            return self.expression_contains_inline_result_expression(
+                expression.array
+            ) or self.expression_contains_inline_result_expression(expression.index)
+        if isinstance(expression, RangeNode):
+            return self.expression_contains_inline_result_expression(
+                expression.start
+            ) or self.expression_contains_inline_result_expression(expression.end)
+        if isinstance(expression, VectorConstructorNode):
+            return any(
+                self.expression_contains_inline_result_expression(arg)
+                for arg in expression.args
+            )
+        if isinstance(expression, TernaryOpNode):
+            return (
+                self.expression_contains_inline_result_expression(expression.condition)
+                or self.expression_contains_inline_result_expression(
+                    expression.true_expr
+                )
+                or self.expression_contains_inline_result_expression(
+                    expression.false_expr
+                )
+            )
+        if isinstance(expression, AwaitNode):
+            return self.expression_contains_inline_result_expression(
+                expression.expression
+            )
+        if isinstance(expression, CastNode):
+            return self.expression_contains_inline_result_expression(
+                expression.expression
+            )
+        if isinstance(expression, ReferenceNode):
+            return self.expression_contains_inline_result_expression(
+                expression.expression
+            )
+        if isinstance(expression, DereferenceNode):
+            return self.expression_contains_inline_result_expression(
+                expression.expression
+            )
+        if isinstance(expression, TupleNode):
+            return any(
+                self.expression_contains_inline_result_expression(elem)
+                for elem in expression.elements
+            )
+        if isinstance(expression, ArrayNode):
+            return any(
+                self.expression_contains_inline_result_expression(elem)
+                for elem in expression.elements
+            ) or self.expression_contains_inline_result_expression(expression.size)
+        if isinstance(expression, StructInitializationNode):
+            fields = (
+                expression.fields.items()
+                if isinstance(expression.fields, dict)
+                else expression.fields
+            )
+            return any(
+                self.expression_contains_inline_result_expression(field_value)
+                for _, field_value in fields
+            )
+        if isinstance(expression, MatchesMacroNode):
+            return self.expression_contains_inline_result_expression(
+                expression.expression
+            ) or self.expression_contains_inline_result_expression(expression.guard)
+        if isinstance(expression, LetPatternConditionNode):
+            return self.expression_contains_inline_result_expression(
+                expression.expression
+            )
+        if isinstance(expression, ConditionChainNode):
+            return any(
+                self.expression_contains_inline_result_expression(operand)
+                for operand in expression.operands
+            )
+
+        return False
+
+    def generate_materialized_expression(self, expression, indent, loop_contexts=None):
+        if self.is_inline_result_expression(expression):
+            return self.materialize_inline_result_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, BinaryOpNode):
+            if expression.op in {"&&", "||"}:
+                return self.generate_materialized_logical_expression(
+                    expression,
+                    indent,
+                    loop_contexts,
+                )
+            left_code, left = self.generate_materialized_expression(
+                expression.left,
+                indent,
+                loop_contexts,
+            )
+            right_code, right = self.generate_materialized_expression(
+                expression.right,
+                indent,
+                loop_contexts,
+            )
+            return left_code + right_code, f"({left} {expression.op} {right})"
+
+        if isinstance(expression, UnaryOpNode):
+            code, operand = self.generate_materialized_expression(
+                expression.operand,
+                indent,
+                loop_contexts,
+            )
+            return code, f"({expression.op}{operand})"
+
+        if isinstance(expression, FunctionCallNode):
+            return self.generate_materialized_function_call(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, MemberAccessNode):
+            code, obj = self.generate_materialized_expression(
+                expression.object,
+                indent,
+                loop_contexts,
+            )
+            return code, f"{obj}.{expression.member}"
+
+        if isinstance(expression, ArrayAccessNode):
+            array_code, array = self.generate_materialized_expression(
+                expression.array,
+                indent,
+                loop_contexts,
+            )
+            index_code, index = self.generate_materialized_expression(
+                expression.index,
+                indent,
+                loop_contexts,
+            )
+            return array_code + index_code, f"{array}[{index}]"
+
+        if isinstance(expression, RangeNode):
+            start_code, start = self.generate_materialized_optional_expression(
+                expression.start,
+                indent,
+                loop_contexts,
+            )
+            end_code, end = self.generate_materialized_optional_expression(
+                expression.end,
+                indent,
+                loop_contexts,
+            )
+            return start_code + end_code, self.format_range_expression(
+                start,
+                end,
+                expression.inclusive,
+            )
+
+        if isinstance(expression, VectorConstructorNode):
+            code, args = self.generate_materialized_expression_list(
+                expression.args,
+                indent,
+                loop_contexts,
+            )
+            type_name = self.map_type(expression.type_name)
+            return code, f"{type_name}({', '.join(args)})"
+
+        if isinstance(expression, TernaryOpNode):
+            return self.generate_materialized_ternary_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, AwaitNode):
+            return self.generate_materialized_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, CastNode):
+            code, value = self.generate_materialized_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+            target_type = self.map_type(expression.target_type)
+            return code, f"({target_type}){value}"
+
+        if isinstance(expression, ReferenceNode):
+            return self.generate_materialized_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, DereferenceNode):
+            return self.generate_materialized_expression(
+                expression.expression,
+                indent,
+                loop_contexts,
+            )
+
+        if isinstance(expression, TupleNode):
+            code, elements = self.generate_materialized_expression_list(
+                expression.elements,
+                indent,
+                loop_contexts,
+            )
+            return code, f"({', '.join(elements)})"
+
+        if isinstance(expression, ArrayNode):
+            code, elements = self.generate_materialized_expression_list(
+                expression.elements,
+                indent,
+                loop_contexts,
+            )
+            return code, f"{{{', '.join(elements)}}}"
+
+        if isinstance(expression, StructInitializationNode):
+            code = ""
+            fields = []
+            field_items = (
+                expression.fields.items()
+                if isinstance(expression.fields, dict)
+                else expression.fields
+            )
+            for field_name, field_value in field_items:
+                field_code, value = self.generate_materialized_expression(
+                    field_value,
+                    indent,
+                    loop_contexts,
+                )
+                code += field_code
+                fields.append(f"{field_name}: {value}")
+            return code, f"{expression.struct_name} {{ {', '.join(fields)} }}"
+
+        return "", self.generate_expression(expression)
+
+    def generate_materialized_optional_expression(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        if expression is None:
+            return "", ""
+        return self.generate_materialized_expression(expression, indent, loop_contexts)
+
+    def generate_materialized_expression_list(
+        self,
+        expressions,
+        indent,
+        loop_contexts=None,
+    ):
+        code = ""
+        values = []
+        for expression in expressions:
+            expression_code, value = self.generate_materialized_expression(
+                expression,
+                indent,
+                loop_contexts,
+            )
+            code += expression_code
+            values.append(value)
+        return code, values
+
+    def materialize_inline_result_expression(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+
+        if self.is_block_expression_node(expression):
+            block_node = self.get_block_expression_node(expression)
+            if not block_node.statements:
+                block_expression = self.get_block_expression(block_node)
+                if block_expression is None:
+                    return "", ""
+                return self.generate_materialized_expression(
+                    block_expression,
+                    indent,
+                    loop_contexts,
+                )
+
+        value_name = self.next_inline_expression_value_name()
+        code = f"{indent_str}auto {value_name};\n"
+        code += self.generate_expression_result(
+            expression,
+            indent,
+            value_name,
+            loop_contexts,
+        )
+        return code, value_name
+
+    def generate_materialized_logical_expression(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+        left_code, left = self.generate_materialized_expression(
+            expression.left,
+            indent,
+            loop_contexts,
+        )
+        result_name = self.next_inline_expression_value_name()
+        code = left_code
+        code += f"{indent_str}auto {result_name};\n"
+
+        if expression.op == "||":
+            code += f"{indent_str}if ({left}) {{\n"
+            code += f"{indent_str}    {result_name} = true;\n"
+            code += f"{indent_str}}} else {{\n"
+        else:
+            code += f"{indent_str}if (!{left}) {{\n"
+            code += f"{indent_str}    {result_name} = false;\n"
+            code += f"{indent_str}}} else {{\n"
+
+        right_code, right = self.generate_materialized_expression(
+            expression.right,
+            indent + 1,
+            loop_contexts,
+        )
+        code += right_code
+        code += f"{indent_str}    {result_name} = {right};\n"
+        code += f"{indent_str}}}\n"
+        return code, result_name
+
+    def generate_materialized_ternary_expression(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+        condition_code, condition = self.generate_materialized_expression(
+            expression.condition,
+            indent,
+            loop_contexts,
+        )
+        result_name = self.next_inline_expression_value_name()
+        code = condition_code
+        code += f"{indent_str}auto {result_name};\n"
+        code += f"{indent_str}if ({condition}) {{\n"
+        true_code, true_expr = self.generate_materialized_expression(
+            expression.true_expr,
+            indent + 1,
+            loop_contexts,
+        )
+        code += true_code
+        code += f"{indent_str}    {result_name} = {true_expr};\n"
+        code += f"{indent_str}}} else {{\n"
+        false_code, false_expr = self.generate_materialized_expression(
+            expression.false_expr,
+            indent + 1,
+            loop_contexts,
+        )
+        code += false_code
+        code += f"{indent_str}    {result_name} = {false_expr};\n"
+        code += f"{indent_str}}}\n"
+        return code, result_name
+
+    def generate_materialized_function_call(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        args_code, args = self.generate_materialized_expression_list(
+            expression.args,
+            indent,
+            loop_contexts,
+        )
+
+        if isinstance(expression.name, MemberAccessNode):
+            obj_code, obj = self.generate_materialized_expression(
+                expression.name.object,
+                indent,
+                loop_contexts,
+            )
+            method_call = self.format_method_call_parts(
+                expression.name.member,
+                obj,
+                args,
+                expression.args,
+            )
+            if method_call is not None:
+                return obj_code + args_code, method_call
+            return (
+                obj_code + args_code,
+                f"{obj}.{expression.name.member}({', '.join(args)})",
+            )
+
+        if isinstance(expression.name, str):
+            constructor = self.format_path_constructor_call_parts(
+                expression.name,
+                args,
+            )
+            if constructor is not None:
+                return args_code, constructor
+            func_name = self.map_function(expression.name)
+            return args_code, f"{func_name}({', '.join(args)})"
+
+        name_code, func_name = self.generate_materialized_expression(
+            expression.name,
+            indent,
+            loop_contexts,
+        )
+        return name_code + args_code, f"{func_name}({', '.join(args)})"
+
     def generate_expression(self, expr):
         """Render a Rust backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
-            return self.resolve_imported_module_path(self.normalize_rust_literal(expr))
+            value = self.resolve_imported_module_path(self.normalize_rust_literal(expr))
+            return self.resolve_name_alias(value)
         elif isinstance(expr, VariableNode):
-            return expr.name
+            return self.resolve_name_alias(expr.name)
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
@@ -4976,6 +5780,10 @@ class RustToCrossGLConverter:
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
+        elif isinstance(expr, (LoopNode, IfNode, MatchNode, AssignmentNode)):
+            return self.generate_inline_result_expression(expr)
+        elif self.is_block_expression_node(expr):
+            return self.generate_inline_block_expression(expr)
         elif isinstance(expr, MatchesMacroNode):
             return self.generate_matches_inline_condition(expr)
         elif isinstance(expr, ConditionChainNode):
@@ -4990,12 +5798,6 @@ class RustToCrossGLConverter:
             return self.generate_try_block_expression(expr)
         elif isinstance(expr, TryNode):
             return self.generate_try_unwrap(self.generate_expression(expr.expression))
-        elif self.is_block_expression_node(expr):
-            block_node = self.get_block_expression_node(expr)
-            expression = self.get_block_expression(block_node)
-            if expression:
-                return self.generate_expression(expression)
-            return ""
         elif isinstance(expr, CastNode):
             expression = self.generate_expression(expr.expression)
             target_type = self.map_type(expr.target_type)
@@ -5034,6 +5836,470 @@ class RustToCrossGLConverter:
             return str(expr).lower() if isinstance(expr, bool) else str(expr)
         else:
             return str(expr)
+
+    def generate_inline_result_expression(self, expression):
+        value_name = self.next_inline_expression_value_name()
+        code = f"auto {value_name};\n"
+        code += self.generate_expression_result(expression, 0, value_name)
+        code += f"return {value_name};\n"
+        return f"lambda({{ {self.compact_generated_block(code)} }})()"
+
+    def generate_inline_block_expression(self, expression):
+        block_node = self.get_block_expression_node(expression)
+        block_expression = self.get_block_expression(block_node)
+
+        if not block_node.statements:
+            if block_expression is None:
+                return ""
+            return self.generate_expression(block_expression)
+
+        return self.generate_inline_result_expression(expression)
+
+    def try_generate_closure_helper(self, closure, context_name=None):
+        if self.current_closure_helpers is None:
+            return None
+        if self.closure_helper_generation_depth:
+            return None
+        if not self.can_generate_closure_helper(closure):
+            return None
+        if self.closure_has_captures(closure):
+            return None
+
+        helper_name = self.next_closure_helper_name(context_name)
+        helper_code = self.generate_closure_helper_function(helper_name, closure)
+        self.current_closure_helpers.append(helper_code)
+        self.closure_helper_names.add(helper_name)
+        self.user_function_names.add(helper_name)
+        return helper_name
+
+    def can_generate_closure_helper(self, closure):
+        if not getattr(closure, "return_type", None):
+            return False
+        if self.expression_contains_try(closure.body):
+            return False
+        if self.closure_body_contains_unsupported_helper_node(closure.body):
+            return False
+
+        for param in closure.params:
+            if not param.param_type:
+                return False
+            if not self.is_helper_compatible_parameter_type(param.param_type):
+                return False
+            if not self.is_helper_supported_closure_parameter_pattern(param.pattern):
+                return False
+        return True
+
+    def is_helper_compatible_parameter_type(self, param_type):
+        mapped_type = self.map_type(param_type)
+        if not mapped_type:
+            return False
+        if mapped_type.startswith("(") or "->" in mapped_type:
+            return False
+        return True
+
+    def is_helper_supported_closure_parameter_pattern(self, pattern):
+        if self.is_discard_pattern(pattern):
+            return True
+        if isinstance(pattern, str):
+            return self.is_plain_identifier(pattern)
+        if isinstance(pattern, ReferenceNode):
+            return self.is_helper_supported_closure_parameter_pattern(
+                pattern.expression
+            )
+        if isinstance(pattern, MatchBindingPatternNode):
+            return self.is_plain_identifier(
+                pattern.name
+            ) and self.is_helper_supported_closure_parameter_pattern(pattern.pattern)
+        if isinstance(pattern, TupleNode):
+            return all(
+                self.is_helper_supported_closure_parameter_pattern(element)
+                for element in pattern.elements
+            )
+        if isinstance(pattern, MatchStructPatternNode):
+            return all(
+                self.is_helper_supported_closure_parameter_pattern(field_pattern)
+                for _, field_pattern in pattern.fields
+            )
+        if isinstance(pattern, FunctionCallNode):
+            return all(
+                self.is_helper_supported_closure_parameter_pattern(arg)
+                for arg in pattern.args
+            )
+        return False
+
+    def closure_body_contains_unsupported_helper_node(self, node):
+        unsupported_types = (
+            ClosureNode,
+            TryNode,
+            TryBlockNode,
+            AwaitNode,
+            LoopNode,
+            ForNode,
+            WhileNode,
+            MatchNode,
+            MatchesMacroNode,
+            LetPatternConditionNode,
+            ConditionChainNode,
+        )
+        if node is None:
+            return False
+        if isinstance(node, unsupported_types):
+            return True
+        if isinstance(node, (str, int, float, bool)):
+            return False
+        if isinstance(node, list):
+            return any(
+                self.closure_body_contains_unsupported_helper_node(item)
+                for item in node
+            )
+        if self.is_block_expression_node(node):
+            block_node = self.get_block_expression_node(node)
+            return self.closure_body_contains_unsupported_helper_node(
+                block_node.statements
+            ) or self.closure_body_contains_unsupported_helper_node(
+                self.get_block_expression(block_node)
+            )
+        if isinstance(node, LetNode):
+            return self.closure_body_contains_unsupported_helper_node(node.value)
+        if isinstance(node, ReturnNode):
+            return self.closure_body_contains_unsupported_helper_node(node.value)
+        if isinstance(node, IfNode):
+            return (
+                self.closure_body_contains_unsupported_helper_node(node.condition)
+                or self.closure_body_contains_unsupported_helper_node(node.if_body)
+                or self.closure_body_contains_unsupported_helper_node(node.else_body)
+            )
+        if isinstance(node, BinaryOpNode):
+            return self.closure_body_contains_unsupported_helper_node(
+                node.left
+            ) or self.closure_body_contains_unsupported_helper_node(node.right)
+        if isinstance(node, UnaryOpNode):
+            return self.closure_body_contains_unsupported_helper_node(node.operand)
+        if isinstance(node, FunctionCallNode):
+            return self.closure_body_contains_unsupported_helper_node(node.name) or any(
+                self.closure_body_contains_unsupported_helper_node(arg)
+                for arg in node.args
+            )
+        if isinstance(node, MemberAccessNode):
+            return self.closure_body_contains_unsupported_helper_node(node.object)
+        if isinstance(node, AssignmentNode):
+            return self.closure_body_contains_unsupported_helper_node(
+                node.left
+            ) or self.closure_body_contains_unsupported_helper_node(node.right)
+        if isinstance(node, CastNode):
+            return self.closure_body_contains_unsupported_helper_node(node.expression)
+        if isinstance(node, ReferenceNode):
+            return self.closure_body_contains_unsupported_helper_node(node.expression)
+        if isinstance(node, DereferenceNode):
+            return self.closure_body_contains_unsupported_helper_node(node.expression)
+        if isinstance(node, ArrayAccessNode):
+            return self.closure_body_contains_unsupported_helper_node(
+                node.array
+            ) or self.closure_body_contains_unsupported_helper_node(node.index)
+        if isinstance(node, VectorConstructorNode):
+            return any(
+                self.closure_body_contains_unsupported_helper_node(arg)
+                for arg in node.args
+            )
+        if isinstance(node, TupleNode):
+            return any(
+                self.closure_body_contains_unsupported_helper_node(element)
+                for element in node.elements
+            )
+        if isinstance(node, ArrayNode):
+            return any(
+                self.closure_body_contains_unsupported_helper_node(element)
+                for element in node.elements
+            ) or self.closure_body_contains_unsupported_helper_node(node.size)
+        if isinstance(node, StructInitializationNode):
+            return any(
+                self.closure_body_contains_unsupported_helper_node(value)
+                for _, value in node.fields
+            )
+        if isinstance(node, TernaryOpNode):
+            return (
+                self.closure_body_contains_unsupported_helper_node(node.condition)
+                or self.closure_body_contains_unsupported_helper_node(node.true_expr)
+                or self.closure_body_contains_unsupported_helper_node(node.false_expr)
+            )
+        return False
+
+    def closure_has_captures(self, closure):
+        local_names = set()
+        for param in closure.params:
+            self.add_closure_local_bindings(param.pattern, local_names)
+        captures = set()
+        self.collect_closure_identifier_captures(
+            closure.body,
+            local_names,
+            captures,
+        )
+        return bool(captures)
+
+    def collect_closure_identifier_captures(self, node, local_names, captures):
+        if node is None or isinstance(node, (int, float, bool)):
+            return
+        if isinstance(node, str):
+            if self.is_capturable_identifier(node) and node not in local_names:
+                captures.add(node)
+            return
+        if isinstance(node, list):
+            for item in node:
+                self.collect_closure_identifier_captures(item, local_names, captures)
+            return
+        if self.is_block_expression_node(node):
+            block_node = self.get_block_expression_node(node)
+            block_locals = set(local_names)
+            for statement in block_node.statements:
+                self.collect_closure_identifier_captures(
+                    statement,
+                    block_locals,
+                    captures,
+                )
+            self.collect_closure_identifier_captures(
+                self.get_block_expression(block_node),
+                block_locals,
+                captures,
+            )
+            return
+        if isinstance(node, LetNode):
+            self.collect_closure_identifier_captures(
+                node.value,
+                local_names,
+                captures,
+            )
+            self.add_closure_local_bindings(node.name, local_names)
+            return
+        if isinstance(node, ReturnNode):
+            self.collect_closure_identifier_captures(
+                node.value,
+                local_names,
+                captures,
+            )
+            return
+        if isinstance(node, IfNode):
+            self.collect_closure_identifier_captures(
+                node.condition,
+                local_names,
+                captures,
+            )
+            self.collect_closure_identifier_captures(
+                node.if_body,
+                set(local_names),
+                captures,
+            )
+            self.collect_closure_identifier_captures(
+                node.else_body,
+                set(local_names),
+                captures,
+            )
+            return
+        if isinstance(node, BinaryOpNode):
+            self.collect_closure_identifier_captures(node.left, local_names, captures)
+            self.collect_closure_identifier_captures(node.right, local_names, captures)
+            return
+        if isinstance(node, UnaryOpNode):
+            self.collect_closure_identifier_captures(
+                node.operand, local_names, captures
+            )
+            return
+        if isinstance(node, FunctionCallNode):
+            if isinstance(node.name, MemberAccessNode):
+                self.collect_closure_identifier_captures(
+                    node.name,
+                    local_names,
+                    captures,
+                )
+            elif isinstance(node.name, str):
+                if (
+                    node.name in local_names
+                    or not self.is_closure_allowed_callable(node.name)
+                ) and self.is_capturable_identifier(node.name):
+                    if node.name not in local_names:
+                        captures.add(node.name)
+            else:
+                self.collect_closure_identifier_captures(
+                    node.name,
+                    local_names,
+                    captures,
+                )
+            for arg in node.args:
+                self.collect_closure_identifier_captures(arg, local_names, captures)
+            return
+        if isinstance(node, MemberAccessNode):
+            self.collect_closure_identifier_captures(node.object, local_names, captures)
+            return
+        if isinstance(node, AssignmentNode):
+            self.collect_closure_identifier_captures(node.left, local_names, captures)
+            self.collect_closure_identifier_captures(node.right, local_names, captures)
+            return
+        if isinstance(node, CastNode):
+            self.collect_closure_identifier_captures(
+                node.expression,
+                local_names,
+                captures,
+            )
+            return
+        if isinstance(node, ReferenceNode):
+            self.collect_closure_identifier_captures(
+                node.expression,
+                local_names,
+                captures,
+            )
+            return
+        if isinstance(node, DereferenceNode):
+            self.collect_closure_identifier_captures(
+                node.expression,
+                local_names,
+                captures,
+            )
+            return
+        if isinstance(node, ArrayAccessNode):
+            self.collect_closure_identifier_captures(node.array, local_names, captures)
+            self.collect_closure_identifier_captures(node.index, local_names, captures)
+            return
+        if isinstance(node, VectorConstructorNode):
+            for arg in node.args:
+                self.collect_closure_identifier_captures(arg, local_names, captures)
+            return
+        if isinstance(node, TupleNode):
+            for element in node.elements:
+                self.collect_closure_identifier_captures(
+                    element,
+                    local_names,
+                    captures,
+                )
+            return
+        if isinstance(node, ArrayNode):
+            for element in node.elements:
+                self.collect_closure_identifier_captures(
+                    element,
+                    local_names,
+                    captures,
+                )
+            self.collect_closure_identifier_captures(node.size, local_names, captures)
+            return
+        if isinstance(node, StructInitializationNode):
+            for _, value in node.fields:
+                self.collect_closure_identifier_captures(value, local_names, captures)
+            return
+        if isinstance(node, TernaryOpNode):
+            self.collect_closure_identifier_captures(
+                node.condition,
+                local_names,
+                captures,
+            )
+            self.collect_closure_identifier_captures(
+                node.true_expr,
+                local_names,
+                captures,
+            )
+            self.collect_closure_identifier_captures(
+                node.false_expr,
+                local_names,
+                captures,
+            )
+
+    def add_closure_local_bindings(self, pattern, local_names):
+        if isinstance(pattern, str):
+            if self.is_plain_identifier(pattern) and not self.is_discard_pattern(
+                pattern
+            ):
+                local_names.add(pattern)
+            return
+
+        for name in self.collect_pattern_binding_names(pattern):
+            local_names.add(name)
+
+    def is_capturable_identifier(self, value):
+        if not isinstance(value, str):
+            return False
+        if "::" in value:
+            return False
+        if value in {"true", "false", "None", "Some", "Ok", "Err"}:
+            return False
+        return self.is_plain_identifier(value)
+
+    def is_closure_allowed_callable(self, name):
+        if not isinstance(name, str):
+            return False
+        base_name = name.rsplit("::", 1)[-1]
+        if base_name in self.user_function_names:
+            return True
+        if base_name in self.closure_helper_names:
+            return True
+        if base_name in self.type_map:
+            return True
+        if base_name in {"Some", "Ok", "Err"}:
+            return True
+        return base_name[:1].isupper()
+
+    def is_plain_identifier(self, value):
+        return isinstance(value, str) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", value)
+
+    def next_closure_helper_name(self, context_name=None):
+        context = self.sanitize_closure_helper_context(context_name)
+        while True:
+            if context:
+                name = f"_rust_closure_{context}_{self.closure_helper_counter}"
+            else:
+                name = f"_rust_closure_{self.closure_helper_counter}"
+            self.closure_helper_counter += 1
+            if (
+                name not in self.user_function_names
+                and name not in self.closure_helper_names
+            ):
+                return name
+
+    def sanitize_closure_helper_context(self, context_name):
+        if not context_name:
+            return ""
+        context = re.sub(r"[^A-Za-z0-9_]+", "_", str(context_name)).strip("_")
+        if not context:
+            return ""
+        if context[0].isdigit():
+            context = f"_{context}"
+        return context
+
+    def generate_closure_helper_function(self, helper_name, closure):
+        parameter_infos = [
+            self.prepare_closure_parameter(param) for param in closure.params
+        ]
+        params = [info["declarator"] for info in parameter_infos]
+        param_types = [
+            (info["subject"], param.param_type)
+            for info, param in zip(parameter_infos, closure.params)
+        ]
+        pattern_params = [
+            (info["subject"], info["pattern"])
+            for info in parameter_infos
+            if info["pattern"] is not None
+        ]
+        return_type = self.map_type(closure.return_type)
+        previous_return_type = self.current_function_return_type
+        self.current_function_return_type = closure.return_type
+        self.closure_helper_generation_depth += 1
+        self.push_value_type_scope(param_types)
+        try:
+            if pattern_params:
+                body = self.generate_closure_pattern_parameter_body(
+                    pattern_params,
+                    0,
+                    2,
+                    closure.body,
+                )
+            else:
+                body = self.generate_closure_body_code(closure.body, indent=2)
+        finally:
+            self.pop_value_type_scope()
+            self.closure_helper_generation_depth -= 1
+            self.current_function_return_type = previous_return_type
+
+        return (
+            f"    {return_type} {helper_name}({', '.join(params)}) {{\n"
+            f"{body}"
+            "    }\n\n"
+        )
 
     def generate_closure_expression(self, closure):
         parameter_infos = [
@@ -5346,6 +6612,37 @@ class RustToCrossGLConverter:
 
         method_name = expr.name.member
         obj = self.generate_expression(expr.name.object)
+
+        if (
+            method_name in {"map", "filter", "for_each", "any", "all"}
+            and len(expr.args) == 1
+            and isinstance(expr.args[0], ClosureNode)
+        ):
+            helper_name = self.try_generate_closure_helper(
+                expr.args[0],
+                context_name=method_name,
+            )
+            if helper_name is not None:
+                return f"{method_name}({obj}, {helper_name})"
+            return f"{method_name}({obj}, {self.generate_expression(expr.args[0])})"
+
+        if (
+            method_name == "fold"
+            and len(expr.args) == 2
+            and isinstance(expr.args[1], ClosureNode)
+        ):
+            initial_value = self.generate_expression(expr.args[0])
+            helper_name = self.try_generate_closure_helper(
+                expr.args[1],
+                context_name=method_name,
+            )
+            if helper_name is not None:
+                return f"fold({obj}, {initial_value}, {helper_name})"
+            return (
+                f"fold({obj}, {initial_value}, "
+                f"{self.generate_expression(expr.args[1])})"
+            )
+
         args = [self.generate_expression(arg) for arg in expr.args]
         return self.format_method_call_parts(method_name, obj, args, expr.args)
 

@@ -721,6 +721,92 @@ def test_function_call(shader, expected_output):
     assert expected_output in generated_code
 
 
+def test_lambda_call_materializes_local_mojo_functions_for_typed_parameters():
+    code = """
+    shader LambdaShader {
+        compute {
+            void main() {
+                let folded = fold(values, 0, lambda(int acc, int x, (acc + x)));
+                let mapped = map(colors, lambda(vec3 color, { return color; }));
+                let genericVector = map(colors, lambda(vec3<f32> color, color));
+                let always = lambda(true);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_lambda_0(acc: Int32, x: Int32) -> Int32:" in generated_code
+    assert "return (acc + x)" in generated_code
+    assert "var folded = fold(values, 0, _crossgl_lambda_0)" in generated_code
+    assert (
+        "fn _crossgl_lambda_1(color: SIMD[DType.float32, 4]) -> "
+        "SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert "var mapped = map(colors, _crossgl_lambda_1)" in generated_code
+    assert (
+        "fn _crossgl_lambda_2(color: SIMD[DType.float32, 4]) -> "
+        "SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert "var genericVector = map(colors, _crossgl_lambda_2)" in generated_code
+    assert "fn _crossgl_lambda_3() -> Bool:" in generated_code
+    assert "return True" in generated_code
+    assert "var always = _crossgl_lambda_3" in generated_code
+    assert "lambda(" not in generated_code
+
+
+def test_lambda_call_preserves_unsupported_mojo_lambda_shapes():
+    code = """
+    shader LambdaFallbackShader {
+        compute {
+            void main() {
+                let mapped = map(values, lambda(x, (x + 1)));
+                let generic = map(values, lambda(Result<i32, i32> value, { return value; }));
+                let tupled = map(values, lambda((i32, i32) pair, { return pair; }));
+                let qualified = map(values, lambda(const int value, value));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "lambda(x, (x + 1))" in generated_code
+    assert "lambda(Result<i32, i32> value, { return value; })" in generated_code
+    assert "lambda((i32, i32) pair, { return pair; })" in generated_code
+    assert "lambda(const int value, value)" in generated_code
+    assert "_crossgl_lambda_" not in generated_code
+
+
+def test_lambda_call_materializes_before_mojo_assignment_statement():
+    code = """
+    shader LambdaAssignmentShader {
+        compute {
+            void main() {
+                int folded = 0;
+                folded = fold(values, 0, lambda(int acc, int x, (acc + x)));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    helper = "fn _crossgl_lambda_0(acc: Int32, x: Int32) -> Int32:"
+    assignment = "folded = fold(values, 0, _crossgl_lambda_0)"
+    assert helper in generated_code
+    assert assignment in generated_code
+    assert generated_code.index(helper) < generated_code.index(assignment)
+    assert "lambda(" not in generated_code
+
+
 def test_builtin_function_call_names_are_mapped():
     code = """
     shader main {
@@ -804,6 +890,101 @@ def test_user_defined_mix_function_is_not_lowered_to_lerp():
     assert "fn mix(x: Float32, y: Float32, t: Float32) -> Float32:" in generated_code
     assert "var adjusted: Float32 = mix(0.0, 1.0, 0.25)" in generated_code
     assert "var adjusted: Float32 = lerp(0.0, 1.0, 0.25)" not in generated_code
+
+
+def test_bool_scalar_mix_lowers_to_mojo_select():
+    code = """
+    shader main {
+        compute {
+            float nextX() {
+                return 0.0;
+            }
+
+            float nextY() {
+                return 1.0;
+            }
+
+            bool nextFlag() {
+                return true;
+            }
+
+            void main() {
+                bool flag = true;
+                float literal = mix(0.0, 1.0, flag);
+                float complexValue = mix(nextX(), nextY(), nextFlag());
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var literal: Float32 = (1.0 if flag else 0.0)" in generated_code
+    assert (
+        "var complexValue: Float32 = "
+        "(nextY() if nextFlag() else nextX())" in generated_code
+    )
+    assert "lerp(0.0, 1.0, flag)" not in generated_code
+    assert "lerp(nextX(), nextY(), nextFlag())" not in generated_code
+    assert "mix(0.0, 1.0, flag)" not in generated_code
+    assert "mix(nextX(), nextY(), nextFlag())" not in generated_code
+
+
+def test_bool_vector_mix_and_ternary_lower_to_mojo_lane_select():
+    code = """
+    bvec3 makeMask() {
+        return bvec3(true, false, true);
+    }
+
+    vec3 makeA() {
+        return vec3(1.0, 2.0, 3.0);
+    }
+
+    vec3 makeB() {
+        return vec3(4.0, 5.0, 6.0);
+    }
+
+    void probe(bvec3 mask, vec3 a, vec3 b) {
+        vec3 selected = mix(a, b, mask);
+        vec3 ternarySelected = mask ? b : a;
+        vec3 complexSelected = mix(makeA(), makeB(), makeMask());
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "fn _crossgl_select_f32_3_4(mask: SIMD[DType.bool, 4], "
+        "true_value: SIMD[DType.float32, 4], "
+        "false_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert (
+        "return SIMD[DType.float32, 4]("
+        "true_value[0] if mask[0] else false_value[0], "
+        "true_value[1] if mask[1] else false_value[1], "
+        "true_value[2] if mask[2] else false_value[2], 0.0)" in generated_code
+    )
+    assert (
+        "var selected: SIMD[DType.float32, 4] = "
+        "_crossgl_select_f32_3_4(mask, b, a)" in generated_code
+    )
+    assert (
+        "var ternarySelected: SIMD[DType.float32, 4] = "
+        "_crossgl_select_f32_3_4(mask, b, a)" in generated_code
+    )
+    assert (
+        "var complexSelected: SIMD[DType.float32, 4] = "
+        "_crossgl_select_f32_3_4(makeMask(), makeB(), makeA())" in generated_code
+    )
+    assert "lerp(a, b, mask)" not in generated_code
+    assert "lerp(makeA(), makeB(), makeMask())" not in generated_code
+    assert "(b if mask else a)" not in generated_code
+    assert "mix(a, b, mask)" not in generated_code
 
 
 def test_fract_scalar_builtin_lowers_to_helper():

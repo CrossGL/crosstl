@@ -88,14 +88,14 @@ shader GenericPatternMatching {
     }
     
     // Advanced generic functions with pattern matching
-    generic<T: Numeric> fn safe_divide(a: T, b: T) -> Result<T, MathError> {
+    generic<T: Numeric + Copy> fn safe_divide(a: T, b: T) -> Result<T, MathError> {
         match b {
             zero if zero == T::zero() => Result::Err(MathError::DivisionByZero),
             _ => Result::Ok(a / b)
         }
     }
     
-    generic<T: Numeric> fn vector_operation(
+    generic<T: Numeric + Copy> fn vector_operation(
         v1: Vec3<T>, 
         v2: Vec3<T>, 
         op: VectorOp
@@ -192,7 +192,7 @@ shader GenericPatternMatching {
     }
     
     // Recursive function with pattern matching
-    generic<T: Numeric> fn matrix_determinant(matrix: Matrix3x3<T>) -> T {
+    generic<T: Numeric + Copy> fn matrix_determinant(matrix: Matrix3x3<T>) -> T {
         match matrix {
             Matrix3x3 { row0, row1, row2 } => {
                 // 3x3 determinant calculation using pattern matching
@@ -234,18 +234,74 @@ shader GenericPatternMatching {
         
         current
     }
+
+    struct Geometry {
+        center: vec3,
+        normal: vec3
+    }
+
+    struct Material {
+        albedo: vec3,
+        roughness: float
+    }
+
+    struct LightingEnvironment {
+        direction: vec3,
+        intensity: float
+    }
+
+    struct RenderedFrame {
+        color: vec4,
+        depth: float
+    }
+
+    fn validate_material(material: Material) -> Result<int, ShaderError> {
+        match material.roughness >= 0.0 {
+            true => Result::Ok(1),
+            false => Result::Err(ShaderError::InvalidState)
+        }
+    }
+
+    fn transform_geometry(shape: Geometry, transform: mat4) -> Geometry {
+        let transformed_center = transform * vec4(shape.center, 1.0);
+        Geometry {
+            center: transformed_center.xyz,
+            normal: shape.normal
+        }
+    }
+
+    fn apply_lighting(
+        shape: Geometry,
+        material: Material,
+        lighting: LightingEnvironment
+    ) -> Result<RenderedFrame, MathError> {
+        let light_strength = max(0.0, dot(shape.normal, normalize(lighting.direction))) * lighting.intensity;
+        let shaded_color = material.albedo * light_strength;
+
+        Result::Ok(RenderedFrame {
+            color: vec4(shaded_color, 1.0),
+            depth: 1.0
+        })
+    }
+
+    fn validate_state(state: RenderState<float>) -> bool {
+        match state.material_id {
+            Option::Some(id) => id >= 0,
+            Option::None => true
+        }
+    }
     
     // Complex nested pattern matching
     fn process_render_command(command: RenderCommand) -> Result<RenderOutput, ShaderError> {
         match command {
             RenderCommand::Draw { 
                 geometry, 
-                material: Some(material), 
+                material: Option::Some(material),
                 transform,
                 lighting
             } => {
                 // Process drawing with material
-                match material.validate() {
+                match validate_material(material) {
                     Result::Ok(_) => {
                         let transformed_geometry = transform_geometry(geometry, transform);
                         let lit_result = apply_lighting(transformed_geometry, material, lighting);
@@ -259,7 +315,7 @@ shader GenericPatternMatching {
                 }
             },
             
-            RenderCommand::Draw { geometry, material: None, .. } => {
+            RenderCommand::Draw { geometry, material: Option::None, .. } => {
                 Result::Err(ShaderError::InvalidState)
             },
             
@@ -325,7 +381,6 @@ shader GenericPatternMatching {
             let world_normal = normalize(normal_matrix * input.normal);
             
             // Using our generic vector operations
-            let position_vec3 = Vec3 { x: world_pos.x, y: world_pos.y, z: world_pos.z };
             let normal_vec3 = Vec3 { x: world_normal.x, y: world_normal.y, z: world_normal.z };
             
             // Pattern match on potential errors
@@ -384,4 +439,4 @@ shader GenericPatternMatching {
             vec4(final_color, tex_color.a * input.color.a)
         }
     }
-} 
+}

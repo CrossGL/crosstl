@@ -1,5 +1,7 @@
 """CrossGL-to-Mojo code generator."""
 
+import re
+
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
@@ -148,6 +150,7 @@ class MojoCodeGen:
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
         self.required_constructor_helpers = {}
+        self.required_select_helpers = set()
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
         self.required_fract_helpers = set()
@@ -158,6 +161,8 @@ class MojoCodeGen:
         self.for_contexts = []
         self.loop_depth = 0
         self.do_while_counter = 0
+        self.lambda_counter = 0
+        self.expression_prelude_stack = []
         self.type_mapping = {
             # Scalar Types
             "void": "None",
@@ -253,6 +258,7 @@ class MojoCodeGen:
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
         self.required_constructor_helpers = {}
+        self.required_select_helpers = set()
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
         self.required_fract_helpers = set()
@@ -262,6 +268,8 @@ class MojoCodeGen:
         self.for_contexts = []
         self.loop_depth = 0
         self.do_while_counter = 0
+        self.lambda_counter = 0
+        self.expression_prelude_stack = []
         self.collect_function_return_types(ast)
 
         header = "# Generated Mojo Shader Code\n"
@@ -717,6 +725,29 @@ class MojoCodeGen:
             return self.assignment_target_root(getattr(target, "vector_expr", None))
         return None
 
+    def generate_expression_with_prelude(self, expr, indent):
+        self.expression_prelude_stack.append({"indent": indent, "lines": []})
+        try:
+            expression = self.generate_expression(expr)
+            prelude = "".join(self.expression_prelude_stack[-1]["lines"])
+            return prelude, expression
+        finally:
+            self.expression_prelude_stack.pop()
+
+    def generate_assignment_statement(self, node, indent):
+        indent_str = "    " * indent
+        left = self.generate_expression(node.left)
+        left_type = self.expression_result_type(node.left)
+        if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
+            left_type
+        ):
+            prelude = ""
+            right = self.generate_array_literal_expression(node.right, left_type)
+        else:
+            prelude, right = self.generate_expression_with_prelude(node.right, indent)
+        op = self.map_operator(node.operator)
+        return f"{prelude}{indent_str}{left} {op} {right}\n"
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL statement as Mojo code."""
         indent_str = "    " * indent
@@ -732,8 +763,6 @@ class MojoCodeGen:
                     and "index=" in vtype_str
                 ):
                     # This is likely an array declaration
-                    import re
-
                     array_match = re.search(r"array=(\w+).*?index=(\w+)", vtype_str)
                     if array_match:
                         array_match.group(1)
@@ -755,6 +784,7 @@ class MojoCodeGen:
                     and var_type is not None
                     and self.is_array_type_name(var_type)
                 ):
+                    prelude = ""
                     init_expr = self.generate_array_literal_expression(
                         stmt.initial_value, var_type
                     )
@@ -767,10 +797,16 @@ class MojoCodeGen:
                     )
                     if increment_init is not None:
                         return increment_init
-                    init_expr = self.generate_expression(stmt.initial_value)
+                    prelude, init_expr = self.generate_expression_with_prelude(
+                        stmt.initial_value,
+                        indent,
+                    )
                 if var_type is None:
-                    return f"{indent_str}var {stmt.name} = {init_expr}\n"
-                return f"{indent_str}var {stmt.name}: {self.map_type(var_type)} = {init_expr}\n"
+                    return f"{prelude}{indent_str}var {stmt.name} = {init_expr}\n"
+                return (
+                    f"{prelude}{indent_str}var {stmt.name}: "
+                    f"{self.map_type(var_type)} = {init_expr}\n"
+                )
 
             var_type = var_type or "float"
             self.register_variable_type(stmt.name, var_type)
@@ -789,7 +825,7 @@ class MojoCodeGen:
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
-            return f"{indent_str}{self.generate_assignment(stmt)}\n"
+            return self.generate_assignment_statement(stmt, indent)
         elif isinstance(stmt, IfNode):
             return self.generate_if(stmt, indent)
         elif isinstance(stmt, ForNode):
@@ -819,7 +855,11 @@ class MojoCodeGen:
                 )
                 return f"{indent_str}return " f"{return_value}\n"
             else:
-                return f"{indent_str}return {self.generate_expression(stmt.value)}\n"
+                prelude, return_value = self.generate_expression_with_prelude(
+                    stmt.value,
+                    indent,
+                )
+                return f"{prelude}{indent_str}return {return_value}\n"
         elif isinstance(stmt, BreakNode):
             context = self.active_do_while_context()
             if context:
@@ -840,9 +880,9 @@ class MojoCodeGen:
             return f"{indent_str}# Unhandled ArrayAccessNode: {stmt}\n"
         else:
             # Handle expressions that may be used as statements
-            expr_result = self.generate_expression(stmt)
+            prelude, expr_result = self.generate_expression_with_prelude(stmt, indent)
             if expr_result.strip():
-                return f"{indent_str}{expr_result}\n"
+                return f"{prelude}{indent_str}{expr_result}\n"
             else:
                 return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
 
@@ -1212,6 +1252,207 @@ class MojoCodeGen:
 
         return code
 
+    def generate_lambda_expression(self, args):
+        """Materialize supported CrossGL pseudo-lambdas as local Mojo functions."""
+        if not args or not self.expression_prelude_stack:
+            return None
+
+        params = []
+        param_types = {}
+        for arg in args[:-1]:
+            param = self.generate_lambda_parameter(arg)
+            if param is None:
+                return None
+            type_name, param_name, mapped_type = param
+            params.append((type_name, param_name, mapped_type))
+            param_types[param_name] = type_name
+
+        body_arg = args[-1]
+        return_expr = self.lambda_return_expression(body_arg)
+        return_type = self.infer_lambda_return_type(return_expr, param_types)
+        if return_type is None:
+            return None
+
+        helper_name = self.next_lambda_helper_name()
+        signature_params = ", ".join(
+            f"{param_name}: {mapped_type}" for _, param_name, mapped_type in params
+        )
+        return_type_mapped = self.map_type(return_type)
+
+        context = self.expression_prelude_stack[-1]
+        indent = context["indent"]
+        indent_str = "    " * indent
+        body = self.generate_lambda_function_body(body_arg, indent + 1)
+        if body is None:
+            return None
+
+        context["lines"].append(
+            f"{indent_str}fn {helper_name}({signature_params}) -> "
+            f"{return_type_mapped}:\n{body}"
+        )
+        return helper_name
+
+    def generate_lambda_parameter(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        typed_param = self.split_lambda_typed_parameter(raw)
+        if typed_param is None:
+            return None
+
+        type_name, param_name = typed_param
+        mapped_type = self.lambda_parameter_type(type_name)
+        if mapped_type is None:
+            return None
+        return type_name, param_name, mapped_type
+
+    def generate_lambda_function_body(self, arg, indent):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if not raw:
+            return None
+
+        indent_str = "    " * indent
+        if raw.startswith("{") and raw.endswith("}"):
+            inner = raw[1:-1].strip()
+            if not inner:
+                return None
+            lines = []
+            for statement in inner.split(";"):
+                statement = statement.strip()
+                if not statement:
+                    continue
+                if statement.startswith("return "):
+                    value = self.translate_lambda_raw_expression(
+                        statement[len("return ") :].strip()
+                    )
+                    lines.append(f"{indent_str}return {value}\n")
+                else:
+                    lines.append(
+                        f"{indent_str}{self.translate_lambda_raw_expression(statement)}\n"
+                    )
+            return "".join(lines) if lines else None
+
+        expression = self.translate_lambda_raw_expression(raw)
+        return f"{indent_str}return {expression}\n"
+
+    def lambda_raw_argument_text(self, arg):
+        if hasattr(arg, "name"):
+            return arg.name
+        if isinstance(arg, str):
+            return arg
+        return self.generate_expression(arg)
+
+    def split_lambda_typed_parameter(self, raw):
+        if not raw or ":" in raw:
+            return None
+        if any(char in raw for char in "{}()"):
+            return None
+
+        parts = raw.rsplit(None, 1)
+        if len(parts) != 2:
+            return None
+
+        type_name, param_name = parts
+        type_name = self.canonical_lambda_type(type_name)
+        if not param_name.isidentifier():
+            return None
+        if not type_name:
+            return None
+        return type_name, param_name
+
+    def canonical_lambda_type(self, type_name):
+        if "<" in type_name or ">" in type_name:
+            return "".join(type_name.split())
+        return type_name
+
+    def lambda_parameter_type(self, type_name):
+        if any(char.isspace() for char in type_name):
+            return None
+        if any(char in type_name for char in "{},;[]()"):
+            return None
+
+        mapped_type = self.map_type(type_name)
+        if "<" in type_name or ">" in type_name:
+            if mapped_type == type_name:
+                return None
+        return mapped_type
+
+    def lambda_return_expression(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if not raw:
+            return None
+        if raw.startswith("{") and raw.endswith("}"):
+            inner = raw[1:-1].strip()
+            for statement in inner.split(";"):
+                statement = statement.strip()
+                if statement.startswith("return "):
+                    return statement[len("return ") :].strip()
+            return None
+        return raw
+
+    def infer_lambda_return_type(self, return_expr, param_types):
+        if not return_expr:
+            return None
+
+        stripped = self.strip_wrapping_parentheses(return_expr.strip())
+        literal_type = self.lambda_literal_type(stripped)
+        if literal_type is not None:
+            return literal_type
+
+        if re.fullmatch(r"[A-Za-z_]\w*", stripped):
+            return param_types.get(stripped) or self.variable_types.get(stripped)
+
+        referenced_types = {
+            type_name
+            for name, type_name in param_types.items()
+            if re.search(rf"\b{re.escape(name)}\b", stripped)
+        }
+        if len(referenced_types) == 1:
+            return next(iter(referenced_types))
+        return None
+
+    def lambda_literal_type(self, value):
+        if value in {"true", "false", "True", "False"}:
+            return "bool"
+        if re.fullmatch(r"[+-]?\d+", value):
+            return "int"
+        if re.fullmatch(r"[+-]?(\d+\.\d*|\.\d+)([eE][+-]?\d+)?", value):
+            return "float"
+        return None
+
+    def strip_wrapping_parentheses(self, expression):
+        while expression.startswith("(") and expression.endswith(")"):
+            inner = expression[1:-1].strip()
+            if not inner:
+                break
+            depth = 0
+            wraps = True
+            for index, char in enumerate(expression):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0 and index != len(expression) - 1:
+                        wraps = False
+                        break
+            if not wraps:
+                break
+            expression = inner
+        return expression
+
+    def translate_lambda_raw_expression(self, expression):
+        translated = expression.strip()
+        translated = re.sub(r"\btrue\b", "True", translated)
+        translated = re.sub(r"\bfalse\b", "False", translated)
+        translated = translated.replace("&&", " and ")
+        translated = translated.replace("||", " or ")
+        return translated
+
+    def next_lambda_helper_name(self):
+        while True:
+            helper_name = f"_crossgl_lambda_{self.lambda_counter}"
+            self.lambda_counter += 1
+            if helper_name not in self.function_return_types:
+                return helper_name
+
     def generate_expression(self, expr):
         """Render a CrossGL expression as Mojo expression syntax."""
         if isinstance(expr, str):
@@ -1269,6 +1510,11 @@ class MojoCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
 
+            if func_name == "lambda":
+                lambda_expr = self.generate_lambda_expression(expr.args)
+                if lambda_expr is not None:
+                    return lambda_expr
+
             if self.is_user_defined_function(func_name):
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{callee}({args})"
@@ -1281,6 +1527,10 @@ class MojoCodeGen:
                 saturate_call = self.generate_saturate_call(expr.args)
                 if saturate_call is not None:
                     return saturate_call
+            if func_name == "mix":
+                bool_mix_call = self.generate_bool_mix_call(expr.args)
+                if bool_mix_call is not None:
+                    return bool_mix_call
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -1306,6 +1556,11 @@ class MojoCodeGen:
                 )
             return f"{obj}.{expr.member}"
         elif isinstance(expr, TernaryOpNode):
+            bool_vector_select = self.generate_bool_vector_select_expression(
+                expr.condition, expr.true_expr, expr.false_expr
+            )
+            if bool_vector_select is not None:
+                return bool_vector_select
             condition = self.generate_expression(expr.condition)
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)
@@ -1506,6 +1761,54 @@ class MojoCodeGen:
 
         arg_expr = self.generate_expression(args[0])
         return f"clamp({arg_expr}, 0.0, 1.0)"
+
+    def generate_bool_mix_call(self, args):
+        if len(args) != 3:
+            return None
+
+        factor_type = self.expression_result_type(args[2])
+        factor_info = self.vector_type_info(factor_type)
+        if factor_info is not None:
+            if factor_info[0] != "DType.bool":
+                return None
+            return self.generate_bool_vector_select_expression(
+                args[2], args[1], args[0]
+            )
+
+        if self.expression_mojo_dtype(args[2]) != "DType.bool":
+            return None
+
+        condition = self.generate_expression(args[2])
+        true_value = self.generate_expression(args[1])
+        false_value = self.generate_expression(args[0])
+        return f"({true_value} if {condition} else {false_value})"
+
+    def generate_bool_vector_select_expression(
+        self, condition_expr, true_expr, false_expr
+    ):
+        condition_info = self.vector_type_info(
+            self.expression_result_type(condition_expr)
+        )
+        if condition_info is None or condition_info[0] != "DType.bool":
+            return None
+
+        true_info = self.vector_type_info(self.expression_result_type(true_expr))
+        false_info = self.vector_type_info(self.expression_result_type(false_expr))
+        if (
+            true_info is None
+            or false_info is None
+            or true_info[:3] != false_info[:3]
+            or condition_info[1] != true_info[1]
+        ):
+            return None
+
+        dtype, source_width, storage_width, _ = true_info
+        helper_name = self.select_helper_name(dtype, source_width, storage_width)
+        self.required_select_helpers.add((dtype, source_width, storage_width))
+        condition = self.generate_expression(condition_expr)
+        true_value = self.generate_expression(true_expr)
+        false_value = self.generate_expression(false_expr)
+        return f"{helper_name}({condition}, {true_value}, {false_value})"
 
     def is_scalar_integer_type(self, type_name):
         if type_name is None or self.vector_type_info(type_name) is not None:
@@ -1715,6 +2018,7 @@ class MojoCodeGen:
             and not self.required_splat_helpers
             and not self.required_swizzle_helpers
             and not self.required_constructor_helpers
+            and not self.required_select_helpers
             and not self.required_matrix_types
             and not self.required_matrix_constructor_helpers
             and not self.required_fract_helpers
@@ -1742,6 +2046,7 @@ class MojoCodeGen:
             or self.required_splat_helpers
             or self.required_swizzle_helpers
             or self.required_constructor_helpers
+            or self.required_select_helpers
             or self.required_matrix_constructor_helpers
         ):
             code += "# CrossGL vector helpers\n"
@@ -1755,6 +2060,8 @@ class MojoCodeGen:
             code += self.generate_constructor_helper(
                 self.required_constructor_helpers[key]
             )
+        for key in sorted(self.required_select_helpers):
+            code += self.generate_select_helper(key)
         for key in sorted(self.required_matrix_constructor_helpers):
             code += self.generate_matrix_constructor_helper(
                 self.required_matrix_constructor_helpers[key]
@@ -1836,6 +2143,30 @@ class MojoCodeGen:
         op_name = MOJO_VECTOR_ARITHMETIC_OPS[op]
         dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
         return f"_crossgl_vec3_{op_name}_{dtype_suffix}_{helper_kind}"
+
+    def generate_select_helper(self, key):
+        dtype, source_width, storage_width = key
+        _, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        mask_type = f"SIMD[DType.bool, {storage_width}]"
+        components = [
+            f"true_value[{index}] if mask[{index}] else false_value[{index}]"
+            for index in range(source_width)
+        ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        helper_name = self.select_helper_name(dtype, source_width, storage_width)
+        code = (
+            f"fn {helper_name}(mask: {mask_type}, true_value: {vector_type}, "
+            f"false_value: {vector_type}) -> {vector_type}:\n"
+        )
+        code += f"    return {vector_type}({', '.join(components)})\n\n"
+        return code
+
+    def select_helper_name(self, dtype, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_select_{dtype_suffix}_{source_width}_{storage_width}"
 
     def generate_vec3_splat_helper(self, dtype):
         scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]

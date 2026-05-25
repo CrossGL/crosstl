@@ -921,6 +921,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         raw_args = getattr(node, "args", getattr(node, "arguments", []))
         args = [self.visit(arg) for arg in raw_args]
 
+        if func_name == "lambda":
+            return self.generate_lambda_expression(raw_args)
+
         is_user_function = self.is_user_defined_function(func_name)
         if not is_user_function:
             resource_call = self.generate_resource_call(func_name, raw_args, args)
@@ -1014,6 +1017,67 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def generate_lambda_expression(self, args):
+        """Render CrossGL's pseudo-lambda as a HIP device lambda."""
+        if not args:
+            return "[&] __device__ () {}"
+
+        params = ", ".join(self.generate_lambda_parameter(arg) for arg in args[:-1])
+        body = self.generate_lambda_body(args[-1])
+        return f"[&] __device__ ({params}) {body}"
+
+    def generate_lambda_parameter(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        typed_param = self.split_lambda_typed_parameter(raw)
+        if typed_param is None:
+            param_name = self.lambda_fallback_parameter_name(raw)
+            return f"auto {param_name}" if param_name else "auto"
+
+        type_name, param_name = typed_param
+        mapped_type = self.lambda_parameter_type(type_name)
+        return f"{mapped_type} {param_name}"
+
+    def generate_lambda_body(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if raw.startswith("{") and raw.endswith("}"):
+            return raw
+        if raw:
+            return f"{{ return {raw}; }}"
+        return "{}"
+
+    def lambda_raw_argument_text(self, arg):
+        if isinstance(arg, IdentifierNode):
+            return arg.name
+        if isinstance(arg, str):
+            return arg
+        return self.visit(arg)
+
+    def split_lambda_typed_parameter(self, raw):
+        if not raw:
+            return None
+        if any(char in raw for char in "{}()"):
+            return None
+        parts = raw.rsplit(None, 1)
+        if len(parts) != 2:
+            return None
+        type_name, param_name = parts
+        if not param_name.isidentifier():
+            return None
+        return type_name, param_name
+
+    def lambda_parameter_type(self, type_name):
+        if "<" in type_name or ">" in type_name:
+            return "auto"
+        return self.map_type(type_name)
+
+    def lambda_fallback_parameter_name(self, raw):
+        if not raw:
+            return ""
+        candidate = raw.rsplit(None, 1)[-1]
+        if candidate.isidentifier():
+            return candidate
+        return raw
 
     def generate_vector_constructor_args(self, vector_info, raw_args, args):
         """Flatten vector arguments passed to HIP make_* constructors."""
@@ -1143,115 +1207,20 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.helper_functions[helper_name] = helper
         return helper_name
 
-    def generate_min_max_call(self, func_name, raw_args, args):
-        left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
-        right_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
-        if not left_info and not right_info:
-            return None
-
-        if left_info and right_info:
-            if len(left_info["components"]) != len(right_info["components"]):
-                return None
-            helper_name = self.require_vector_min_max_helper(
-                left_info,
-                func_name,
-                "vector",
-            )
-        elif left_info:
-            helper_name = self.require_vector_min_max_helper(
-                left_info,
-                func_name,
-                "scalar_right",
-            )
-        else:
-            helper_name = self.require_vector_min_max_helper(
-                right_info,
-                func_name,
-                "scalar_left",
-            )
-
-        if helper_name is None:
-            return None
-        return f"{helper_name}({args[0]}, {args[1]})"
-
-    def require_vector_min_max_helper(self, vector_info, func_name, operand_shape):
-        component_type = vector_info["component_type"]
-        if component_type == "bool":
-            return None
-
-        vector_type = vector_info["type"]
-        scalar_type = self.vector_scalar_parameter_type(vector_info)
-        helper_name = f"cgl_{vector_type}_{func_name}"
-        if operand_shape == "scalar_right":
-            helper_name += "_scalar"
-        elif operand_shape == "scalar_left":
-            helper_name = f"cgl_scalar_{func_name}_{vector_type}"
-
-        if helper_name in self.helper_functions:
-            return helper_name
-
-        components = vector_info["components"]
-        constructor = vector_info["constructor"]
-        if operand_shape == "vector":
-            params = f"{vector_type} lhs, {vector_type} rhs"
-            args = [
-                self.format_min_max_component(
-                    func_name,
-                    component_type,
-                    f"lhs.{component}",
-                    f"rhs.{component}",
-                )
-                for component in components
-            ]
-        elif operand_shape == "scalar_right":
-            params = f"{vector_type} lhs, {scalar_type} rhs"
-            args = [
-                self.format_min_max_component(
-                    func_name,
-                    component_type,
-                    f"lhs.{component}",
-                    "rhs",
-                )
-                for component in components
-            ]
-        else:
-            params = f"{scalar_type} lhs, {vector_type} rhs"
-            args = [
-                self.format_min_max_component(
-                    func_name,
-                    component_type,
-                    "lhs",
-                    f"rhs.{component}",
-                )
-                for component in components
-            ]
-
-        helper = (
-            f"__device__ inline {vector_type} {helper_name}({params})\n"
-            "{\n"
-            f"    return {constructor}({', '.join(args)});\n"
-            "}"
-        )
-        self.helper_functions[helper_name] = helper
-        return helper_name
-
-    def format_min_max_component(self, func_name, component_type, left, right):
-        if component_type == "float":
-            intrinsic = "fminf" if func_name == "min" else "fmaxf"
-            return f"{intrinsic}({left}, {right})"
-        if component_type == "double":
-            intrinsic = "fmin" if func_name == "min" else "fmax"
-            return f"{intrinsic}({left}, {right})"
-
-        operator = "<" if func_name == "min" else ">"
-        return f"(({left}) {operator} ({right}) ? ({left}) : ({right}))"
-
     def generate_clamp_call(self, raw_args, args):
         value_type = self.expression_result_type(raw_args[0])
         value_info = self.vector_type_info(value_type)
         if not value_info:
+            scalar_type = self.clamp_scalar_type(value_type)
+            scalar_call = self.generate_scalar_clamp_single_eval_call(
+                scalar_type,
+                raw_args,
+                args,
+            )
+            if scalar_call is not None:
+                return scalar_call
             return self.format_clamp_component(
-                self.clamp_scalar_type(value_type),
+                scalar_type,
                 args[0],
                 args[1],
                 args[2],
@@ -1303,6 +1272,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         factor_info = self.vector_type_info(factor_type)
 
         if not left_info and not right_info and not factor_info:
+            scalar_bool_mix = self.lower_bool_scalar_mix_operation(
+                raw_args[0],
+                args[0],
+                raw_args[1],
+                args[1],
+                raw_args[2],
+                args[2],
+            )
+            if scalar_bool_mix is not None:
+                return scalar_bool_mix
+            scalar_mix_call = self.generate_scalar_mix_single_eval_call(
+                raw_args,
+                args,
+            )
+            if scalar_mix_call is not None:
+                return scalar_mix_call
             return self.format_mix_component(args[0], args[1], args[2])
 
         if left_info is None or right_info is None:
@@ -1312,6 +1297,20 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             or left_info["component_type"] != right_info["component_type"]
         ):
             return None
+
+        bool_mix = self.lower_bool_vector_mix_operation(
+            raw_args[0],
+            args[0],
+            raw_args[1],
+            args[1],
+            raw_args[2],
+            args[2],
+            left_info,
+            right_info,
+            factor_info,
+        )
+        if bool_mix is not None:
+            return bool_mix
 
         if factor_info is not None and (
             len(factor_info["components"]) != len(left_info["components"])
@@ -1851,7 +1850,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return member_access
 
     def generate_vector_swizzle(self, node, object_expr):
-        vector_info = self.vector_type_info(self.expression_result_type(node.object))
+        object_node = getattr(node, "object_expr", getattr(node, "object", None))
+        vector_info = self.vector_type_info(self.expression_result_type(object_node))
         if vector_info is None:
             return None
 
@@ -1883,6 +1883,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         result_info = self.vector_type_info(result_type)
         if result_info is None:
             return None
+
+        swizzle_call = self.generate_vector_swizzle_single_eval_call(
+            result_info,
+            vector_info,
+            object_node,
+            object_expr,
+            components,
+        )
+        if swizzle_call is not None:
+            return swizzle_call
 
         args = [f"{object_expr}.{component}" for component in components]
         return f"{result_info['constructor']}({', '.join(args)})"

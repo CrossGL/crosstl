@@ -24,6 +24,7 @@ from crosstl.backend.CUDA.CudaAst import (
     TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
+    VariableNode,
 )
 
 
@@ -335,6 +336,42 @@ class TestCudaParser:
         )
         assert isinstance(duration_call.args[0], BinaryOpNode)
         assert body[4].value.op == "<"
+
+    def test_device_lambda_expression_parsing(self):
+        """Test CUDA device lambdas parse into CrossGL pseudo-lambda calls."""
+        code = """
+        void host() {
+            auto folded = fold(values, 0,
+                [&] __device__ (int acc, int x) { return (acc + x); });
+            auto mapped = map(colors,
+                [] __device__ (float3 color) -> float3 {
+                    prepare(color);
+                    return color;
+                });
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        folded_lambda = body[0].value.args[2]
+        assert isinstance(folded_lambda, FunctionCallNode)
+        assert folded_lambda.name == "lambda"
+        assert [(arg.vtype, arg.name) for arg in folded_lambda.args[:-1]] == [
+            ("int", "acc"),
+            ("int", "x"),
+        ]
+        assert isinstance(folded_lambda.args[-1], BinaryOpNode)
+
+        mapped_lambda = body[1].value.args[1]
+        assert isinstance(mapped_lambda, FunctionCallNode)
+        assert mapped_lambda.name == "lambda"
+        assert isinstance(mapped_lambda.args[0], VariableNode)
+        assert mapped_lambda.args[0].vtype == "float3"
+        assert mapped_lambda.args[0].name == "color"
+        assert mapped_lambda.args[-1] == "{ prepare(color); return color; }"
 
     def test_std_vector_host_buffer_parsing(self):
         """Test scoped template host vector declarations and methods"""

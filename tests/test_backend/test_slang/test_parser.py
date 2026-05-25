@@ -5,10 +5,12 @@ from crosstl.backend.slang import SlangParser
 from crosstl.backend.slang.SlangAst import (
     ArrayAccessNode,
     AssignmentNode,
+    BinaryOpNode,
     BreakNode,
     CallNode,
     CaseNode,
     ContinueNode,
+    DiscardNode,
     DoWhileNode,
     ForNode,
     FunctionCallNode,
@@ -127,6 +129,130 @@ def test_for_initializer_parses_uint_and_bool_declarations():
     assert bool_loop.init.left.name == "done"
 
 
+def test_increment_decrement_expression_parsing():
+    code = """
+    void main(){
+        for (int i = 0; i < 4; i++) {
+        }
+        j--;
+        ++k;
+        --items[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "main").body
+    loop = body[0]
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.update, UnaryOpNode)
+    assert loop.update.op == "POST_INCREMENT"
+    assert loop.update.operand.name == "i"
+
+    assert isinstance(body[1], UnaryOpNode)
+    assert body[1].op == "POST_DECREMENT"
+    assert body[1].operand.name == "j"
+
+    assert isinstance(body[2], UnaryOpNode)
+    assert body[2].op == "PRE_INCREMENT"
+    assert body[2].operand.name == "k"
+
+    assert isinstance(body[3], UnaryOpNode)
+    assert body[3].op == "PRE_DECREMENT"
+    assert isinstance(body[3].operand, ArrayAccessNode)
+
+
+def test_postfix_update_rejects_call_target():
+    code = """
+    void main(){
+        getValue()++;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    with pytest.raises(SyntaxError, match="Invalid postfix update target"):
+        parse_code(tokens)
+
+
+def test_for_initializer_uses_shared_declaration_parsing():
+    code = """
+    void main(Buffer<float> source){
+        for (const uint i = 0; i < 4; i = i + 1) {
+        }
+        for (Counter cursor = Counter(0); cursor.value < 4; cursor.value += 1) {
+        }
+        for (Buffer<float> view = source; view.count < 4; view.count += 1) {
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loops = find_function(ast, "main").body
+
+    qualified_loop = loops[0]
+    custom_loop = loops[1]
+    generic_loop = loops[2]
+
+    assert isinstance(qualified_loop, ForNode)
+    assert qualified_loop.init.left.qualifiers == ["const"]
+    assert qualified_loop.init.left.vtype == "uint"
+
+    assert isinstance(custom_loop, ForNode)
+    assert custom_loop.init.left.vtype == "Counter"
+    assert custom_loop.init.left.name == "cursor"
+
+    assert isinstance(generic_loop, ForNode)
+    assert generic_loop.init.left.vtype == "Buffer<float>"
+    assert generic_loop.init.left.name == "view"
+
+
+def test_for_optional_clauses_parse_as_empty_slots():
+    code = """
+    void main(){
+        for (; ; ) {
+            break;
+        }
+        for (int i = 0; ; ) {
+            break;
+        }
+        for (; i < 4; ) {
+            break;
+        }
+        for (; ; i = i + 1) {
+            break;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loops = find_function(ast, "main").body
+
+    empty_loop = loops[0]
+    init_only_loop = loops[1]
+    condition_only_loop = loops[2]
+    update_only_loop = loops[3]
+
+    assert isinstance(empty_loop, ForNode)
+    assert empty_loop.init is None
+    assert empty_loop.condition is None
+    assert empty_loop.update is None
+
+    assert isinstance(init_only_loop.init, AssignmentNode)
+    assert init_only_loop.condition is None
+    assert init_only_loop.update is None
+
+    assert condition_only_loop.init is None
+    assert isinstance(condition_only_loop.condition, BinaryOpNode)
+    assert condition_only_loop.update is None
+
+    assert update_only_loop.init is None
+    assert update_only_loop.condition is None
+    assert isinstance(update_only_loop.update, AssignmentNode)
+
+
 def test_break_continue_statement_parsing():
     code = """
     void main(){
@@ -145,6 +271,23 @@ def test_break_continue_statement_parsing():
     assert isinstance(loop, ForNode)
     assert isinstance(loop.body[0], BreakNode)
     assert isinstance(loop.body[1], ContinueNode)
+
+
+def test_discard_statement_parsing():
+    code = """
+    float4 main(float alpha) {
+        if (alpha < 0.5) {
+            discard;
+        }
+        return float4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    discard = find_function(ast, "main").body[0].if_body[0]
+
+    assert isinstance(discard, DiscardNode)
 
 
 def test_switch_statement_parsing():
@@ -175,6 +318,60 @@ def test_switch_statement_parsing():
     assert isinstance(switch.cases[0].body[1], BreakNode)
     assert len(switch.default_case) == 1
     assert isinstance(switch.default_case[0], AssignmentNode)
+
+
+def test_switch_default_before_case_preserves_order_metadata():
+    code = """
+    void main() {
+        int mode = 0;
+        switch (mode) {
+            default:
+                mode = 2;
+            case 0:
+                mode = 1;
+                break;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    switch = find_function(ast, "main").body[1]
+
+    assert len(switch.cases) == 1
+    assert len(switch.default_case) == 1
+    assert [case.value for case in switch.ordered_cases] == [None, "0"]
+    assert switch.ordered_cases[0].body is switch.default_case
+
+
+def test_lambda_expression_parsing():
+    code = """
+    void main() {
+        float folded = fold(values, 0, (int acc, int x) => (acc + x));
+        float mapped = map(colors, (float3 color) => { return color; });
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    folded = function.body[0]
+    mapped = function.body[1]
+
+    folded_lambda = folded.right.args[2]
+    assert isinstance(folded_lambda, FunctionCallNode)
+    assert folded_lambda.name == "lambda"
+    assert folded_lambda.args[0].vtype == "int"
+    assert folded_lambda.args[0].name == "acc"
+    assert folded_lambda.args[1].vtype == "int"
+    assert folded_lambda.args[1].name == "x"
+    assert isinstance(folded_lambda.args[2], BinaryOpNode)
+
+    mapped_lambda = mapped.right.args[1]
+    assert mapped_lambda.name == "lambda"
+    assert mapped_lambda.args[0].vtype == "float3"
+    assert mapped_lambda.args[0].name == "color"
+    assert mapped_lambda.args[1] == "{ return color; }"
 
 
 def test_for_update_parses_array_and_member_assignment_targets():
@@ -264,6 +461,26 @@ def test_logical_not_parsing():
     assert isinstance(value, UnaryOpNode)
     assert value.op == "!"
     assert value.operand.name == "disabled"
+
+
+def test_logical_and_keeps_equality_operands_grouped():
+    code = """
+    void main(bool a, bool b, bool c, bool d) {
+        bool bothEqual = a == b && c == d;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    assignment = find_function(ast, "main").body[0]
+    expression = assignment.right
+
+    assert isinstance(expression, BinaryOpNode)
+    assert expression.op == "&&"
+    assert isinstance(expression.left, BinaryOpNode)
+    assert expression.left.op == "=="
+    assert isinstance(expression.right, BinaryOpNode)
+    assert expression.right.op == "=="
 
 
 def test_while_parsing():
@@ -398,6 +615,8 @@ def test_bound_cbuffer_parsing():
     cbuffer Camera : register(b0) {
         float4x4 viewProj;
         float4 tint[2];
+        float weights[];
+        float4x4 transforms[2][3];
     };
     """
     tokens = tokenize_code(code)
@@ -406,9 +625,13 @@ def test_bound_cbuffer_parsing():
 
     assert cbuffer.name == "Camera"
     assert cbuffer.register == "b0"
-    assert [(member.vtype, member.name) for member in cbuffer.members] == [
-        ("float4x4", "viewProj"),
-        ("float4", "tint[2]"),
+    assert [
+        (member.vtype, member.name, member.array_sizes) for member in cbuffer.members
+    ] == [
+        ("float4x4", "viewProj", []),
+        ("float4", "tint", ["2"]),
+        ("float", "weights", [None]),
+        ("float4x4", "transforms", ["2", "3"]),
     ]
 
 
@@ -427,6 +650,60 @@ def test_global_resource_array_parsing():
         ("SamplerState", "samplers", [None]),
     ]
     assert ast.global_vars[1].register == "t0"
+
+
+def test_local_and_parameter_array_declarator_parsing():
+    code = """
+    float bump(float values[2], int idx) {
+        float local[2];
+        float grid[2][3];
+        return values[idx];
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "bump")
+
+    assert [
+        (param.vtype, param.name, param.array_sizes) for param in function.params
+    ] == [
+        ("float", "values", ["2"]),
+        ("int", "idx", []),
+    ]
+    assert isinstance(function.body[0], VariableNode)
+    assert function.body[0].name == "local"
+    assert function.body[0].array_sizes == ["2"]
+    assert isinstance(function.body[1], VariableNode)
+    assert function.body[1].name == "grid"
+    assert function.body[1].array_sizes == ["2", "3"]
+    assert isinstance(function.body[2].value, ArrayAccessNode)
+
+
+def test_local_and_parameter_generic_resource_type_parsing():
+    code = """
+    float4 sample(Sampler2D<float4> tex, Texture2D<float4> image,
+                  SamplerState state, float2 uv) {
+        Sampler2D<float4> localTex;
+        Texture2D<float4> localImage;
+        SamplerState localState;
+        return tex.Sample(uv);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "sample")
+
+    assert [(param.vtype, param.name) for param in function.params] == [
+        ("Sampler2D<float4>", "tex"),
+        ("Texture2D<float4>", "image"),
+        ("SamplerState", "state"),
+        ("float2", "uv"),
+    ]
+    assert [(stmt.vtype, stmt.name) for stmt in function.body[:3]] == [
+        ("Sampler2D<float4>", "localTex"),
+        ("Texture2D<float4>", "localImage"),
+        ("SamplerState", "localState"),
+    ]
 
 
 def test_texture_method_call_parsing():
@@ -503,6 +780,36 @@ def test_local_matrix_declaration_parsing():
     assert isinstance(declaration, VariableNode)
     assert declaration.vtype == "float4x4"
     assert declaration.name == "transform"
+
+
+def test_qualified_function_parameters_globals_and_locals_parsing():
+    code = """
+    static Texture2D<float4> sourceTexture;
+
+    static inline float helper(const float x) {
+        return x;
+    }
+
+    void main() {
+        static const float cached = 1.0;
+        constexpr float scale = 2.0;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.global_vars[0].qualifiers == ["static"]
+
+    helper = find_function(ast, "helper")
+    assert helper.qualifiers == ["static", "inline"]
+    assert helper.params[0].qualifiers == ["const"]
+
+    body = find_function(ast, "main").body
+    assert isinstance(body[0], AssignmentNode)
+    assert body[0].left.qualifiers == ["static", "const"]
+    assert body[0].left.vtype == "float"
+    assert isinstance(body[1], AssignmentNode)
+    assert body[1].left.qualifiers == ["constexpr"]
 
 
 def test_else_parsing():

@@ -41,6 +41,733 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
+    shader = """
+    shader Float16IRSmoke {
+        float16 tone(float16 input) {
+            float16 bias = float16(0.5);
+            return input + bias;
+        }
+
+        f16vec2 pair(f16vec2 input) {
+            f16vec2 scale = f16vec2(1.0, 2.0);
+            return input * scale;
+        }
+
+        i16vec2 signedPair(i16vec2 input) {
+            i16vec2 inc = i16vec2(1, 2);
+            return input + inc;
+        }
+
+        u16vec2 unsignedPair(u16vec2 input) {
+            u16vec2 inc = u16vec2(1u, 2u);
+            return input + inc;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "half tone(half input)" in generated_code
+    assert "half bias = half(0.5);" in generated_code
+    assert "half2 pair(half2 input)" in generated_code
+    assert "half2 scale = half2(1.0, 2.0);" in generated_code
+    assert "min16int2 signedPair(min16int2 input)" in generated_code
+    assert "min16int2 inc = min16int2(1, 2);" in generated_code
+    assert "min16uint2 unsignedPair(min16uint2 input)" in generated_code
+    assert "min16uint2 inc = min16uint2(1u, 2u);" in generated_code
+    for invalid_token in ("float16", "f16vec2", "i16vec2", "u16vec2"):
+        assert invalid_token not in generated_code
+
+
+def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices():
+    shader = """
+    shader Float16MatrixIRSmoke {
+        f16mat3x2 passMatrix(f16mat3x2 input) {
+            f16mat3x2 m = f16mat3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);
+            return input;
+        }
+
+        f16mat3 passSquare(f16mat3 input) {
+            f16mat3 m = f16mat3(1.0);
+            return input * m;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "half2x3 passMatrix(half2x3 input)" in generated_code
+    assert "half2x3 m = half2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    assert "half3x3 passSquare(half3x3 input)" in generated_code
+    assert "half3x3 m = half3x3(1.0);" in generated_code
+    assert "return (input * m);" in generated_code
+    assert "f16mat3x2" not in generated_code
+    assert "f16mat3" not in generated_code
+
+
+def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
+    shader = """
+    shader NarrowIntegerAliasSmoke {
+        int8 signedScalar(int8 input) {
+            int8 one = int8(1);
+            return input + one;
+        }
+
+        uint8 unsignedScalar(uint8 input) {
+            uint8 one = uint8(1u);
+            return input + one;
+        }
+
+        i8vec2 signedPair(i8vec2 input) {
+            i8vec2 inc = i8vec2(1, 2);
+            return input + inc;
+        }
+
+        u8vec3 unsignedTriple(u8vec3 input) {
+            u8vec3 inc = u8vec3(1u, 2u, 3u);
+            return input + inc;
+        }
+
+        short2 signedShort(short2 input) {
+            short2 inc = short2(1, 2);
+            return input + inc;
+        }
+
+        ushort3 unsignedShort(ushort3 input) {
+            ushort3 inc = ushort3(1u, 2u, 3u);
+            return input + inc;
+        }
+
+        char4 signedChar(char4 input) {
+            char4 inc = char4(1, 2, 3, 4);
+            return input + inc;
+        }
+
+        uchar2 unsignedChar(uchar2 input) {
+            uchar2 inc = uchar2(1u, 2u);
+            return input + inc;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int signedScalar(int input)" in generated_code
+    assert "int one = int(1);" in generated_code
+    assert "uint unsignedScalar(uint input)" in generated_code
+    assert "uint one = uint(1u);" in generated_code
+    assert "int2 signedPair(int2 input)" in generated_code
+    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "uint3 unsignedTriple(uint3 input)" in generated_code
+    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert "min16int2 signedShort(min16int2 input)" in generated_code
+    assert "min16int2 inc = min16int2(1, 2);" in generated_code
+    assert "min16uint3 unsignedShort(min16uint3 input)" in generated_code
+    assert "min16uint3 inc = min16uint3(1u, 2u, 3u);" in generated_code
+    assert "int4 signedChar(int4 input)" in generated_code
+    assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
+    assert "uint2 unsignedChar(uint2 input)" in generated_code
+    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    for invalid_token in (
+        "int8",
+        "uint8",
+        "i8vec2",
+        "u8vec3",
+        "short2",
+        "ushort3",
+        "char4",
+        "uchar2",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_hlsl_packed_vector_aliases_map_to_standard_hlsl_vectors():
+    shader = """
+    shader PackedVectorAliasSmoke {
+        packed_float4 color(packed_float4 input) {
+            packed_float4 bias = packed_float4(1.0, 2.0, 3.0, 4.0);
+            return input + bias;
+        }
+
+        packed_half2 halfPair(packed_half2 input) {
+            packed_half2 scale = packed_half2(1.0, 2.0);
+            return input * scale;
+        }
+
+        packed_int3 signedTriple(packed_int3 input) {
+            packed_int3 inc = packed_int3(1, 2, 3);
+            return input + inc;
+        }
+
+        packed_uint4 unsignedQuad(packed_uint4 input) {
+            packed_uint4 inc = packed_uint4(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float4 color(float4 input)" in generated_code
+    assert "float4 bias = float4(1.0, 2.0, 3.0, 4.0);" in generated_code
+    assert "half2 halfPair(half2 input)" in generated_code
+    assert "half2 scale = half2(1.0, 2.0);" in generated_code
+    assert "int3 signedTriple(int3 input)" in generated_code
+    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "uint4 unsignedQuad(uint4 input)" in generated_code
+    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "packed_" not in generated_code
+
+
+def test_hlsl_simd_aliases_map_to_standard_hlsl_types():
+    shader = """
+    shader SimdAliasSmoke {
+        simd_float4 color(simd_float4 input) {
+            simd_float4 bias = simd_float4(1.0, 2.0, 3.0, 4.0);
+            return input + bias;
+        }
+
+        simd_int3 signedTriple(simd_int3 input) {
+            simd_int3 inc = simd_int3(1, 2, 3);
+            return input + inc;
+        }
+
+        simd_uint2 unsignedPair(simd_uint2 input) {
+            simd_uint2 inc = simd_uint2(1u, 2u);
+            return input + inc;
+        }
+
+        simd_float4x4 passSquare(simd_float4x4 input) {
+            simd_float4x4 m = simd_float4x4(1.0);
+            return input * m;
+        }
+
+        simd_float3x2 passMatrix(simd_float3x2 input) {
+            simd_float3x2 m = simd_float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);
+            return input;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float4 color(float4 input)" in generated_code
+    assert "float4 bias = float4(1.0, 2.0, 3.0, 4.0);" in generated_code
+    assert "int3 signedTriple(int3 input)" in generated_code
+    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "uint2 unsignedPair(uint2 input)" in generated_code
+    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "float4x4 passSquare(float4x4 input)" in generated_code
+    assert "float4x4 m = float4x4(1.0);" in generated_code
+    assert "float3x2 passMatrix(float3x2 input)" in generated_code
+    assert "float3x2 m = float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    assert "simd_" not in generated_code
+
+
+def test_hlsl_fixed_width_scalar_aliases_map_to_valid_hlsl_scalars():
+    shader = """
+    shader FixedWidthScalarAliasSmoke {
+        int8_t signedByte(int8_t input) {
+            int8_t one = int8_t(1);
+            return input + one;
+        }
+
+        uint8_t unsignedByte(uint8_t input) {
+            uint8_t one = uint8_t(1u);
+            return input + one;
+        }
+
+        int16_t signedShortScalar(int16_t input) {
+            int16_t one = int16_t(1);
+            return input + one;
+        }
+
+        uint16_t unsignedShortScalar(uint16_t input) {
+            uint16_t one = uint16_t(1u);
+            return input + one;
+        }
+
+        int32_t signedWord(int32_t input) {
+            int32_t one = int32_t(1);
+            return input + one;
+        }
+
+        uint32_t unsignedWord(uint32_t input) {
+            uint32_t one = uint32_t(1u);
+            return input + one;
+        }
+
+        int64 signedLong(int64 input) {
+            int64 one = int64(1);
+            return input + one;
+        }
+
+        uint64 unsignedLong(uint64 input) {
+            uint64 one = uint64(1u);
+            return input + one;
+        }
+
+        int64_t signedLongT(int64_t input) {
+            int64_t one = int64_t(1);
+            return input + one;
+        }
+
+        uint64_t unsignedLongT(uint64_t input) {
+            uint64_t one = uint64_t(1u);
+            return input + one;
+        }
+
+        size_t sizeValue(size_t input) {
+            size_t one = size_t(1u);
+            return input + one;
+        }
+
+        ptrdiff_t ptrDiff(ptrdiff_t input) {
+            ptrdiff_t one = ptrdiff_t(1);
+            return input + one;
+        }
+
+        long longValue(long input) {
+            long one = long(1);
+            return input + one;
+        }
+
+        ulong ulongValue(ulong input) {
+            ulong one = ulong(1u);
+            return input + one;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int signedByte(int input)" in generated_code
+    assert "uint unsignedByte(uint input)" in generated_code
+    assert "min16int signedShortScalar(min16int input)" in generated_code
+    assert "min16uint unsignedShortScalar(min16uint input)" in generated_code
+    assert "int signedWord(int input)" in generated_code
+    assert "uint unsignedWord(uint input)" in generated_code
+    assert "int64_t signedLong(int64_t input)" in generated_code
+    assert "uint64_t unsignedLong(uint64_t input)" in generated_code
+    assert "int64_t signedLongT(int64_t input)" in generated_code
+    assert "uint64_t unsignedLongT(uint64_t input)" in generated_code
+    assert "uint64_t sizeValue(uint64_t input)" in generated_code
+    assert "int64_t ptrDiff(int64_t input)" in generated_code
+    assert "int64_t longValue(int64_t input)" in generated_code
+    assert "uint64_t ulongValue(uint64_t input)" in generated_code
+    assert "int one = int(1);" in generated_code
+    assert "uint one = uint(1u);" in generated_code
+    assert "min16int one = min16int(1);" in generated_code
+    assert "min16uint one = min16uint(1u);" in generated_code
+    assert "int64_t one = int64_t(1);" in generated_code
+    assert "uint64_t one = uint64_t(1u);" in generated_code
+    for invalid_token in (
+        "int8_t",
+        "uint8_t",
+        "int16_t",
+        "uint16_t",
+        "int32_t",
+        "uint32_t",
+        "int64 ",
+        "uint64 ",
+        "size_t",
+        "ptrdiff_t",
+        "long ",
+        "ulong ",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_hlsl_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
+    shader = """
+    shader AliasArrayAggregateSmoke {
+        int8_t globalBytes[2];
+        uint64_t globalCounters[2];
+
+        struct AliasPayload {
+            int8_t bytes[2];
+            uint16_t words[3];
+            int64_t signedValue;
+            size_t offsets[2];
+        };
+
+        cbuffer AliasConstants @register(b1) {
+            int16_t smalls[2];
+            uint32_t count;
+            ptrdiff_t delta;
+        };
+
+        uint64_t bump(uint64_t counters[2], AliasPayload payload) {
+            uint64_t localCounters[2];
+            uint64_t one = uint64_t(1u);
+            localCounters[0] = counters[0] + one;
+            return localCounters[0] + payload.offsets[1];
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int bytes[2];" in generated_code
+    assert "min16uint words[3];" in generated_code
+    assert "int64_t signedValue;" in generated_code
+    assert "uint64_t offsets[2];" in generated_code
+    assert "int globalBytes[2];" in generated_code
+    assert "uint64_t globalCounters[2];" in generated_code
+    assert "min16int smalls[2];" in generated_code
+    assert "uint count;" in generated_code
+    assert "int64_t delta;" in generated_code
+    assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
+    assert "uint64_t localCounters[2];" in generated_code
+    assert "uint64_t one = uint64_t(1u);" in generated_code
+    for invalid_token in (
+        "int8_t",
+        "uint16_t",
+        "int16_t",
+        "uint32_t",
+        "int64 ",
+        "uint64 ",
+        "size_t",
+        "ptrdiff_t",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_hlsl_fixed_width_nested_array_aliases_map_to_valid_hlsl_types():
+    shader = """
+    shader AliasNestedArraySmoke {
+        struct AliasGridPayload {
+            int8_t bytes[2][3];
+            size_t offsets[2][3];
+        };
+
+        uint16_t bumpNested(uint16_t values[2][3], int row, int col) {
+            uint16_t grid[2][3];
+            grid[row][col] = values[row][col] + uint16_t(1u);
+            return grid[row][col];
+        }
+
+        ptrdiff_t readPayload(AliasGridPayload payload, int row, int col) {
+            return ptrdiff_t(payload.bytes[row][col]) +
+                ptrdiff_t(payload.offsets[row][col]);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int bytes[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
+    assert (
+        "min16uint bumpNested(min16uint values[2][3], int row, int col)"
+        in generated_code
+    )
+    assert "min16uint grid[2][3];" in generated_code
+    assert "min16uint(1u)" in generated_code
+    assert (
+        "int64_t readPayload(AliasGridPayload payload, int row, int col)"
+        in generated_code
+    )
+    assert "int64_t(payload.bytes[row][col])" in generated_code
+    assert "int64_t(payload.offsets[row][col])" in generated_code
+    assert "int[2] bytes[3]" not in generated_code
+    assert "uint64_t[2] offsets[3]" not in generated_code
+    for invalid_token in (
+        "int8_t",
+        "uint16_t",
+        "uint64 ",
+        "size_t",
+        "ptrdiff_t",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_hlsl_array_return_aliases_are_rejected_with_clear_diagnostic():
+    shader = """
+    shader AliasReturnArraySmoke {
+        uint64_t[2] makeCounters() {
+            uint64_t counters[2];
+            return counters;
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError, match="DirectX output does not support array return"
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_hlsl_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():
+    shader = """
+    shader AliasNestedCbufferArraySmoke {
+        cbuffer AliasNestedConstants @register(b2) {
+            int64_t signedGrid[2][3];
+            uint16_t unsignedGrid[2][3];
+            size_t offsets[2][3];
+        };
+
+        uint64_t readConstant(int row, int col) {
+            return uint64_t(offsets[row][col]) + uint64_t(unsignedGrid[row][col]);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "cbuffer AliasNestedConstants : register(b2)" in generated_code
+    assert "int64_t signedGrid[2][3];" in generated_code
+    assert "min16uint unsignedGrid[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
+    assert "uint64_t readConstant(int row, int col)" in generated_code
+    assert "uint64_t(offsets[row][col])" in generated_code
+    assert "uint64_t(unsignedGrid[row][col])" in generated_code
+    assert "int64_t[2] signedGrid[3]" not in generated_code
+    assert "min16uint[2] unsignedGrid[3]" not in generated_code
+    for invalid_token in (
+        "uint16_t",
+        "uint64 ",
+        "size_t",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_hlsl_structured_buffer_fixed_width_aliases_map_resource_generics():
+    shader = """
+    shader AliasStructuredBufferHLSL {
+        RWStructuredBuffer<uint16_t> counts @ binding(3);
+        StructuredBuffer<int64_t> signedValues @ binding(4);
+        RWStructuredBuffer<size_t> offsets @ binding(5);
+
+        uint64_t loadOffset(uint index) {
+            uint64_t offset = buffer_load(offsets, index);
+            uint16_t count = buffer_load(counts, index);
+            int64_t signedValue = buffer_load(signedValues, index);
+            buffer_store(counts, index, count + uint16_t(1u));
+            return offset + uint64_t(count) + uint64_t(signedValue);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<min16uint> counts : register(u3);" in generated_code
+    assert "StructuredBuffer<int64_t> signedValues : register(t4);" in generated_code
+    assert "RWStructuredBuffer<uint64_t> offsets : register(u5);" in generated_code
+    assert "min16uint count = counts.Load(index);" in generated_code
+    assert "counts.Store(index, (count + min16uint(1u)));" in generated_code
+    assert "RWStructuredBuffer<uint16_t>" not in generated_code
+    assert "RWStructuredBuffer<size_t>" not in generated_code
+    assert "size_t" not in generated_code
+
+
+def test_hlsl_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
+    shader = """
+    shader AliasStructuredBufferArrayHLSL {
+        RWStructuredBuffer<uint16_t> counts[2] @ binding(3);
+        StructuredBuffer<size_t> offsets[2] @ binding(5);
+
+        uint16_t readCount(RWStructuredBuffer<uint16_t> localCounts[], uint which, uint index) {
+            return buffer_load(localCounts[which], index);
+        }
+
+        uint64_t readOffset(StructuredBuffer<size_t> localOffsets[2], uint which, uint index) {
+            return buffer_load(localOffsets[which], index);
+        }
+
+        uint64_t combine(uint which, uint index) {
+            uint16_t count = readCount(counts, which, index);
+            uint64_t offset = readOffset(offsets, which, index);
+            buffer_store(counts[which], index, count + uint16_t(1u));
+            return offset + uint64_t(count);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<min16uint> counts[2] : register(u3);" in generated_code
+    assert "StructuredBuffer<uint64_t> offsets[2] : register(t5);" in generated_code
+    assert (
+        "min16uint readCount(RWStructuredBuffer<min16uint> localCounts[2], uint which, uint index)"
+        in generated_code
+    )
+    assert (
+        "uint64_t readOffset(StructuredBuffer<uint64_t> localOffsets[2], uint which, uint index)"
+        in generated_code
+    )
+    assert "return localCounts[which].Load(index);" in generated_code
+    assert "counts[which].Store(index, (count + min16uint(1u)));" in generated_code
+    assert "localCounts[]" not in generated_code
+    assert "uint16_t" not in generated_code
+    assert "size_t" not in generated_code
+
+
+def test_hlsl_structured_buffer_array_u_register_overlap_raises():
+    shader = """
+    shader StructuredBufferArrayRegisterOverlapHLSL {
+        RWStructuredBuffer<int> first[2] @ binding(3);
+        RWStructuredBuffer<int> second @ binding(4);
+
+        int read(uint index) {
+            return buffer_load(first[1], index) + buffer_load(second, index);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting DirectX resource binding for 'second'",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_hlsl_unsized_structured_buffer_global_allows_multiple_fixed_helper_sizes():
+    shader = """
+    shader UnsizedStructuredBufferMultipleFixedHelpersHLSL {
+        RWStructuredBuffer<uint> counts[] @ binding(3);
+
+        uint readThree(RWStructuredBuffer<uint> localCounts[3], uint index) {
+            return buffer_load(localCounts[2], index);
+        }
+
+        uint readFour(RWStructuredBuffer<uint> localCounts[4], uint index) {
+            return buffer_load(localCounts[3], index);
+        }
+
+        uint combine(uint index) {
+            return readThree(counts, index) + readFour(counts, index);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<uint> counts[] : register(u3);" in generated_code
+    assert (
+        "uint readThree(RWStructuredBuffer<uint> localCounts[3], uint index)"
+        in generated_code
+    )
+    assert (
+        "uint readFour(RWStructuredBuffer<uint> localCounts[4], uint index)"
+        in generated_code
+    )
+    assert "return localCounts[2].Load(index);" in generated_code
+    assert "return localCounts[3].Load(index);" in generated_code
+    assert (
+        "return (readThree(counts, index) + readFour(counts, index));" in generated_code
+    )
+
+
+def test_hlsl_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
+    shader = """
+    shader NestedStructuredBufferArrayHelpersHLSL {
+        RWStructuredBuffer<uint16_t> counts[] @ binding(3);
+        RWStructuredBuffer<uint16_t> afterCounts;
+
+        uint16_t readLeaf(RWStructuredBuffer<uint16_t> leafCounts[3], uint index) {
+            return buffer_load(leafCounts[2], index);
+        }
+
+        uint16_t readMid(RWStructuredBuffer<uint16_t> midCounts[], uint index) {
+            return readLeaf(midCounts, index);
+        }
+
+        uint16_t combine(uint index) {
+            return readMid(counts, index) + buffer_load(afterCounts, index);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<min16uint> counts[] : register(u3);" in generated_code
+    assert "RWStructuredBuffer<min16uint> afterCounts : register(u4);" in generated_code
+    assert (
+        "min16uint readLeaf(RWStructuredBuffer<min16uint> leafCounts[3], uint index)"
+        in generated_code
+    )
+    assert (
+        "min16uint readMid(RWStructuredBuffer<min16uint> midCounts[3], uint index)"
+        in generated_code
+    )
+    assert "return leafCounts[2].Load(index);" in generated_code
+    assert "return readLeaf(midCounts, index);" in generated_code
+    assert (
+        "return (readMid(counts, index) + afterCounts.Load(index));" in generated_code
+    )
+    assert "RWStructuredBuffer<uint16_t>" not in generated_code
+
+
+def test_hlsl_structured_buffer_array_nested_helpers_reject_mixed_fixed_sizes():
+    shader = """
+    shader NestedStructuredBufferArrayConflictHLSL {
+        RWStructuredBuffer<uint> counts[] @ binding(3);
+
+        uint readLeaf(RWStructuredBuffer<uint> leafCounts[3], uint index) {
+            return buffer_load(leafCounts[2], index);
+        }
+
+        uint readMid(RWStructuredBuffer<uint> midCounts[4], uint index) {
+            return readLeaf(midCounts, index);
+        }
+
+        uint combine(uint index) {
+            return readMid(counts, index);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting fixed resource array sizes for 'midCounts': 4 and 3",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer():
+    shader = """
+    shader AliasGlslBufferBlockHLSL {
+        struct AliasBlock {
+            uint16_t words[2];
+            size_t offsets[];
+        };
+
+        AliasBlock aliasBlock @glsl_buffer_block(std430) @binding(7);
+
+        uint64_t readAlias(uint index) {
+            uint16_t word = aliasBlock.words[1];
+            return uint64_t(word) + uint64_t(aliasBlock.offsets[index]);
+        }
+
+        void writeAlias(uint index, uint16_t word, size_t offset) {
+            aliasBlock.words[1] = word;
+            aliasBlock.offsets[index] = offset;
+            aliasBlock.words[0] += uint16_t(1u);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWByteAddressBuffer aliasBlock : register(u7);" in generated_code
+    assert "min16uint word = aliasBlock.Load(4);" in generated_code
+    assert "uint64_t(aliasBlock.Load((8 + index * 4)))" in generated_code
+    assert (
+        "void writeAlias(uint index, min16uint word, uint64_t offset)" in generated_code
+    )
+    assert "aliasBlock.Store(4, uint(word));" in generated_code
+    assert "aliasBlock.Store((8 + index * 4), uint(offset));" in generated_code
+    assert (
+        "aliasBlock.Store(0, uint((aliasBlock.Load(0) + min16uint(1u))));"
+        in generated_code
+    )
+    assert "unsupported HLSL GLSL buffer block" not in generated_code
+    assert "uint16_t" not in generated_code
+    assert "size_t" not in generated_code
+
+
 def test_structured_buffer_dimensions_lower_to_get_dimensions():
     code = """
     shader StructuredBufferDimensionsHLSL {
@@ -164,6 +891,231 @@ def test_hlsl_global_resource_binding_attributes_drive_registers():
     assert "Texture2D autoTex : register(t9);" in generated_code
 
 
+def test_hlsl_generic_bindings_are_independent_between_register_namespaces():
+    code = """
+    shader GenericBindingNamespaces {
+        sampler2D colorMap @binding(0);
+        sampler linearSampler @binding(0);
+        image2D outImage @binding(0);
+
+        cbuffer Constants @binding(0) {
+            vec4 tint;
+        };
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(outImage, ivec2(0, 0));
+                return texture(colorMap, linearSampler, uv) + stored + tint;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "Texture2D colorMap : register(t0);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "RWTexture2D<float4> outImage : register(u0);" in generated_code
+    assert "cbuffer Constants : register(b0)" in generated_code
+
+
+def test_hlsl_generic_binding_overlap_raises_within_uav_namespace():
+    code = """
+    shader GenericBindingUavOverlap {
+        image2D images[2] @binding(3);
+        RWStructuredBuffer<int> values @binding(4);
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting DirectX resource binding for 'values': "
+            "u4 overlaps 'images' u3-u4"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_hlsl_auto_registers_skip_later_explicit_global_bindings():
+    code = """
+    shader LateExplicitBindings {
+        sampler2D autoTexture;
+        image2D autoImage;
+        sampler autoSampler;
+
+        cbuffer AutoBlock {
+            vec4 autoTint;
+        };
+
+        sampler2D explicitTexture @register(t0);
+        RWStructuredBuffer<int> explicitValues @register(u0);
+        sampler explicitSampler @register(s0);
+
+        cbuffer ExplicitBlock @register(b0) {
+            vec4 explicitTint;
+        };
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(autoImage, ivec2(0, 0));
+                int value = buffer_load(explicitValues, 0);
+                return texture(autoTexture, autoSampler, uv) +
+                    texture(explicitTexture, explicitSampler, uv) +
+                    stored + autoTint + explicitTint + vec4(float(value));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "Texture2D autoTexture : register(t1);" in generated_code
+    assert "RWTexture2D<float4> autoImage : register(u1);" in generated_code
+    assert "SamplerState autoSampler : register(s1);" in generated_code
+    assert "cbuffer AutoBlock : register(b1)" in generated_code
+    assert "Texture2D explicitTexture : register(t0);" in generated_code
+    assert "RWStructuredBuffer<int> explicitValues : register(u0);" in generated_code
+    assert "SamplerState explicitSampler : register(s0);" in generated_code
+    assert "cbuffer ExplicitBlock : register(b0)" in generated_code
+
+
+def test_hlsl_implicit_sampler_skips_later_explicit_sampler_register():
+    code = """
+    shader LateExplicitSampler {
+        sampler2D colorMap;
+        sampler linearSampler @register(s0);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(colorMap, uv) + texture(colorMap, linearSampler, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "Texture2D colorMap : register(t0);" in generated_code
+    assert "SamplerState colorMapSampler : register(s1);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "colorMap.Sample(colorMapSampler, uv)" in generated_code
+    assert "colorMap.Sample(linearSampler, uv)" in generated_code
+
+
+def test_hlsl_global_resource_register_spaces_keep_independent_cursors():
+    code = """
+    shader ExplicitGlobalBindingSpaces {
+        sampler spaceSampler @register(s4, space1);
+        sampler autoSpaceSampler @space(1);
+        sampler defaultSampler;
+
+        sampler2D spaceTex @register(t5, space1);
+        sampler2D otherSpaceTex @register(t5, space2);
+        sampler2D autoSpaceTex @space(2);
+        sampler2D defaultTex;
+
+        uimage2D spaceImage @register(u3, space1);
+        image2D otherSpaceImage @register(u3, space2);
+        RWStructuredBuffer<int> autoSpaceBuffer @space(2);
+        RWStructuredBuffer<int> defaultBuffer;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "SamplerState spaceSampler : register(s4, space1);" in generated_code
+    assert "SamplerState autoSpaceSampler : register(s5, space1);" in generated_code
+    assert "SamplerState defaultSampler : register(s0);" in generated_code
+    assert "Texture2D spaceTex : register(t5, space1);" in generated_code
+    assert "Texture2D otherSpaceTex : register(t5, space2);" in generated_code
+    assert "Texture2D autoSpaceTex : register(t6, space2);" in generated_code
+    assert "Texture2D defaultTex : register(t0);" in generated_code
+    assert "RWTexture2D<uint> spaceImage : register(u3, space1);" in generated_code
+    assert (
+        "RWTexture2D<float4> otherSpaceImage : register(u3, space2);" in generated_code
+    )
+    assert (
+        "RWStructuredBuffer<int> autoSpaceBuffer : register(u4, space2);"
+        in generated_code
+    )
+    assert "RWStructuredBuffer<int> defaultBuffer : register(u0);" in generated_code
+
+
+def test_hlsl_implicit_sampler_inherits_global_texture_register_space():
+    code = """
+    shader ImplicitSamplerSpaces {
+        sampler explicitSpaceSampler @register(s4, space1);
+        sampler defaultSampler;
+        sampler2D spaceTex @register(t3, space1);
+        sampler2D defaultTex;
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(spaceTex, uv) +
+                    texture(defaultTex, uv) +
+                    texture(spaceTex, explicitSpaceSampler, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "SamplerState explicitSpaceSampler : register(s4, space1);" in generated_code
+    assert "SamplerState spaceTexSampler : register(s5, space1);" in generated_code
+    assert "SamplerState defaultSampler : register(s0);" in generated_code
+    assert "SamplerState defaultTexSampler : register(s1);" in generated_code
+    assert "Texture2D spaceTex : register(t3, space1);" in generated_code
+    assert "Texture2D defaultTex : register(t0);" in generated_code
+    assert "spaceTex.Sample(spaceTexSampler, uv)" in generated_code
+    assert "defaultTex.Sample(defaultTexSampler, uv)" in generated_code
+
+
+def test_hlsl_implicit_shadow_sampler_split_inherits_global_texture_register_space():
+    code = """
+    shader ImplicitShadowSamplerSpaces {
+        sampler defaultSampler;
+        sampler2DShadow shadowMap @register(t2, space3);
+
+        fragment {
+            float main(vec2 uv @TEXCOORD0, float depth) @gl_FragDepth {
+                vec2 lod = textureQueryLod(shadowMap, uv);
+                float cmp = textureCompare(shadowMap, uv, depth);
+                return lod.x + cmp;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "SamplerState defaultSampler : register(s0);" in generated_code
+    assert "Texture2D shadowMap : register(t2, space3);" in generated_code
+    assert (
+        "SamplerComparisonState shadowMapSampler : register(s0, space3);"
+        in generated_code
+    )
+    assert (
+        "SamplerState shadowMapQuerySampler : register(s1, space3);" in generated_code
+    )
+    assert (
+        "shadowMap.CalculateLevelOfDetailUnclamped(shadowMapQuerySampler, uv)"
+        in generated_code
+    )
+    assert "shadowMap.SampleCmp(shadowMapSampler, uv, depth)" in generated_code
+
+
 def test_hlsl_cbuffer_binding_attributes_drive_registers():
     code = """
     shader CBufferBindings {
@@ -191,6 +1143,53 @@ def test_hlsl_cbuffer_binding_attributes_drive_registers():
     assert "cbuffer Material : register(b4)" in generated_code
     assert "cbuffer AutoBlock : register(b5)" in generated_code
     assert "MatrixType(" not in generated_code
+
+
+def test_hlsl_cbuffer_register_overlap_raises():
+    code = """
+    shader CBufferOverlap {
+        cbuffer Camera @register(b2) {
+            mat4 viewProj;
+        };
+
+        cbuffer Material @binding(2) {
+            vec4 tint;
+        };
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting DirectX resource binding for 'Material': "
+            "b2 overlaps 'Camera' b2"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_hlsl_cbuffer_register_spaces_are_independent():
+    code = """
+    shader CBufferSpaces {
+        cbuffer Camera @register(b2, space1) {
+            mat4 viewProj;
+        };
+
+        cbuffer Material @register(b2, space2) {
+            vec4 tint;
+        };
+
+        cbuffer AutoBlock {
+            vec4 color;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer Camera : register(b2, space1)" in generated_code
+    assert "cbuffer Material : register(b2, space2)" in generated_code
+    assert "cbuffer AutoBlock : register(b0)" in generated_code
 
 
 def test_hlsl_default_float_image_scalar_and_vector_load_store():
@@ -783,6 +1782,1843 @@ def test_ray_and_mesh_shader_attributes():
     generated = generate_code(ast)
     assert '[shader("raygeneration")]' in generated
     assert '[shader("mesh")]' in generated
+    assert "void RayGenMain()" in generated
+    assert "void MSMain()" in generated
+
+
+def test_directx_advanced_stage_entries_use_stage_specific_names():
+    code = """
+    shader advanced {
+        geometry {
+            void main() @maxvertexcount(3) { }
+        }
+
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+
+        tessellation_evaluation {
+            void main() @domain(tri) { }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("geometry")]' in generated
+    assert "void GSMain()" in generated
+    assert '[shader("hull")]' in generated
+    assert "void HSMain()" in generated
+    assert '[shader("domain")]' in generated
+    assert "void DSMain()" in generated
+    assert "void main()" not in generated
+
+
+def test_directx_advanced_stage_entry_name_avoids_local_helper_collision():
+    code = """
+    shader geometry_collision {
+        geometry {
+            void GSMain() { }
+
+            void main() @maxvertexcount(3) {
+                GSMain();
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+    assert "void GSMain() {" in generated
+    assert '[shader("geometry")]' in generated
+    assert "void GSMain_2()" in generated
+    assert "GSMain();" in generated
+
+
+def test_directx_geometry_stage_lowers_hlsl_stage_attributes():
+    code = """
+    shader geometry_attributes {
+        geometry {
+            void main() @maxvertexcount(3) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+    assert "[maxvertexcount(3)]" in generated
+    assert generated.index("[maxvertexcount(3)]") < generated.index(
+        '[shader("geometry")]'
+    )
+    assert "void GSMain()" in generated
+
+
+def test_directx_geometry_stage_validates_positive_maxvertexcount():
+    code = """
+    shader bad_geometry_maxvertexcount {
+        geometry {
+            void main() @maxvertexcount(0) { }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="maxvertexcount.*positive"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+def test_directx_tessellation_stages_lower_hlsl_stage_attributes():
+    code = """
+    shader tessellation_attributes {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+
+        tessellation_evaluation {
+            void main() @domain(tri) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert '[domain("tri")]' in generated
+    assert '[partitioning("fractional_odd")]' in generated
+    assert '[outputtopology("triangle_cw")]' in generated
+    assert "[outputcontrolpoints(3)]" in generated
+    assert '[patchconstantfunc("HSConst")]' in generated
+    assert generated.index('[domain("tri")]') < generated.index('[shader("hull")]')
+    assert generated.count('[domain("tri")]') == 2
+    assert "void HSMain()" in generated
+    assert "void DSMain()" in generated
+
+
+def test_directx_advanced_stage_signatures_accept_hlsl_patch_and_stream_types():
+    code = """
+    shader advanced_signatures {
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        geometry {
+            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
+                @maxvertexcount(3) { }
+        }
+
+        tessellation_control {
+            HSConstData HSConst(
+                InputPatch<HSInput, 3> patch,
+                uint patchId @ SV_PrimitiveID
+            ) {
+                HSConstData constants;
+                return constants;
+            }
+
+            void main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 3> patch, vec3 bary @ SV_DomainLocation)
+                @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void GSMain(triangle GSInput input[3], "
+        "inout TriangleStream<GSOutput> stream)"
+    ) in generated
+    assert (
+        "void HSMain(InputPatch<HSInput, 3> patch, "
+        "uint id : SV_OutputControlPointID)"
+    ) in generated
+    assert (
+        "float4 DSMain(OutputPatch<HSOutput, 3> patch, "
+        "float3 bary : SV_DomainLocation)"
+    ) in generated
+    assert (
+        "HSConstData HSConst(InputPatch<HSInput, 3> patch, "
+        "uint patchId : SV_PrimitiveID)"
+    ) in generated
+    assert "float edges[3] : SV_TessFactor;" in generated
+    assert "float3 edges : SV_TessFactor;" not in generated
+
+
+def test_directx_tessellation_signatures_preserve_extra_hlsl_parameters():
+    code = """
+    shader tessellation_signature_parameters {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(
+                InputPatch<HSInput, 3> patch,
+                uint id @ SV_OutputControlPointID,
+                uint patchId @ SV_PrimitiveID
+            )
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(
+                HSConstData constants,
+                vec3 bary @ SV_DomainLocation,
+                const OutputPatch<HSOutput, 3> patch
+            ) @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "HSOutput HSMain(InputPatch<HSInput, 3> patch, "
+        "uint id : SV_OutputControlPointID, uint patchId : SV_PrimitiveID)"
+    ) in generated
+    assert (
+        "float4 DSMain(HSConstData constants, float3 bary : SV_DomainLocation, "
+        "const OutputPatch<HSOutput, 3> patch)"
+    ) in generated
+    assert "HSConstData HSConst(InputPatch<HSInput, 3> patch)" in generated
+    assert "float edges[3] : SV_TessFactor;" in generated
+    assert "float3 edges : SV_TessFactor;" not in generated
+
+
+def test_directx_tessellation_factor_vectors_emit_hlsl_arrays():
+    code = """
+    shader tessellation_factor_layout {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec4 edges @ SV_TessFactor;
+            vec2 inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 4> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 4> patch, uint id @ SV_OutputControlPointID)
+                @domain(quad)
+                @partitioning(fractional_even)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(4)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_control"
+    )
+
+    assert "float edges[4] : SV_TessFactor;" in generated
+    assert "float inside[2] : SV_InsideTessFactor;" in generated
+    assert "float4 edges : SV_TessFactor;" not in generated
+    assert "float2 inside : SV_InsideTessFactor;" not in generated
+
+
+def test_directx_advanced_stage_signature_validation_rejects_partial_hlsl_shapes():
+    geometry_code = """
+    shader bad_geometry_signature {
+        geometry {
+            void main(vec3 position @ POSITION) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TriangleStream"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(geometry_code), "geometry"
+        )
+
+    stream_only_geometry_code = """
+    shader bad_geometry_stream_only_signature {
+        geometry {
+            void main(inout TriangleStream<GSOutput> stream) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="input primitive"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(stream_only_geometry_code), "geometry"
+        )
+
+    hull_code = """
+    shader bad_hull_signature {
+        tessellation_control {
+            void main(uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="InputPatch"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(hull_code), "tessellation_control"
+        )
+
+    domain_code = """
+    shader bad_domain_signature {
+        tessellation_evaluation {
+            vec4 main(vec3 bary @ SV_DomainLocation) @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="OutputPatch"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(domain_code), "tessellation_evaluation"
+        )
+
+
+def test_directx_geometry_stage_validates_input_primitive_array_arity():
+    wrong_triangle_count_code = """
+    shader bad_geometry_triangle_arity {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(triangle GSInput input[2], inout TriangleStream<GSOutput> stream)
+                @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="triangle.*3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_triangle_count_code), "geometry"
+        )
+
+    missing_array_code = """
+    shader bad_geometry_missing_primitive_array {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(line GSInput input, inout LineStream<GSOutput> stream)
+                @maxvertexcount(2) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="line.*array.*2"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_array_code), "geometry"
+        )
+
+    lineadj_code = """
+    shader geometry_lineadj_arity {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(lineadj GSInput input[4], inout LineStream<GSOutput> stream)
+                @maxvertexcount(2) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(lineadj_code), "geometry"
+    )
+    assert "void GSMain(lineadj GSInput input[4]" in generated
+
+
+def test_directx_geometry_stage_validates_primitive_id_type():
+    float_id_code = """
+    shader bad_geometry_float_primitive_id {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                float primitiveId @ SV_PrimitiveID,
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_id_code), "geometry"
+        )
+
+    vector_id_code = """
+    shader bad_geometry_vector_primitive_id {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                ivec2 primitiveId @ SV_PrimitiveID,
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_id_code), "geometry"
+        )
+
+    int_id_code = """
+    shader valid_geometry_int_primitive_id {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                int primitiveId @ SV_PrimitiveID,
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(int_id_code), "geometry"
+    )
+    assert "int primitiveId : SV_PrimitiveID" in generated
+
+
+def test_directx_geometry_stage_validates_gs_instance_id_type():
+    float_id_code = """
+    shader bad_geometry_float_gs_instance_id {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                float instanceId @ SV_GSInstanceID,
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_GSInstanceID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_id_code), "geometry"
+        )
+
+    vector_id_code = """
+    shader bad_geometry_vector_gs_instance_id {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                uvec2 instanceId @ SV_GSInstanceID,
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_GSInstanceID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_id_code), "geometry"
+        )
+
+    uint_id_code = """
+    shader valid_geometry_uint_gs_instance_id {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 position @ SV_Position;
+        };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                uint instanceId @ SV_GSInstanceID,
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uint_id_code), "geometry"
+    )
+    assert "uint instanceId : SV_GSInstanceID" in generated
+
+
+def test_directx_tessellation_control_validates_patch_constant_helper():
+    missing_helper_code = """
+    shader missing_patch_constant_helper {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="patchconstantfunc 'HSConst'"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_helper_code), "tessellation_control"
+        )
+
+    void_helper_code = """
+    shader void_patch_constant_helper {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            void HSConst(InputPatch<HSInput, 3> patch) { }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="return patch-constant data"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(void_helper_code), "tessellation_control"
+        )
+
+    parameter_shape_code = """
+    shader bad_patch_constant_helper_parameters {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(uint patchId @ SV_PrimitiveID) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="InputPatch"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(parameter_shape_code), "tessellation_control"
+        )
+
+
+def test_directx_tessellation_control_validates_patch_constant_primitive_id_type():
+    float_id_code = """
+    shader bad_patch_constant_float_primitive_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(
+                InputPatch<HSInput, 3> patch,
+                float patchId @ SV_PrimitiveID
+            ) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_id_code), "tessellation_control"
+        )
+
+    vector_id_code = """
+    shader bad_patch_constant_vector_primitive_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(
+                InputPatch<HSInput, 3> patch,
+                ivec2 patchId @ SV_PrimitiveID
+            ) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_id_code), "tessellation_control"
+        )
+
+    int_id_code = """
+    shader valid_patch_constant_int_primitive_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(
+                InputPatch<HSInput, 3> patch,
+                int patchId @ SV_PrimitiveID
+            ) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(int_id_code), "tessellation_control"
+    )
+    assert "int patchId : SV_PrimitiveID" in generated
+
+
+def test_directx_tessellation_control_validates_parameterless_patch_constant_helper():
+    void_helper_code = """
+    shader parameterless_void_patch_constant_helper {
+        tessellation_control {
+            void HSConst() { }
+
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="return patch-constant data"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(void_helper_code), "tessellation_control"
+        )
+
+    missing_semantics_code = """
+    shader parameterless_bad_patch_constant_semantics {
+        struct HSConstData {
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst() {
+                HSConstData constants;
+                return constants;
+            }
+
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_TessFactor"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_semantics_code),
+            "tessellation_control",
+        )
+
+
+def test_directx_tessellation_control_validates_patch_constant_semantics():
+    missing_outer_code = """
+    shader missing_tess_factor_semantic {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_TessFactor"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_outer_code), "tessellation_control"
+        )
+
+    missing_inside_code = """
+    shader missing_inside_tess_factor_semantic {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_InsideTessFactor"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_inside_code), "tessellation_control"
+        )
+
+    isoline_code = """
+    shader isoline_patch_constant_semantics {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec2 edges @ SV_TessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 2> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 2> patch, uint id @ SV_OutputControlPointID)
+                @domain(isoline)
+                @partitioning(fractional_even)
+                @outputtopology(line)
+                @outputcontrolpoints(2)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(isoline_code), "tessellation_control"
+    )
+    assert '[domain("isoline")]' in generated
+    assert "HSConstData HSConst(InputPatch<HSInput, 2> patch)" in generated
+    assert "float edges[2] : SV_TessFactor;" in generated
+
+
+def test_directx_tessellation_control_validates_patch_constant_factor_counts():
+    wrong_tri_outer_code = """
+    shader wrong_tri_outer_tess_factor_count {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec4 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="3 SV_TessFactor"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_tri_outer_code), "tessellation_control"
+        )
+
+    wrong_quad_inner_code = """
+    shader wrong_quad_inner_tess_factor_count {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec4 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 4> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 4> patch, uint id @ SV_OutputControlPointID)
+                @domain(quad)
+                @partitioning(fractional_even)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(4)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="2 SV_InsideTessFactor"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_quad_inner_code), "tessellation_control"
+        )
+
+    wrong_isoline_inside_code = """
+    shader wrong_isoline_inside_tess_factor {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec2 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 2> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 2> patch, uint id @ SV_OutputControlPointID)
+                @domain(isoline)
+                @partitioning(fractional_even)
+                @outputtopology(line)
+                @outputcontrolpoints(2)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="must not return SV_InsideTessFactor"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_isoline_inside_code),
+            "tessellation_control",
+        )
+
+
+def test_directx_tessellation_control_validates_domain_outputtopology_pairs():
+    tri_line_code = """
+    shader bad_tri_line_topology {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(line)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="triangle_cw or triangle_ccw"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(tri_line_code), "tessellation_control"
+        )
+
+    isoline_triangle_code = """
+    shader bad_isoline_triangle_topology {
+        tessellation_control {
+            void main()
+                @domain(isoline)
+                @partitioning(fractional_even)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(2)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires outputtopology line"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(isoline_triangle_code), "tessellation_control"
+        )
+
+    quad_triangle_code = """
+    shader valid_quad_triangle_topology {
+        tessellation_control {
+            void main()
+                @domain(quad)
+                @partitioning(fractional_even)
+                @outputtopology(triangle_ccw)
+                @outputcontrolpoints(4)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(quad_triangle_code), "tessellation_control"
+    )
+    assert '[domain("quad")]' in generated
+    assert '[outputtopology("triangle_ccw")]' in generated
+
+
+def test_directx_tessellation_validates_domain_values():
+    invalid_hull_code = """
+    shader bad_hull_domain {
+        tessellation_control {
+            void main()
+                @domain(trianglee)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="domain.*trianglee"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_hull_code), "tessellation_control"
+        )
+
+    invalid_domain_code = """
+    shader bad_domain_domain {
+        tessellation_evaluation {
+            void main() @domain(patch) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="domain.*patch"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_domain_code), "tessellation_evaluation"
+        )
+
+    triangle_alias_code = """
+    shader triangle_alias_domain {
+        tessellation_control {
+            void main()
+                @domain(triangle)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(triangle_alias_code), "tessellation_control"
+    )
+    assert '[domain("tri")]' in generated
+    assert '[domain("triangle")]' not in generated
+
+
+def test_directx_tessellation_control_validates_outputtopology_values():
+    invalid_code = """
+    shader bad_outputtopology {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangles_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputtopology.*triangles_cw"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_code), "tessellation_control"
+        )
+
+    point_code = """
+    shader valid_point_outputtopology {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(point)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(point_code), "tessellation_control"
+    )
+    assert '[outputtopology("point")]' in generated
+
+
+def test_directx_tessellation_control_validates_partitioning_values():
+    invalid_code = """
+    shader bad_partitioning {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="partitioning.*fractional"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_code), "tessellation_control"
+        )
+
+    for partitioning in ("integer", "pow2"):
+        valid_code = f"""
+        shader valid_{partitioning}_partitioning {{
+            tessellation_control {{
+                void main()
+                    @domain(tri)
+                    @partitioning({partitioning})
+                    @outputtopology(triangle_cw)
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {{ }}
+            }}
+        }}
+        """
+        generated = HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(valid_code), "tessellation_control"
+        )
+        assert f'[partitioning("{partitioning}")]' in generated
+
+
+def test_directx_tessellation_control_validates_outputcontrolpoints_positive():
+    code = """
+    shader bad_output_control_point_count {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(0)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_directx_tessellation_control_validates_outputcontrolpoints_inputpatch_count():
+    mismatched_code = """
+    shader mismatched_hull_control_point_count {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(4)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputcontrolpoints.*InputPatch"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(mismatched_code), "tessellation_control"
+        )
+
+
+def test_directx_tessellation_control_validates_output_control_point_id_type():
+    float_id_code = """
+    shader bad_output_control_point_float_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            HSOutput main(InputPatch<HSInput, 3> patch, float id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_OutputControlPointID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_id_code), "tessellation_control"
+        )
+
+    vector_id_code = """
+    shader bad_output_control_point_vector_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            HSOutput main(InputPatch<HSInput, 3> patch, uvec2 id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_OutputControlPointID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_id_code), "tessellation_control"
+        )
+
+    int_id_code = """
+    shader valid_output_control_point_int_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, int id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(int_id_code), "tessellation_control"
+    )
+    assert "int id : SV_OutputControlPointID" in generated
+
+
+def test_directx_tessellation_control_validates_primitive_id_type():
+    float_id_code = """
+    shader bad_hull_float_primitive_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            HSOutput main(
+                InputPatch<HSInput, 3> patch,
+                uint id @ SV_OutputControlPointID,
+                float patchId @ SV_PrimitiveID
+            )
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_id_code), "tessellation_control"
+        )
+
+    vector_id_code = """
+    shader bad_hull_vector_primitive_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            HSOutput main(
+                InputPatch<HSInput, 3> patch,
+                uint id @ SV_OutputControlPointID,
+                uvec2 patchId @ SV_PrimitiveID
+            )
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_id_code), "tessellation_control"
+        )
+
+    int_id_code = """
+    shader valid_hull_int_primitive_id {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(
+                InputPatch<HSInput, 3> patch,
+                uint id @ SV_OutputControlPointID,
+                int patchId @ SV_PrimitiveID
+            )
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(int_id_code), "tessellation_control"
+    )
+    assert "int patchId : SV_PrimitiveID" in generated
+
+
+def test_directx_tessellation_evaluation_validates_domain_location_components():
+    tri_vec2_code = """
+    shader bad_tri_domain_location_components {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 3> patch, vec2 uv @ SV_DomainLocation)
+                @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_DomainLocation.*3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(tri_vec2_code), "tessellation_evaluation"
+        )
+
+    quad_vec3_code = """
+    shader bad_quad_domain_location_components {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 4> patch, vec3 uvw @ SV_DomainLocation)
+                @domain(quad) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_DomainLocation.*2"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(quad_vec3_code), "tessellation_evaluation"
+        )
+
+    isoline_vec2_code = """
+    shader valid_isoline_domain_location_components {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 2> patch, vec2 uv @ SV_DomainLocation)
+                @domain(isoline) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(isoline_vec2_code), "tessellation_evaluation"
+    )
+    assert "float2 uv : SV_DomainLocation" in generated
+
+
+def test_directx_tessellation_evaluation_validates_domain_location_type():
+    int_vector_code = """
+    shader bad_domain_location_integer_type {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 4> patch, ivec2 uv @ SV_DomainLocation)
+                @domain(quad) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_DomainLocation.*floating-point"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(int_vector_code), "tessellation_evaluation"
+        )
+
+    bool_vector_code = """
+    shader bad_domain_location_bool_type {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 3> patch, bvec3 bary @ SV_DomainLocation)
+                @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_DomainLocation.*floating-point"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bool_vector_code), "tessellation_evaluation"
+        )
+
+    valid_code = """
+    shader valid_domain_location_float_type {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 3> patch, vec3 bary @ SV_DomainLocation)
+                @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "tessellation_evaluation"
+    )
+    assert "float3 bary : SV_DomainLocation" in generated
+
+
+def test_directx_tessellation_evaluation_validates_primitive_id_type():
+    float_id_code = """
+    shader bad_domain_float_primitive_id {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(
+                OutputPatch<HSOutput, 3> patch,
+                vec3 bary @ SV_DomainLocation,
+                float primitiveId @ SV_PrimitiveID
+            ) @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_id_code), "tessellation_evaluation"
+        )
+
+    vector_id_code = """
+    shader bad_domain_vector_primitive_id {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(
+                OutputPatch<HSOutput, 4> patch,
+                vec2 uv @ SV_DomainLocation,
+                ivec2 primitiveId @ SV_PrimitiveID
+            ) @domain(quad) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_PrimitiveID.*int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_id_code), "tessellation_evaluation"
+        )
+
+    uint_id_code = """
+    shader valid_domain_uint_primitive_id {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(
+                OutputPatch<HSOutput, 2> patch,
+                vec2 uv @ SV_DomainLocation,
+                uint primitiveId @ SV_PrimitiveID
+            ) @domain(isoline) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uint_id_code), "tessellation_evaluation"
+    )
+    assert "uint primitiveId : SV_PrimitiveID" in generated
+
+
+def test_directx_tessellation_evaluation_validates_outputpatch_count_against_hull():
+    mismatched_code = """
+    shader mismatched_domain_patch_count {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec4 edges @ SV_TessFactor;
+            vec2 inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 4> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 4> patch, uint id @ SV_OutputControlPointID)
+                @domain(quad)
+                @partitioning(fractional_even)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(4)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 3> patch, vec2 uv @ SV_DomainLocation)
+                @domain(quad) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="OutputPatch.*outputcontrolpoints"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(mismatched_code), "tessellation_evaluation"
+        )
+
+    matching_code = mismatched_code.replace(
+        "OutputPatch<HSOutput, 3>", "OutputPatch<HSOutput, 4>"
+    )
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(matching_code), "tessellation_evaluation"
+    )
+    assert "float4 DSMain(OutputPatch<HSOutput, 4> patch" in generated
+
+
+def test_directx_tessellation_evaluation_validates_domain_matches_hull_domain():
+    mismatched_code = """
+    shader mismatched_tessellation_domain {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec4 edges @ SV_TessFactor;
+            vec2 inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 4> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 4> patch, uint id @ SV_OutputControlPointID)
+                @domain(quad)
+                @partitioning(fractional_even)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(4)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 4> patch, vec2 uv @ SV_DomainLocation)
+                @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="domain.*tessellation_control domain"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(mismatched_code), "tessellation_evaluation"
+        )
+
+    matching_code = mismatched_code.replace("@domain(tri) {", "@domain(quad) {")
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(matching_code), "tessellation_evaluation"
+    )
+    assert '[domain("quad")]' in generated
+    assert "float4 DSMain(OutputPatch<HSOutput, 4> patch" in generated
+
+
+def test_directx_geometry_stage_requires_maxvertexcount_attribute():
+    code = """
+    shader missing_geometry_attribute {
+        geometry {
+            void main() { }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="maxvertexcount"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+def test_directx_tessellation_control_requires_hlsl_stage_attributes():
+    code = """
+    shader missing_hull_attributes {
+        tessellation_control {
+            void main() @domain(tri) @outputcontrolpoints(3) { }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="outputtopology"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_directx_tessellation_evaluation_requires_domain_attribute():
+    code = """
+    shader missing_domain_attribute {
+        tessellation_evaluation {
+            void main() { }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="domain"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
+        )
 
 
 def test_generate_stage_filters_combined_vertex_fragment_units():
@@ -834,6 +3670,85 @@ def test_generate_stage_filters_combined_vertex_fragment_units():
     assert "float4 PSMain" not in vertex_code
     assert "float4 PSMain(VSOutput input): SV_TARGET" in fragment_code
     assert "VSOutput VSMain" not in fragment_code
+
+
+def test_directx_stage_local_helpers_order_by_dependencies_before_entrypoint():
+    shader = """
+    shader StageLocalHelperDependencyOrder {
+        fragment {
+            vec4 first(vec2 uv) {
+                return second(uv);
+            }
+
+            vec4 second(vec2 uv) {
+                return vec4(uv, 0.0, 1.0);
+            }
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ SV_Target {
+                return first(uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    second_index = generated_code.index("float4 second(float2 uv)")
+    first_index = generated_code.index("float4 first(float2 uv)")
+    entry_index = generated_code.index("float4 PSMain(float2 uv : TEXCOORD0)")
+
+    assert second_index < first_index < entry_index
+    assert "return second(uv);" in generated_code
+    assert "return first(uv);" in generated_code
+
+
+def test_directx_stage_entry_name_avoids_global_helper_collision():
+    shader = """
+    shader StageEntryGlobalHelperCollision {
+        vec4 PSMain(vec2 uv) {
+            return vec4(uv, 0.0, 1.0);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ SV_Target {
+                return vec4(uv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float4 PSMain(float2 uv)" in generated_code
+    assert "float4 PSMain_2(float2 uv : TEXCOORD0): SV_Target" in generated_code
+
+
+def test_directx_stage_entry_name_avoids_local_helper_collision():
+    shader = """
+    shader StageEntryLocalHelperCollision {
+        fragment {
+            vec4 PSMain(vec2 uv) {
+                return vec4(uv, 0.0, 1.0);
+            }
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ SV_Target {
+                return PSMain(uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float4 PSMain(float2 uv)" in generated_code
+    assert "float4 PSMain_2(float2 uv : TEXCOORD0): SV_Target" in generated_code
+    assert "return PSMain(uv);" in generated_code
 
 
 def test_compute_stage_emits_default_numthreads_attribute():

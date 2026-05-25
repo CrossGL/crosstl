@@ -1,5 +1,7 @@
 """CrossGL-to-Rust code generator."""
 
+import re
+
 from ..ast import (
     ArrayNode,
     ArrayAccessNode,
@@ -10,22 +12,29 @@ from ..ast import (
     CaseNode,
     CbufferNode,
     ContinueNode,
+    ConstructorNode,
+    ConstructorPatternNode,
     DoWhileNode,
+    EnumNode,
+    ExpressionStatementNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
+    IdentifierPatternNode,
     IfNode,
     LiteralNode,
     LiteralPatternNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
+    PointerAccessNode,
     ReturnNode,
     RangeNode,
     ShaderNode,
     StructNode,
+    StructPatternNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -56,6 +65,7 @@ class RustCodeGen:
             "half": "f16",
             "bool": "bool",
             "string": "&'static str",
+            "str": "&'static str",
             "char": "char",
             # Vector Types (using GPU-style vector types)
             "vec2<f32>": "Vec2<f32>",
@@ -184,15 +194,31 @@ class RustCodeGen:
             "mod": "modulo",
         }
         self.variable_types = {}
+        self.local_variable_names = set()
+        self.lazy_static_names = set()
         self.struct_member_types = {}
+        self.struct_generic_params = {}
+        self.static_variable_names = set()
+        self.static_symbol_names = {}
+        self.runtime_type_collisions = set()
         self.current_return_type = None
         self.do_while_contexts = []
         self.for_contexts = []
         self.loop_depth = 0
         self.do_while_counter = 0
         self.user_function_names = set()
+        self.user_function_nodes = {}
         self.user_function_return_types = {}
         self.user_function_param_types = {}
+        self.user_function_generic_constraint_cache = {}
+        self.active_generic_constraint_functions = set()
+        self.current_generic_param_names = set()
+        self.current_function_generic_constraints = {}
+        self.trait_methods = {}
+        self.enum_variant_names = {}
+        self.enum_variant_field_types = {}
+        self.current_mutated_names = set()
+        self.required_generic_math_traits = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -200,15 +226,33 @@ class RustCodeGen:
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
         self.variable_types = {}
+        self.local_variable_names = set()
+        self.lazy_static_names = set()
         self.struct_member_types = {}
+        self.struct_generic_params = {}
+        self.static_variable_names = self.collect_static_variable_names(ast)
+        self.static_symbol_names = self.build_static_symbol_names(
+            self.static_variable_names
+        )
+        self.runtime_type_collisions = self.collect_runtime_type_collisions(ast)
         self.current_return_type = None
         self.do_while_contexts = []
         self.for_contexts = []
         self.loop_depth = 0
         self.do_while_counter = 0
         self.user_function_names = self.collect_user_function_names(ast)
+        self.user_function_nodes = self.collect_user_function_nodes(ast)
         self.user_function_return_types = self.collect_user_function_return_types(ast)
         self.user_function_param_types = self.collect_user_function_param_types(ast)
+        self.user_function_generic_constraint_cache = {}
+        self.active_generic_constraint_functions = set()
+        self.current_generic_param_names = set()
+        self.current_function_generic_constraints = {}
+        self.trait_methods = self.collect_trait_methods(ast)
+        self.enum_variant_names = self.collect_enum_variant_names(ast)
+        self.enum_variant_field_types = self.collect_enum_variant_field_types(ast)
+        self.current_mutated_names = set()
+        self.required_generic_math_traits = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -219,38 +263,22 @@ class RustCodeGen:
         structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
-                code += self.generate_struct(node)
+                if getattr(node, "is_trait", False):
+                    code += self.generate_trait(node)
+                else:
+                    code += self.generate_struct(node)
+            elif isinstance(node, EnumNode):
+                code += self.generate_enum(node)
 
+        emitted_static_names = set()
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
             if isinstance(node, ArrayNode):
                 code += self.generate_global_array_declaration(node)
+                emitted_static_names.add(node.name)
             else:
-                # Handle both old and new AST variable structures
-                if hasattr(node, "var_type"):
-                    var_type = self.convert_type_node_to_string(node.var_type)
-                elif hasattr(node, "vtype"):
-                    var_type = node.vtype
-                else:
-                    var_type = "float"
-                self.register_variable_type(node.name, var_type)
-                initial_value = getattr(
-                    node, "initial_value", getattr(node, "value", None)
-                )
-                rust_type = self.map_type(var_type)
-                if initial_value is not None:
-                    init_expr = self.generate_expression_with_type(
-                        initial_value, var_type, static_context=True
-                    )
-                    lazy_lock = self.static_array_literal_requires_lazy_lock(
-                        var_type, initial_value
-                    )
-                else:
-                    init_expr = self.rust_static_default_initializer(rust_type)
-                    lazy_lock = False
-                code += self.generate_static_declaration(
-                    node.name, rust_type, init_expr, lazy_lock=lazy_lock
-                )
+                code += self.generate_variable_static_declaration(node)
+                emitted_static_names.add(node.name)
 
         cbuffers = self.get_cbuffer_nodes(ast)
         if cbuffers:
@@ -279,18 +307,62 @@ class RustCodeGen:
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
+            stage_entry_name_counts = self.stage_entry_name_counts(ast.stages)
             for stage_type, stage in ast.stages.items():
+                for struct in getattr(stage, "local_structs", []) or []:
+                    code += self.generate_struct(struct)
+
+                saved_variable_types = self.variable_types.copy()
+                for variable in getattr(stage, "local_variables", []) or []:
+                    self.register_variable_type(
+                        variable.name,
+                        self.get_variable_type(variable),
+                        scope="static",
+                    )
+                    if variable.name not in emitted_static_names:
+                        code += self.generate_variable_static_declaration(variable)
+                        emitted_static_names.add(variable.name)
+
                 if hasattr(stage, "entry_point"):
                     stage_name = str(stage_type).split(".")[-1].lower()
+                    function_name = self.stage_entry_function_name(
+                        stage_name,
+                        stage.entry_point,
+                        stage_entry_name_counts,
+                    )
                     code += f"// {stage_name.title()} Shader\n"
                     code += self.generate_function(
-                        stage.entry_point, shader_type=stage_name
+                        stage.entry_point,
+                        shader_type=stage_name,
+                        function_name=function_name,
                     )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
                         code += self.generate_function(func)
 
+                self.variable_types = saved_variable_types
+
+        code += self.generate_required_generic_math_traits()
         return code
+
+    def stage_entry_name_counts(self, stages):
+        """Count entry-point names across shader stages."""
+        counts = {}
+        for stage in stages.values():
+            entry_point = getattr(stage, "entry_point", None)
+            name = getattr(entry_point, "name", None)
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def stage_entry_function_name(self, stage_name, entry_point, name_counts):
+        """Avoid duplicate Rust symbols when multiple stages use ``main``."""
+        name = getattr(entry_point, "name", None)
+        if not name:
+            return name
+        if name_counts.get(name, 0) > 1:
+            return f"{stage_name}_{name}"
+        return name
 
     def collect_user_function_names(self, node):
         names = set()
@@ -317,6 +389,251 @@ class RustCodeGen:
         collect(node)
         names.discard(None)
         return names
+
+    def collect_user_function_nodes(self, node):
+        functions = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode) and current.name:
+                functions[current.name] = current
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return functions
+
+    def collect_static_variable_names(self, node):
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            for variable in getattr(current, "global_variables", []):
+                name = getattr(variable, "name", None)
+                if name:
+                    names.add(name)
+            for variable in getattr(current, "local_variables", []):
+                name = getattr(variable, "name", None)
+                if name:
+                    names.add(name)
+            for cbuffer in self.get_cbuffer_nodes(current):
+                for member in getattr(cbuffer, "members", []) or []:
+                    name = getattr(member, "name", None)
+                    if name:
+                        names.add(name)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return names
+
+    def build_static_symbol_names(self, names):
+        """Map source static names to Rust-style uppercase static symbols."""
+        symbol_names = {}
+        used_symbols = set()
+        for name in sorted(names):
+            symbol = self.uppercase_static_symbol_name(name)
+            base_symbol = symbol
+            suffix = 2
+            while symbol in used_symbols:
+                symbol = f"{base_symbol}_{suffix}"
+                suffix += 1
+            symbol_names[name] = symbol
+            used_symbols.add(symbol)
+        return symbol_names
+
+    def uppercase_static_symbol_name(self, name):
+        """Convert a CrossGL identifier to a Rust static identifier."""
+        name = str(name)
+        words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
+        words = re.sub(r"[^0-9A-Za-z_]+", "_", words)
+        words = re.sub(r"_+", "_", words).strip("_")
+        symbol = words.upper() or "STATIC"
+        if symbol[0].isdigit():
+            symbol = f"STATIC_{symbol}"
+        return symbol
+
+    def collect_runtime_type_collisions(self, node):
+        """Find user declarations that shadow Rust math prelude type names."""
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, (StructNode, EnumNode)):
+                name = getattr(current, "name", None)
+                if name in self.runtime_math_type_names():
+                    names.add(name)
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return names
+
+    def runtime_math_type_names(self):
+        return {
+            "Vec2",
+            "Vec3",
+            "Vec4",
+            "Mat2",
+            "Mat3",
+            "Mat4",
+            "Mat2x3",
+            "Mat2x4",
+            "Mat3x2",
+            "Mat3x4",
+            "Mat4x2",
+            "Mat4x3",
+        }
+
+    def collect_trait_methods(self, node):
+        traits = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, StructNode) and getattr(current, "is_trait", False):
+                traits[current.name] = {
+                    method.name
+                    for method in getattr(current, "members", []) or []
+                    if isinstance(method, FunctionNode)
+                }
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for function in getattr(current, "functions", []):
+                collect(function)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return traits
+
+    def collect_enum_variant_names(self, node):
+        """Collect enum variant names keyed by the Rust enum type name."""
+        variants = {}
+
+        def add_enum(name, enum_node):
+            if not name or enum_node is None:
+                return
+            variants[name] = [
+                variant.name
+                for variant in getattr(enum_node, "variants", []) or []
+                if getattr(variant, "name", None)
+            ]
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, EnumNode):
+                add_enum(current.name, current)
+            elif isinstance(current, StructNode):
+                wrapper_enum = self.struct_enum_wrapper(current)
+                if wrapper_enum is not None:
+                    add_enum(current.name, wrapper_enum)
+                    add_enum(wrapper_enum.name, wrapper_enum)
+                for member in getattr(current, "members", []) or []:
+                    if isinstance(member, EnumNode):
+                        collect(member)
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return variants
+
+    def collect_enum_variant_field_types(self, node):
+        """Collect named payload fields for struct-like enum variants."""
+        field_types = {}
+
+        def add_enum(name, enum_node):
+            if not name or enum_node is None:
+                return
+            variant_fields = {}
+            for variant in getattr(enum_node, "variants", []) or []:
+                data = self.enum_variant_data(variant)
+                if not data or not all(
+                    isinstance(item, tuple) and len(item) == 2 for item in data
+                ):
+                    continue
+                variant_fields[variant.name] = {
+                    field_name: self.convert_type_node_to_string(field_type)
+                    for field_name, field_type in data
+                }
+            if variant_fields:
+                field_types[name] = variant_fields
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, EnumNode):
+                add_enum(current.name, current)
+            elif isinstance(current, StructNode):
+                wrapper_enum = self.struct_enum_wrapper(current)
+                if wrapper_enum is not None:
+                    add_enum(current.name, wrapper_enum)
+                    add_enum(wrapper_enum.name, wrapper_enum)
+                for member in getattr(current, "members", []) or []:
+                    if isinstance(member, EnumNode):
+                        collect(member)
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return field_types
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
@@ -400,11 +717,145 @@ class RustCodeGen:
         vtype = getattr(member, "vtype", None)
         return isinstance(vtype, str) and vtype.endswith("[]")
 
+    def generate_trait(self, node):
+        """Render a simple CrossGL trait declaration as a Rust trait."""
+        code = f"pub trait {node.name}{self.format_generic_params(node)}: Sized {{\n"
+        for method in getattr(node, "members", []) or []:
+            if isinstance(method, FunctionNode):
+                code += self.generate_trait_method(method)
+        code += "}\n\n"
+        if self.is_auto_numeric_trait(node):
+            code += self.generate_numeric_trait_primitive_impls(node.name)
+        return code
+
+    def is_auto_numeric_trait(self, node):
+        """Detect the canonical value-style Numeric trait used by generic shaders."""
+        if getattr(node, "name", None) != "Numeric":
+            return False
+
+        methods = {
+            method.name: method
+            for method in getattr(node, "members", []) or []
+            if isinstance(method, FunctionNode)
+        }
+        if set(methods) != {"add", "mul", "zero", "one"}:
+            return False
+
+        return (
+            self.is_binary_self_method(methods["add"])
+            and self.is_binary_self_method(methods["mul"])
+            and self.is_nullary_self_method(methods["zero"])
+            and self.is_nullary_self_method(methods["one"])
+        )
+
+    def is_binary_self_method(self, method):
+        params = getattr(method, "parameters", getattr(method, "params", []))
+        return (
+            len(params) == 2
+            and params[0].name == "self"
+            and self.function_parameter_type(params[0]) == "Self"
+            and self.function_parameter_type(params[1]) == "Self"
+            and self.convert_type_node_to_string(method.return_type) == "Self"
+        )
+
+    def is_nullary_self_method(self, method):
+        params = getattr(method, "parameters", getattr(method, "params", []))
+        return (
+            len(params) == 0
+            and self.convert_type_node_to_string(method.return_type) == "Self"
+        )
+
+    def generate_numeric_trait_primitive_impls(self, trait_name):
+        """Provide primitive Rust implementations for the canonical Numeric trait."""
+        primitive_types = ["f32", "f64", "i32", "u32", "i16", "u16", "i64", "u64"]
+        code = ""
+        for rust_type in primitive_types:
+            one = "1.0" if rust_type in {"f32", "f64"} else "1"
+            zero = "0.0" if rust_type in {"f32", "f64"} else "0"
+            code += f"impl {trait_name} for {rust_type} {{\n"
+            code += "    fn add(self, other: Self) -> Self {\n"
+            code += "        self + other\n"
+            code += "    }\n"
+            code += "    fn mul(self, other: Self) -> Self {\n"
+            code += "        self * other\n"
+            code += "    }\n"
+            code += "    fn zero() -> Self {\n"
+            code += f"        {zero}\n"
+            code += "    }\n"
+            code += "    fn one() -> Self {\n"
+            code += f"        {one}\n"
+            code += "    }\n"
+            code += "}\n\n"
+        return code
+
+    def generate_required_generic_math_traits(self):
+        code = ""
+        if "CglSqrt" in self.required_generic_math_traits:
+            code += self.generate_cgl_sqrt_trait()
+        return code
+
+    def generate_cgl_sqrt_trait(self):
+        code = "pub trait CglSqrt {\n"
+        code += "    fn cgl_sqrt(self) -> Self;\n"
+        code += "}\n\n"
+        for rust_type in ["f32", "f64"]:
+            code += f"impl CglSqrt for {rust_type} {{\n"
+            code += "    fn cgl_sqrt(self) -> Self {\n"
+            code += "        self.sqrt()\n"
+            code += "    }\n"
+            code += "}\n\n"
+        for rust_type in ["i32", "u32", "i16", "u16", "i64", "u64"]:
+            code += f"impl CglSqrt for {rust_type} {{\n"
+            code += "    fn cgl_sqrt(self) -> Self {\n"
+            code += f"        (self as f64).sqrt() as {rust_type}\n"
+            code += "    }\n"
+            code += "}\n\n"
+        return code
+
+    def generate_trait_method(self, method):
+        param_list = getattr(method, "parameters", getattr(method, "params", []))
+        params = []
+        for param in param_list:
+            param_type = self.function_parameter_type(param)
+            if param.name == "self" and param_type == "Self":
+                params.append("self")
+            else:
+                params.append(f"{param.name}: {self.map_type(param_type)}")
+
+        return_type = getattr(method, "return_type", None)
+        if return_type is not None:
+            return_type = self.convert_type_node_to_string(return_type)
+        else:
+            return_type = "void"
+
+        generic_params = self.format_generic_params(method)
+        params_str = ", ".join(params)
+        return (
+            f"    fn {method.name}{generic_params}({params_str}) "
+            f"-> {self.map_type(return_type)};\n"
+        )
+
     def generate_struct(self, node):
+        wrapper_enum = self.struct_enum_wrapper(node)
+        if wrapper_enum is not None:
+            self.struct_member_types[node.name] = {}
+            self.struct_generic_params[node.name] = self.generic_param_names(node)
+            return self.generate_enum(
+                wrapper_enum,
+                enum_name=node.name,
+                generic_owner=node,
+                derive_traits=(
+                    "Debug, Clone, Copy, Default"
+                    if self.enum_has_unit_variant(wrapper_enum)
+                    else "Debug, Clone, Copy"
+                ),
+                default_variant_name=self.enum_default_variant_name(wrapper_enum),
+            )
+
         members = getattr(node, "members", [])
         derive_traits = self.derive_traits_for_members(members, include_default=True)
         code = f"#[repr(C)]\n#[derive({derive_traits})]\n"
-        code += f"pub struct {node.name} {{\n"
+        code += f"pub struct {node.name}{self.format_generic_params(node)} {{\n"
         member_types = {}
 
         for member in members:
@@ -422,6 +873,9 @@ class RustCodeGen:
                 else:
                     code += f"    pub {member.name}: Vec<{self.map_type_to_rust(element_type)}>,\n"
             else:
+                if not hasattr(member, "member_type") and not hasattr(member, "vtype"):
+                    continue
+
                 if hasattr(member, "member_type"):
                     member_type = self.convert_type_node_to_string(member.member_type)
                 elif hasattr(member, "vtype"):
@@ -442,8 +896,244 @@ class RustCodeGen:
                 code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
 
         self.struct_member_types[node.name] = member_types
+        self.struct_generic_params[node.name] = self.generic_param_names(node)
+        code += "}\n\n"
+        code += self.generate_struct_constructor_impl(node, member_types)
+        return code
+
+    def generate_struct_constructor_impl(self, node, member_types):
+        """Emit a positional constructor for generated Rust structs."""
+        if not member_types:
+            return ""
+
+        generic_decl = self.format_generic_params(node)
+        generic_use = self.format_generic_argument_params(node)
+        params = []
+        fields = []
+        for name, member_type in member_types.items():
+            param_name = self.struct_constructor_param_name(name)
+            params.append(f"{param_name}: {self.map_type(member_type)}")
+            if param_name == name:
+                fields.append(name)
+            else:
+                fields.append(f"{name}: {param_name}")
+
+        code = f"impl{generic_decl} {node.name}{generic_use} {{\n"
+        code += f"    pub fn new({', '.join(params)}) -> Self {{\n"
+        code += f"        Self {{ {', '.join(fields)} }}\n"
+        code += "    }\n"
         code += "}\n\n"
         return code
+
+    def struct_constructor_param_name(self, field_name):
+        if field_name in self.static_variable_names:
+            return f"{field_name}_value"
+        return field_name
+
+    def struct_enum_wrapper(self, node):
+        """Return a nested enum when a legacy wrapper struct should lower as enum."""
+        members = getattr(node, "members", []) or []
+        enum_members = [member for member in members if isinstance(member, EnumNode)]
+        data_members = [
+            member for member in members if not isinstance(member, EnumNode)
+        ]
+
+        if len(enum_members) != 1 or len(data_members) != 1:
+            return None
+
+        variant_member = data_members[0]
+        if getattr(variant_member, "name", None) != "variant":
+            return None
+
+        variant_type = self.get_member_type(variant_member)
+        if variant_type != enum_members[0].name:
+            return None
+
+        return enum_members[0]
+
+    def enum_has_unit_variant(self, node):
+        return self.enum_default_variant_name(node) is not None
+
+    def enum_default_variant_name(self, node):
+        for variant in getattr(node, "variants", []) or []:
+            if getattr(variant, "data", None):
+                continue
+            if getattr(variant, "value", None) is not None:
+                continue
+            return variant.name
+        return None
+
+    def generate_enum(
+        self,
+        node,
+        enum_name=None,
+        generic_owner=None,
+        derive_traits=None,
+        default_variant_name=None,
+    ):
+        """Render a CrossGL enum declaration as a Rust enum."""
+        if derive_traits is None:
+            default_variant_name = self.enum_default_variant_name(node)
+            derive_traits = (
+                "Debug, Clone, Copy, Default"
+                if default_variant_name is not None
+                else "Debug, Clone, Copy"
+            )
+
+        derived_traits = {
+            trait.strip() for trait in derive_traits.split(",") if trait.strip()
+        }
+
+        if derive_traits:
+            code = f"#[derive({derive_traits})]\n"
+        else:
+            code = ""
+        name = enum_name or node.name
+        generic_node = generic_owner or node
+        code += f"pub enum {name}{self.format_generic_params(generic_node)} {{\n"
+        for variant in getattr(node, "variants", []) or []:
+            if variant.name == default_variant_name:
+                code += "    #[default]\n"
+            code += f"    {self.generate_enum_variant(variant)},\n"
+        code += "}\n\n"
+
+        if "Default" not in derived_traits:
+            code += self.generate_enum_default_impl(node, name, generic_node)
+
+        return code
+
+    def generate_enum_default_impl(self, node, name, generic_node):
+        variant = self.enum_default_impl_variant(node)
+        if variant is None:
+            return ""
+
+        default_expression = self.enum_variant_default_expression(variant)
+        generic_decl = self.format_default_impl_generic_params(generic_node)
+        generic_use = self.format_generic_argument_params(generic_node)
+        code = f"impl{generic_decl} Default for {name}{generic_use} {{\n"
+        code += "    fn default() -> Self {\n"
+        code += f"        {default_expression}\n"
+        code += "    }\n"
+        code += "}\n\n"
+        return code
+
+    def enum_default_impl_variant(self, node):
+        variants = getattr(node, "variants", []) or []
+        for variant in variants:
+            if not self.enum_variant_data(variant):
+                return variant
+        return variants[0] if variants else None
+
+    def enum_variant_default_expression(self, variant):
+        data = self.enum_variant_data(variant)
+        if not data:
+            return f"Self::{variant.name}"
+
+        if all(isinstance(item, tuple) and len(item) == 2 for item in data):
+            fields = ", ".join(
+                f"{name}: Default::default()" for name, _field_type in data
+            )
+            return f"Self::{variant.name} {{ {fields} }}"
+
+        args = ", ".join("Default::default()" for _field_type in data)
+        return f"Self::{variant.name}({args})"
+
+    def enum_variant_data(self, variant):
+        data = getattr(variant, "data", None)
+        if data:
+            return data
+        return getattr(variant, "fields", None) or []
+
+    def format_default_impl_generic_params(self, node):
+        generic_params = getattr(node, "generic_params", []) or []
+        if not generic_params:
+            return ""
+        params = []
+        for param in generic_params:
+            name = self.generic_param_name(param)
+            if not name:
+                continue
+            constraints = self.generic_param_constraints(param)
+            if "Default" not in constraints:
+                constraints.append("Default")
+            params.append(f"{name}: {' + '.join(constraints)}")
+        return f"<{', '.join(params)}>" if params else ""
+
+    def generate_enum_variant(self, variant):
+        data = self.enum_variant_data(variant)
+        if data:
+            if all(isinstance(item, tuple) and len(item) == 2 for item in data):
+                fields = ", ".join(
+                    f"{name}: {self.map_type(self.convert_type_node_to_string(field_type))}"
+                    for name, field_type in data
+                )
+                return f"{variant.name} {{ {fields} }}"
+
+            fields = ", ".join(
+                self.map_type(self.convert_type_node_to_string(field_type))
+                for field_type in data
+            )
+            return f"{variant.name}({fields})"
+
+        value = getattr(variant, "value", None)
+        if value is not None:
+            return f"{variant.name} = {self.generate_expression(value)}"
+
+        return variant.name
+
+    def format_generic_params(self, node, extra_constraints=None):
+        """Render AST generic parameters as a Rust generic parameter list."""
+        extra_constraints = extra_constraints or {}
+        params = []
+        for param in getattr(node, "generic_params", []) or []:
+            name = self.generic_param_name(param)
+            if not name:
+                continue
+            constraints = self.generic_param_constraints(param)
+            for constraint in extra_constraints.get(name, []):
+                if constraint not in constraints:
+                    constraints.append(constraint)
+            if constraints:
+                params.append(f"{name}: {' + '.join(constraints)}")
+            else:
+                params.append(name)
+        return f"<{', '.join(params)}>" if params else ""
+
+    def format_generic_argument_params(self, node):
+        """Render only generic parameter names for a Rust type reference."""
+        params = self.generic_param_names(node)
+        return f"<{', '.join(params)}>" if params else ""
+
+    def generic_param_names(self, node):
+        """Return unique generic parameter names from an AST declaration."""
+        params = []
+        for param in getattr(node, "generic_params", []) or []:
+            name = self.generic_param_name(param)
+
+            if name and name not in params:
+                params.append(name)
+
+        return params
+
+    def generic_param_name(self, param):
+        if hasattr(param, "name"):
+            return param.name
+        if isinstance(param, (tuple, list)) and param:
+            return param[0]
+        return str(param)
+
+    def generic_param_constraints(self, param):
+        constraints = []
+        for constraint in getattr(param, "constraints", []) or []:
+            constraint_name = self.generic_constraint_name(constraint)
+            if constraint_name and constraint_name not in constraints:
+                constraints.append(constraint_name)
+        return constraints
+
+    def generic_constraint_name(self, constraint):
+        if hasattr(constraint, "name") or hasattr(constraint, "element_type"):
+            constraint = self.convert_type_node_to_string(constraint)
+        return self.map_type(str(constraint))
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
@@ -572,7 +1262,10 @@ class RustCodeGen:
             "float3": "Vec3<f32>",
             "float4": "Vec4<f32>",
         }
-        return type_map.get(type_str, type_str)
+        mapped_type = type_map.get(type_str, type_str)
+        if mapped_type != type_str:
+            return self.qualify_colliding_runtime_type(mapped_type)
+        return mapped_type
 
     def generate_cbuffers(self, ast):
         code = ""
@@ -623,8 +1316,45 @@ class RustCodeGen:
             else:
                 member_type = self.map_type(self.get_member_type(member))
             initializer = self.rust_static_default_initializer(member_type)
-            code += f"static {member.name}: {member_type} = {initializer};\n"
+            code += self.generate_static_declaration(
+                member.name,
+                member_type,
+                initializer,
+            )
         return code
+
+    def generate_variable_static_declaration(self, node):
+        """Render a module-level static for a global or stage-local variable."""
+        var_type = self.get_variable_type(node)
+        if var_type is None:
+            var_type = "float"
+        elif hasattr(var_type, "name") or hasattr(var_type, "element_type"):
+            var_type = self.convert_type_node_to_string(var_type)
+
+        self.register_variable_type(node.name, var_type, scope="static")
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        rust_type = self.map_type(var_type)
+
+        if initial_value is not None:
+            init_expr = self.generate_expression_with_type(
+                initial_value,
+                var_type,
+                static_context=True,
+            )
+            lazy_lock = self.static_array_literal_requires_lazy_lock(
+                var_type,
+                initial_value,
+            )
+        else:
+            init_expr = self.rust_static_default_initializer(rust_type)
+            lazy_lock = False
+
+        return self.generate_static_declaration(
+            node.name,
+            rust_type,
+            init_expr,
+            lazy_lock=lazy_lock,
+        )
 
     def generate_global_array_declaration(self, node):
         element_type_name = self.convert_type_node_to_string(
@@ -668,12 +1398,22 @@ class RustCodeGen:
     def generate_static_declaration(
         self, name, rust_type, initializer, lazy_lock=False
     ):
+        symbol = self.static_symbol_name(name)
+        lazy_lock = lazy_lock or self.static_initializer_requires_lazy_lock(
+            rust_type,
+            initializer,
+        )
         if lazy_lock:
+            self.lazy_static_names.add(name)
             return (
-                f"static {name}: std::sync::LazyLock<{rust_type}> = "
+                f"static {symbol}: std::sync::LazyLock<{rust_type}> = "
                 f"std::sync::LazyLock::new(|| {initializer});\n"
             )
-        return f"static {name}: {rust_type} = {initializer};\n"
+        self.lazy_static_names.discard(name)
+        return f"static {symbol}: {rust_type} = {initializer};\n"
+
+    def static_initializer_requires_lazy_lock(self, rust_type, initializer):
+        return str(initializer) == "Default::default()"
 
     def static_array_literal_requires_lazy_lock(self, target_type, initial_value):
         if not isinstance(initial_value, ArrayLiteralNode):
@@ -745,6 +1485,7 @@ class RustCodeGen:
         return None
 
     def is_rust_shader_pod_value_type(self, rust_type):
+        rust_type = self.unqualify_runtime_type_name(rust_type)
         return str(rust_type).startswith(
             (
                 "Vec2<",
@@ -759,18 +1500,27 @@ class RustCodeGen:
             )
         ) and str(rust_type).endswith(">")
 
-    def generate_function(self, func, indent=0, shader_type=None):
+    def generate_function(self, func, indent=0, shader_type=None, function_name=None):
         """Render one CrossGL function or shader entry point as Rust code."""
         code = ""
         code += "  " * indent
         saved_variable_types = self.variable_types.copy()
+        saved_local_variable_names = self.local_variable_names.copy()
+        self.local_variable_names = set()
         saved_return_type = self.current_return_type
+        saved_generic_param_names = self.current_generic_param_names
+        saved_function_generic_constraints = self.current_function_generic_constraints
+        saved_mutated_names = self.current_mutated_names
+        self.current_generic_param_names = set(self.generic_param_names(func))
+        self.current_mutated_names = self.collect_mutated_binding_names(
+            getattr(func, "body", None)
+        )
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
         for p in param_list:
             param_type = self.function_parameter_type(p)
-            self.register_variable_type(p.name, param_type)
+            self.register_variable_type(p.name, param_type, scope="local")
             params.append(f"{p.name}: {self.map_type(param_type)}")
 
         params_str = ", ".join(params) if params else ""
@@ -788,7 +1538,17 @@ class RustCodeGen:
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
 
-        code += f"pub fn {func.name}({params_str}) -> {self.map_type(return_type)} {{\n"
+        inferred_constraints = self.combined_function_generic_constraints(func)
+        self.current_function_generic_constraints = inferred_constraints
+        generic_params = self.format_generic_params(
+            func,
+            extra_constraints=inferred_constraints,
+        )
+        emitted_name = function_name or func.name
+        code += (
+            f"pub fn {emitted_name}{generic_params}({params_str}) "
+            f"-> {self.map_type(return_type)} {{\n"
+        )
 
         body = getattr(func, "body", [])
         if hasattr(body, "statements"):
@@ -800,8 +1560,575 @@ class RustCodeGen:
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
+        self.local_variable_names = saved_local_variable_names
         self.current_return_type = saved_return_type
+        self.current_generic_param_names = saved_generic_param_names
+        self.current_function_generic_constraints = saved_function_generic_constraints
+        self.current_mutated_names = saved_mutated_names
         return code
+
+    def combined_function_generic_constraints(self, func):
+        """Return explicit and inferred generic constraints for one function."""
+        getattr(func, "name", None)
+        cache_key = id(func)
+        if cache_key in self.user_function_generic_constraint_cache:
+            return self.user_function_generic_constraint_cache[cache_key]
+        if cache_key in self.active_generic_constraint_functions:
+            return {}
+
+        self.active_generic_constraint_functions.add(cache_key)
+        try:
+            constraints = {}
+            for param in getattr(func, "generic_params", []) or []:
+                name = self.generic_param_name(param)
+                if name:
+                    constraints[name] = self.generic_param_constraints(param)
+
+            inferred = self.infer_function_generic_operator_constraints(func)
+            for name, bounds in inferred.items():
+                for bound in bounds:
+                    self.add_generic_constraint(constraints, name, bound)
+        finally:
+            self.active_generic_constraint_functions.remove(cache_key)
+
+        self.user_function_generic_constraint_cache[cache_key] = constraints
+        return constraints
+
+    def infer_function_generic_operator_constraints(self, func):
+        """Infer Rust operator trait bounds needed by generic function bodies."""
+        generic_names = set(self.generic_param_names(func))
+        if not generic_names:
+            return {}
+
+        saved_variable_types = self.variable_types.copy()
+        saved_local_variable_names = self.local_variable_names.copy()
+        saved_generic_param_names = self.current_generic_param_names
+        constraints = {name: [] for name in generic_names}
+
+        try:
+            self.variable_types = {}
+            self.local_variable_names = set()
+            self.current_generic_param_names = generic_names
+            for param in getattr(func, "parameters", getattr(func, "params", [])):
+                self.register_variable_type(
+                    param.name,
+                    self.function_parameter_type(param),
+                    scope="local",
+                )
+            self.collect_generic_operator_constraints(
+                getattr(func, "body", []),
+                generic_names,
+                constraints,
+            )
+        finally:
+            self.variable_types = saved_variable_types
+            self.local_variable_names = saved_local_variable_names
+            self.current_generic_param_names = saved_generic_param_names
+
+        return {name: bounds for name, bounds in constraints.items() if bounds}
+
+    def collect_mutated_binding_names(self, node):
+        """Collect local binding names that need `mut` because they are assigned."""
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if hasattr(current, "statements"):
+                collect(current.statements)
+                return
+
+            if isinstance(current, AssignmentNode):
+                root_name = self.assignment_target_root_name(current.target)
+                if root_name:
+                    names.add(root_name)
+                collect(current.value)
+                return
+
+            if isinstance(current, VariableNode):
+                collect(getattr(current, "initial_value", None))
+                return
+
+            if isinstance(current, ExpressionStatementNode):
+                collect(current.expression)
+                return
+
+            if isinstance(current, ReturnNode):
+                collect(current.value)
+                return
+
+            if isinstance(current, IfNode):
+                collect(current.condition)
+                collect(current.then_branch)
+                collect(current.else_branch)
+                return
+
+            if isinstance(current, ForNode):
+                collect(current.init)
+                collect(current.condition)
+                collect(current.update)
+                collect(current.body)
+                return
+
+            if isinstance(current, ForInNode):
+                collect(current.iterable)
+                collect(current.body)
+                return
+
+            if isinstance(current, (WhileNode, DoWhileNode)):
+                collect(current.condition)
+                collect(current.body)
+                return
+
+            if isinstance(current, LoopNode):
+                collect(current.body)
+                return
+
+            if isinstance(current, MatchNode):
+                collect(current.expression)
+                for arm in getattr(current, "arms", []) or []:
+                    collect(getattr(arm, "guard", None))
+                    collect(getattr(arm, "body", None))
+                return
+
+            if isinstance(current, SwitchNode):
+                collect(getattr(current, "expression", None))
+                for case in getattr(current, "cases", []) or []:
+                    collect(getattr(case, "value", None))
+                    collect(getattr(case, "statements", []))
+                collect(getattr(current, "default_case", None))
+                return
+
+            if isinstance(current, UnaryOpNode):
+                operator = self.map_operator(
+                    getattr(current, "operator", getattr(current, "op", None))
+                )
+                if operator in {"++", "--"}:
+                    root_name = self.assignment_target_root_name(current.operand)
+                    if root_name:
+                        names.add(root_name)
+                collect(current.operand)
+                return
+
+            if isinstance(current, BinaryOpNode):
+                collect(current.left)
+                collect(current.right)
+                return
+
+            if isinstance(current, TernaryOpNode):
+                collect(current.condition)
+                collect(current.true_expr)
+                collect(current.false_expr)
+                return
+
+            if isinstance(current, FunctionCallNode):
+                collect(current.function)
+                collect(getattr(current, "arguments", getattr(current, "args", [])))
+                return
+
+            if isinstance(current, MemberAccessNode):
+                collect(current.object_expr)
+                return
+
+            if isinstance(current, PointerAccessNode):
+                collect(current.pointer_expr)
+                return
+
+            if isinstance(current, ArrayAccessNode):
+                collect(current.array_expr)
+                collect(current.index_expr)
+                return
+
+            if isinstance(current, ConstructorNode):
+                collect(getattr(current, "arguments", []))
+                collect(list((getattr(current, "named_arguments", {}) or {}).values()))
+                return
+
+            if isinstance(current, ArrayLiteralNode):
+                collect(getattr(current, "elements", []))
+
+        collect(node)
+        return names
+
+    def assignment_target_root_name(self, target):
+        """Return the binding name mutated by an assignment target."""
+        if isinstance(target, IdentifierNode):
+            return target.name
+        if isinstance(target, VariableNode):
+            return target.name
+        if isinstance(target, str):
+            return target if target.isidentifier() else None
+        if isinstance(target, MemberAccessNode):
+            return self.assignment_target_root_name(target.object_expr)
+        if isinstance(target, PointerAccessNode):
+            return self.assignment_target_root_name(target.pointer_expr)
+        if isinstance(target, ArrayAccessNode):
+            return self.assignment_target_root_name(target.array_expr)
+        return None
+
+    def collect_generic_operator_constraints(self, node, generic_names, constraints):
+        if node is None:
+            return
+
+        if isinstance(node, list):
+            for item in node:
+                self.collect_generic_operator_constraints(
+                    item, generic_names, constraints
+                )
+            return
+
+        if hasattr(node, "statements"):
+            for statement in node.statements:
+                self.collect_generic_operator_constraints(
+                    statement, generic_names, constraints
+                )
+            return
+
+        if isinstance(node, VariableNode):
+            initial_value = getattr(node, "initial_value", None)
+            self.collect_generic_operator_constraints(
+                initial_value, generic_names, constraints
+            )
+            declared_type = self.get_variable_type(node)
+            variable_type = declared_type or self.expression_result_type(initial_value)
+            if variable_type is not None:
+                self.register_variable_type(node.name, variable_type, scope="local")
+            return
+
+        if isinstance(node, ExpressionStatementNode):
+            self.collect_generic_operator_constraints(
+                node.expression, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, ReturnNode):
+            self.collect_generic_operator_constraints(
+                node.value, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, AssignmentNode):
+            self.collect_generic_operator_constraints(
+                node.target, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.value, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, IfNode):
+            self.collect_generic_operator_constraints(
+                node.condition, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.then_branch, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.else_branch, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, ForNode):
+            self.collect_generic_operator_constraints(
+                node.init, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.condition, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.update, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.body, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, ForInNode):
+            self.collect_generic_operator_constraints(
+                node.iterable, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.body, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, (WhileNode, DoWhileNode)):
+            self.collect_generic_operator_constraints(
+                node.condition, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.body, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, LoopNode):
+            self.collect_generic_operator_constraints(
+                node.body, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, MatchNode):
+            subject_expr = getattr(node, "expression", None)
+            subject_type = self.expression_result_type(subject_expr)
+            self.collect_generic_operator_constraints(
+                subject_expr, generic_names, constraints
+            )
+            for arm in getattr(node, "arms", []) or []:
+                saved_variable_types = self.variable_types.copy()
+                saved_local_variable_names = self.local_variable_names.copy()
+                try:
+                    self.register_match_pattern_bindings(
+                        getattr(arm, "pattern", None), subject_type
+                    )
+                    self.collect_generic_operator_constraints(
+                        getattr(arm, "guard", None), generic_names, constraints
+                    )
+                    self.collect_generic_operator_constraints(
+                        getattr(arm, "body", None), generic_names, constraints
+                    )
+                finally:
+                    self.variable_types = saved_variable_types
+                    self.local_variable_names = saved_local_variable_names
+            return
+
+        if isinstance(node, BinaryOpNode):
+            self.collect_generic_operator_constraints(
+                node.left, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.right, generic_names, constraints
+            )
+            operator = self.map_operator(
+                getattr(node, "operator", getattr(node, "op", None))
+            )
+            self.add_generic_operator_constraints(
+                operator,
+                self.expression_result_type(node.left),
+                self.expression_result_type(node.right),
+                generic_names,
+                constraints,
+            )
+            return
+
+        if isinstance(node, UnaryOpNode):
+            self.collect_generic_operator_constraints(
+                node.operand, generic_names, constraints
+            )
+            operator = self.map_operator(
+                getattr(node, "operator", getattr(node, "op", None))
+            )
+            operand_type = self.expression_result_type(node.operand)
+            if operator == "-" and operand_type in generic_names:
+                self.add_generic_constraint(
+                    constraints,
+                    operand_type,
+                    f"std::ops::Neg<Output = {operand_type}>",
+                )
+            return
+
+        if isinstance(node, TernaryOpNode):
+            self.collect_generic_operator_constraints(
+                node.condition, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.true_expr, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.false_expr, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, FunctionCallNode):
+            self.collect_generic_operator_constraints(
+                node.function, generic_names, constraints
+            )
+            for argument in getattr(node, "arguments", []) or []:
+                self.collect_generic_operator_constraints(
+                    argument, generic_names, constraints
+                )
+            self.add_builtin_function_call_constraints(node, generic_names, constraints)
+            self.add_user_function_call_constraints(node, generic_names, constraints)
+            return
+
+        if isinstance(node, MemberAccessNode):
+            self.collect_generic_operator_constraints(
+                node.object_expr, generic_names, constraints
+            )
+            return
+
+        if isinstance(node, ConstructorNode):
+            for argument in getattr(node, "arguments", []) or []:
+                self.collect_generic_operator_constraints(
+                    argument, generic_names, constraints
+                )
+            for argument in (getattr(node, "named_arguments", {}) or {}).values():
+                self.collect_generic_operator_constraints(
+                    argument, generic_names, constraints
+                )
+            return
+
+        if isinstance(node, ArrayLiteralNode):
+            for element in getattr(node, "elements", []) or []:
+                self.collect_generic_operator_constraints(
+                    element, generic_names, constraints
+                )
+            return
+
+        if isinstance(node, ArrayAccessNode):
+            self.collect_generic_operator_constraints(
+                node.array_expr, generic_names, constraints
+            )
+            self.collect_generic_operator_constraints(
+                node.index_expr, generic_names, constraints
+            )
+
+    def add_builtin_function_call_constraints(self, node, generic_names, constraints):
+        func_name = self.function_call_name(getattr(node, "function", None))
+        if self.is_user_defined_function(func_name):
+            return
+
+        mapped_name = self.function_map.get(func_name, func_name)
+        if mapped_name != "sqrt":
+            return
+
+        arguments = getattr(node, "arguments", []) or []
+        if len(arguments) != 1:
+            return
+
+        argument_type = self.expression_result_type(arguments[0])
+        if argument_type in generic_names:
+            self.add_generic_constraint(constraints, argument_type, "CglSqrt")
+            self.required_generic_math_traits.add("CglSqrt")
+
+    def add_user_function_call_constraints(self, node, generic_names, constraints):
+        func_name = self.function_call_name(getattr(node, "function", None))
+        callee = self.user_function_nodes.get(func_name)
+        if callee is None:
+            return
+
+        substitutions = self.infer_call_generic_substitutions(callee, node)
+        if not substitutions:
+            return
+
+        callee_constraints = self.combined_function_generic_constraints(callee)
+        for callee_param, caller_type in substitutions.items():
+            if caller_type not in generic_names:
+                continue
+            for bound in callee_constraints.get(callee_param, []):
+                self.add_generic_constraint(
+                    constraints,
+                    caller_type,
+                    self.substitute_generic_bound(bound, callee_param, caller_type),
+                )
+
+    def function_call_name(self, function_expr):
+        if isinstance(function_expr, IdentifierNode):
+            return function_expr.name
+        if isinstance(function_expr, str):
+            return function_expr
+        return getattr(function_expr, "name", None)
+
+    def infer_call_generic_substitutions(self, callee, call_node):
+        callee_generic_names = self.generic_param_names(callee)
+        if not callee_generic_names:
+            return {}
+
+        substitutions = {}
+        param_types = [
+            self.function_parameter_type(param)
+            for param in getattr(callee, "parameters", getattr(callee, "params", []))
+        ]
+        arg_types = [
+            self.expression_result_type(argument)
+            for argument in getattr(call_node, "arguments", []) or []
+        ]
+
+        for param_type, arg_type in zip(param_types, arg_types):
+            self.collect_generic_substitutions_from_type(
+                param_type,
+                arg_type,
+                set(callee_generic_names),
+                substitutions,
+            )
+
+        return substitutions
+
+    def collect_generic_substitutions_from_type(
+        self, param_type, arg_type, callee_generic_names, substitutions
+    ):
+        if param_type is None or arg_type is None:
+            return
+        param_type = (
+            self.convert_type_node_to_string(param_type)
+            if hasattr(param_type, "name") or hasattr(param_type, "element_type")
+            else str(param_type)
+        )
+        arg_type = (
+            self.convert_type_node_to_string(arg_type)
+            if hasattr(arg_type, "name") or hasattr(arg_type, "element_type")
+            else str(arg_type)
+        )
+
+        if param_type in callee_generic_names:
+            substitutions.setdefault(param_type, arg_type)
+            return
+
+        param_base, param_args = self.generic_type_parts(param_type)
+        arg_base, arg_args = self.generic_type_parts(arg_type)
+        if param_base != arg_base or len(param_args) != len(arg_args):
+            return
+
+        for nested_param, nested_arg in zip(param_args, arg_args):
+            self.collect_generic_substitutions_from_type(
+                nested_param,
+                nested_arg,
+                callee_generic_names,
+                substitutions,
+            )
+
+    def substitute_generic_bound(self, bound, source_name, target_name):
+        return str(bound).replace(f"Output = {source_name}", f"Output = {target_name}")
+
+    def add_generic_operator_constraints(
+        self, operator, left_type, right_type, generic_names, constraints
+    ):
+        generic_types = []
+        for type_name in (left_type, right_type):
+            if type_name in generic_names and type_name not in generic_types:
+                generic_types.append(type_name)
+
+        for generic_type in generic_types:
+            bound = self.generic_operator_bound(operator, generic_type)
+            if bound is not None:
+                self.add_generic_constraint(constraints, generic_type, bound)
+
+    def generic_operator_bound(self, operator, generic_name):
+        if operator in {"==", "!="}:
+            return "PartialEq"
+        if operator in {"<", ">", "<=", ">="}:
+            return "PartialOrd"
+
+        operator_traits = {
+            "+": "Add",
+            "-": "Sub",
+            "*": "Mul",
+            "/": "Div",
+            "%": "Rem",
+        }
+        trait = operator_traits.get(operator)
+        if trait is None:
+            return None
+        return f"std::ops::{trait}<Output = {generic_name}>"
+
+    def add_generic_constraint(self, constraints, generic_name, bound):
+        if generic_name not in constraints:
+            constraints[generic_name] = []
+        if bound not in constraints[generic_name]:
+            constraints[generic_name].append(bound)
 
     def function_parameter_type(self, param):
         if hasattr(param, "param_type"):
@@ -845,7 +2172,8 @@ class RustCodeGen:
         if isinstance(stmt, VariableNode):
             initial_value = getattr(stmt, "initial_value", None)
             vtype = self.variable_declaration_type(stmt, initial_value)
-            self.register_variable_type(stmt.name, vtype)
+            self.register_variable_type(stmt.name, vtype, scope="local")
+            binding_keyword = self.local_let_keyword(stmt)
             if initial_value is not None:
                 increment_init = self.generate_increment_initializer_declaration(
                     stmt,
@@ -855,15 +2183,18 @@ class RustCodeGen:
                 )
                 if increment_init is not None:
                     return increment_init
-                init_expr = self.generate_expression_with_type(initial_value, vtype)
-                init_expr = self.normalize_assignment_rhs(
-                    vtype, initial_value, init_expr, "="
-                )
-                return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
+                if isinstance(initial_value, MatchNode):
+                    init_expr = self.generate_match_expression(initial_value, indent)
+                else:
+                    init_expr = self.generate_expression_with_type(initial_value, vtype)
+                    init_expr = self.normalize_assignment_rhs(
+                        vtype, initial_value, init_expr, "="
+                    )
+                return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
             elif self.is_generated_struct_type(vtype):
-                return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)} = Default::default();\n"
+                return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)} = Default::default();\n"
             else:
-                return f"{indent_str}let mut {stmt.name}: {self.map_type(vtype)};\n"
+                return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)};\n"
 
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
@@ -938,7 +2269,10 @@ class RustCodeGen:
         ):
             # Handle ExpressionStatementNode
             if hasattr(stmt, "expression"):
-                return f"{indent_str}{self.generate_expression(stmt.expression)};\n"
+                expression = self.generate_expression(stmt.expression)
+                if getattr(stmt, "is_tail_expression", False):
+                    return f"{indent_str}{expression}\n"
+                return f"{indent_str}{expression};\n"
             else:
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
 
@@ -953,6 +2287,16 @@ class RustCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def local_let_keyword(self, stmt):
+        """Return `let` or `let mut` for a generated local binding."""
+        qualifiers = {str(q) for q in getattr(stmt, "qualifiers", []) or []}
+        if (
+            "mut" in qualifiers
+            or getattr(stmt, "name", None) in self.current_mutated_names
+        ):
+            return "let mut"
+        return "let"
 
     def generate_increment_initializer_declaration(
         self,
@@ -973,7 +2317,7 @@ class RustCodeGen:
         assignment_op = "+=" if op == "++" else "-="
         update = f"{'    ' * indent}{operand} {assignment_op} 1;\n"
         declaration = (
-            f"{'    ' * indent}let mut {stmt.name}: "
+            f"{'    ' * indent}{self.local_let_keyword(stmt)} {stmt.name}: "
             f"{self.map_type(vtype)} = {operand};\n"
         )
         is_postfix = getattr(
@@ -1019,39 +2363,571 @@ class RustCodeGen:
     def generate_match(self, node, indent):
         indent_str = "    " * indent
         arm_indent = "    " * (indent + 1)
-        expression = self.generate_expression(getattr(node, "expression", ""))
+        subject_expr = getattr(node, "expression", "")
+        subject_type = self.expression_result_type(subject_expr)
+        expression = self.generate_expression(subject_expr)
 
         code = f"{indent_str}match {expression} {{\n"
-        has_wildcard = False
+        has_unconditional_wildcard = False
         for arm in getattr(node, "arms", []) or []:
             if not self.is_supported_match_arm(arm):
-                raise ValueError(
-                    "Unsupported match arm for Rust codegen; only unguarded "
-                    "literal and wildcard patterns are supported"
-                )
+                raise ValueError("Unsupported match arm for Rust codegen")
 
             pattern = getattr(arm, "pattern", None)
-            if isinstance(pattern, WildcardPatternNode):
-                arm_pattern = "_"
-                has_wildcard = True
-            else:
-                arm_pattern = self.generate_expression(pattern.literal)
+            guard = getattr(arm, "guard", None)
+            body = getattr(arm, "body", [])
+            unused_bindings = self.unused_match_pattern_binding_names(
+                pattern,
+                guard,
+                body,
+            )
+            arm_pattern = self.generate_match_pattern(pattern, unused_bindings)
+            saved_variable_types = self.variable_types.copy()
+            saved_local_variable_names = self.local_variable_names.copy()
+            try:
+                self.register_match_pattern_bindings(pattern, subject_type)
 
-            code += f"{arm_indent}{arm_pattern} => {{\n"
-            code += self.generate_switch_case_body(getattr(arm, "body", []), indent + 2)
-            code += f"{arm_indent}}},\n"
+                has_unconditional_wildcard = (
+                    has_unconditional_wildcard
+                    or guard is None
+                    and isinstance(pattern, WildcardPatternNode)
+                )
+                if guard is not None:
+                    arm_pattern = f"{arm_pattern} if {self.generate_expression(guard)}"
 
-        if not has_wildcard:
-            code += f"{arm_indent}_ => {{}},\n"
+                code += f"{arm_indent}{arm_pattern} => {{\n"
+                code += self.generate_switch_case_body(body, indent + 2)
+                code += f"{arm_indent}}},\n"
+            finally:
+                self.variable_types = saved_variable_types
+                self.local_variable_names = saved_local_variable_names
+
+        if not has_unconditional_wildcard and not self.match_arms_are_exhaustive(
+            node, subject_type
+        ):
+            code += f"{arm_indent}_ => unreachable!(),\n"
 
         code += f"{indent_str}}}\n"
         return code
 
+    def generate_match_expression(self, node, indent=0):
+        """Render a match node where Rust expects an expression value."""
+        code = self.generate_match(node, indent).rstrip("\n")
+        indent_str = "    " * indent
+        if indent_str and code.startswith(indent_str):
+            code = code[len(indent_str) :]
+        return code
+
+    def register_match_pattern_bindings(self, pattern, subject_type):
+        """Track types introduced by a match pattern while rendering its arm."""
+        if isinstance(pattern, IdentifierPatternNode):
+            if pattern.name.isidentifier() and subject_type is not None:
+                self.register_variable_type(
+                    pattern.name,
+                    subject_type,
+                    scope="local",
+                )
+            return
+
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = self.specialize_pattern_type(
+                pattern.type_name,
+                subject_type,
+            )
+            for field_name, field_pattern in pattern.field_patterns.items():
+                field_type = self.resolve_struct_member_type(pattern_type, field_name)
+                if field_type is None:
+                    field_type = self.resolve_struct_member_type(
+                        pattern.type_name,
+                        field_name,
+                    )
+                self.register_match_pattern_bindings(field_pattern, field_type)
+            return
+
+        if isinstance(pattern, ConstructorPatternNode):
+            for index, arg_pattern in enumerate(pattern.arguments):
+                arg_type = self.constructor_pattern_argument_type(
+                    pattern.type_name,
+                    subject_type,
+                    index,
+                )
+                self.register_match_pattern_bindings(arg_pattern, arg_type)
+
+    def specialize_pattern_type(self, pattern_type, subject_type):
+        """Prefer the scrutinee's generic arguments for matching struct patterns."""
+        if subject_type is None:
+            return pattern_type
+        subject_base, _ = self.generic_type_parts(subject_type)
+        pattern_base, _ = self.generic_type_parts(pattern_type)
+        if subject_base == pattern_base:
+            return subject_type
+        return pattern_type
+
+    def constructor_pattern_argument_type(self, pattern_type, subject_type, index):
+        """Infer payload types for common generic enum-like constructor patterns."""
+        if subject_type is None:
+            return None
+        base, args = self.generic_type_parts(subject_type)
+        variant = str(pattern_type).split("::")[-1]
+        if base == "Option" and variant == "Some" and index == 0 and args:
+            return args[0]
+        if base == "Result" and args:
+            if variant == "Ok" and index == 0:
+                return args[0]
+            if variant == "Err" and index == 0 and len(args) > 1:
+                return args[1]
+        return None
+
     def is_supported_match_arm(self, arm):
-        if getattr(arm, "guard", None) is not None:
-            return False
         pattern = getattr(arm, "pattern", None)
-        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+        return isinstance(
+            pattern,
+            (
+                LiteralPatternNode,
+                WildcardPatternNode,
+                IdentifierPatternNode,
+                ConstructorPatternNode,
+                StructPatternNode,
+            ),
+        )
+
+    def match_arms_are_exhaustive(self, node, subject_type):
+        """Return whether known bool/enum match arms already cover all cases."""
+        arms = getattr(node, "arms", []) or []
+        if self.match_arms_cover_bool(arms, subject_type):
+            return True
+        if self.match_arms_cover_struct(arms, subject_type):
+            return True
+
+        variants = self.enum_variants_for_type(subject_type)
+        if not variants:
+            return False
+
+        covered_variants = set()
+        conditional_variant_patterns = {variant: [] for variant in variants}
+        for arm in arms:
+            if getattr(arm, "guard", None) is not None:
+                continue
+            pattern = getattr(arm, "pattern", None)
+            variant_name = self.match_pattern_variant_name_for_subject(
+                pattern,
+                subject_type,
+            )
+            if variant_name is None:
+                continue
+            if self.is_unconditional_variant_pattern(pattern):
+                covered_variants.add(variant_name)
+            else:
+                conditional_variant_patterns[variant_name].append(pattern)
+
+        for variant in variants:
+            if variant in covered_variants:
+                continue
+            if self.variant_patterns_cover_nested_enum_field(
+                conditional_variant_patterns.get(variant, []),
+                subject_type,
+                variant,
+            ):
+                continue
+            return False
+
+        return True
+
+    def match_arms_cover_bool(self, arms, subject_type):
+        if self.normalize_scalar_type(subject_type) != "bool":
+            return False
+
+        covered = set()
+        for arm in arms:
+            if getattr(arm, "guard", None) is not None:
+                continue
+            value = self.bool_match_pattern_value(getattr(arm, "pattern", None))
+            if value is not None:
+                covered.add(value)
+
+        return covered == {True, False}
+
+    def match_arms_cover_struct(self, arms, subject_type):
+        subject_base, _generic_args = self.generic_type_parts(subject_type)
+        member_types = self.struct_member_types.get(subject_base)
+        if not member_types:
+            return False
+
+        for arm in arms:
+            if getattr(arm, "guard", None) is not None:
+                continue
+            pattern = getattr(arm, "pattern", None)
+            if not isinstance(pattern, StructPatternNode):
+                continue
+            pattern_base, _pattern_args = self.generic_type_parts(pattern.type_name)
+            if pattern_base != subject_base:
+                continue
+            if not self.is_unconditional_variant_pattern(pattern):
+                continue
+            if getattr(pattern, "has_rest", False) or set(
+                pattern.field_patterns
+            ) == set(member_types):
+                return True
+
+        return False
+
+    def bool_match_pattern_value(self, pattern):
+        if isinstance(pattern, LiteralPatternNode):
+            value = getattr(pattern.literal, "value", None)
+            if isinstance(value, bool):
+                return value
+        if isinstance(pattern, IdentifierPatternNode):
+            if pattern.name == "true":
+                return True
+            if pattern.name == "false":
+                return False
+        return None
+
+    def enum_variants_for_type(self, subject_type):
+        if subject_type is None:
+            return []
+        base_type, _generic_args = self.generic_type_parts(subject_type)
+        return self.enum_variant_names.get(base_type, [])
+
+    def match_pattern_variant_name_for_subject(self, pattern, subject_type):
+        variant_path = self.match_pattern_variant_path(pattern)
+        if variant_path is None:
+            return None
+
+        subject_base, _generic_args = self.generic_type_parts(subject_type)
+        variant_base, variant_name = self.split_variant_path(variant_path)
+        if variant_base is not None and variant_base != subject_base:
+            return None
+
+        variants = self.enum_variants_for_type(subject_type)
+        if variant_name not in variants:
+            return None
+
+        return variant_name
+
+    def unconditional_match_variant_name(self, pattern, subject_type):
+        variant_name = self.match_pattern_variant_name_for_subject(
+            pattern,
+            subject_type,
+        )
+        if variant_name is None:
+            return None
+        if not self.is_unconditional_variant_pattern(pattern):
+            return None
+
+        return variant_name
+
+    def variant_patterns_cover_nested_enum_field(
+        self,
+        patterns,
+        subject_type,
+        variant_name,
+    ):
+        if not patterns:
+            return False
+
+        subject_base, _generic_args = self.generic_type_parts(subject_type)
+        variant_fields = self.enum_variant_field_types.get(subject_base, {}).get(
+            variant_name,
+            {},
+        )
+        if not variant_fields:
+            return False
+
+        for field_name, field_type in variant_fields.items():
+            nested_variants = self.enum_variants_for_type(field_type)
+            if not nested_variants:
+                continue
+
+            covered_nested_variants = set()
+            for pattern in patterns:
+                if not isinstance(pattern, StructPatternNode):
+                    continue
+                if not getattr(pattern, "has_rest", False) and set(
+                    pattern.field_patterns
+                ) != set(variant_fields):
+                    continue
+                if not self.struct_pattern_other_fields_are_unconditional(
+                    pattern,
+                    field_name,
+                ):
+                    continue
+                field_pattern = pattern.field_patterns.get(field_name)
+                if field_pattern is None:
+                    if getattr(pattern, "has_rest", False):
+                        return True
+                    continue
+                if self.is_unconditional_payload_pattern(field_pattern):
+                    return True
+                nested_variant = self.unconditional_match_variant_name(
+                    field_pattern,
+                    field_type,
+                )
+                if nested_variant is not None:
+                    covered_nested_variants.add(nested_variant)
+
+            if set(nested_variants).issubset(covered_nested_variants):
+                return True
+
+        return False
+
+    def struct_pattern_other_fields_are_unconditional(self, pattern, skipped_field):
+        for field_name, field_pattern in pattern.field_patterns.items():
+            if field_name == skipped_field:
+                continue
+            if not self.is_unconditional_payload_pattern(field_pattern):
+                return False
+        return True
+
+    def match_pattern_variant_path(self, pattern):
+        if isinstance(pattern, ConstructorPatternNode):
+            return pattern.type_name
+        if isinstance(pattern, StructPatternNode):
+            return pattern.type_name
+        if isinstance(pattern, IdentifierPatternNode):
+            return pattern.name
+        return None
+
+    def split_variant_path(self, path):
+        path = str(path)
+        if "::" not in path:
+            return None, path
+        base, variant_name = path.rsplit("::", 1)
+        return base, variant_name
+
+    def is_unconditional_variant_pattern(self, pattern):
+        if isinstance(pattern, IdentifierPatternNode):
+            return "::" in pattern.name
+        if isinstance(pattern, ConstructorPatternNode):
+            return all(
+                self.is_unconditional_payload_pattern(argument)
+                for argument in getattr(pattern, "arguments", []) or []
+            )
+        if isinstance(pattern, StructPatternNode):
+            return all(
+                self.is_unconditional_payload_pattern(field_pattern)
+                for field_pattern in getattr(pattern, "field_patterns", {}).values()
+            )
+        return False
+
+    def is_unconditional_payload_pattern(self, pattern):
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if isinstance(pattern, IdentifierPatternNode):
+            return "::" not in pattern.name
+        return False
+
+    def unused_match_pattern_binding_names(self, pattern, guard, body):
+        """Return pattern bindings that are not referenced by the arm."""
+        binding_names = self.match_pattern_binding_names(pattern)
+        if not binding_names:
+            return set()
+
+        used_names = self.collect_referenced_names([guard, body])
+        return binding_names - used_names
+
+    def match_pattern_binding_names(self, pattern):
+        """Collect identifiers introduced by a match pattern."""
+        if isinstance(pattern, IdentifierPatternNode):
+            if self.is_match_binding_identifier(pattern.name):
+                return {pattern.name}
+            return set()
+        if isinstance(pattern, ConstructorPatternNode):
+            names = set()
+            for argument in getattr(pattern, "arguments", []) or []:
+                names.update(self.match_pattern_binding_names(argument))
+            return names
+        if isinstance(pattern, StructPatternNode):
+            names = set()
+            for field_pattern in getattr(pattern, "field_patterns", {}).values():
+                names.update(self.match_pattern_binding_names(field_pattern))
+            return names
+        return set()
+
+    def is_match_binding_identifier(self, name):
+        """Return whether a pattern identifier introduces a Rust binding."""
+        return (
+            isinstance(name, str)
+            and name.isidentifier()
+            and name not in {"true", "false"}
+        )
+
+    def collect_referenced_names(self, node):
+        """Collect identifier references from statements and expressions."""
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if hasattr(current, "statements"):
+                collect(current.statements)
+                return
+
+            if isinstance(current, IdentifierNode):
+                names.add(current.name)
+                return
+
+            if isinstance(current, str):
+                if current.isidentifier():
+                    names.add(current)
+                return
+
+            if isinstance(current, VariableNode):
+                collect(getattr(current, "initial_value", None))
+                return
+
+            if isinstance(current, AssignmentNode):
+                collect(current.target)
+                collect(current.value)
+                return
+
+            if isinstance(current, ExpressionStatementNode):
+                collect(current.expression)
+                return
+
+            if isinstance(current, ReturnNode):
+                collect(current.value)
+                return
+
+            if isinstance(current, IfNode):
+                collect(current.condition)
+                collect(current.then_branch)
+                collect(current.else_branch)
+                return
+
+            if isinstance(current, ForNode):
+                collect(current.init)
+                collect(current.condition)
+                collect(current.update)
+                collect(current.body)
+                return
+
+            if isinstance(current, ForInNode):
+                collect(current.iterable)
+                collect(current.body)
+                return
+
+            if isinstance(current, (WhileNode, DoWhileNode)):
+                collect(current.condition)
+                collect(current.body)
+                return
+
+            if isinstance(current, LoopNode):
+                collect(current.body)
+                return
+
+            if isinstance(current, MatchNode):
+                collect(current.expression)
+                for arm in getattr(current, "arms", []) or []:
+                    collect(getattr(arm, "guard", None))
+                    collect(getattr(arm, "body", None))
+                return
+
+            if isinstance(current, SwitchNode):
+                collect(getattr(current, "expression", None))
+                for case in getattr(current, "cases", []) or []:
+                    collect(getattr(case, "value", None))
+                    collect(getattr(case, "statements", []))
+                collect(getattr(current, "default_case", None))
+                return
+
+            if isinstance(current, UnaryOpNode):
+                collect(current.operand)
+                return
+
+            if isinstance(current, BinaryOpNode):
+                collect(current.left)
+                collect(current.right)
+                return
+
+            if isinstance(current, TernaryOpNode):
+                collect(current.condition)
+                collect(current.true_expr)
+                collect(current.false_expr)
+                return
+
+            if isinstance(current, FunctionCallNode):
+                collect(current.function)
+                collect(getattr(current, "arguments", getattr(current, "args", [])))
+                return
+
+            if isinstance(current, MemberAccessNode):
+                collect(current.object_expr)
+                return
+
+            if isinstance(current, PointerAccessNode):
+                collect(current.pointer_expr)
+                return
+
+            if isinstance(current, ArrayAccessNode):
+                collect(current.array_expr)
+                collect(current.index_expr)
+                return
+
+            if isinstance(current, RangeNode):
+                collect(current.start)
+                collect(current.end)
+                return
+
+            if isinstance(current, ConstructorNode):
+                collect(getattr(current, "arguments", []))
+                collect(list((getattr(current, "named_arguments", {}) or {}).values()))
+                return
+
+            if isinstance(current, ArrayLiteralNode):
+                collect(getattr(current, "elements", []))
+
+        collect(node)
+        return names
+
+    def format_match_binding_identifier(self, name, unused_bindings):
+        """Prefix unused pattern bindings to suppress Rust warnings."""
+        if name in unused_bindings and not name.startswith("_"):
+            return f"_{name}"
+        return name
+
+    def generate_match_pattern(self, pattern, unused_bindings=None):
+        unused_bindings = unused_bindings or set()
+        if isinstance(pattern, WildcardPatternNode):
+            return "_"
+        if isinstance(pattern, LiteralPatternNode):
+            return self.generate_expression(pattern.literal)
+        if isinstance(pattern, IdentifierPatternNode):
+            if self.is_match_binding_identifier(pattern.name):
+                return self.format_match_binding_identifier(
+                    pattern.name,
+                    unused_bindings,
+                )
+            return pattern.name
+        if isinstance(pattern, ConstructorPatternNode):
+            args = ", ".join(
+                self.generate_match_pattern(arg, unused_bindings)
+                for arg in pattern.arguments
+            )
+            return f"{pattern.type_name}({args})"
+        if isinstance(pattern, StructPatternNode):
+            fields = []
+            for field_name, field_pattern in pattern.field_patterns.items():
+                field_pattern_code = self.generate_match_pattern(
+                    field_pattern,
+                    unused_bindings,
+                )
+                if (
+                    isinstance(field_pattern, IdentifierPatternNode)
+                    and field_pattern.name == field_name
+                    and field_pattern_code == field_name
+                ):
+                    fields.append(field_name)
+                else:
+                    fields.append(f"{field_name}: {field_pattern_code}")
+            if getattr(pattern, "has_rest", False):
+                fields.append("..")
+            return f"{pattern.type_name} {{ {', '.join(fields)} }}"
+        raise ValueError(f"Unsupported match pattern for Rust codegen: {pattern!r}")
 
     def generate_switch_case_body(self, body, indent):
         statements = self.statement_list(body)
@@ -1135,6 +3011,8 @@ class RustCodeGen:
             return f"{indent_str}let {node.name}: [{element_type}; {size}] = [Default::default(); {size}];\n"
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
+        if isinstance(expr, MatchNode):
+            return self.generate_match_expression(expr)
         if isinstance(expr, ArrayLiteralNode):
             return self.generate_array_literal_expression(
                 expr, target_type, static_context=static_context
@@ -1143,6 +3021,10 @@ class RustCodeGen:
             return self.generate_binary_expression(expr, target_type)
         if isinstance(expr, TernaryOpNode):
             return self.generate_ternary_expression(expr, target_type)
+        if isinstance(expr, FunctionCallNode):
+            function_call = self.generate_function_call_with_target(expr, target_type)
+            if function_call is not None:
+                return function_call
         return self.generate_expression(expr)
 
     def generate_binary_expression(self, expr, target_type=None):
@@ -1182,6 +3064,12 @@ class RustCodeGen:
             )
             return f"({left} {mapped_op} {right})"
 
+        scalar_left_vector = self.generate_scalar_left_vector_binary_expression(
+            left_expr, right_expr, left_type, right_type, mapped_op
+        )
+        if scalar_left_vector is not None:
+            return scalar_left_vector
+
         composite_operand_type = self.binary_composite_operand_type(
             left_type, right_type, mapped_op
         )
@@ -1216,6 +3104,50 @@ class RustCodeGen:
             )
 
         return f"({left} {mapped_op} {right})"
+
+    def generate_scalar_left_vector_binary_expression(
+        self, left_expr, right_expr, left_type, right_type, operator
+    ):
+        if operator not in {"+", "-", "*", "/", "%"}:
+            return None
+
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_vector = self.vector_type_info(right_type)
+        if left_scalar is None or right_vector is None:
+            return None
+
+        result_type = self.vector_type_for_promoted_scalar(right_vector, left_scalar)
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return None
+
+        component_type = result_info["component_type"]
+        if self.normalize_scalar_type(component_type) == "bool":
+            return None
+
+        temp_bindings = []
+        left_lanes = self.vector_comparison_operand_lanes(
+            left_expr,
+            left_type,
+            component_type,
+            result_info["size"],
+            temp_bindings,
+        )
+        right_lanes = self.vector_argument_lane_expressions(
+            right_expr,
+            right_vector,
+            temp_bindings,
+            component_type,
+        )
+        lanes = [
+            f"({left_lane} {operator} {right_lane})"
+            for left_lane, right_lane in zip(left_lanes, right_lanes)
+        ]
+        return self.generate_constructor_call(
+            self.map_type(result_type),
+            lanes,
+            temp_bindings,
+        )
 
     def generate_binary_composite_operand(self, expr, source_type, composite_type):
         if self.vector_type_info(source_type) or self.matrix_type_info(source_type):
@@ -1434,6 +3366,22 @@ class RustCodeGen:
                 elements.append(padding)
 
         return f"[{', '.join(elements)}]"
+
+    def generate_constructor_expression(self, expr):
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        rust_type = self.map_type(type_name)
+
+        named_arguments = getattr(expr, "named_arguments", {}) or {}
+        if named_arguments:
+            fields = ", ".join(
+                f"{name}: {self.generate_expression(value)}"
+                for name, value in named_arguments.items()
+            )
+            return f"{rust_type} {{ {fields} }}"
+
+        arguments = getattr(expr, "arguments", []) or []
+        args = ", ".join(self.generate_expression(arg) for arg in arguments)
+        return f"{self.rust_constructor_path(rust_type)}::new({args})"
 
     def rust_array_padding_expression(self, base_type, static_context=False):
         if static_context:
@@ -1779,10 +3727,11 @@ class RustCodeGen:
                 return self.format_literal(expr.value, literal_type)
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            return getattr(expr, "name", str(expr))
+            name = getattr(expr, "name", str(expr))
+            return self.lazy_static_identifier_expression(name)
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "name"):
-                return expr.name
+                return self.lazy_static_identifier_expression(expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
@@ -1791,6 +3740,10 @@ class RustCodeGen:
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_array_literal_expression(expr)
+        elif isinstance(expr, ConstructorNode):
+            return self.generate_constructor_expression(expr)
+        elif isinstance(expr, MatchNode):
+            return self.generate_match_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             operand_expr = getattr(expr, "operand", "")
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
@@ -1808,12 +3761,13 @@ class RustCodeGen:
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
             array = self.generate_expression(array_expr)
+            array = self.lazy_static_object_expression(array_expr, array)
             index = self.generate_array_index_expression(index_expr)
             return f"{array}[{index}]"
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
             func_name = None
-            if hasattr(func_expr, "name"):
+            if getattr(func_expr, "name", None):
                 func_name = func_expr.name
                 callee = func_name
             elif isinstance(func_expr, str):
@@ -1823,16 +3777,35 @@ class RustCodeGen:
                 callee = self.generate_expression(func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
+            qualified_method_call = self.generate_qualified_generic_trait_method_call(
+                func_expr,
+                args,
+            )
+            if qualified_method_call is not None:
+                return qualified_method_call
+
+            if func_name == "lambda":
+                return self.generate_lambda_expression(args)
+
             if self.is_user_defined_function(func_name):
                 args_str = ", ".join(
                     self.generate_user_function_call_args(func_name, args)
                 )
                 return f"{callee}({args_str})"
 
+            if func_name == "mix" and len(args) == 3:
+                bool_mix = self.generate_bool_mix_expression(args)
+                if bool_mix is not None:
+                    return bool_mix
+
             func_name = self.function_map.get(func_name, func_name)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
+
+            generic_intrinsic = self.generate_generic_intrinsic_call(func_name, args)
+            if generic_intrinsic is not None:
+                return generic_intrinsic
 
             scalar_cast = self.generate_scalar_constructor_call(func_name, args)
             if scalar_cast is not None:
@@ -1880,6 +3853,202 @@ class RustCodeGen:
             return self.generate_ternary_expression(expr)
         else:
             return str(expr)
+
+    def generate_generic_intrinsic_call(self, func_name, args):
+        if func_name != "sqrt" or len(args) != 1:
+            return None
+
+        argument_type = self.expression_result_type(args[0])
+        if argument_type not in self.current_generic_param_names:
+            return None
+
+        self.required_generic_math_traits.add("CglSqrt")
+        return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
+
+    def generate_qualified_generic_trait_method_call(self, func_expr, args):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        method_name = getattr(func_expr, "member", "")
+        object_expr = getattr(
+            func_expr, "object_expr", getattr(func_expr, "object", None)
+        )
+        receiver_type = self.expression_result_type(object_expr)
+        if receiver_type not in self.current_generic_param_names:
+            return None
+
+        trait_name = self.generic_trait_method_owner(receiver_type, method_name)
+        if trait_name is None:
+            return None
+
+        receiver = self.generate_expression(object_expr)
+        args_str = ", ".join(self.generate_expression(arg) for arg in args)
+        if args_str:
+            return f"{trait_name}::{method_name}({receiver}, {args_str})"
+        return f"{trait_name}::{method_name}({receiver})"
+
+    def generic_trait_method_owner(self, generic_name, method_name):
+        for constraint in self.current_function_generic_constraints.get(
+            generic_name, []
+        ):
+            trait_name = str(constraint).split("<", 1)[0]
+            if method_name in self.trait_methods.get(trait_name, set()):
+                return trait_name
+        return None
+
+    def generate_lambda_expression(self, args):
+        """Render CrossGL's compact pseudo-lambda as a native Rust closure."""
+        if not args:
+            return "|| ()"
+
+        params = ", ".join(self.generate_lambda_parameter(arg) for arg in args[:-1])
+        body = self.generate_lambda_body(args[-1])
+        return f"|{params}| {body}"
+
+    def generate_lambda_parameter(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        typed_param = self.split_lambda_typed_parameter(raw)
+        if typed_param is None:
+            return raw or "_"
+
+        type_name, param_name = typed_param
+        return f"{param_name}: {self.map_type(type_name)}"
+
+    def generate_lambda_body(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if raw:
+            return raw
+        return self.generate_expression(arg)
+
+    def lambda_raw_argument_text(self, arg):
+        if isinstance(arg, IdentifierNode):
+            return arg.name
+        if isinstance(arg, str):
+            return arg
+        return self.generate_expression(arg)
+
+    def split_lambda_typed_parameter(self, raw):
+        if not raw or ":" in raw:
+            return None
+        if any(char in raw for char in "{}()"):
+            return None
+
+        parts = raw.rsplit(None, 1)
+        if len(parts) != 2:
+            return None
+
+        type_name, param_name = parts
+        if not param_name.isidentifier():
+            return None
+        if type_name in {"mut", "ref"}:
+            return None
+        return type_name, param_name
+
+    def generate_bool_mix_expression(self, args):
+        condition_type = self.expression_result_type(args[2])
+        condition_info = self.vector_type_info(condition_type)
+        if condition_info is not None:
+            if condition_info["component_type"] != "bool":
+                return None
+            return self.generate_bool_vector_ternary_expression(
+                args[2], args[1], args[0]
+            )
+
+        if self.normalize_scalar_type(condition_type) != "bool":
+            return None
+
+        result_type = self.promoted_bool_mix_scalar_type(args[0], args[1])
+        if result_type is None:
+            return None
+
+        condition = self.generate_condition_expression(args[2])
+        true_value = self.generate_expression_with_type(args[1], result_type)
+        false_value = self.generate_expression_with_type(args[0], result_type)
+        true_value = self.normalize_typed_expression_value(
+            args[1], true_value, result_type
+        )
+        false_value = self.normalize_typed_expression_value(
+            args[0], false_value, result_type
+        )
+        return f"(if {condition} {{ {true_value} }} else {{ {false_value} }})"
+
+    def generate_function_call_with_target(self, expr, target_type):
+        func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
+        func_name = getattr(func_expr, "name", func_expr)
+        if not isinstance(func_name, str):
+            return None
+
+        args = getattr(expr, "arguments", getattr(expr, "args", []))
+        struct_constructor = self.generate_struct_new_call_with_typed_args(
+            func_name,
+            args,
+        )
+        if struct_constructor is not None:
+            return struct_constructor
+
+        vector_info = self.vector_type_info(func_name)
+        if vector_info is None:
+            return None
+
+        target_rust_type = self.vector_constructor_target_type(
+            target_type,
+            vector_info,
+        )
+        if target_rust_type is None:
+            return None
+
+        generated_args, temp_bindings = self.generate_vector_constructor_args(
+            vector_info,
+            args,
+        )
+        return self.generate_constructor_call(
+            target_rust_type,
+            generated_args,
+            temp_bindings,
+        )
+
+    def generate_struct_new_call_with_typed_args(self, func_name, args):
+        if not func_name.endswith("::new"):
+            return None
+
+        struct_name = func_name[: -len("::new")]
+        member_types = self.struct_member_types.get(struct_name)
+        if not member_types:
+            return None
+
+        generated_args = []
+        for arg, member_type in zip(args, member_types.values()):
+            arg_expr = self.generate_expression_with_type(arg, member_type)
+            arg_expr = self.normalize_typed_expression_value(
+                arg,
+                arg_expr,
+                member_type,
+            )
+            generated_args.append(arg_expr)
+
+        for arg in args[len(generated_args) :]:
+            generated_args.append(self.generate_expression(arg))
+
+        return f"{func_name}({', '.join(generated_args)})"
+
+    def vector_constructor_target_type(self, target_type, source_vector_info):
+        if target_type is None:
+            return None
+
+        target_info = self.vector_type_info(target_type)
+        if target_info is None:
+            return None
+        if target_info["size"] != source_vector_info["size"]:
+            return None
+
+        return self.map_type(target_type)
+
+    def promoted_bool_mix_scalar_type(self, false_expr, true_expr):
+        false_type = self.expression_result_type(false_expr)
+        true_type = self.expression_result_type(true_expr)
+        if self.vector_type_info(false_type) or self.vector_type_info(true_type):
+            return None
+        return self.promoted_scalar_type(false_type, true_type)
 
     def generate_user_function_call_args(self, func_name, args):
         param_types = self.user_function_param_types.get(func_name, [])
@@ -2135,6 +4304,7 @@ class RustCodeGen:
         obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
         member = getattr(expr, "member", "")
         obj = self.generate_expression(obj_expr)
+        obj = self.lazy_static_object_expression(obj_expr, obj)
 
         swizzle_components = self.member_swizzle_components(expr)
         if swizzle_components is None:
@@ -2700,7 +4870,7 @@ class RustCodeGen:
             return f'"{escaped}"'
         return str(value)
 
-    def register_variable_type(self, name, type_name):
+    def register_variable_type(self, name, type_name, scope="local"):
         if not name or type_name is None:
             return
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
@@ -2708,6 +4878,33 @@ class RustCodeGen:
         else:
             type_name = str(type_name)
         self.variable_types[name] = type_name
+        if scope == "local":
+            self.local_variable_names.add(name)
+
+    def lazy_static_identifier_expression(self, name):
+        if self.is_static_reference(name):
+            symbol = self.static_symbol_name(name)
+            if self.is_lazy_static_reference(name):
+                return f"*{symbol}"
+            return symbol
+        return name
+
+    def lazy_static_object_expression(self, expr, generated_expr):
+        name = self.get_expression_name(expr)
+        if name is not None and self.is_lazy_static_reference(name):
+            return f"({generated_expr})"
+        return generated_expr
+
+    def is_static_reference(self, name):
+        return (
+            name in self.static_variable_names and name not in self.local_variable_names
+        )
+
+    def is_lazy_static_reference(self, name):
+        return name in self.lazy_static_names and name not in self.local_variable_names
+
+    def static_symbol_name(self, name):
+        return self.static_symbol_names.get(name, name)
 
     def is_generated_struct_type(self, type_name):
         if type_name is None:
@@ -2748,19 +4945,45 @@ class RustCodeGen:
             if isinstance(expr.value, int):
                 return "int"
             return None
+        if isinstance(expr, ConstructorNode):
+            return self.constructor_result_type(expr)
+        if isinstance(expr, MatchNode):
+            return self.match_expression_result_type(expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", getattr(expr, "name", None))
+            if isinstance(func_expr, MemberAccessNode):
+                receiver_type = self.expression_result_type(
+                    getattr(
+                        func_expr, "object_expr", getattr(func_expr, "object", None)
+                    )
+                )
+                if receiver_type is not None and func_expr.member in {
+                    "add",
+                    "sub",
+                    "mul",
+                    "div",
+                    "rem",
+                }:
+                    return receiver_type
             func_name = getattr(func_expr, "name", func_expr)
+            arguments = getattr(expr, "arguments", getattr(expr, "args", [])) or []
             if isinstance(func_name, str) and self.vector_type_info(func_name):
                 return func_name
             if isinstance(func_name, str) and self.matrix_type_info(func_name):
                 return func_name
+            if isinstance(func_name, str) and "::" in func_name:
+                base_name = func_name.split("::", 1)[0]
+                if base_name in self.current_generic_param_names:
+                    return base_name
             scalar_type = self.scalar_constructor_type(func_name)
             if scalar_type is not None:
                 return scalar_type
             return_type = self.user_function_return_types.get(func_name)
             if return_type and return_type != "void":
                 return return_type
+            builtin_type = self.builtin_function_result_type(func_name, arguments)
+            if builtin_type is not None:
+                return builtin_type
             return None
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
@@ -2844,9 +5067,9 @@ class RustCodeGen:
                 else object_type
             )
             member = getattr(expr, "member", "")
-            struct_members = self.struct_member_types.get(object_type_name, {})
-            if member in struct_members:
-                return struct_members[member]
+            member_type = self.resolve_struct_member_type(object_type_name, member)
+            if member_type is not None:
+                return member_type
 
             vector_info = self.vector_type_info(object_type)
             if not vector_info:
@@ -2858,6 +5081,235 @@ class RustCodeGen:
                     vector_info["component_type"], len(member)
                 )
         return None
+
+    def builtin_function_result_type(self, func_name, arguments):
+        """Infer result types for shader intrinsics emitted as Rust prelude calls."""
+        if not isinstance(func_name, str):
+            return None
+
+        mapped_name = self.function_map.get(func_name, func_name)
+        arg_types = [self.expression_result_type(arg) for arg in arguments]
+
+        if func_name == "texture" or mapped_name == "sample":
+            return "vec4"
+
+        if mapped_name in {"normalize", "reflect", "refract"} and arg_types:
+            return arg_types[0]
+
+        if mapped_name == "cross" and len(arg_types) >= 2:
+            return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
+
+        if mapped_name in {"dot", "length"} and arg_types:
+            return self.vector_or_scalar_component_type(arg_types[0])
+
+        if (
+            mapped_name
+            in {
+                "sqrt",
+                "rsqrt",
+                "abs",
+                "floor",
+                "ceil",
+                "sin",
+                "cos",
+                "tan",
+                "fract",
+            }
+            and arg_types
+        ):
+            return arg_types[0]
+
+        if mapped_name in {"min", "max", "pow", "modulo"} and len(arg_types) >= 2:
+            return self.promoted_value_type(arg_types[0], arg_types[1])
+
+        if mapped_name == "clamp" and arg_types:
+            return arg_types[0]
+
+        if mapped_name == "lerp" and len(arg_types) >= 2:
+            return self.promoted_value_type(arg_types[0], arg_types[1])
+
+        if mapped_name == "smoothstep" and len(arg_types) >= 3:
+            return arg_types[2]
+
+        if mapped_name == "step" and len(arg_types) >= 2:
+            return arg_types[1]
+
+        return None
+
+    def vector_or_scalar_component_type(self, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info["component_type"]
+        return self.normalize_scalar_type(type_name)
+
+    def promoted_value_type(self, left_type, right_type):
+        for promoted in (
+            self.promoted_vector_type(left_type, right_type),
+            self.promoted_vector_scalar_type(left_type, right_type),
+            self.promoted_matrix_type(left_type, right_type),
+            self.promoted_matrix_scalar_type(left_type, right_type),
+            self.promoted_scalar_type(left_type, right_type),
+        ):
+            if promoted is not None:
+                return promoted
+        return left_type or right_type
+
+    def match_expression_result_type(self, expr):
+        subject_type = self.expression_result_type(getattr(expr, "expression", None))
+        result_type = None
+
+        for arm in getattr(expr, "arms", []) or []:
+            saved_variable_types = self.variable_types.copy()
+            saved_local_variable_names = self.local_variable_names.copy()
+            try:
+                self.register_match_pattern_bindings(
+                    getattr(arm, "pattern", None),
+                    subject_type,
+                )
+                arm_type = self.match_arm_body_result_type(getattr(arm, "body", None))
+            finally:
+                self.variable_types = saved_variable_types
+                self.local_variable_names = saved_local_variable_names
+
+            if arm_type is None:
+                continue
+            if result_type is None:
+                result_type = arm_type
+                continue
+
+            promoted_vector = self.promoted_vector_type(result_type, arm_type)
+            if promoted_vector is not None:
+                result_type = promoted_vector
+                continue
+
+            promoted_scalar = self.promoted_scalar_type(result_type, arm_type)
+            if promoted_scalar is not None:
+                result_type = promoted_scalar
+
+        return result_type
+
+    def match_arm_body_result_type(self, body):
+        statements = self.statement_list(body)
+        if not statements:
+            return None
+
+        tail = statements[-1]
+        if hasattr(tail, "expression"):
+            return self.expression_result_type(tail.expression)
+        if isinstance(tail, ReturnNode):
+            return self.expression_result_type(getattr(tail, "value", None))
+        if isinstance(tail, MatchNode):
+            return self.expression_result_type(tail)
+        return None
+
+    def constructor_result_type(self, expr):
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        base_type, existing_args = self.generic_type_parts(type_name)
+        if existing_args or base_type not in self.struct_generic_params:
+            return type_name
+
+        generic_params = self.struct_generic_params.get(base_type, [])
+        if not generic_params:
+            return type_name
+
+        substitutions = {}
+        named_arguments = getattr(expr, "named_arguments", {}) or {}
+        for field_name, value in named_arguments.items():
+            member_type = self.resolve_struct_member_type(base_type, field_name)
+            value_type = self.expression_result_type(value)
+            self.collect_type_parameter_bindings(
+                member_type,
+                value_type,
+                substitutions,
+                set(generic_params),
+            )
+
+        if not all(param in substitutions for param in generic_params):
+            return type_name
+
+        args = ", ".join(substitutions[param] for param in generic_params)
+        return f"{base_type}<{args}>"
+
+    def resolve_struct_member_type(self, object_type, member):
+        if object_type is None:
+            return None
+        if hasattr(object_type, "name") or hasattr(object_type, "element_type"):
+            object_type = self.convert_type_node_to_string(object_type)
+        else:
+            object_type = str(object_type)
+
+        exact_members = self.struct_member_types.get(object_type, {})
+        if member in exact_members:
+            return exact_members[member]
+
+        base_type, generic_args = self.generic_type_parts(object_type)
+        member_types = self.struct_member_types.get(base_type, {})
+        if member not in member_types:
+            return None
+
+        member_type = member_types[member]
+        generic_params = self.struct_generic_params.get(base_type, [])
+        substitutions = dict(zip(generic_params, generic_args))
+        return self.substitute_type_parameters(member_type, substitutions)
+
+    def generic_type_parts(self, type_name):
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+
+        if "<" not in type_name or not type_name.endswith(">"):
+            return type_name, []
+
+        base_type, args_text = type_name.split("<", 1)
+        args_text = args_text[:-1]
+        args = [arg.strip() for arg in self.split_top_level_generic_args(args_text)]
+        return base_type, [arg for arg in args if arg]
+
+    def substitute_type_parameters(self, type_name, substitutions):
+        if type_name is None:
+            return None
+        type_name = str(type_name)
+        if type_name in substitutions:
+            return substitutions[type_name]
+
+        base_type, generic_args = self.generic_type_parts(type_name)
+        if not generic_args:
+            return type_name
+
+        mapped_args = [
+            self.substitute_type_parameters(arg, substitutions) for arg in generic_args
+        ]
+        return f"{base_type}<{', '.join(mapped_args)}>"
+
+    def collect_type_parameter_bindings(
+        self,
+        expected_type,
+        actual_type,
+        substitutions,
+        generic_params,
+    ):
+        if expected_type is None or actual_type is None:
+            return
+
+        expected_type = str(expected_type)
+        actual_type = str(actual_type)
+        if expected_type in generic_params:
+            substitutions.setdefault(expected_type, actual_type)
+            return
+
+        expected_base, expected_args = self.generic_type_parts(expected_type)
+        actual_base, actual_args = self.generic_type_parts(actual_type)
+        if expected_base != actual_base or len(expected_args) != len(actual_args):
+            return
+
+        for expected_arg, actual_arg in zip(expected_args, actual_args):
+            self.collect_type_parameter_bindings(
+                expected_arg,
+                actual_arg,
+                substitutions,
+                generic_params,
+            )
 
     def array_access_element_type(self, expr):
         array_name = self.get_expression_name(expr)
@@ -2882,6 +5334,7 @@ class RustCodeGen:
             type_name = str(type_name)
 
         mapped_type = self.map_type(type_name)
+        mapped_type = self.unqualify_runtime_type_name(mapped_type)
         vector_details = {
             "Vec2<f32>": ("float", 2),
             "Vec3<f32>": ("float", 3),
@@ -2904,6 +5357,12 @@ class RustCodeGen:
             return None
         component_type, size = details
         return {"component_type": component_type, "size": size}
+
+    def unqualify_runtime_type_name(self, type_name):
+        type_name = str(type_name)
+        if type_name.startswith("math::"):
+            return type_name[len("math::") :]
+        return type_name
 
     def matrix_type_info(self, type_name):
         if type_name is None:
@@ -3023,11 +5482,67 @@ class RustCodeGen:
             base_type, size = parse_array_type(vtype_str)
             base_mapped = self.type_mapping.get(base_type, base_type)
             if size:
-                return f"[{base_mapped}; {size}]"
+                return f"[{self.qualify_colliding_runtime_type(base_mapped)}; {size}]"
             else:
-                return f"Vec<{base_mapped}>"
+                return f"Vec<{self.qualify_colliding_runtime_type(base_mapped)}>"
 
-        return self.type_mapping.get(vtype_str, vtype_str)
+        mapped_type = self.type_mapping.get(vtype_str)
+        if mapped_type is not None:
+            return self.qualify_colliding_runtime_type(mapped_type)
+
+        generic_type = self.map_generic_type_string(vtype_str)
+        if generic_type is not None:
+            return generic_type
+
+        return vtype_str
+
+    def qualify_colliding_runtime_type(self, rust_type):
+        """Disambiguate built-in math types when user declarations reuse their names."""
+        rust_type = str(rust_type)
+        if rust_type.startswith("math::"):
+            return rust_type
+        base_type = rust_type.split("<", 1)[0]
+        if base_type in self.runtime_type_collisions:
+            return f"math::{rust_type}"
+        return rust_type
+
+    def map_generic_type_string(self, type_name):
+        """Map primitive arguments inside a generic type string."""
+        if "<" not in type_name or not type_name.endswith(">"):
+            return None
+
+        base_type, args_text = type_name.split("<", 1)
+        args_text = args_text[:-1]
+        args = self.split_top_level_generic_args(args_text)
+        mapped_args = [self.map_type(arg.strip()) for arg in args if arg.strip()]
+        if not mapped_args:
+            return None
+
+        mapped_base = self.type_mapping.get(base_type, base_type)
+        return f"{mapped_base}<{', '.join(mapped_args)}>"
+
+    def split_top_level_generic_args(self, args_text):
+        """Split generic arguments without breaking nested generic arguments."""
+        args = []
+        current = []
+        depth = 0
+
+        for char in args_text:
+            if char == "<":
+                depth += 1
+            elif char == ">" and depth > 0:
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append("".join(current))
+                current = []
+                continue
+
+            current.append(char)
+
+        if current:
+            args.append("".join(current))
+
+        return args
 
     def rust_constructor_path(self, rust_type):
         """Return a Rust path suitable for associated constructor calls."""

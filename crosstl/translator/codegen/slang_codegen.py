@@ -72,9 +72,12 @@ class SlangCodeGen:
         self.variable_types = {}
         self.image_resource_types = {}
         self.helper_functions = {}
+        self.helper_name_aliases = {}
+        self.user_symbol_names = set()
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.user_function_names = set()
+        self.user_function_return_types = {}
         self._generating = False
         self.function_map = {
             "mix": "lerp",
@@ -96,9 +99,14 @@ class SlangCodeGen:
             self.variable_types = {}
             self.image_resource_types = {}
             self.helper_functions = {}
+            self.helper_name_aliases = {}
+            self.user_symbol_names = self.collect_user_symbol_names(ast)
             self.current_function_return_type = None
             self.current_expression_expected_type = None
             self.user_function_names = self.collect_user_function_names(ast)
+            self.user_function_return_types = self.collect_user_function_return_types(
+                ast
+            )
 
         if isinstance(ast, list):
             result = ""
@@ -203,6 +211,73 @@ class SlangCodeGen:
         collect(node)
         names.discard(None)
         return names
+
+    def collect_user_symbol_names(self, node):
+        names = set()
+
+        def add_name(current):
+            name = getattr(current, "name", None)
+            if name:
+                names.add(name)
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, (FunctionNode, StructNode)):
+                add_name(current)
+            for attr in ("global_variables", "cbuffers"):
+                for declaration in getattr(current, attr, []) or []:
+                    add_name(declaration)
+            for function in getattr(current, "functions", []) or []:
+                collect(function)
+            for function in getattr(current, "local_functions", []) or []:
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    for declaration in getattr(stage, "local_variables", []) or []:
+                        add_name(declaration)
+                    collect(stage)
+
+        collect(node)
+        names.discard(None)
+        return names
+
+    def collect_user_function_return_types(self, node):
+        return_types = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode):
+                return_type = getattr(current, "return_type", None)
+                return_types[current.name] = (
+                    self.convert_type_node_to_string(return_type)
+                    if return_type is not None
+                    else "void"
+                )
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return_types.pop(None, None)
+        return return_types
 
     def generate_shader(self, node):
         """Render a full CrossGL shader AST as a Slang translation unit."""
@@ -626,6 +701,93 @@ class SlangCodeGen:
             return "bool"
         return None
 
+    def vector_value_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.convert_type(type_name)
+        for component_type in ("double", "float", "uint", "int", "bool"):
+            if not mapped_type.startswith(component_type):
+                continue
+            suffix = mapped_type[len(component_type) :]
+            if suffix in {"2", "3", "4"}:
+                size = int(suffix)
+                return {
+                    "type": mapped_type,
+                    "component_type": component_type,
+                    "size": size,
+                    "components": ("x", "y", "z", "w")[:size],
+                }
+        return None
+
+    def generate_bool_mix_call(self, args):
+        if len(args) != 3:
+            return None
+
+        condition_type = self.expression_result_type(args[2])
+        condition_info = self.vector_value_info(condition_type)
+        if condition_info is not None:
+            if condition_info["component_type"] != "bool":
+                return None
+            return self.generate_bool_vector_select_expression(
+                args[2], args[1], args[0]
+            )
+
+        if self.convert_type(condition_type) != "bool":
+            return None
+
+        condition = self.generate_expression(args[2])
+        true_value = self.generate_expression(args[1])
+        false_value = self.generate_expression(args[0])
+        return f"({condition} ? {true_value} : {false_value})"
+
+    def generate_bool_vector_select_expression(
+        self, condition_expr, true_expr, false_expr
+    ):
+        condition_info = self.vector_value_info(
+            self.expression_result_type(condition_expr)
+        )
+        if condition_info is None or condition_info["component_type"] != "bool":
+            return None
+
+        true_info = self.vector_value_info(self.expression_result_type(true_expr))
+        false_info = self.vector_value_info(self.expression_result_type(false_expr))
+        if (
+            true_info is None
+            or false_info is None
+            or true_info["type"] != false_info["type"]
+            or condition_info["size"] != true_info["size"]
+        ):
+            return None
+
+        helper_name = self.require_vector_select_helper(true_info, condition_info)
+        condition = self.generate_expression(condition_expr)
+        true_value = self.generate_expression(true_expr)
+        false_value = self.generate_expression(false_expr)
+        return f"{helper_name}({condition}, {true_value}, {false_value})"
+
+    def require_vector_select_helper(self, result_info, condition_info):
+        result_type = result_info["type"]
+        condition_type = condition_info["type"]
+        base_name = f"_crossgl_select_{condition_type}_{result_type}"
+        helper_name = self.helper_function_name(base_name)
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = [
+            f"(mask.{component} ? trueValue.{component} : falseValue.{component})"
+            for component in result_info["components"]
+        ]
+        helper = (
+            f"{result_type} {helper_name}("
+            f"{condition_type} mask, {result_type} trueValue, "
+            f"{result_type} falseValue)\n"
+            "{\n"
+            f"    return {result_type}({', '.join(components)});\n"
+            "}"
+        )
+        self.register_helper_function(helper_name, helper)
+        return helper_name
+
     def modulo_requires_fmod(self, left_expr, right_expr):
         """Return whether scalar/vector modulo needs Slang fmod lowering."""
         left_component = self.vector_component_type(
@@ -725,6 +887,7 @@ class SlangCodeGen:
                 "bool4",
             }:
                 return str(func_name)
+            return self.user_function_return_types.get(func_name)
         return None
 
     def generate_literal(self, node):
@@ -840,6 +1003,14 @@ class SlangCodeGen:
                 resource_call = self.generate_resource_call(callee, node.args)
                 if resource_call is not None:
                     return resource_call
+            if callee == "mix" and callee not in self.user_function_names:
+                bool_mix = self.generate_bool_mix_call(node.args)
+                if bool_mix is not None:
+                    return bool_mix
+            if callee == "lambda":
+                lambda_expr = self.generate_lambda_expression(node.args)
+                if lambda_expr is not None:
+                    return lambda_expr
             args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
             if (
@@ -859,6 +1030,11 @@ class SlangCodeGen:
                 return f"{operand}{node.op}"
             return f"{node.op}{operand}"
         elif isinstance(node, TernaryOpNode):
+            bool_vector_select = self.generate_bool_vector_select_expression(
+                node.condition, node.true_expr, node.false_expr
+            )
+            if bool_vector_select is not None:
+                return bool_vector_select
             condition = self.generate_expression(node.condition)
             true_expr = self.generate_expression(node.true_expr)
             false_expr = self.generate_expression(node.false_expr)
@@ -867,6 +1043,89 @@ class SlangCodeGen:
             return node
         else:
             return str(node)
+
+    def generate_lambda_expression(self, args):
+        """Render supported CrossGL pseudo-lambdas as Slang lambda expressions."""
+        if not args:
+            return None
+
+        params = []
+        for arg in args[:-1]:
+            param = self.generate_lambda_parameter(arg)
+            if param is None:
+                return None
+            params.append(param)
+
+        body = self.generate_lambda_body(args[-1])
+        if body is None:
+            return None
+        return f"({', '.join(params)}) => {body}"
+
+    def generate_lambda_parameter(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        typed_param = self.split_lambda_typed_parameter(raw)
+        if typed_param is None:
+            return None
+
+        type_name, param_name = typed_param
+        mapped_type = self.lambda_parameter_type(type_name)
+        if mapped_type is None:
+            return None
+        return f"{mapped_type} {param_name}"
+
+    def generate_lambda_body(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if not raw:
+            return None
+        return raw
+
+    def lambda_raw_argument_text(self, arg):
+        if isinstance(arg, IdentifierNode):
+            return arg.name
+        if isinstance(arg, str):
+            return arg
+        return self.generate_expression(arg)
+
+    def split_lambda_typed_parameter(self, raw):
+        if not raw or ":" in raw:
+            return None
+        if any(char in raw for char in "{}()"):
+            return None
+
+        parts = raw.rsplit(None, 1)
+        if len(parts) != 2:
+            return None
+
+        type_name, param_name = parts
+        if not param_name.isidentifier():
+            return None
+        return type_name, param_name
+
+    def lambda_parameter_type(self, type_name):
+        canonical_type = (
+            "".join(type_name.split())
+            if "<" in type_name or ">" in type_name
+            else type_name
+        )
+        if any(char.isspace() for char in canonical_type):
+            return None
+        if any(char in canonical_type for char in "{},;[]()"):
+            return None
+
+        mapped_type = self.convert_type(canonical_type)
+        if "<" in canonical_type or ">" in canonical_type:
+            if mapped_type == canonical_type:
+                return None
+
+        if any(char in mapped_type for char in "<>{},;[]()"):
+            return None
+        if not mapped_type:
+            return None
+        if not (mapped_type[0].isalpha() or mapped_type[0] == "_"):
+            return None
+        if not all(char.isalnum() or char == "_" for char in mapped_type):
+            return None
+        return mapped_type
 
     def format_array_access_index(self, index):
         if isinstance(index, BinaryOpNode):
@@ -1127,6 +1386,7 @@ class SlangCodeGen:
             "void": "void",
             "sampler": "SamplerState",
             "sampler1D": "Sampler1D<float4>",
+            "sampler1DArray": "Sampler1DArray<float4>",
             "sampler2D": "Sampler2D<float4>",
             "sampler3D": "Sampler3D<float4>",
             "samplerCube": "SamplerCube<float4>",
@@ -1138,16 +1398,22 @@ class SlangCodeGen:
             "sampler2DArrayShadow": "Sampler2DArrayShadow",
             "samplerCubeShadow": "SamplerCubeShadow",
             "samplerCubeArrayShadow": "SamplerCubeArrayShadow",
+            "iimage1D": "RWTexture1D<int>",
+            "iimage1DArray": "RWTexture1DArray<int>",
             "iimage2D": "RWTexture2D<int>",
             "iimage3D": "RWTexture3D<int>",
             "iimage2DArray": "RWTexture2DArray<int>",
             "iimage2DMS": "RWTexture2DMS<int>",
             "iimage2DMSArray": "RWTexture2DMSArray<int>",
+            "uimage1D": "RWTexture1D<uint>",
+            "uimage1DArray": "RWTexture1DArray<uint>",
             "uimage2D": "RWTexture2D<uint>",
             "uimage3D": "RWTexture3D<uint>",
             "uimage2DArray": "RWTexture2DArray<uint>",
             "uimage2DMS": "RWTexture2DMS<uint>",
             "uimage2DMSArray": "RWTexture2DMSArray<uint>",
+            "image1D": "RWTexture1D<float4>",
+            "image1DArray": "RWTexture1DArray<float4>",
             "image2D": "RWTexture2D<float4>",
             "image3D": "RWTexture3D<float4>",
             "image2DArray": "RWTexture2DArray<float4>",
@@ -1293,12 +1559,18 @@ class SlangCodeGen:
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
         texture_types = {
+            "image1D": "RWTexture1D",
+            "iimage1D": "RWTexture1D",
+            "uimage1D": "RWTexture1D",
             "image2D": "RWTexture2D",
             "iimage2D": "RWTexture2D",
             "uimage2D": "RWTexture2D",
             "image3D": "RWTexture3D",
             "iimage3D": "RWTexture3D",
             "uimage3D": "RWTexture3D",
+            "image1DArray": "RWTexture1DArray",
+            "iimage1DArray": "RWTexture1DArray",
+            "uimage1DArray": "RWTexture1DArray",
             "image2DArray": "RWTexture2DArray",
             "iimage2DArray": "RWTexture2DArray",
             "uimage2DArray": "RWTexture2DArray",
@@ -1317,12 +1589,18 @@ class SlangCodeGen:
     def is_storage_image_type(self, type_name):
         base_type = self.resource_base_type(type_name)
         return isinstance(base_type, str) and base_type in {
+            "image1D",
+            "iimage1D",
+            "uimage1D",
             "image2D",
             "iimage2D",
             "uimage2D",
             "image3D",
             "iimage3D",
             "uimage3D",
+            "image1DArray",
+            "iimage1DArray",
+            "uimage1DArray",
             "image2DArray",
             "iimage2DArray",
             "uimage2DArray",
@@ -1414,10 +1692,14 @@ class SlangCodeGen:
 
     def image_atomic_helper_suffix(self, image_type):
         return {
+            "RWTexture1D<int>": "iimage1D",
+            "RWTexture1D<uint>": "uimage1D",
             "RWTexture2D<int>": "iimage2D",
             "RWTexture2D<uint>": "uimage2D",
             "RWTexture3D<int>": "iimage3D",
             "RWTexture3D<uint>": "uimage3D",
+            "RWTexture1DArray<int>": "iimage1DArray",
+            "RWTexture1DArray<uint>": "uimage1DArray",
             "RWTexture2DArray<int>": "iimage2DArray",
             "RWTexture2DArray<uint>": "uimage2DArray",
         }.get(image_type)
@@ -1429,6 +1711,10 @@ class SlangCodeGen:
         return None
 
     def image_atomic_coord_type(self, image_type):
+        if image_type in {"RWTexture1D<int>", "RWTexture1D<uint>"}:
+            return "int"
+        if image_type in {"RWTexture1DArray<int>", "RWTexture1DArray<uint>"}:
+            return "int2"
         if image_type in {"RWTexture2D<int>", "RWTexture2D<uint>"}:
             return "int2"
         if image_type in {
@@ -1478,13 +1764,18 @@ class SlangCodeGen:
             )
 
         image_type = self.resource_base_type(self.image_resource_type(args[0]))
-        helper_name = self.image_atomic_helper_name(operation, image_type)
-        if not helper_name:
+        base_helper_name = self.image_atomic_helper_name(operation, image_type)
+        if not base_helper_name:
+            reason = (
+                "requires scalar int or uint "
+                "image1D/image1DArray/image2D/image3D/image2DArray resource"
+            )
             return self.unsupported_image_atomic_call(
                 operation,
-                "requires scalar int or uint image2D/image3D/image2DArray resource",
+                reason,
                 image_type,
             )
+        helper_name = self.helper_function_name(base_helper_name)
 
         self.register_helper_function(
             helper_name,
@@ -1662,9 +1953,10 @@ class SlangCodeGen:
             return None
 
         resource_slang_type = self.resource_query_slang_type(args[0], resource_type)
-        helper_name = self.resource_query_helper_name(
+        base_helper_name = self.resource_query_helper_name(
             func_name, resource_type, resource_slang_type
         )
+        helper_name = self.helper_function_name(base_helper_name)
         self.register_helper_function(
             helper_name,
             self.build_dimension_query_helper(
@@ -1688,9 +1980,10 @@ class SlangCodeGen:
             return None
 
         resource_slang_type = self.resource_query_slang_type(args[0], resource_type)
-        helper_name = self.resource_query_helper_name(
+        base_helper_name = self.resource_query_helper_name(
             func_name, resource_type, resource_slang_type
         )
+        helper_name = self.helper_function_name(base_helper_name)
         self.register_helper_function(
             helper_name,
             self.build_sample_count_query_helper(
@@ -2085,7 +2378,8 @@ class SlangCodeGen:
         if spec is None or not spec["mip"]:
             return None
 
-        helper_name = f"cgl_textureQueryLevels_{resource_type}"
+        base_helper_name = f"cgl_textureQueryLevels_{resource_type}"
+        helper_name = self.helper_function_name(base_helper_name)
         self.register_helper_function(
             helper_name,
             self.build_texture_query_levels_helper(helper_name, resource_type, spec),
@@ -2118,6 +2412,22 @@ class SlangCodeGen:
     def register_helper_function(self, name, source):
         if name not in self.helper_functions:
             self.helper_functions[name] = source
+
+    def helper_function_name(self, base_name):
+        if base_name in self.helper_name_aliases:
+            return self.helper_name_aliases[base_name]
+
+        candidate = base_name
+        suffix = 1
+        used_helper_names = set(self.helper_functions) | set(
+            self.helper_name_aliases.values()
+        )
+        while candidate in self.user_symbol_names or candidate in used_helper_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+
+        self.helper_name_aliases[base_name] = candidate
+        return candidate
 
     def build_dimension_query_helper(
         self, helper_name, resource_type, spec, resource_slang_type=None
@@ -2225,6 +2535,12 @@ class SlangCodeGen:
             ),
             "sampler2DMS": (("width", "height"), False, True),
             "sampler2DMSArray": (("width", "height", "elements"), False, True),
+            "image1D": (("width",), False, False),
+            "iimage1D": (("width",), False, False),
+            "uimage1D": (("width",), False, False),
+            "image1DArray": (("width", "elements"), False, False),
+            "iimage1DArray": (("width", "elements"), False, False),
+            "uimage1DArray": (("width", "elements"), False, False),
             "image2D": (("width", "height"), False, False),
             "iimage2D": (("width", "height"), False, False),
             "uimage2D": (("width", "height"), False, False),

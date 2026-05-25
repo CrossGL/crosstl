@@ -2142,6 +2142,9 @@ class RustParser:
         return left
 
     def parse_unary_expression(self):
+        if self.current_token[0] == "ASYNC" and self.is_async_closure_start():
+            return self.parse_closure_expression()
+
         if self.current_token[0] in {"PIPE", "LOGICAL_OR", "MOVE"}:
             return self.parse_closure_expression()
 
@@ -2165,7 +2168,24 @@ class RustParser:
         else:
             return self.parse_postfix_expression()
 
+    def is_async_closure_start(self):
+        if self.current_token[0] != "ASYNC":
+            return False
+
+        index = self.current_index + 1
+        if index < len(self.tokens) and self.tokens[index][0] == "MOVE":
+            index += 1
+        return index < len(self.tokens) and self.tokens[index][0] in {
+            "PIPE",
+            "LOGICAL_OR",
+        }
+
     def parse_closure_expression(self):
+        is_async = False
+        if self.current_token[0] == "ASYNC":
+            is_async = True
+            self.eat("ASYNC")
+
         is_move = False
         if self.current_token[0] == "MOVE":
             is_move = True
@@ -2198,7 +2218,7 @@ class RustParser:
             return_type = self.parse_type()
 
         body = self.parse_result_expression()
-        return ClosureNode(params, body, is_move, return_type)
+        return ClosureNode(params, body, is_move, return_type, is_async)
 
     def find_closure_parameter_end(self):
         paren_depth = 0
@@ -2314,6 +2334,15 @@ class RustParser:
         return MatchesMacroNode(expression, pattern, guard)
 
     def parse_primary_expression(self):
+        if self.current_token[0] == "IF":
+            return self.parse_if_expression()
+
+        if self.current_token[0] == "MATCH":
+            return self.parse_match_expression()
+
+        if self.current_token[0] in ["LIFETIME", "LOOP"]:
+            return self.parse_loop_expression()
+
         if self.current_token[0] == "TRY":
             return self.parse_try_block_expression()
 

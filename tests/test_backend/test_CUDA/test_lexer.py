@@ -21,6 +21,23 @@ class TestCudaLexer:
 
         assert tokens == expected_tokens
 
+    def test_device_lambda_capture_tokenization(self):
+        """Test CUDA device lambda captures use existing bracket/operator tokens."""
+        code = "[&] __device__ (int x) { return x; }"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens[:8] == [
+            ("LBRACKET", "["),
+            ("BITWISE_AND", "&"),
+            ("RBRACKET", "]"),
+            ("DEVICE", "__device__"),
+            ("LPAREN", "("),
+            ("INT", "int"),
+            ("IDENTIFIER", "x"),
+            ("RPAREN", ")"),
+        ]
+
     def test_cuda_builtin_variables(self):
         """Test CUDA built-in variable tokenization"""
         code = "threadIdx blockIdx gridDim blockDim"

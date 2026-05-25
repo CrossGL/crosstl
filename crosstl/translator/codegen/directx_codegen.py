@@ -3,6 +3,7 @@
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     ContinueNode,
     DoWhileNode,
@@ -61,8 +62,12 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from .stage_utils import (
+    assign_stage_entry_names,
+    collect_stage_entry_records,
+    collect_stage_entry_reserved_function_names,
     compute_local_size,
     normalize_stage_name,
+    order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
 )
@@ -272,6 +277,9 @@ class HLSLCodeGen:
         self.local_variable_types = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
+        self.current_hlsl_available_functions = {}
+        self.current_hlsl_hull_output_control_points = None
+        self.current_hlsl_hull_domain = None
         self.hlsl_temp_variable_index = 0
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -317,7 +325,109 @@ class HLSLCodeGen:
             "bvec3": "bool3",
             "bvec4": "bool4",
             "float": "float",
+            "packed_float2": "float2",
+            "packed_float3": "float3",
+            "packed_float4": "float4",
+            "simd_float2": "float2",
+            "simd_float3": "float3",
+            "simd_float4": "float4",
+            "half": "half",
+            "half2": "half2",
+            "half3": "half3",
+            "half4": "half4",
+            "packed_half2": "half2",
+            "packed_half3": "half3",
+            "packed_half4": "half4",
+            "float16": "half",
+            "f16vec2": "half2",
+            "f16vec3": "half3",
+            "f16vec4": "half4",
             "double": "double",
+            "char": "int",
+            "signed char": "int",
+            "int8": "int",
+            "int8_t": "int",
+            "uchar": "uint",
+            "unsigned char": "uint",
+            "uint8": "uint",
+            "uint8_t": "uint",
+            "short": "min16int",
+            "signed short": "min16int",
+            "ushort": "min16uint",
+            "unsigned short": "min16uint",
+            "int16": "min16int",
+            "int16_t": "min16int",
+            "int32_t": "int",
+            "int64": "int64_t",
+            "int64_t": "int64_t",
+            "long": "int64_t",
+            "signed long": "int64_t",
+            "ptrdiff_t": "int64_t",
+            "uint16": "min16uint",
+            "uint16_t": "min16uint",
+            "uint32_t": "uint",
+            "uint64": "uint64_t",
+            "uint64_t": "uint64_t",
+            "ulong": "uint64_t",
+            "unsigned long": "uint64_t",
+            "size_t": "uint64_t",
+            "char2": "int2",
+            "char3": "int3",
+            "char4": "int4",
+            "packed_int2": "int2",
+            "packed_int3": "int3",
+            "packed_int4": "int4",
+            "simd_int2": "int2",
+            "simd_int3": "int3",
+            "simd_int4": "int4",
+            "uchar2": "uint2",
+            "uchar3": "uint3",
+            "uchar4": "uint4",
+            "packed_uint2": "uint2",
+            "packed_uint3": "uint3",
+            "packed_uint4": "uint4",
+            "simd_uint2": "uint2",
+            "simd_uint3": "uint3",
+            "simd_uint4": "uint4",
+            "i8vec2": "int2",
+            "i8vec3": "int3",
+            "i8vec4": "int4",
+            "u8vec2": "uint2",
+            "u8vec3": "uint3",
+            "u8vec4": "uint4",
+            "short2": "min16int2",
+            "short3": "min16int3",
+            "short4": "min16int4",
+            "ushort2": "min16uint2",
+            "ushort3": "min16uint3",
+            "ushort4": "min16uint4",
+            "i16vec2": "min16int2",
+            "i16vec3": "min16int3",
+            "i16vec4": "min16int4",
+            "u16vec2": "min16uint2",
+            "u16vec3": "min16uint3",
+            "u16vec4": "min16uint4",
+            "f16mat2": "half2x2",
+            "f16mat3": "half3x3",
+            "f16mat4": "half4x4",
+            "f16mat2x2": "half2x2",
+            "f16mat2x3": "half3x2",
+            "f16mat2x4": "half4x2",
+            "f16mat3x2": "half2x3",
+            "f16mat3x3": "half3x3",
+            "f16mat3x4": "half4x3",
+            "f16mat4x2": "half2x4",
+            "f16mat4x3": "half3x4",
+            "f16mat4x4": "half4x4",
+            "simd_float2x2": "float2x2",
+            "simd_float2x3": "float2x3",
+            "simd_float2x4": "float2x4",
+            "simd_float3x2": "float3x2",
+            "simd_float3x3": "float3x3",
+            "simd_float3x4": "float3x4",
+            "simd_float4x2": "float4x2",
+            "simd_float4x3": "float4x3",
+            "simd_float4x4": "float4x4",
             "sampler1D": "Texture1D",
             "sampler1DArray": "Texture1DArray",
             "sampler2D": "Texture2D",
@@ -423,6 +533,9 @@ class HLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.current_hlsl_available_functions = {}
+        self.current_hlsl_hull_output_control_points = None
+        self.current_hlsl_hull_domain = None
         self.hlsl_temp_variable_index = 0
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -563,21 +676,13 @@ class HLSLCodeGen:
                         if hasattr(member, "member_type"):
                             # New AST structure - check if it's an ArrayType
                             if str(type(member.member_type)).find("ArrayType") != -1:
-                                # Handle array types with C-style syntax for struct members
-                                element_type = self.convert_type_node_to_string(
-                                    member.member_type.element_type
+                                member_type_str = self.convert_type_node_to_string(
+                                    member.member_type
                                 )
-                                element_type = self.map_struct_member_type(
-                                    node.name, member.name, element_type
+                                member_type = self.map_struct_member_type(
+                                    node.name, member.name, member_type_str
                                 )
-                                if member.member_type.size is not None:
-                                    size_str = self.expression_to_string(
-                                        member.member_type.size
-                                    )
-                                    array_syntax = f"[{size_str}]"
-                                else:
-                                    array_syntax = "[]"
-                                member_type = element_type
+                                array_syntax = None
                             else:
                                 # Regular type - pass TypeNode directly to map_type
                                 member_type = self.map_struct_member_type(
@@ -608,7 +713,23 @@ class HLSLCodeGen:
                             }
                             semantic = name_semantics.get(member.name)
 
-                        code += f"    {member_type} {member.name}{array_syntax}{self.map_semantic(semantic)};\n"
+                        semantic_attr = self.map_semantic(semantic)
+                        tess_factor_declaration = (
+                            self.hlsl_tess_factor_member_declaration(
+                                member_type, member.name, semantic
+                            )
+                        )
+                        if tess_factor_declaration is not None:
+                            code += f"    {tess_factor_declaration} {semantic_attr};\n"
+                            continue
+
+                        if array_syntax is None:
+                            declaration = format_c_style_array_declaration(
+                                member_type, member.name
+                            )
+                            code += f"    {declaration}{semantic_attr};\n"
+                        else:
+                            code += f"    {member_type} {member.name}{array_syntax}{semantic_attr};\n"
                 code += "};\n"
 
         comparison_texture_names, comparison_sampler_names = (
@@ -662,9 +783,13 @@ class HLSLCodeGen:
             )
         )
 
-        texture_register = 0
-        sampler_register = 0
-        uav_register = 0
+        texture_registers = {}
+        sampler_registers = {}
+        uav_registers = {}
+        used_resource_registers = {}
+        self.reserve_explicit_global_resource_registers(
+            global_vars, used_resource_registers
+        )
         for i, node in enumerate(global_vars):
             # Handle both old and new AST variable structures
             resource_count = 1
@@ -719,21 +844,55 @@ class HLSLCodeGen:
                     else "RWByteAddressBuffer"
                 )
                 if lowered_block["readonly"]:
+                    space = self.explicit_resource_register_space(node)
                     binding = self.explicit_resource_binding_index(
                         node, {"binding", "texture"}, ("t",)
                     )
                     if binding is None:
-                        binding = texture_register
+                        binding = self.next_available_resource_register(
+                            used_resource_registers,
+                            "t",
+                            texture_registers,
+                            space,
+                            resource_count,
+                        )
+                    self.reserve_resource_register_range(
+                        used_resource_registers,
+                        "t",
+                        binding,
+                        resource_count,
+                        var_name,
+                        space,
+                    )
                     register = self.resource_register_suffix("t", binding, node)
-                    texture_register = max(texture_register, binding + resource_count)
+                    self.advance_resource_register(
+                        texture_registers, space, binding, resource_count
+                    )
                 else:
+                    space = self.explicit_resource_register_space(node)
                     binding = self.explicit_resource_binding_index(
                         node, {"binding", "texture", "uav"}, ("u",)
                     )
                     if binding is None:
-                        binding = uav_register
+                        binding = self.next_available_resource_register(
+                            used_resource_registers,
+                            "u",
+                            uav_registers,
+                            space,
+                            resource_count,
+                        )
+                    self.reserve_resource_register_range(
+                        used_resource_registers,
+                        "u",
+                        binding,
+                        resource_count,
+                        var_name,
+                        space,
+                    )
                     register = self.resource_register_suffix("u", binding, node)
-                    uav_register = max(uav_register, binding + resource_count)
+                    self.advance_resource_register(
+                        uav_registers, space, binding, resource_count
+                    )
                 declaration = format_c_style_array_declaration(
                     f"{mapped_type}{array_suffix}", var_name
                 )
@@ -773,13 +932,30 @@ class HLSLCodeGen:
                         image_formats=self.image_variable_formats,
                         image_accesses=self.image_variable_accesses,
                     )
+                space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
                     node, {"binding", "texture"}, ("t",)
                 )
                 if binding is None:
-                    binding = texture_register
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "t",
+                        texture_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "t",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
                 register = self.resource_register_suffix("t", binding, node)
-                texture_register = max(texture_register, binding + resource_count)
+                self.advance_resource_register(
+                    texture_registers, space, binding, resource_count
+                )
             elif mapped_type.startswith("RWTexture"):
                 self.texture_variable_types[var_name] = mapped_type
                 record_explicit_image_metadata(
@@ -789,38 +965,106 @@ class HLSLCodeGen:
                     image_formats=self.image_variable_formats,
                     image_accesses=self.image_variable_accesses,
                 )
+                space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
                     node, {"binding", "texture", "uav"}, ("u",)
                 )
                 if binding is None:
-                    binding = uav_register
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "u",
+                        uav_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "u",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
                 register = self.resource_register_suffix("u", binding, node)
-                uav_register = max(uav_register, binding + resource_count)
+                self.advance_resource_register(
+                    uav_registers, space, binding, resource_count
+                )
             elif self.is_hlsl_uav_buffer_type(mapped_type):
+                space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
                     node, {"binding", "texture", "uav"}, ("u",)
                 )
                 if binding is None:
-                    binding = uav_register
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "u",
+                        uav_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "u",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
                 register = self.resource_register_suffix("u", binding, node)
-                uav_register = max(uav_register, binding + resource_count)
+                self.advance_resource_register(
+                    uav_registers, space, binding, resource_count
+                )
             elif self.is_hlsl_readonly_buffer_type(mapped_type):
+                space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
                     node, {"binding", "texture"}, ("t",)
                 )
                 if binding is None:
-                    binding = texture_register
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "t",
+                        texture_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "t",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
                 register = self.resource_register_suffix("t", binding, node)
-                texture_register = max(texture_register, binding + resource_count)
+                self.advance_resource_register(
+                    texture_registers, space, binding, resource_count
+                )
             elif mapped_type in ["SamplerState", "SamplerComparisonState"]:
                 self.sampler_variables.add(var_name)
+                space = self.explicit_resource_register_space(node)
                 binding = self.explicit_resource_binding_index(
                     node, {"binding", "sampler"}, ("s",)
                 )
                 if binding is None:
-                    binding = sampler_register
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "s",
+                        sampler_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "s",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
                 register = self.resource_register_suffix("s", binding, node)
-                sampler_register = max(sampler_register, binding + resource_count)
+                self.advance_resource_register(
+                    sampler_registers, space, binding, resource_count
+                )
 
             qualifier = self.resource_memory_qualifier(mapped_type, node)
             code += f"{qualifier}{declaration}{register};\n"
@@ -848,8 +1092,28 @@ class HLSLCodeGen:
                         else "SamplerState"
                     )
                     self.sampler_variables.add(sampler_name)
-                    code += f"{sampler_type} {sampler_name} : register(s{sampler_register});\n"
-                    sampler_register += 1
+                    sampler_binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "s",
+                        sampler_registers,
+                        space,
+                        1,
+                    )
+                    self.reserve_resource_register_range(
+                        used_resource_registers,
+                        "s",
+                        sampler_binding,
+                        1,
+                        sampler_name,
+                        space,
+                    )
+                    sampler_register = self.resource_register_suffix_for_space(
+                        "s", sampler_binding, space
+                    )
+                    code += f"{sampler_type} {sampler_name}{sampler_register};\n"
+                    self.advance_resource_register(
+                        sampler_registers, space, sampler_binding, 1
+                    )
                 if needs_regular_sampler and needs_comparison_sampler:
                     regular_sampler_name = self.implicit_regular_sampler_name(
                         var_name,
@@ -867,8 +1131,30 @@ class HLSLCodeGen:
                         and not self.is_multisample_sampler_type(vtype)
                     ):
                         self.sampler_variables.add(regular_sampler_name)
-                        code += f"SamplerState {regular_sampler_name} : register(s{sampler_register});\n"
-                        sampler_register += 1
+                        sampler_binding = self.next_available_resource_register(
+                            used_resource_registers,
+                            "s",
+                            sampler_registers,
+                            space,
+                            1,
+                        )
+                        self.reserve_resource_register_range(
+                            used_resource_registers,
+                            "s",
+                            sampler_binding,
+                            1,
+                            regular_sampler_name,
+                            space,
+                        )
+                        sampler_register = self.resource_register_suffix_for_space(
+                            "s", sampler_binding, space
+                        )
+                        code += (
+                            f"SamplerState {regular_sampler_name}{sampler_register};\n"
+                        )
+                        self.advance_resource_register(
+                            sampler_registers, space, sampler_binding, 1
+                        )
                 if needs_query_lod_sampler:
                     query_sampler_name = (
                         f"{var_name}QuerySampler"
@@ -884,15 +1170,47 @@ class HLSLCodeGen:
                         and not self.is_multisample_sampler_type(vtype)
                     ):
                         self.sampler_variables.add(query_sampler_name)
-                        code += f"SamplerState {query_sampler_name} : register(s{sampler_register});\n"
-                        sampler_register += 1
+                        sampler_binding = self.next_available_resource_register(
+                            used_resource_registers,
+                            "s",
+                            sampler_registers,
+                            space,
+                            1,
+                        )
+                        self.reserve_resource_register_range(
+                            used_resource_registers,
+                            "s",
+                            sampler_binding,
+                            1,
+                            query_sampler_name,
+                            space,
+                        )
+                        sampler_register = self.resource_register_suffix_for_space(
+                            "s", sampler_binding, space
+                        )
+                        code += (
+                            f"SamplerState {query_sampler_name}{sampler_register};\n"
+                        )
+                        self.advance_resource_register(
+                            sampler_registers, space, sampler_binding, 1
+                        )
 
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
+        stage_entry_names = self.stage_entry_names(ast, target_stage)
+        self.current_hlsl_hull_output_control_points = (
+            self.hlsl_program_hull_output_control_points(ast)
+        )
+        self.current_hlsl_hull_domain = self.hlsl_program_hull_domain(ast)
+
         functions = getattr(ast, "functions", [])
+        global_functions_by_name = {
+            func.name: func for func in functions if getattr(func, "name", None)
+        }
+        self.current_hlsl_available_functions = global_functions_by_name
         functions_code = ""
         for func in functions:
             # Handle both old and new AST function structures
@@ -906,32 +1224,69 @@ class HLSLCodeGen:
                 continue
 
             if qualifier_name == "vertex":
-                functions_code += self.generate_function(func, shader_type="vertex")
+                functions_code += self.generate_function(
+                    func,
+                    shader_type="vertex",
+                    entry_name=stage_entry_names.get(id(func)),
+                )
             elif qualifier_name == "fragment":
-                functions_code += self.generate_function(func, shader_type="fragment")
+                functions_code += self.generate_function(
+                    func,
+                    shader_type="fragment",
+                    entry_name=stage_entry_names.get(id(func)),
+                )
             elif qualifier_name == "compute":
-                functions_code += self.generate_function(func, shader_type="compute")
+                functions_code += self.generate_function(
+                    func,
+                    shader_type="compute",
+                    entry_name=stage_entry_names.get(id(func)),
+                )
             else:
                 functions_code += self.generate_function(func)
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
+                stage_name = normalize_stage_name(stage_type)
+                if not stage_matches(target_stage, stage_name):
+                    continue
+
+                local_functions = getattr(stage, "local_functions", []) or []
+                stage_functions_by_name = dict(global_functions_by_name)
+                stage_functions_by_name.update(
+                    {
+                        func.name: func
+                        for func in local_functions
+                        if getattr(func, "name", None)
+                    }
+                )
+
+                for func in order_functions_by_dependencies(
+                    local_functions,
+                    self.walk_ast,
+                    self.function_call_name,
+                    FunctionCallNode,
+                ):
+                    functions_code += self.generate_function(func)
+
                 if hasattr(stage, "entry_point"):
-                    stage_name = normalize_stage_name(stage_type)
-                    if not stage_matches(target_stage, stage_name):
-                        continue
-                    functions_code += self.generate_function(
-                        stage.entry_point,
-                        shader_type=stage_name,
-                        execution_config=getattr(stage, "execution_config", None),
-                    )
-                if hasattr(stage, "local_functions"):
-                    stage_name = normalize_stage_name(stage_type)
-                    if not stage_matches(target_stage, stage_name):
-                        continue
-                    for func in stage.local_functions:
-                        functions_code += self.generate_function(func)
+                    previous_available_functions = self.current_hlsl_available_functions
+                    self.current_hlsl_available_functions = {
+                        name: func
+                        for name, func in stage_functions_by_name.items()
+                        if func is not stage.entry_point
+                    }
+                    try:
+                        functions_code += self.generate_function(
+                            stage.entry_point,
+                            shader_type=stage_name,
+                            execution_config=getattr(stage, "execution_config", None),
+                            entry_name=stage_entry_names.get(id(stage.entry_point)),
+                        )
+                    finally:
+                        self.current_hlsl_available_functions = (
+                            previous_available_functions
+                        )
 
         code += self.generate_texture_query_helpers()
         code += self.generate_image_atomic_helpers()
@@ -991,16 +1346,48 @@ class HLSLCodeGen:
                 "Cbuffer member name(s) conflict with DirectX global declaration(s): "
                 f"{names}"
             )
-        buffer_register = 0
+        used_cbuffer_registers = {}
+        buffer_registers = {}
         for node in cbuffers:
+            space = self.explicit_resource_register_space(node)
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "buffer"}, ("b",)
             )
             if binding is None:
-                binding = buffer_register
-            buffer_register = max(buffer_register, binding + 1)
+                continue
+            self.reserve_resource_register_range(
+                used_cbuffer_registers,
+                "b",
+                binding,
+                1,
+                node.name,
+                space,
+            )
+        for node in cbuffers:
+            space = self.explicit_resource_register_space(node)
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b",)
+            )
+            if binding is None:
+                binding = self.next_available_resource_register(
+                    used_cbuffer_registers,
+                    "b",
+                    buffer_registers,
+                    space,
+                    1,
+                )
+            self.reserve_resource_register_range(
+                used_cbuffer_registers,
+                "b",
+                binding,
+                1,
+                node.name,
+                space,
+            )
+            buffer_registers[space] = max(buffer_registers.get(space, 0), binding + 1)
+            register = self.resource_register_suffix("b", binding, node)
             if isinstance(node, StructNode):
-                code += f"cbuffer {node.name} : register(b{binding}) {{\n"
+                code += f"cbuffer {node.name}{register} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -1030,7 +1417,7 @@ class HLSLCodeGen:
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # Generic cbuffer handling
-                code += f"cbuffer {node.name} : register(b{binding}) {{\n"
+                code += f"cbuffer {node.name}{register} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -1063,7 +1450,12 @@ class HLSLCodeGen:
         return f"[numthreads({x}, {y}, {z})]\n"
 
     def generate_function(
-        self, func, indent=0, shader_type=None, execution_config=None
+        self,
+        func,
+        indent=0,
+        shader_type=None,
+        execution_config=None,
+        entry_name=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
         code = ""
@@ -1157,6 +1549,7 @@ class HLSLCodeGen:
 
             semantic = self.semantic_from_node(p)
 
+            param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
             declaration = format_c_style_array_declaration(param_type, p.name)
             semantic_attr = self.map_semantic(semantic)
             params.append(
@@ -1215,6 +1608,11 @@ class HLSLCodeGen:
 
         if hasattr(func, "return_type"):
             raw_return_type = self.type_name_string(func.return_type)
+            if "[" in raw_return_type:
+                raise ValueError(
+                    "DirectX output does not support array return types; "
+                    "wrap the array in a struct or use an output parameter"
+                )
             return_type = self.map_type(raw_return_type)
         else:
             raw_return_type = "void"
@@ -1264,12 +1662,16 @@ class HLSLCodeGen:
             code += f"// {effective_shader_type.capitalize()} Shader\n"
             if effective_shader_type == "compute":
                 code += self.generate_compute_numthreads(execution_config)
-            code += f"{return_type} {shader_map[effective_shader_type]}({params_str}){return_semantic} {{\n"
+            function_name = entry_name or shader_map[effective_shader_type]
+            code += f"{return_type} {function_name}({params_str}){return_semantic} {{\n"
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
+            self.validate_hlsl_stage_requirements(func, effective_shader_type)
+            code += self.generate_hlsl_stage_attributes(func, effective_shader_type)
             if shader_attr:
                 code += f'[shader("{shader_attr}")]\n'
-            code += f"{return_type} {func.name}({params_str}) {{\n"
+            function_name = entry_name or func.name
+            code += f"{return_type} {function_name}({params_str}) {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -1389,6 +1791,9 @@ class HLSLCodeGen:
         elif isinstance(stmt, AssignmentNode):
             return self.generate_statement_code(self.generate_assignment(stmt), indent)
 
+        elif isinstance(stmt, BlockNode):
+            return self.generate_block(stmt, indent)
+
         elif isinstance(stmt, BreakNode):
             return f"{indent_str}break;\n"
 
@@ -1492,9 +1897,15 @@ class HLSLCodeGen:
             return False
         return self.map_type(vtype) in {
             "float",
+            "half",
+            "min16float",
+            "min10float",
             "double",
             "int",
+            "min16int",
+            "min12int",
             "uint",
+            "min16uint",
             "bool",
         }
 
@@ -1506,15 +1917,33 @@ class HLSLCodeGen:
             "float2",
             "float3",
             "float4",
+            "half2",
+            "half3",
+            "half4",
+            "min16float2",
+            "min16float3",
+            "min16float4",
+            "min10float2",
+            "min10float3",
+            "min10float4",
             "double2",
             "double3",
             "double4",
             "int2",
             "int3",
             "int4",
+            "min16int2",
+            "min16int3",
+            "min16int4",
+            "min12int2",
+            "min12int3",
+            "min12int4",
             "uint2",
             "uint3",
             "uint4",
+            "min16uint2",
+            "min16uint3",
+            "min16uint4",
             "bool2",
             "bool3",
             "bool4",
@@ -1524,12 +1953,24 @@ class HLSLCodeGen:
         mapped_type = self.map_type(vtype)
         if mapped_type.startswith("float"):
             return "float"
+        if mapped_type.startswith("half"):
+            return "half"
+        if mapped_type.startswith("min16float"):
+            return "min16float"
+        if mapped_type.startswith("min10float"):
+            return "min10float"
         if mapped_type.startswith("double"):
             return "double"
         if mapped_type.startswith("uint"):
             return "uint"
+        if mapped_type.startswith("min16uint"):
+            return "min16uint"
         if mapped_type.startswith("int"):
             return "int"
+        if mapped_type.startswith("min16int"):
+            return "min16int"
+        if mapped_type.startswith("min12int"):
+            return "min12int"
         if mapped_type.startswith("bool"):
             return "bool"
         return None
@@ -1624,9 +2065,44 @@ class HLSLCodeGen:
                 return self.image_load_result_type(args[0])
             if func_name in {
                 "float",
+                "half",
+                "float16",
+                "min16float",
+                "min10float",
                 "double",
                 "int",
+                "char",
+                "signed char",
+                "int8",
+                "int8_t",
+                "int16",
+                "int16_t",
+                "int32_t",
+                "int64",
+                "int64_t",
+                "long",
+                "signed long",
+                "ptrdiff_t",
+                "min16int",
+                "min12int",
                 "uint",
+                "uchar",
+                "unsigned char",
+                "uint8",
+                "uint8_t",
+                "uint16",
+                "uint16_t",
+                "uint32_t",
+                "uint64",
+                "uint64_t",
+                "ulong",
+                "unsigned long",
+                "size_t",
+                "min16uint",
+                "short",
+                "signed short",
+                "ushort",
+                "unsigned short",
                 "bool",
                 "vec2",
                 "vec3",
@@ -1643,15 +2119,102 @@ class HLSLCodeGen:
                 "float2",
                 "float3",
                 "float4",
+                "packed_float2",
+                "packed_float3",
+                "packed_float4",
+                "simd_float2",
+                "simd_float3",
+                "simd_float4",
                 "int2",
                 "int3",
                 "int4",
+                "packed_int2",
+                "packed_int3",
+                "packed_int4",
+                "simd_int2",
+                "simd_int3",
+                "simd_int4",
                 "uint2",
                 "uint3",
                 "uint4",
+                "packed_uint2",
+                "packed_uint3",
+                "packed_uint4",
+                "simd_uint2",
+                "simd_uint3",
+                "simd_uint4",
                 "bool2",
                 "bool3",
                 "bool4",
+                "half2",
+                "half3",
+                "half4",
+                "packed_half2",
+                "packed_half3",
+                "packed_half4",
+                "f16vec2",
+                "f16vec3",
+                "f16vec4",
+                "f16mat2",
+                "f16mat3",
+                "f16mat4",
+                "f16mat2x2",
+                "f16mat2x3",
+                "f16mat2x4",
+                "f16mat3x2",
+                "f16mat3x3",
+                "f16mat3x4",
+                "f16mat4x2",
+                "f16mat4x3",
+                "f16mat4x4",
+                "simd_float2x2",
+                "simd_float2x3",
+                "simd_float2x4",
+                "simd_float3x2",
+                "simd_float3x3",
+                "simd_float3x4",
+                "simd_float4x2",
+                "simd_float4x3",
+                "simd_float4x4",
+                "char2",
+                "char3",
+                "char4",
+                "uchar2",
+                "uchar3",
+                "uchar4",
+                "i8vec2",
+                "i8vec3",
+                "i8vec4",
+                "u8vec2",
+                "u8vec3",
+                "u8vec4",
+                "short2",
+                "short3",
+                "short4",
+                "ushort2",
+                "ushort3",
+                "ushort4",
+                "i16vec2",
+                "i16vec3",
+                "i16vec4",
+                "u16vec2",
+                "u16vec3",
+                "u16vec4",
+                "min16float2",
+                "min16float3",
+                "min16float4",
+                "min10float2",
+                "min10float3",
+                "min10float4",
+                "min16int2",
+                "min16int3",
+                "min16int4",
+                "min12int2",
+                "min12int3",
+                "min12int4",
+                "min16uint2",
+                "min16uint3",
+                "min16uint4",
             }:
                 return str(func_name)
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
@@ -1699,14 +2262,7 @@ class HLSLCodeGen:
 
         code = f"{indent_str}if ({self.generate_expression(condition)}) {{\n"
 
-        if hasattr(then_body, "statements"):
-            for stmt in then_body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(then_body, list):
-            for stmt in then_body:
-                code += self.generate_statement(stmt, indent + 1)
-        else:
-            code += self.generate_statement(then_body, indent + 1)
+        code += self.generate_scoped_statement_body(then_body, indent + 1)
 
         code += f"{indent_str}}}"
 
@@ -1715,20 +2271,12 @@ class HLSLCodeGen:
                 node.else_if_conditions, node.else_if_bodies
             ):
                 code += f" else if ({self.generate_expression(else_if_condition)}) {{\n"
-                for stmt in else_if_body:
-                    code += self.generate_statement(stmt, indent + 1)
+                code += self.generate_scoped_statement_body(else_if_body, indent + 1)
                 code += f"{indent_str}}}"
 
         if else_body:
             code += " else {\n"
-            if hasattr(else_body, "statements"):
-                for stmt in else_body.statements:
-                    code += self.generate_statement(stmt, indent + 1)
-            elif isinstance(else_body, list):
-                for stmt in else_body:
-                    code += self.generate_statement(stmt, indent + 1)
-            else:
-                code += self.generate_statement(else_body, indent + 1)
+            code += self.generate_scoped_statement_body(else_body, indent + 1)
             code += f"{indent_str}}}"
 
         code += "\n"
@@ -1736,75 +2284,119 @@ class HLSLCodeGen:
 
     def generate_for(self, node, indent):
         indent_str = "    " * indent
+        previous_local_variable_types = dict(self.local_variable_types)
+        previous_unsupported_locals = set(
+            self.current_unsupported_glsl_buffer_block_local_variables
+        )
 
-        # Handle for loop components
-        init = ""
-        condition = ""
-        update = ""
+        try:
+            # Handle for loop components
+            init = ""
+            condition = ""
+            update = ""
 
-        if hasattr(node, "init") and node.init:
-            if isinstance(node.init, str):
-                init = node.init
-            else:
-                init = self.generate_for_initializer(node.init)
+            if hasattr(node, "init") and node.init:
+                if isinstance(node.init, str):
+                    init = node.init
+                else:
+                    init = self.generate_for_initializer(node.init)
 
-        if hasattr(node, "condition") and node.condition:
-            if isinstance(node.condition, str):
-                condition = node.condition
-            else:
-                condition = self.generate_expression(node.condition).strip().rstrip(";")
+            if hasattr(node, "condition") and node.condition:
+                if isinstance(node.condition, str):
+                    condition = node.condition
+                else:
+                    condition = (
+                        self.generate_expression(node.condition).strip().rstrip(";")
+                    )
 
-        if hasattr(node, "update") and node.update:
-            if isinstance(node.update, str):
-                update = node.update
-            else:
-                update = self.generate_expression(node.update).strip().rstrip(";")
+            if hasattr(node, "update") and node.update:
+                if isinstance(node.update, str):
+                    update = node.update
+                else:
+                    update = self.generate_expression(node.update).strip().rstrip(";")
 
-        code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
+            code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
 
-        body = getattr(node, "body", [])
-        if hasattr(body, "statements"):
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(body, list):
-            for stmt in body:
-                code += self.generate_statement(stmt, indent + 1)
-        else:
-            code += self.generate_statement(body, indent + 1)
+            body = getattr(node, "body", [])
+            code += self.generate_scoped_statement_body(body, indent + 1)
 
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.local_variable_types = previous_local_variable_types
+            self.current_unsupported_glsl_buffer_block_local_variables = (
+                previous_unsupported_locals
+            )
+
+    def generate_block(self, node, indent):
+        indent_str = "    " * indent
+        code = f"{indent_str}{{\n"
+        code += self.generate_scoped_statement_body(
+            getattr(node, "statements", []), indent + 1
+        )
         code += f"{indent_str}}}\n"
         return code
+
+    def generate_scoped_statement_body(self, body, indent):
+        previous_local_variable_types = dict(self.local_variable_types)
+        previous_unsupported_locals = set(
+            self.current_unsupported_glsl_buffer_block_local_variables
+        )
+        try:
+            return self.generate_statement_body(body, indent)
+        finally:
+            self.local_variable_types = previous_local_variable_types
+            self.current_unsupported_glsl_buffer_block_local_variables = (
+                previous_unsupported_locals
+            )
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
         pattern = getattr(node, "pattern", "item")
         iterable_node = getattr(node, "iterable", "")
+        previous_local_variable_types = dict(self.local_variable_types)
+        previous_unsupported_locals = set(
+            self.current_unsupported_glsl_buffer_block_local_variables
+        )
 
-        if isinstance(iterable_node, RangeNode):
-            start = self.generate_expression(iterable_node.start)
-            end = self.generate_expression(iterable_node.end)
-            comparator = "<=" if iterable_node.inclusive else "<"
-            code = (
-                f"{indent_str}for (int {pattern} = {start}; "
-                f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
-            )
-        else:
-            iterable = self.generate_expression(iterable_node)
-            code = (
-                f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
-                f"++{pattern}) {{\n"
-            )
+        try:
+            self.local_variable_types[pattern] = "int"
+            self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
 
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
-        code += f"{indent_str}}}\n"
-        return code
+            if isinstance(iterable_node, RangeNode):
+                start = self.generate_expression(iterable_node.start)
+                end = self.generate_expression(iterable_node.end)
+                comparator = "<=" if iterable_node.inclusive else "<"
+                code = (
+                    f"{indent_str}for (int {pattern} = {start}; "
+                    f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
+                )
+            else:
+                iterable = self.generate_expression(iterable_node)
+                code = (
+                    f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
+                    f"++{pattern}) {{\n"
+                )
+
+            code += self.generate_scoped_statement_body(
+                getattr(node, "body", []), indent + 1
+            )
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.local_variable_types = previous_local_variable_types
+            self.current_unsupported_glsl_buffer_block_local_variables = (
+                previous_unsupported_locals
+            )
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(getattr(node, "condition", ""))
 
         code = f"{indent_str}while ({condition}) {{\n"
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []), indent + 1
+        )
         code += f"{indent_str}}}\n"
         return code
 
@@ -1813,7 +2405,9 @@ class HLSLCodeGen:
         condition = self.generate_expression(getattr(node, "condition", ""))
 
         code = f"{indent_str}do {{\n"
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []), indent + 1
+        )
         code += f"{indent_str}}} while ({condition});\n"
         return code
 
@@ -1821,7 +2415,9 @@ class HLSLCodeGen:
         indent_str = "    " * indent
 
         code = f"{indent_str}while (true) {{\n"
-        code += self.generate_statement_body(getattr(node, "body", []), indent + 1)
+        code += self.generate_scoped_statement_body(
+            getattr(node, "body", []), indent + 1
+        )
         code += f"{indent_str}}}\n"
         return code
 
@@ -1907,7 +2503,7 @@ class HLSLCodeGen:
             return f"{indent_str}{label}:\n"
 
         code = f"{indent_str}{label}: {{\n"
-        code += self.generate_statement_body(body, indent + 1)
+        code += self.generate_scoped_statement_body(body, indent + 1)
         if auto_break and not self.statement_body_terminates(body):
             code += f"{indent_str}    break;\n"
         code += f"{indent_str}}}\n"
@@ -2050,9 +2646,44 @@ class HLSLCodeGen:
 
             if func_name in [
                 "float",
+                "half",
+                "float16",
+                "min16float",
+                "min10float",
                 "double",
                 "int",
+                "char",
+                "signed char",
+                "int8",
+                "int8_t",
+                "int16",
+                "int16_t",
+                "int32_t",
+                "int64",
+                "int64_t",
+                "long",
+                "signed long",
+                "ptrdiff_t",
+                "min16int",
+                "min12int",
                 "uint",
+                "uchar",
+                "unsigned char",
+                "uint8",
+                "uint8_t",
+                "uint16",
+                "uint16_t",
+                "uint32_t",
+                "uint64",
+                "uint64_t",
+                "ulong",
+                "unsigned long",
+                "size_t",
+                "min16uint",
+                "short",
+                "signed short",
+                "ushort",
+                "unsigned short",
                 "bool",
                 "vec2",
                 "vec3",
@@ -2066,6 +2697,93 @@ class HLSLCodeGen:
                 "bvec2",
                 "bvec3",
                 "bvec4",
+                "packed_float2",
+                "packed_float3",
+                "packed_float4",
+                "simd_float2",
+                "simd_float3",
+                "simd_float4",
+                "half2",
+                "half3",
+                "half4",
+                "packed_half2",
+                "packed_half3",
+                "packed_half4",
+                "f16vec2",
+                "f16vec3",
+                "f16vec4",
+                "f16mat2",
+                "f16mat3",
+                "f16mat4",
+                "f16mat2x2",
+                "f16mat2x3",
+                "f16mat2x4",
+                "f16mat3x2",
+                "f16mat3x3",
+                "f16mat3x4",
+                "f16mat4x2",
+                "f16mat4x3",
+                "f16mat4x4",
+                "char2",
+                "char3",
+                "char4",
+                "uchar2",
+                "uchar3",
+                "uchar4",
+                "packed_int2",
+                "packed_int3",
+                "packed_int4",
+                "simd_int2",
+                "simd_int3",
+                "simd_int4",
+                "packed_uint2",
+                "packed_uint3",
+                "packed_uint4",
+                "simd_uint2",
+                "simd_uint3",
+                "simd_uint4",
+                "simd_float2x2",
+                "simd_float2x3",
+                "simd_float2x4",
+                "simd_float3x2",
+                "simd_float3x3",
+                "simd_float3x4",
+                "simd_float4x2",
+                "simd_float4x3",
+                "simd_float4x4",
+                "i8vec2",
+                "i8vec3",
+                "i8vec4",
+                "u8vec2",
+                "u8vec3",
+                "u8vec4",
+                "short2",
+                "short3",
+                "short4",
+                "ushort2",
+                "ushort3",
+                "ushort4",
+                "i16vec2",
+                "i16vec3",
+                "i16vec4",
+                "u16vec2",
+                "u16vec3",
+                "u16vec4",
+                "min16float2",
+                "min16float3",
+                "min16float4",
+                "min10float2",
+                "min10float3",
+                "min10float4",
+                "min16int2",
+                "min16int3",
+                "min16int4",
+                "min12int2",
+                "min12int3",
+                "min12int4",
+                "min16uint2",
+                "min16uint3",
+                "min16uint4",
             ]:
                 mapped_type = self.map_type(func_name)
                 args_str = ", ".join(
@@ -3285,6 +4003,980 @@ class HLSLCodeGen:
 
         return texture_names
 
+    def stage_entry_types(self):
+        return {
+            "vertex",
+            "fragment",
+            "compute",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+            "task",
+            "amplification",
+            "object",
+            "ray_generation",
+            "ray_intersection",
+            "ray_closest_hit",
+            "ray_any_hit",
+            "ray_miss",
+            "ray_callable",
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+        }
+
+    def stage_entry_base_name(self, stage_name, func):
+        shader_map = {
+            "vertex": "VSMain",
+            "fragment": "PSMain",
+            "compute": "CSMain",
+            "geometry": "GSMain",
+            "tessellation_control": "HSMain",
+            "tessellation_evaluation": "DSMain",
+            "mesh": "MSMain",
+            "amplification": "ASMain",
+            "task": "ASMain",
+            "object": "ASMain",
+            "ray_generation": "RayGenMain",
+            "ray_intersection": "IntersectionMain",
+            "ray_closest_hit": "ClosestHitMain",
+            "ray_any_hit": "AnyHitMain",
+            "ray_miss": "MissMain",
+            "ray_callable": "CallableMain",
+            "intersection": "IntersectionMain",
+            "closesthit": "ClosestHitMain",
+            "anyhit": "AnyHitMain",
+            "miss": "MissMain",
+            "callable": "CallableMain",
+        }
+        return shader_map.get(stage_name, getattr(func, "name", None) or "main")
+
+    def hlsl_stage_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+
+        valid_names = {
+            "domain",
+            "maxvertexcount",
+            "maxtessfactor",
+            "outputcontrolpoints",
+            "outputtopology",
+            "partitioning",
+            "patchconstantfunc",
+        }
+        if normalized in valid_names:
+            return normalized
+        return None
+
+    def hlsl_stage_attribute_names(self, func):
+        names = set()
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.hlsl_stage_attribute_name(attr)
+            if attr_name and getattr(attr, "arguments", []):
+                names.add(attr_name)
+        return names
+
+    def hlsl_stage_attribute_argument(self, func, expected_name):
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.hlsl_stage_attribute_name(attr)
+            if attr_name != expected_name:
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            if arguments:
+                return self.hlsl_stage_attribute_value_to_string(arguments[0])
+        return None
+
+    def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
+        value = self.hlsl_stage_attribute_argument(func, expected_name)
+        if value is None:
+            return None
+        return str(value).strip('"').lower()
+
+    def canonical_hlsl_tessellation_domain(self, domain):
+        if domain is None:
+            return None
+        normalized = str(domain).strip('"').lower()
+        if normalized == "triangle":
+            return "tri"
+        return normalized
+
+    def hlsl_int_literal_value(self, value):
+        if value is None:
+            return None
+        if hasattr(value, "value"):
+            value = value.value
+        elif hasattr(value, "name"):
+            value = value.name
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+
+        text = str(value).strip().strip('"').replace("_", "")
+        if not text:
+            return None
+        while text and text[-1] in {"u", "U", "l", "L"}:
+            text = text[:-1]
+        try:
+            return int(text, 0)
+        except ValueError:
+            return None
+
+    def hlsl_stage_attribute_int_argument(self, func, expected_name):
+        return self.hlsl_int_literal_value(
+            self.hlsl_stage_attribute_argument(func, expected_name)
+        )
+
+    def hlsl_parameter_type_base(self, parameter):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        type_name = self.type_name_string(param_type)
+        if not type_name:
+            return None
+        return type_name.split("<", 1)[0].strip()
+
+    def hlsl_parameter_array_count(self, parameter):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if str(type(param_type)).find("ArrayType") != -1:
+            return self.hlsl_int_literal_value(getattr(param_type, "size", None))
+
+        type_name = self.type_name_string(param_type)
+        if not type_name:
+            return None
+        _base_type, array_suffix = split_array_type_suffix(str(type_name))
+        if not array_suffix:
+            return None
+        first_dimension = array_suffix[1:].split("]", 1)[0]
+        return self.hlsl_int_literal_value(first_dimension)
+
+    def hlsl_parameter_mapped_base_and_array_suffix(self, parameter):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        type_name = self.type_name_string(param_type)
+        if not type_name:
+            return None, None
+
+        mapped_type = self.map_type(type_name)
+        return split_array_type_suffix(str(mapped_type))
+
+    def hlsl_parameter_is_array(self, parameter):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if str(type(param_type)).find("ArrayType") != -1:
+            return True
+
+        type_name = self.type_name_string(param_type)
+        return bool(type_name and split_array_type_suffix(str(type_name))[1])
+
+    def hlsl_parameter_component_count(self, parameter):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        type_name = self.type_name_string(param_type)
+        if not type_name:
+            return None
+
+        base_type, _array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+            parameter
+        )
+        if base_type is None:
+            return None
+        scalar_bases = (
+            "min16float",
+            "min10float",
+            "min16int",
+            "min12int",
+            "min16uint",
+            "float",
+            "half",
+            "double",
+            "int",
+            "uint",
+            "bool",
+        )
+        for scalar_base in scalar_bases:
+            if not base_type.startswith(scalar_base):
+                continue
+            suffix = base_type[len(scalar_base) :]
+            if suffix in {"2", "3", "4"}:
+                return int(suffix)
+            if suffix == "":
+                return 1
+        return None
+
+    def split_hlsl_generic_argument_string(self, arguments):
+        split_arguments = []
+        start = 0
+        depth = 0
+        for index, char in enumerate(arguments):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth = max(depth - 1, 0)
+            elif char == "," and depth == 0:
+                split_arguments.append(arguments[start:index].strip())
+                start = index + 1
+        split_arguments.append(arguments[start:].strip())
+        return [argument for argument in split_arguments if argument]
+
+    def hlsl_type_generic_arguments(self, vtype):
+        generic_args = getattr(vtype, "generic_args", None)
+        if generic_args:
+            return generic_args
+
+        type_name = self.type_name_string(vtype)
+        if not type_name or "<" not in type_name or not type_name.endswith(">"):
+            return []
+        arguments = type_name.split("<", 1)[1][:-1].strip()
+        return self.split_hlsl_generic_argument_string(arguments)
+
+    def hlsl_patch_control_point_count(self, parameters, patch_type):
+        for parameter in parameters:
+            if self.hlsl_parameter_type_base(parameter) != patch_type:
+                continue
+            param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            generic_args = self.hlsl_type_generic_arguments(param_type)
+            if len(generic_args) < 2:
+                return None
+            return self.hlsl_int_literal_value(generic_args[1])
+        return None
+
+    def hlsl_input_patch_control_point_count(self, parameters):
+        return self.hlsl_patch_control_point_count(parameters, "InputPatch")
+
+    def hlsl_output_patch_control_point_count(self, parameters):
+        return self.hlsl_patch_control_point_count(parameters, "OutputPatch")
+
+    def validate_hlsl_output_control_points(self, func, parameters):
+        output_control_points = self.hlsl_stage_attribute_int_argument(
+            func, "outputcontrolpoints"
+        )
+        input_patch_control_points = self.hlsl_input_patch_control_point_count(
+            parameters
+        )
+        if output_control_points is None or input_patch_control_points is None:
+            return
+        if output_control_points != input_patch_control_points:
+            raise ValueError(
+                "DirectX tessellation_control stage outputcontrolpoints "
+                f"({output_control_points}) must match the InputPatch control "
+                f"point count ({input_patch_control_points})"
+            )
+
+    def validate_hlsl_output_control_points_value(self, func, shader_type):
+        if shader_type != "tessellation_control":
+            return
+
+        output_control_points = self.hlsl_stage_attribute_int_argument(
+            func, "outputcontrolpoints"
+        )
+        if output_control_points is None:
+            return
+        if output_control_points <= 0:
+            raise ValueError(
+                "DirectX tessellation_control stage outputcontrolpoints "
+                f"({output_control_points}) must be positive"
+            )
+
+    def validate_hlsl_max_vertex_count_value(self, func, shader_type):
+        if shader_type != "geometry":
+            return
+
+        max_vertex_count = self.hlsl_stage_attribute_int_argument(
+            func, "maxvertexcount"
+        )
+        if max_vertex_count is None:
+            return
+        if max_vertex_count <= 0:
+            raise ValueError(
+                "DirectX geometry stage maxvertexcount "
+                f"({max_vertex_count}) must be positive"
+            )
+
+    def validate_hlsl_domain_output_patch_control_points(self, parameters):
+        hull_output_control_points = self.current_hlsl_hull_output_control_points
+        output_patch_control_points = self.hlsl_output_patch_control_point_count(
+            parameters
+        )
+        if hull_output_control_points is None or output_patch_control_points is None:
+            return
+        if output_patch_control_points != hull_output_control_points:
+            raise ValueError(
+                "DirectX tessellation_evaluation stage OutputPatch control "
+                f"point count ({output_patch_control_points}) must match the "
+                "tessellation_control outputcontrolpoints "
+                f"({hull_output_control_points})"
+            )
+
+    def validate_hlsl_domain_matches_hull(self, func, shader_type):
+        if shader_type != "tessellation_evaluation":
+            return
+
+        hull_domain = self.current_hlsl_hull_domain
+        domain = self.canonical_hlsl_tessellation_domain(
+            self.normalized_hlsl_stage_attribute_argument(func, "domain")
+        )
+        if hull_domain is None or domain is None:
+            return
+        if domain != hull_domain:
+            raise ValueError(
+                "DirectX tessellation_evaluation stage domain "
+                f"'{domain}' must match tessellation_control domain "
+                f"'{hull_domain}'"
+            )
+
+    def hlsl_parameter_has_semantic(self, parameter, expected_semantic):
+        semantic = self.semantic_from_node(parameter)
+        if semantic is None:
+            return False
+        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        return str(mapped_semantic).lower() == expected_semantic.lower()
+
+    def hlsl_parameter_qualifiers(self, parameter):
+        qualifiers = []
+        allowed_qualifiers = {
+            "const",
+            "in",
+            "out",
+            "inout",
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            if getattr(attr, "name", None) != "primitive":
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+            primitive = self.hlsl_stage_attribute_value_to_string(arguments[0])
+            normalized = str(primitive).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+
+        return qualifiers
+
+    def apply_hlsl_parameter_qualifiers(self, param_type, parameter):
+        qualifiers = self.hlsl_parameter_qualifiers(parameter)
+        if not qualifiers:
+            return param_type
+        return f"{' '.join(qualifiers)} {param_type}"
+
+    def hlsl_geometry_input_primitive_qualifier(self, parameter):
+        primitive_qualifiers = {
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in self.hlsl_parameter_qualifiers(parameter):
+            if qualifier in primitive_qualifiers:
+                return qualifier
+        return None
+
+    def validate_hlsl_geometry_input_primitive_arity(self, parameters):
+        expected_counts = {
+            "point": 1,
+            "line": 2,
+            "triangle": 3,
+            "lineadj": 4,
+            "triangleadj": 6,
+        }
+
+        for parameter in parameters:
+            primitive = self.hlsl_geometry_input_primitive_qualifier(parameter)
+            if primitive is None:
+                continue
+
+            expected_count = expected_counts[primitive]
+            if not self.hlsl_parameter_is_array(parameter):
+                raise ValueError(
+                    "DirectX geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must be an array with {expected_count} element(s)"
+                )
+
+            array_count = self.hlsl_parameter_array_count(parameter)
+            if array_count is None:
+                continue
+            if array_count != expected_count:
+                raise ValueError(
+                    "DirectX geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must have {expected_count} element(s), got {array_count}"
+                )
+
+    def validate_hlsl_domain_location_components(self, func, parameters):
+        domain = self.canonical_hlsl_tessellation_domain(
+            self.normalized_hlsl_stage_attribute_argument(func, "domain")
+        )
+        expected_counts = {
+            "tri": 3,
+            "quad": 2,
+            "isoline": 2,
+        }
+        expected_count = expected_counts.get(domain)
+        if expected_count is None:
+            return
+
+        for parameter in parameters:
+            if not self.hlsl_parameter_has_semantic(parameter, "SV_DomainLocation"):
+                continue
+
+            component_count = self.hlsl_parameter_component_count(parameter)
+            if component_count is None:
+                continue
+            if component_count != expected_count:
+                raise ValueError(
+                    "DirectX tessellation_evaluation stage SV_DomainLocation "
+                    f"parameter '{parameter.name}' must have {expected_count} "
+                    f"component(s) for {domain} domains, got {component_count}"
+                )
+
+    def validate_hlsl_domain_location_type(self, parameters):
+        floating_scalar_bases = (
+            "min16float",
+            "min10float",
+            "float",
+            "half",
+            "double",
+        )
+        for parameter in parameters:
+            if not self.hlsl_parameter_has_semantic(parameter, "SV_DomainLocation"):
+                continue
+
+            base_type, array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+                parameter
+            )
+            if base_type is None:
+                continue
+
+            is_floating_type = False
+            for scalar_base in floating_scalar_bases:
+                if not base_type.startswith(scalar_base):
+                    continue
+                suffix = base_type[len(scalar_base) :]
+                if suffix in {"", "2", "3", "4"}:
+                    is_floating_type = True
+                break
+
+            if array_suffix or not is_floating_type:
+                raise ValueError(
+                    "DirectX tessellation_evaluation stage SV_DomainLocation "
+                    f"parameter '{parameter.name}' must be a floating-point "
+                    "scalar or vector"
+                )
+
+    def validate_hlsl_scalar_integer_semantic_type(
+        self, parameters, shader_type, semantic
+    ):
+        for parameter in parameters:
+            if not self.hlsl_parameter_has_semantic(parameter, semantic):
+                continue
+
+            base_type, array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+                parameter
+            )
+            if base_type is None:
+                continue
+            if array_suffix or base_type not in {"int", "uint"}:
+                raise ValueError(
+                    f"DirectX {shader_type} stage {semantic} "
+                    f"parameter '{parameter.name}' "
+                    "must be scalar int or uint"
+                )
+
+    def validate_hlsl_scalar_integer_semantic_types(
+        self, parameters, shader_type, semantics
+    ):
+        for semantic in semantics:
+            self.validate_hlsl_scalar_integer_semantic_type(
+                parameters, shader_type, semantic
+            )
+
+    def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
+        parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        if not parameters:
+            return
+
+        parameter_type_bases = {
+            self.hlsl_parameter_type_base(parameter) for parameter in parameters
+        }
+        if shader_type == "geometry" and not (
+            parameter_type_bases & {"PointStream", "LineStream", "TriangleStream"}
+        ):
+            raise ValueError(
+                "DirectX geometry stage parameters must include an HLSL stream "
+                "output parameter: PointStream<T>, LineStream<T>, or "
+                "TriangleStream<T>"
+            )
+        if shader_type == "geometry" and not any(
+            set(self.hlsl_parameter_qualifiers(parameter))
+            & {"point", "line", "triangle", "lineadj", "triangleadj"}
+            for parameter in parameters
+        ):
+            raise ValueError(
+                "DirectX geometry stage parameters must include an HLSL input "
+                "primitive qualifier: point, line, triangle, lineadj, or "
+                "triangleadj"
+            )
+        if shader_type == "geometry":
+            self.validate_hlsl_geometry_input_primitive_arity(parameters)
+            self.validate_hlsl_scalar_integer_semantic_types(
+                parameters,
+                "geometry",
+                ("SV_PrimitiveID", "SV_GSInstanceID"),
+            )
+
+        if shader_type == "tessellation_control":
+            if "InputPatch" not in parameter_type_bases:
+                raise ValueError(
+                    "DirectX tessellation_control stage parameters must include "
+                    "an InputPatch<T, N> parameter"
+                )
+            self.validate_hlsl_output_control_points(func, parameters)
+            if not any(
+                self.hlsl_parameter_has_semantic(parameter, "SV_OutputControlPointID")
+                for parameter in parameters
+            ):
+                raise ValueError(
+                    "DirectX tessellation_control stage parameters must include "
+                    "an SV_OutputControlPointID parameter"
+                )
+            self.validate_hlsl_scalar_integer_semantic_types(
+                parameters,
+                "tessellation_control",
+                ("SV_OutputControlPointID", "SV_PrimitiveID"),
+            )
+
+        if shader_type == "tessellation_evaluation":
+            if "OutputPatch" not in parameter_type_bases:
+                raise ValueError(
+                    "DirectX tessellation_evaluation stage parameters must include "
+                    "an OutputPatch<T, N> parameter"
+                )
+            self.validate_hlsl_domain_output_patch_control_points(parameters)
+            if not any(
+                self.hlsl_parameter_has_semantic(parameter, "SV_DomainLocation")
+                for parameter in parameters
+            ):
+                raise ValueError(
+                    "DirectX tessellation_evaluation stage parameters must include "
+                    "an SV_DomainLocation parameter"
+                )
+            self.validate_hlsl_domain_location_type(parameters)
+            self.validate_hlsl_domain_location_components(func, parameters)
+            self.validate_hlsl_scalar_integer_semantic_types(
+                parameters,
+                "tessellation_evaluation",
+                ("SV_PrimitiveID",),
+            )
+
+    def validate_hlsl_patch_constant_function(self, func, shader_type):
+        if shader_type != "tessellation_control":
+            return
+
+        patch_function_name = self.hlsl_stage_attribute_argument(
+            func, "patchconstantfunc"
+        )
+        if not patch_function_name:
+            return
+
+        parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        available_functions = self.current_hlsl_available_functions or {}
+        patch_function = available_functions.get(patch_function_name)
+        if patch_function is None or patch_function is func:
+            if not parameters:
+                return
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must reference an emitted helper "
+                "function in the global or tessellation_control stage scope"
+            )
+
+        return_type = self.type_name_string(
+            getattr(
+                patch_function, "return_type", getattr(patch_function, "vtype", None)
+            )
+        )
+        if return_type is None or self.map_type(return_type) == "void":
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must return patch-constant data"
+            )
+
+        patch_parameters = (
+            getattr(patch_function, "parameters", getattr(patch_function, "params", []))
+            or []
+        )
+        if patch_parameters and "InputPatch" not in {
+            self.hlsl_parameter_type_base(parameter) for parameter in patch_parameters
+        }:
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' parameters must include "
+                "InputPatch<T, N>"
+            )
+        self.validate_hlsl_scalar_integer_semantic_types(
+            patch_parameters,
+            "tessellation_control patchconstantfunc",
+            ("SV_PrimitiveID",),
+        )
+        self.validate_hlsl_patch_constant_tess_factor_semantics(
+            func, patch_function, patch_function_name
+        )
+
+    def hlsl_return_struct(self, func):
+        return_type = self.type_name_string(
+            getattr(func, "return_type", getattr(func, "vtype", None))
+        )
+        if not return_type:
+            return None
+        base_type = return_type.split("<", 1)[0].split("[", 1)[0].strip()
+        return self.structs_by_name.get(base_type)
+
+    def hlsl_struct_semantics(self, struct_node):
+        semantics = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            mapped_semantic = self.semantic_map.get(semantic, semantic)
+            semantics.add(str(mapped_semantic).lower())
+        return semantics
+
+    def hlsl_struct_semantic_member_counts(self, struct_node):
+        counts = {}
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            mapped_semantic = self.semantic_map.get(semantic, semantic)
+            semantic_key = str(mapped_semantic).lower()
+            count = self.hlsl_tess_factor_member_count(member)
+            if count is not None:
+                counts[semantic_key] = counts.get(semantic_key, 0) + count
+        return counts
+
+    def hlsl_tess_factor_member_count(self, member):
+        member_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if member_type is None and hasattr(member, "element_type"):
+            member_type = member.element_type
+
+        type_name = self.type_name_string(member_type)
+        mapped_type = self.map_type(type_name)
+        _base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            first_dimension = array_suffix[1:].split("]", 1)[0]
+            try:
+                return int(first_dimension)
+            except ValueError:
+                return None
+
+        for scalar_base in ("min16float", "float", "half", "double"):
+            if mapped_type.startswith(scalar_base):
+                suffix = mapped_type[len(scalar_base) :]
+                if suffix in {"2", "3", "4"}:
+                    return int(suffix)
+                if suffix == "":
+                    return 1
+        return None
+
+    def validate_hlsl_patch_constant_tess_factor_semantics(
+        self, hull_func, patch_function, patch_function_name
+    ):
+        return_struct = self.hlsl_return_struct(patch_function)
+        if return_struct is None:
+            return
+
+        semantics = self.hlsl_struct_semantics(return_struct)
+        if "sv_tessfactor" not in semantics:
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must return a struct containing "
+                "SV_TessFactor"
+            )
+
+        normalized_domain = self.normalized_hlsl_stage_attribute_argument(
+            hull_func, "domain"
+        )
+        if normalized_domain in {"tri", "triangle", "quad"} and (
+            "sv_insidetessfactor" not in semantics
+        ):
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must return a struct containing "
+                f"SV_InsideTessFactor for {normalized_domain} domains"
+            )
+        factor_counts = self.hlsl_struct_semantic_member_counts(return_struct)
+        expected_outer_counts = {
+            "tri": 3,
+            "triangle": 3,
+            "quad": 4,
+            "isoline": 2,
+        }
+        expected_inner_counts = {
+            "tri": 1,
+            "triangle": 1,
+            "quad": 2,
+        }
+        expected_outer_count = expected_outer_counts.get(normalized_domain)
+        expected_inner_count = expected_inner_counts.get(normalized_domain)
+        outer_count = factor_counts.get("sv_tessfactor")
+        inner_count = factor_counts.get("sv_insidetessfactor")
+
+        if (
+            expected_outer_count is not None
+            and outer_count is not None
+            and outer_count != expected_outer_count
+        ):
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must return {expected_outer_count} "
+                f"SV_TessFactor value(s) for {normalized_domain} domains"
+            )
+        if (
+            expected_inner_count is not None
+            and inner_count is not None
+            and inner_count != expected_inner_count
+        ):
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must return {expected_inner_count} "
+                f"SV_InsideTessFactor value(s) for {normalized_domain} domains"
+            )
+        if expected_inner_count is None and inner_count is not None:
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must not return SV_InsideTessFactor "
+                f"for {normalized_domain} domains"
+            )
+
+    def validate_hlsl_tessellation_domain_topology(self, func, shader_type):
+        if shader_type != "tessellation_control":
+            return
+
+        domain = self.normalized_hlsl_stage_attribute_argument(func, "domain")
+        topology = self.normalized_hlsl_stage_attribute_argument(func, "outputtopology")
+        if not domain or not topology:
+            return
+
+        if domain in {"tri", "triangle", "quad"} and topology == "line":
+            raise ValueError(
+                "DirectX tessellation_control stage domain "
+                f"'{domain}' requires outputtopology triangle_cw or "
+                "triangle_ccw"
+            )
+        if domain == "isoline" and topology in {"triangle_cw", "triangle_ccw"}:
+            raise ValueError(
+                "DirectX tessellation_control stage domain 'isoline' "
+                "requires outputtopology line"
+            )
+
+    def validate_hlsl_tessellation_domain(self, func, shader_type):
+        if shader_type not in {"tessellation_control", "tessellation_evaluation"}:
+            return
+
+        domain = self.normalized_hlsl_stage_attribute_argument(func, "domain")
+        if not domain:
+            return
+
+        canonical_domain = self.canonical_hlsl_tessellation_domain(domain)
+        valid_domains = {"tri", "quad", "isoline"}
+        if canonical_domain not in valid_domains:
+            valid_values = ", ".join(sorted(valid_domains))
+            raise ValueError(
+                f"DirectX {shader_type} stage domain '{domain}' must be "
+                f"one of: {valid_values}"
+            )
+
+    def validate_hlsl_tessellation_output_topology(self, func, shader_type):
+        if shader_type != "tessellation_control":
+            return
+
+        topology = self.normalized_hlsl_stage_attribute_argument(func, "outputtopology")
+        if not topology:
+            return
+
+        valid_topologies = {
+            "point",
+            "line",
+            "triangle_cw",
+            "triangle_ccw",
+        }
+        if topology not in valid_topologies:
+            valid_values = ", ".join(sorted(valid_topologies))
+            raise ValueError(
+                "DirectX tessellation_control stage outputtopology "
+                f"'{topology}' must be one of: {valid_values}"
+            )
+
+    def validate_hlsl_tessellation_partitioning(self, func, shader_type):
+        if shader_type != "tessellation_control":
+            return
+
+        partitioning = self.normalized_hlsl_stage_attribute_argument(
+            func, "partitioning"
+        )
+        if not partitioning:
+            return
+
+        valid_partitioning = {
+            "integer",
+            "fractional_even",
+            "fractional_odd",
+            "pow2",
+        }
+        if partitioning not in valid_partitioning:
+            valid_values = ", ".join(sorted(valid_partitioning))
+            raise ValueError(
+                "DirectX tessellation_control stage partitioning "
+                f"'{partitioning}' must be one of: {valid_values}"
+            )
+
+    def validate_hlsl_stage_requirements(self, func, shader_type):
+        required_attributes = {
+            "geometry": {"maxvertexcount"},
+            "tessellation_control": {
+                "domain",
+                "outputcontrolpoints",
+                "outputtopology",
+                "partitioning",
+                "patchconstantfunc",
+            },
+            "tessellation_evaluation": {"domain"},
+        }.get(shader_type)
+        if not required_attributes:
+            return
+
+        present_attributes = self.hlsl_stage_attribute_names(func)
+        missing_attributes = sorted(required_attributes - present_attributes)
+        if missing_attributes:
+            missing = ", ".join(missing_attributes)
+            raise ValueError(
+                f"DirectX {shader_type} stage requires HLSL attribute(s): " f"{missing}"
+            )
+        self.validate_hlsl_tessellation_domain(func, shader_type)
+        self.validate_hlsl_tessellation_output_topology(func, shader_type)
+        self.validate_hlsl_tessellation_domain_topology(func, shader_type)
+        self.validate_hlsl_tessellation_partitioning(func, shader_type)
+        self.validate_hlsl_output_control_points_value(func, shader_type)
+        self.validate_hlsl_max_vertex_count_value(func, shader_type)
+        self.validate_hlsl_domain_matches_hull(func, shader_type)
+        self.validate_hlsl_stage_parameter_requirements(func, shader_type)
+        self.validate_hlsl_patch_constant_function(func, shader_type)
+
+    def hlsl_stage_attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "value"):
+            return str(value.value).strip('"')
+        if hasattr(value, "name"):
+            return str(value.name)
+        return str(value)
+
+    def generate_hlsl_stage_attributes(self, func, shader_type):
+        if shader_type not in {
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+        }:
+            return ""
+
+        quoted_argument_attributes = {
+            "domain",
+            "outputtopology",
+            "partitioning",
+            "patchconstantfunc",
+        }
+        code = ""
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.hlsl_stage_attribute_name(attr)
+            if not attr_name:
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+
+            argument_values = [
+                self.hlsl_stage_attribute_value_to_string(argument)
+                for argument in arguments
+            ]
+            if attr_name == "domain":
+                argument_values = [
+                    self.canonical_hlsl_tessellation_domain(value) or value
+                    for value in argument_values
+                ]
+            if attr_name in quoted_argument_attributes:
+                argument_values = [f'"{value}"' for value in argument_values]
+            code += f"[{attr_name}({', '.join(argument_values)})]\n"
+
+        return code
+
+    def stage_entry_names(self, ast, target_stage=None):
+        stage_entry_types = self.stage_entry_types()
+        entries = collect_stage_entry_records(ast, target_stage, stage_entry_types)
+        used_names = collect_stage_entry_reserved_function_names(
+            ast, target_stage, stage_entry_types
+        )
+        return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
+
+    def hlsl_stage_entry_functions(self, ast, expected_stage_name):
+        functions = []
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if getattr(func, "qualifiers", None)
+                else getattr(func, "qualifier", None)
+            )
+            if normalize_stage_name(qualifier) == expected_stage_name:
+                functions.append(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            if normalize_stage_name(stage_type) != expected_stage_name:
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+        return functions
+
+    def hlsl_program_hull_output_control_points(self, ast):
+        counts = {
+            self.hlsl_stage_attribute_int_argument(func, "outputcontrolpoints")
+            for func in self.hlsl_stage_entry_functions(ast, "tessellation_control")
+        }
+        counts.discard(None)
+        if len(counts) == 1:
+            return next(iter(counts))
+        return None
+
+    def hlsl_program_hull_domain(self, ast):
+        domains = {
+            self.canonical_hlsl_tessellation_domain(
+                self.normalized_hlsl_stage_attribute_argument(func, "domain")
+            )
+            for func in self.hlsl_stage_entry_functions(ast, "tessellation_control")
+        }
+        domains.discard(None)
+        if len(domains) == 1:
+            return next(iter(domains))
+        return None
+
     def collect_functions(self, root):
         functions = []
         for node in self.walk_ast(root):
@@ -3320,7 +5012,11 @@ class HLSLCodeGen:
         for node in getattr(ast, "global_variables", []) or []:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
-            if name and self.is_unsized_resource_array_type(vtype):
+            if (
+                name
+                and self.is_unsized_resource_array_type(vtype)
+                and not self.is_hlsl_buffer_resource_array_type(vtype)
+            ):
                 globals_by_name[name] = vtype
         return globals_by_name
 
@@ -3396,9 +5092,25 @@ class HLSLCodeGen:
     def is_resource_array_hint_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
+            or self.is_hlsl_readonly_buffer_type(vtype)
+            or self.is_hlsl_uav_buffer_type(vtype)
             or str(self.resource_base_type(vtype))
             in self.glsl_buffer_block_struct_names
         )
+
+    def is_hlsl_buffer_resource_array_type(self, vtype):
+        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+            base_type = self.convert_type_node_to_string(vtype.element_type)
+        elif hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            return False
+        else:
+            type_string = str(vtype)
+            if "[" not in type_string or "]" not in type_string:
+                return False
+            base_type, _ = parse_array_type(type_string)
+        return self.is_hlsl_readonly_buffer_type(
+            base_type
+        ) or self.is_hlsl_uav_buffer_type(base_type)
 
     def walk_ast(self, root):
         visited = set()
@@ -3603,6 +5315,147 @@ class HLSLCodeGen:
             return max(resolved_size, 1)
         size_str = str(size)
         return max(int(size_str), 1) if size_str.isdigit() else 1
+
+    def global_resource_shape(self, node):
+        resource_count = 1
+        if hasattr(node, "var_type"):
+            if hasattr(node.var_type, "name") or hasattr(node.var_type, "element_type"):
+                if (
+                    hasattr(node.var_type, "element_type")
+                    and str(type(node.var_type)).find("ArrayType") != -1
+                ):
+                    vtype = self.convert_type_node_to_string(node.var_type.element_type)
+                    array_size = (
+                        self.generate_expression(node.var_type.size)
+                        if node.var_type.size
+                        else self.resource_array_size_hints.get(node.name, "")
+                    )
+                    resource_count = self.resource_array_count(
+                        node.var_type.size if node.var_type.size else array_size
+                    )
+                else:
+                    vtype = self.convert_type_node_to_string(node.var_type)
+            else:
+                vtype = str(node.var_type)
+        elif hasattr(node, "vtype"):
+            vtype = node.vtype
+        else:
+            vtype = "float"
+        return vtype, resource_count
+
+    def global_resource_register_metadata(self, node):
+        var_name = getattr(node, "name", getattr(node, "variable_name", None))
+        if not var_name:
+            return None
+
+        vtype, resource_count = self.global_resource_shape(node)
+        lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
+        if lowered_block is not None:
+            if lowered_block["readonly"]:
+                prefix = "t"
+                attribute_names = {"binding", "texture"}
+            else:
+                prefix = "u"
+                attribute_names = {"binding", "texture", "uav"}
+        else:
+            if self.is_glsl_buffer_block_variable(node, vtype):
+                return None
+            mapped_type = self.map_resource_type_with_format(vtype, node)
+            if mapped_type.startswith(
+                "Texture"
+            ) or self.is_multisample_storage_image_resource_type(mapped_type):
+                prefix = "t"
+                attribute_names = {"binding", "texture"}
+            elif mapped_type.startswith("RWTexture"):
+                prefix = "u"
+                attribute_names = {"binding", "texture", "uav"}
+            elif self.is_hlsl_uav_buffer_type(mapped_type):
+                prefix = "u"
+                attribute_names = {"binding", "texture", "uav"}
+            elif self.is_hlsl_readonly_buffer_type(mapped_type):
+                prefix = "t"
+                attribute_names = {"binding", "texture"}
+            elif mapped_type in ["SamplerState", "SamplerComparisonState"]:
+                prefix = "s"
+                attribute_names = {"binding", "sampler"}
+            else:
+                return None
+
+        binding = self.explicit_resource_binding_index(node, attribute_names, (prefix,))
+        if binding is None:
+            return None
+        space = self.explicit_resource_register_space(node)
+        return prefix, binding, space, resource_count, var_name
+
+    def reserve_explicit_global_resource_registers(self, global_vars, used_registers):
+        for node in global_vars:
+            metadata = self.global_resource_register_metadata(node)
+            if metadata is None:
+                continue
+            prefix, binding, space, resource_count, var_name = metadata
+            self.reserve_resource_register_range(
+                used_registers,
+                prefix,
+                binding,
+                resource_count,
+                var_name,
+                space,
+            )
+
+    def next_resource_register(self, register_cursors, space):
+        return register_cursors.get(space, 0)
+
+    def next_available_resource_register(
+        self, used_registers, register_prefix, register_cursors, space, count
+    ):
+        count = max(count or 1, 1)
+        binding = self.next_resource_register(register_cursors, space)
+        ranges = used_registers.get((register_prefix, space), [])
+        while True:
+            end = binding + count - 1
+            conflict_end = None
+            for used_start, used_end, _ in ranges:
+                if binding <= used_end and used_start <= end:
+                    conflict_end = (
+                        used_end
+                        if conflict_end is None
+                        else max(conflict_end, used_end)
+                    )
+            if conflict_end is None:
+                return binding
+            binding = conflict_end + 1
+
+    def advance_resource_register(self, register_cursors, space, start, count):
+        count = max(count or 1, 1)
+        register_cursors[space] = max(register_cursors.get(space, 0), start + count)
+
+    def reserve_resource_register_range(
+        self, used_registers, register_prefix, start, count, name, space=None
+    ):
+        count = max(count or 1, 1)
+        end = start + count - 1
+        namespace = (register_prefix, space)
+        ranges = used_registers.setdefault(namespace, [])
+        for used_start, used_end, used_name in ranges:
+            if start <= used_end and used_start <= end:
+                if used_start == start and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    f"Conflicting DirectX resource binding for '{name}': "
+                    f"{self.resource_register_range_label(register_prefix, start, end, space)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.resource_register_range_label(register_prefix, used_start, used_end, space)}"
+                )
+        ranges.append((start, end, name))
+
+    def resource_register_range_label(self, register_prefix, start, end, space=None):
+        if start == end:
+            label = f"{register_prefix}{start}"
+        else:
+            label = f"{register_prefix}{start}-{register_prefix}{end}"
+        if space:
+            return f"{label}, {space}"
+        return label
 
     def literal_int_value(self, expr, constants=None):
         return evaluate_literal_int_expression(expr, constants)
@@ -5821,7 +7674,12 @@ class HLSLCodeGen:
         return None
 
     def register_space_value(self, value):
-        raw_value = self.attribute_value_to_string(value)
+        if hasattr(value, "value") and value.value is not None:
+            raw_value = value.value
+        elif hasattr(value, "name") and value.name is not None:
+            raw_value = value.name
+        else:
+            raw_value = self.attribute_value_to_string(value)
         if raw_value is None:
             return None
         raw_value = str(raw_value).strip().lower()
@@ -5872,12 +7730,18 @@ class HLSLCodeGen:
                         return space
         return None
 
-    def resource_register_suffix(self, register_prefix, binding, node):
+    def resource_register_suffix_for_space(self, register_prefix, binding, space=None):
         register = f"{register_prefix}{binding}"
-        space = self.explicit_resource_register_space(node)
         if space:
             return f" : register({register}, {space})"
         return f" : register({register})"
+
+    def resource_register_suffix(self, register_prefix, binding, node):
+        return self.resource_register_suffix_for_space(
+            register_prefix,
+            binding,
+            self.explicit_resource_register_space(node),
+        )
 
     def resource_memory_qualifier(self, mapped_type, node):
         if not (
@@ -5937,7 +7801,7 @@ class HLSLCodeGen:
 
         if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
             base_type = self.convert_type_node_to_string(vtype.element_type)
-            if self.is_resource_parameter_type(base_type):
+            if self.is_resource_array_hint_type(base_type):
                 array_size = (
                     self.expression_to_string(vtype.size)
                     if vtype.size is not None
@@ -5952,7 +7816,7 @@ class HLSLCodeGen:
             type_string = str(vtype)
             if "[" in type_string and "]" in type_string:
                 base_type, array_suffix = split_array_type_suffix(type_string)
-                if self.is_resource_parameter_type(base_type):
+                if self.is_resource_array_hint_type(base_type):
                     mapped_type = self.map_image_base_type_with_format(base_type, node)
                     if array_suffix == "[]":
                         array_size = function_hints.get(param_name, "")
@@ -6275,6 +8139,13 @@ class HLSLCodeGen:
         return load
 
     def hlsl_byteaddress_store_value(self, value, access):
+        if access.get("layout_type") != access.get("type"):
+            if access["component_type"] == "int":
+                return f"asuint(int({value}))"
+            if access["component_type"] == "uint":
+                if access["components"] == 1:
+                    return f"uint({value})"
+                return f"uint{access['components']}({value})"
         if access["component_type"] in {"float", "int"}:
             return f"asuint({value})"
         return value
@@ -6806,6 +8677,9 @@ class HLSLCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "value"):
+            value = type_node.value
+            return str(value).lower() if isinstance(value, bool) else str(value)
         generic_args = getattr(type_node, "generic_args", [])
         if hasattr(type_node, "name") and generic_args:
             args = ", ".join(
@@ -6867,8 +8741,14 @@ class HLSLCodeGen:
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
-            base_mapped = self.type_mapping.get(base_type, base_type)
+            base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        if "<" in vtype_str and vtype_str.endswith(">"):
+            base_type, generic_args = vtype_str.split("<", 1)
+            generic_args = generic_args[:-1].strip()
+            if "," not in generic_args:
+                return f"{base_type}<{self.map_type(generic_args)}>"
 
         return self.type_mapping.get(vtype_str, vtype_str)
 
@@ -6881,6 +8761,32 @@ class HLSLCodeGen:
         ):
             return mapped_type.replace("SamplerState", "SamplerComparisonState", 1)
         return mapped_type
+
+    def hlsl_tess_factor_member_declaration(self, member_type, member_name, semantic):
+        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        if str(mapped_semantic).lower() not in {
+            "sv_tessfactor",
+            "sv_insidetessfactor",
+        }:
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(str(member_type))
+        if array_suffix:
+            return format_c_style_array_declaration(member_type, member_name)
+
+        vector_base = None
+        vector_size = None
+        for scalar_base in ("float", "half", "double", "min16float"):
+            if base_type.startswith(scalar_base):
+                suffix = base_type[len(scalar_base) :]
+                if suffix in {"2", "3", "4"}:
+                    vector_base = scalar_base
+                    vector_size = suffix
+                    break
+
+        if vector_base is None:
+            return f"{member_type} {member_name}"
+        return f"{vector_base} {member_name}[{vector_size}]"
 
     def struct_member_uses_comparison_sampler(self, struct_name, member_name):
         return (

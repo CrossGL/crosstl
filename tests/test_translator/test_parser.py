@@ -1,21 +1,29 @@
 from crosstl.translator.lexer import Lexer
 import pytest
+from pathlib import Path
 from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
     ArrayType,
     AssignmentNode,
+    ConstructorNode,
+    ConstructorPatternNode,
     DoWhileNode,
     ForInNode,
     FunctionCallNode,
+    IdentifierNode,
+    IdentifierPatternNode,
     LiteralNode,
     LoopNode,
     MatrixType,
+    MemberAccessNode,
+    NamedType,
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
     ShaderNode,
     ShaderStage,
+    StructPatternNode,
     VariableNode,
     VectorType,
     WaveOpNode,
@@ -940,6 +948,34 @@ def test_array_syntax():
         pytest.fail(f"Array syntax parsing failed: {e}")
 
 
+def test_nested_cbuffer_array_members_parse_as_nested_array_types():
+    code = """
+    shader NestedCBufferArrays {
+        cbuffer Constants {
+            int values[2][3];
+            uint offsets[4][5];
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    cbuffer = ast.cbuffers[0]
+    values = cbuffer.members[0].member_type
+    offsets = cbuffer.members[1].member_type
+
+    assert isinstance(values, ArrayType)
+    assert isinstance(values.element_type, ArrayType)
+    assert values.size.value == 3
+    assert values.element_type.size.value == 2
+    assert values.element_type.element_type.name == "int"
+
+    assert isinstance(offsets, ArrayType)
+    assert isinstance(offsets.element_type, ArrayType)
+    assert offsets.size.value == 5
+    assert offsets.element_type.size.value == 4
+    assert offsets.element_type.element_type.name == "uint"
+
+
 def test_duplicate_cbuffer_members_fail_validation():
     code = """
     shader CBufferScope {
@@ -1153,6 +1189,45 @@ def test_compute_layout_does_not_consume_resource_layouts():
     ]
 
 
+def test_lambda_call_preserves_typed_parameters_and_block_body_parse():
+    code = """
+    shader LambdaBlocks {
+        void closure_blocks(Values values) {
+            let mapped = map(
+                values,
+                lambda(Result<i32, i32> value, {
+                    prepare(value);
+                    return Ok(value);
+                })
+            );
+            let less = lambda(x, (x < 1));
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    statements = ast.functions[0].body.statements
+    mapped = statements[0]
+    map_call = mapped.initial_value
+
+    assert isinstance(map_call, FunctionCallNode)
+    assert map_call.function.name == "map"
+
+    lambda_call = map_call.arguments[1]
+    assert isinstance(lambda_call, FunctionCallNode)
+    assert lambda_call.function.name == "lambda"
+    assert all(isinstance(arg, IdentifierNode) for arg in lambda_call.arguments)
+    assert [arg.name for arg in lambda_call.arguments] == [
+        "Result<i32, i32> value",
+        "{ prepare(value); return Ok(value); }",
+    ]
+
+    less_call = statements[1].initial_value
+    assert isinstance(less_call, FunctionCallNode)
+    assert less_call.function.name == "lambda"
+    assert [arg.name for arg in less_call.arguments] == ["x", "(x < 1)"]
+
+
 def test_double_vector_type_keywords_parse():
     code = """
     shader DoubleVectors {
@@ -1245,6 +1320,317 @@ def test_generic_vector_type_keywords_parse():
         assert statement.var_type.size == size
         assert isinstance(statement.initial_value, FunctionCallNode)
         assert statement.initial_value.function.name == constructor
+
+
+def test_literal_generic_type_arguments_parse():
+    code = """
+    shader GenericLiteralArgs {
+        struct HSInput {
+            vec3 position;
+        };
+
+        void consume(InputPatch<HSInput, 3> patch) { }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    param_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(param_type, NamedType)
+    assert param_type.name == "InputPatch"
+    assert isinstance(param_type.generic_args[0], NamedType)
+    assert param_type.generic_args[0].name == "HSInput"
+    assert isinstance(param_type.generic_args[1], LiteralNode)
+    assert param_type.generic_args[1].value == 3
+
+
+def test_hlsl_parameter_qualifiers_parse():
+    code = """
+    shader HLSLParameterQualifiers {
+        struct GSInput {
+            vec3 position;
+        };
+
+        struct GSOutput {
+            vec4 position;
+        };
+
+        void consume(
+            triangle GSInput input[3],
+            inout TriangleStream<GSOutput> stream,
+            const OutputPatch<GSOutput, 3> patch
+        ) { }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    input_param, stream_param, patch_param = ast.functions[0].parameters
+
+    assert input_param.qualifiers == ["triangle"]
+    assert isinstance(input_param.param_type, ArrayType)
+    assert input_param.param_type.element_type.name == "GSInput"
+    assert input_param.param_type.size.value == 3
+
+    assert stream_param.qualifiers == ["inout"]
+    assert isinstance(stream_param.param_type, NamedType)
+    assert stream_param.param_type.name == "TriangleStream"
+    assert stream_param.param_type.generic_args[0].name == "GSOutput"
+
+    assert patch_param.qualifiers == ["const"]
+    assert isinstance(patch_param.param_type, NamedType)
+    assert patch_param.param_type.name == "OutputPatch"
+    assert patch_param.param_type.generic_args[0].name == "GSOutput"
+    assert patch_param.param_type.generic_args[1].value == 3
+
+
+def test_shader_generic_struct_wrapper_parses_without_leaking_members(capsys):
+    code = """
+    shader GenericWrapper {
+        generic<T, E> struct Result {
+            value: T;
+            error: E;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    captured = capsys.readouterr()
+
+    assert "Parser may be stuck" not in captured.out
+    assert ast.name == "GenericWrapper"
+    assert ast.global_variables == []
+    result_struct = next(struct for struct in ast.structs if struct.name == "Result")
+    assert [param.name for param in result_struct.generic_params] == ["T", "E"]
+    assert [member.name for member in result_struct.members] == ["value", "error"]
+
+
+def test_shader_generic_function_signature_parses_rust_style(capsys):
+    code = """
+    shader GenericFunctions {
+        generic<T> fn identity(value: T) -> T {
+            return value;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    captured = capsys.readouterr()
+
+    assert "Parser may be stuck" not in captured.out
+    function = next(func for func in ast.functions if func.name == "identity")
+    assert [param.name for param in function.generic_params] == ["T"]
+    assert function.parameters[0].name == "value"
+    assert function.parameters[0].param_type.name == "T"
+    assert function.return_type.name == "T"
+
+
+def test_shader_traits_and_generic_constraints_parse(capsys):
+    code = """
+    shader GenericBounds {
+        trait Numeric {
+            fn zero() -> Self;
+            fn add(self, other: Self) -> Self;
+        }
+
+        struct ScalarBox<T: Numeric> {
+            value: T;
+        }
+
+        generic<T: Numeric + Copy> fn add_zero(value: T) -> T {
+            return value.add(T::zero());
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    captured = capsys.readouterr()
+
+    assert "Parser may be stuck" not in captured.out
+    trait = next(struct for struct in ast.structs if struct.name == "Numeric")
+    assert getattr(trait, "is_trait", False) is True
+    assert [method.name for method in trait.members] == ["zero", "add"]
+
+    scalar_box = next(struct for struct in ast.structs if struct.name == "ScalarBox")
+    assert scalar_box.generic_params[0].name == "T"
+    assert [
+        constraint.name for constraint in scalar_box.generic_params[0].constraints
+    ] == ["Numeric"]
+
+    function = next(func for func in ast.functions if func.name == "add_zero")
+    assert function.generic_params[0].name == "T"
+    assert [
+        constraint.name for constraint in function.generic_params[0].constraints
+    ] == [
+        "Numeric",
+        "Copy",
+    ]
+
+
+def test_generic_pattern_matching_example_does_not_trigger_parser_stuck_warning(
+    capsys,
+):
+    repo_root = Path(__file__).resolve().parents[2]
+    source = (repo_root / "examples/advanced/GenericPatternMatching.cgl").read_text()
+
+    ast = parse_code(tokenize_code(source))
+    captured = capsys.readouterr()
+
+    assert "Parser may be stuck" not in captured.out
+    vector_operation = next(
+        func for func in ast.functions if func.name == "vector_operation"
+    )
+    assert vector_operation.body.statements
+    assert vector_operation.body.statements[0].__class__.__name__ == "MatchNode"
+    process_lighting_model = next(
+        func for func in ast.functions if func.name == "process_lighting_model"
+    )
+    assert len(process_lighting_model.body.statements) == 1
+    lighting_match = process_lighting_model.body.statements[0]
+    assert lighting_match.__class__.__name__ == "MatchNode"
+    assert len(lighting_match.arms) == 4
+    vertex_entry = ast.stages[ShaderStage.VERTEX].entry_point
+    processed_normal = next(
+        stmt for stmt in vertex_entry.body.statements if stmt.name == "processed_normal"
+    )
+    assert processed_normal.initial_value.__class__.__name__ == "MatchNode"
+    assert len(processed_normal.initial_value.arms) == 2
+    assert [struct.name for struct in ast.stages[ShaderStage.VERTEX].local_structs] == [
+        "VertexInput",
+        "VertexOutput",
+    ]
+    vertex_input = ast.stages[ShaderStage.VERTEX].local_structs[0]
+    assert [member.name for member in vertex_input.members] == [
+        "position",
+        "normal",
+        "uv",
+        "color",
+    ]
+    fragment_input = ast.stages[ShaderStage.FRAGMENT].local_structs[0]
+    assert [member.name for member in fragment_input.members] == [
+        "world_position",
+        "normal",
+        "uv",
+        "color",
+    ]
+
+
+def test_match_path_constructor_and_struct_patterns_parse():
+    code = """
+    shader PatternCases {
+        fn inspect(result: Result<int, Error>, model: LightingModel) -> int {
+            match result {
+                Result::Ok(value) => value,
+                Result::Err(_) => 0,
+            }
+
+            match model {
+                LightingModel::Phong { ambient, diffuse, specular, shininess } if shininess > 0.0 => 1,
+                LightingModel::Toon { base_color, .. } => 2,
+            }
+
+            return 0;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+    result_match = function.body.statements[0]
+    model_match = function.body.statements[1]
+
+    ok_pattern = result_match.arms[0].pattern
+    assert isinstance(ok_pattern, ConstructorPatternNode)
+    assert ok_pattern.type_name == "Result::Ok"
+    assert isinstance(ok_pattern.arguments[0], IdentifierPatternNode)
+    assert ok_pattern.arguments[0].name == "value"
+
+    err_pattern = result_match.arms[1].pattern
+    assert isinstance(err_pattern, ConstructorPatternNode)
+    assert err_pattern.type_name == "Result::Err"
+    assert err_pattern.arguments[0].__class__.__name__ == "WildcardPatternNode"
+
+    phong_pattern = model_match.arms[0].pattern
+    assert isinstance(phong_pattern, StructPatternNode)
+    assert phong_pattern.type_name == "LightingModel::Phong"
+    assert list(phong_pattern.field_patterns) == [
+        "ambient",
+        "diffuse",
+        "specular",
+        "shininess",
+    ]
+    assert model_match.arms[0].guard.operator == ">"
+
+    toon_pattern = model_match.arms[1].pattern
+    assert isinstance(toon_pattern, StructPatternNode)
+    assert toon_pattern.type_name == "LightingModel::Toon"
+    assert list(toon_pattern.field_patterns) == ["base_color"]
+    assert toon_pattern.has_rest is True
+
+
+def test_match_arm_block_tail_expression_parses_without_semicolon():
+    code = """
+    shader PatternCases {
+        fn convert(op: VectorOp) -> Result<int, MathError> {
+            match op {
+                VectorOp::Cross => {
+                    Result::Ok(1)
+                },
+                _ => Result::Err(MathError::InvalidInput),
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    match_stmt = ast.functions[0].body.statements[0]
+    cross_body = match_stmt.arms[0].body
+    cross_tail = cross_body.statements[-1]
+    fallback_body = match_stmt.arms[1].body
+
+    assert cross_tail.__class__.__name__ == "ExpressionStatementNode"
+    assert cross_tail.is_tail_expression is True
+    assert isinstance(cross_tail.expression, FunctionCallNode)
+    assert cross_tail.expression.function.name == "Result::Ok"
+    assert fallback_body.is_tail_expression is True
+
+
+def test_method_calls_and_shorthand_path_constructors_parse():
+    code = """
+    shader ConstructorCases {
+        fn build(v1: Vec3<T>, v2: Vec3<T>, color: vec4, depth: float, op: VectorOp) -> int {
+            match op {
+                VectorOp::Add => Result::Ok(Vec3 { x: v1.x.add(v2.x), y: v1.y.mul(v2.y), z: v1.z }),
+                _ => Result::Ok(RenderOutput::Clear { color, depth }),
+            }
+
+            return 0;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    match_stmt = ast.functions[0].body.statements[0]
+    add_call = match_stmt.arms[0].body.expression
+    clear_call = match_stmt.arms[1].body.expression
+
+    vec_constructor = add_call.arguments[0]
+    assert isinstance(vec_constructor, ConstructorNode)
+    assert list(vec_constructor.named_arguments) == ["x", "y", "z"]
+
+    x_call = vec_constructor.named_arguments["x"]
+    assert isinstance(x_call, FunctionCallNode)
+    assert isinstance(x_call.function, MemberAccessNode)
+    assert x_call.function.member == "add"
+    assert isinstance(x_call.function.object_expr, MemberAccessNode)
+    assert x_call.function.object_expr.member == "x"
+
+    clear_constructor = clear_call.arguments[0]
+    assert isinstance(clear_constructor, ConstructorNode)
+    assert clear_constructor.constructor_type.name == "RenderOutput::Clear"
+    assert clear_constructor.arguments == []
+    assert list(clear_constructor.named_arguments) == ["color", "depth"]
+    assert isinstance(clear_constructor.named_arguments["color"], IdentifierNode)
+    assert clear_constructor.named_arguments["color"].name == "color"
 
 
 def test_matrix_type_keywords_parse():

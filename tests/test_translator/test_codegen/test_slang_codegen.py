@@ -157,6 +157,198 @@ def test_mix_builtin_lowers_to_lerp_without_affecting_resources_or_constructors(
     assert "texture(" not in generated_code
 
 
+def test_bool_mix_lowers_to_slang_selectors():
+    code = """
+    shader BoolMix {
+        compute {
+            float nextX() {
+                return 0.0;
+            }
+
+            float nextY() {
+                return 1.0;
+            }
+
+            bool nextFlag() {
+                return true;
+            }
+
+            vec3 makeA() {
+                return vec3(1.0, 2.0, 3.0);
+            }
+
+            vec3 makeB() {
+                return vec3(4.0, 5.0, 6.0);
+            }
+
+            bvec3 makeMask() {
+                return bvec3(true, false, true);
+            }
+
+            void main() {
+                bool flag = true;
+                float literal = mix(0.0, 1.0, flag);
+                float complexValue = mix(nextX(), nextY(), nextFlag());
+                vec3 a = vec3(1.0, 2.0, 3.0);
+                vec3 b = vec3(4.0, 5.0, 6.0);
+                bvec3 mask = bvec3(true, false, true);
+                vec3 selected = mix(a, b, mask);
+                vec3 ternarySelected = mask ? b : a;
+                vec3 complexSelected = mix(makeA(), makeB(), makeMask());
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float3 _crossgl_select_bool3_float3("
+        "bool3 mask, float3 trueValue, float3 falseValue)" in generated_code
+    )
+    assert (
+        "return float3((mask.x ? trueValue.x : falseValue.x), "
+        "(mask.y ? trueValue.y : falseValue.y), "
+        "(mask.z ? trueValue.z : falseValue.z));" in generated_code
+    )
+    assert "float literal = (flag ? 1.0 : 0.0);" in generated_code
+    assert "float complexValue = (nextFlag() ? nextY() : nextX());" in generated_code
+    assert (
+        "float3 selected = _crossgl_select_bool3_float3(mask, b, a);" in generated_code
+    )
+    assert (
+        "float3 ternarySelected = _crossgl_select_bool3_float3(mask, b, a);"
+        in generated_code
+    )
+    assert (
+        "float3 complexSelected = "
+        "_crossgl_select_bool3_float3(makeMask(), makeB(), makeA());" in generated_code
+    )
+    assert "lerp(0.0, 1.0, flag)" not in generated_code
+    assert "lerp(nextX(), nextY(), nextFlag())" not in generated_code
+    assert "lerp(a, b, mask)" not in generated_code
+    assert "lerp(makeA(), makeB(), makeMask())" not in generated_code
+    assert "(mask ? b : a)" not in generated_code
+
+
+def test_generated_helper_names_avoid_user_symbol_collisions():
+    code = """
+    shader HelperCollisions {
+        vec3 _crossgl_select_bool3_float3;
+        int cgl_textureSize_sampler2D;
+        int cgl_textureQueryLevels_sampler2D;
+        uint cgl_imageAtomicAdd_uimage2D;
+        sampler2d colorMap;
+        uimage2D counters @r32ui;
+
+        compute {
+            void main() {
+                vec3 a = vec3(1.0, 2.0, 3.0);
+                vec3 b = vec3(4.0, 5.0, 6.0);
+                bvec3 mask = bvec3(true, false, true);
+                vec3 selected = mix(a, b, mask);
+                ivec2 size = textureSize(colorMap, 0);
+                int levels = textureQueryLevels(colorMap);
+                uint oldValue = imageAtomicAdd(counters, ivec2(0, 0), 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float3 _crossgl_select_bool3_float3;" in generated_code
+    assert "int cgl_textureSize_sampler2D;" in generated_code
+    assert "int cgl_textureQueryLevels_sampler2D;" in generated_code
+    assert "uint cgl_imageAtomicAdd_uimage2D;" in generated_code
+    assert (
+        "float3 _crossgl_select_bool3_float3_1("
+        "bool3 mask, float3 trueValue, float3 falseValue)" in generated_code
+    )
+    assert (
+        "int2 cgl_textureSize_sampler2D_1("
+        "Sampler2D<float4> tex, uint mipLevel)" in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_sampler2D_1(Sampler2D<float4> tex)"
+        in generated_code
+    )
+    assert (
+        "uint cgl_imageAtomicAdd_uimage2D_1("
+        "RWTexture2D<uint> image, int2 coord, uint value)" in generated_code
+    )
+    assert (
+        "float3 selected = _crossgl_select_bool3_float3_1(mask, b, a);"
+        in generated_code
+    )
+    assert "int2 size = cgl_textureSize_sampler2D_1(colorMap, 0);" in generated_code
+    assert (
+        "int levels = cgl_textureQueryLevels_sampler2D_1(colorMap);" in generated_code
+    )
+    assert (
+        "uint oldValue = cgl_imageAtomicAdd_uimage2D_1("
+        "counters, int2(0, 0), 1u);" in generated_code
+    )
+    assert "float3 _crossgl_select_bool3_float3(" not in generated_code
+    assert "int2 cgl_textureSize_sampler2D(" not in generated_code
+    assert "int cgl_textureQueryLevels_sampler2D(" not in generated_code
+    assert "uint cgl_imageAtomicAdd_uimage2D(" not in generated_code
+
+
+def test_lambda_call_emits_slang_lambda_for_explicit_simple_parameters():
+    code = """
+    shader LambdaShader {
+        compute {
+            void main() {
+                let folded = fold(values, 0, lambda(int acc, int x, (acc + x)));
+                let mapped = map(colors, lambda(vec3 color, { return color; }));
+                let genericVector = map(colors, lambda(vec3<f32> color, color));
+                let always = lambda(true);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fold(values, 0, (int acc, int x) => (acc + x))" in generated_code
+    assert "map(colors, (float3 color) => { return color; })" in generated_code
+    assert "map(colors, (float3 color) => color)" in generated_code
+    assert "() => true" in generated_code
+    assert "lambda(" not in generated_code
+
+
+def test_lambda_call_preserves_unsupported_slang_lambda_shapes():
+    code = """
+    shader LambdaFallbackShader {
+        compute {
+            void main() {
+                let mapped = map(values, lambda(x, (x + 1)));
+                let generic = map(values, lambda(Result<i32, i32> value, { return value; }));
+                let tupled = map(values, lambda((i32, i32) pair, { return pair; }));
+                let qualified = map(values, lambda(const int value, value));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "lambda(x, (x + 1))" in generated_code
+    assert "lambda(Result<i32, i32> value, { return value; })" in generated_code
+    assert "lambda((i32, i32) pair, { return pair; })" in generated_code
+    assert "lambda(const int value, value)" in generated_code
+    assert "=>" not in generated_code
+
+
 def test_user_defined_texture_function_shadows_resource_lowering():
     code = """
     shader TextureShadow {
@@ -813,9 +1005,15 @@ def test_generic_vector_constructors_emit_slang_names():
 def test_resource_types_emit_slang_texture_names():
     code = """
     shader Resources {
+        sampler1d lineMap;
+        sampler1darray lineArray;
         sampler2d colorMap;
         sampler2dms msTex;
         sampler2dmsarray msArray;
+        image1D lineImage;
+        image1DArray lineImages;
+        iimage1D signedLine;
+        uimage1DArray unsignedLines;
         image2D colorImage;
         image2DMS msColor;
         image2DMSArray msLayers;
@@ -832,9 +1030,15 @@ def test_resource_types_emit_slang_texture_names():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    assert "Sampler1D<float4> lineMap;" in generated_code
+    assert "Sampler1DArray<float4> lineArray;" in generated_code
     assert "Sampler2D<float4> colorMap;" in generated_code
     assert "Sampler2DMS<float4> msTex;" in generated_code
     assert "Sampler2DMSArray<float4> msArray;" in generated_code
+    assert "RWTexture1D<float4> lineImage;" in generated_code
+    assert "RWTexture1DArray<float4> lineImages;" in generated_code
+    assert "RWTexture1D<int> signedLine;" in generated_code
+    assert "RWTexture1DArray<uint> unsignedLines;" in generated_code
     assert "RWTexture2D<float4> colorImage;" in generated_code
     assert "RWTexture2DMS<float4> msColor;" in generated_code
     assert "RWTexture2DMSArray<float4> msLayers;" in generated_code
@@ -844,6 +1048,121 @@ def test_resource_types_emit_slang_texture_names():
     assert "image2DMS" not in generated_code
     assert "iimage2DMSArray" not in generated_code
     assert "uimage2DMS" not in generated_code
+
+
+def test_one_dimensional_resources_emit_slang_methods_and_helpers():
+    code = """
+    shader OneDResources {
+        sampler1d line;
+        sampler1darray lineLayers;
+        image1D values @r32f;
+        image1DArray layerValues @rgba16f;
+        uimage1D counters @r32ui;
+        uimage1DArray layerCounters @r32ui;
+
+        compute {
+            vec4 sampleLine(
+                sampler1D tex,
+                sampler1DArray layers,
+                float u,
+                vec2 uvLayer,
+                int pixel,
+                ivec2 pixelLayer,
+                int lod
+            ) {
+                vec4 filtered = texture(tex, u);
+                vec4 layered = texture(layers, uvLayer);
+                vec4 fetched = texelFetch(tex, pixel, lod);
+                vec4 fetchedLayer = texelFetch(layers, pixelLayer, lod);
+                return filtered + layered + fetched + fetchedLayer;
+            }
+
+            void main() {
+                int lineSize = textureSize(line, 0);
+                ivec2 layerSize = textureSize(lineLayers, 0);
+                float oldValue = imageLoad(values, 3);
+                imageStore(values, 4, oldValue + 1.0);
+                vec4 oldLayer = imageLoad(layerValues, ivec2(2, 1));
+                imageStore(layerValues, ivec2(3, 1), oldLayer);
+                int valueSize = imageSize(values);
+                ivec2 layerValueSize = imageSize(layerValues);
+                uint previous = imageAtomicAdd(counters, 2, 1u);
+                uint layerPrevious = imageAtomicExchange(
+                    layerCounters,
+                    ivec2(2, 1),
+                    previous
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler1D<float4> line;" in generated_code
+    assert "Sampler1DArray<float4> lineLayers;" in generated_code
+    assert "RWTexture1D<float> values;" in generated_code
+    assert "RWTexture1DArray<float4> layerValues;" in generated_code
+    assert "RWTexture1D<uint> counters;" in generated_code
+    assert "RWTexture1DArray<uint> layerCounters;" in generated_code
+    assert (
+        "float4 sampleLine(Sampler1D<float4> tex, "
+        "Sampler1DArray<float4> layers, float u, float2 uvLayer, "
+        "int pixel, int2 pixelLayer, int lod)" in generated_code
+    )
+    assert "float4 filtered = tex.Sample(u);" in generated_code
+    assert "float4 layered = layers.Sample(uvLayer);" in generated_code
+    assert "float4 fetched = tex.Load(int2(pixel, lod));" in generated_code
+    assert "float4 fetchedLayer = layers.Load(int3(pixelLayer, lod));" in generated_code
+    assert (
+        "int cgl_textureSize_sampler1D(Sampler1D<float4> tex, uint mipLevel)"
+        in generated_code
+    )
+    assert (
+        "int2 cgl_textureSize_sampler1DArray("
+        "Sampler1DArray<float4> tex, uint mipLevel)" in generated_code
+    )
+    assert (
+        "int cgl_imageSize_image1D_RWTexture1D_float(RWTexture1D<float> tex)"
+        in generated_code
+    )
+    assert (
+        "int2 cgl_imageSize_image1DArray(RWTexture1DArray<float4> tex)"
+        in generated_code
+    )
+    assert "float oldValue = values[3];" in generated_code
+    assert "values[4] = oldValue + 1.0;" in generated_code
+    assert "float4 oldLayer = layerValues[int2(2, 1)];" in generated_code
+    assert "layerValues[int2(3, 1)] = oldLayer;" in generated_code
+    assert (
+        "int valueSize = cgl_imageSize_image1D_RWTexture1D_float(values);"
+        in generated_code
+    )
+    assert (
+        "int2 layerValueSize = cgl_imageSize_image1DArray(layerValues);"
+        in generated_code
+    )
+    assert (
+        "uint cgl_imageAtomicAdd_uimage1D("
+        "RWTexture1D<uint> image, int coord, uint value)" in generated_code
+    )
+    assert (
+        "uint cgl_imageAtomicExchange_uimage1DArray("
+        "RWTexture1DArray<uint> image, int2 coord, uint value)" in generated_code
+    )
+    assert (
+        "uint previous = cgl_imageAtomicAdd_uimage1D(counters, 2, 1u);"
+        in generated_code
+    )
+    assert (
+        "uint layerPrevious = cgl_imageAtomicExchange_uimage1DArray("
+        "layerCounters, int2(2, 1), previous);" in generated_code
+    )
+    assert "sampler1d" not in generated_code
+    assert "imageAtomicAdd(counters" not in generated_code
+    assert "imageAtomicExchange(layerCounters" not in generated_code
 
 
 def test_non_resource_arrays_preserve_expression_sizes():
@@ -4857,13 +5176,13 @@ def test_unsupported_image_atomics_emit_slang_diagnostic_stubs():
     assert "RWTexture2D<uint2> vectorCounters;" in generated_code
     assert (
         "return /* unsupported Slang image atomic: imageAtomicAdd "
-        "requires scalar int or uint image2D/image3D/image2DArray resource */ 0u;"
-        in generated_code
+        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
+        "resource */ 0u;" in generated_code
     )
     assert (
         "return /* unsupported Slang image atomic: imageAtomicCompSwap "
-        "requires scalar int or uint image2D/image3D/image2DArray resource */ 0;"
-        in generated_code
+        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
+        "resource */ 0;" in generated_code
     )
     assert "imageAtomicAdd(image" not in generated_code
     assert "imageAtomicCompSwap(image" not in generated_code
@@ -4971,6 +5290,61 @@ def test_formatted_image_queries_emit_typed_slang_helpers():
     )
     assert "imageSize(" not in generated_code
     assert "imageSamples(" not in generated_code
+
+
+def test_formatted_image_query_helpers_avoid_user_symbol_collisions():
+    code = """
+    shader FormattedImageQueryCollisions {
+        int cgl_imageSize_image2D_RWTexture2D_float2;
+        int cgl_imageSize_image2DMS_RWTexture2DMS_float2;
+        int cgl_imageSamples_image2DMS_RWTexture2DMS_float2;
+        image2D rgFloat @rg32f;
+        image2DMS msRg @format(rg32f);
+
+        compute {
+            void main() {
+                ivec2 imageSizeValue = imageSize(rgFloat);
+                ivec2 msSizeValue = imageSize(msRg);
+                int msSamples = imageSamples(msRg);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int cgl_imageSize_image2D_RWTexture2D_float2;" in generated_code
+    assert "int cgl_imageSize_image2DMS_RWTexture2DMS_float2;" in generated_code
+    assert "int cgl_imageSamples_image2DMS_RWTexture2DMS_float2;" in generated_code
+    assert (
+        "int2 cgl_imageSize_image2D_RWTexture2D_float2_1("
+        "RWTexture2D<float2> tex)" in generated_code
+    )
+    assert (
+        "int2 cgl_imageSize_image2DMS_RWTexture2DMS_float2_1("
+        "RWTexture2DMS<float2> tex)" in generated_code
+    )
+    assert (
+        "int cgl_imageSamples_image2DMS_RWTexture2DMS_float2_1("
+        "RWTexture2DMS<float2> tex)" in generated_code
+    )
+    assert (
+        "int2 imageSizeValue = "
+        "cgl_imageSize_image2D_RWTexture2D_float2_1(rgFloat);" in generated_code
+    )
+    assert (
+        "int2 msSizeValue = "
+        "cgl_imageSize_image2DMS_RWTexture2DMS_float2_1(msRg);" in generated_code
+    )
+    assert (
+        "int msSamples = "
+        "cgl_imageSamples_image2DMS_RWTexture2DMS_float2_1(msRg);" in generated_code
+    )
+    assert "int2 cgl_imageSize_image2D_RWTexture2D_float2(" not in generated_code
+    assert "int2 cgl_imageSize_image2DMS_RWTexture2DMS_float2(" not in generated_code
+    assert "int cgl_imageSamples_image2DMS_RWTexture2DMS_float2(" not in generated_code
 
 
 def test_bool_string_and_char_literals_emit_slang_syntax():

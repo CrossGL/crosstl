@@ -106,6 +106,83 @@ def test_for_initializer_uint_and_bool_declaration_codegen():
     assert "for (bool done = false; done == false; done = true) {" in generated_code
 
 
+def test_increment_decrement_expression_codegen():
+    code = """
+    void main(){
+        for (int i = 0; i < 4; i++) {
+        }
+        j--;
+        ++k;
+        --items[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (int i = 0; i < 4; i++) {" in generated_code
+    assert "j--;" in generated_code
+    assert "++k;" in generated_code
+    assert "--items[index];" in generated_code
+
+
+def test_for_initializer_custom_generic_and_qualified_declaration_codegen():
+    code = """
+    void main(Buffer<float> source){
+        for (const uint i = 0; i < 4; i = i + 1) {
+        }
+        for (Counter cursor = Counter(0); cursor.value < 4; cursor.value += 1) {
+        }
+        for (Buffer<float> view = source; view.count < 4; view.count += 1) {
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (uint i = 0; i < 4; i = i + 1) {" in generated_code
+    assert (
+        "for (Counter cursor = Counter(0); cursor.value < 4; cursor.value += 1) {"
+        in generated_code
+    )
+    assert (
+        "for (Buffer<float> view = source; view.count < 4; view.count += 1) {"
+        in generated_code
+    )
+
+
+def test_optional_for_clauses_codegen_as_empty_slots():
+    code = """
+    void main(){
+        for (; ; ) {
+            break;
+        }
+        for (int i = 0; ; ) {
+            break;
+        }
+        for (; i < 4; ) {
+            break;
+        }
+        for (; ; i = i + 1) {
+            break;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (; ; ) {" in generated_code
+    assert "for (int i = 0; ; ) {" in generated_code
+    assert "for (; i < 4; ) {" in generated_code
+    assert "for (; ; i = i + 1) {" in generated_code
+    assert "None" not in generated_code
+
+
 def test_break_continue_statement_codegen():
     code = """
     void main(){
@@ -122,6 +199,24 @@ def test_break_continue_statement_codegen():
 
     assert "break;" in generated_code
     assert "continue;" in generated_code
+
+
+def test_discard_statement_codegen():
+    code = """
+    float4 main(float alpha) {
+        if (alpha < 0.5) {
+            discard;
+        }
+        return float4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "discard;" in generated_code
+    assert "VariableNode" not in generated_code
 
 
 def test_switch_case_codegen():
@@ -150,6 +245,48 @@ def test_switch_case_codegen():
     assert "mode = 2;" in generated_code
 
 
+def test_switch_default_before_case_preserves_label_order_codegen():
+    code = """
+    float choose(int mode) {
+        switch (mode) {
+            default:
+                return 9.0;
+            case 1:
+                return 1.0;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert generated_code.index("default:") < generated_code.index("case 1:")
+
+
+def test_lambda_expression_codegen():
+    code = """
+    void main() {
+        float folded = fold(values, 0, (int acc, int x) => (acc + x));
+        float mapped = map(colors, (float3 color) => { return color; });
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float folded = fold(values, 0, lambda(int acc, int x, acc + x));"
+        in generated_code
+    )
+    assert (
+        "float mapped = map(colors, lambda(vec3 color, { return color; }));"
+        in generated_code
+    )
+    assert "=>" not in generated_code
+
+
 def test_for_array_assignment_update_codegen():
     code = """
     void main(){
@@ -167,6 +304,27 @@ def test_for_array_assignment_update_codegen():
 
     assert "for (int i = 0; i < 4; items[i] += value) {" in generated_code
     assert "for (int i = 0; i < 4; object.field = value) {" in generated_code
+
+
+def test_qualified_declarations_codegen_lower_qualifiers():
+    code = """
+    static inline float helper(const float x) {
+        return x;
+    }
+
+    void main(){
+        static const float cached = 1.0;
+        constexpr float scale = 2.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float helper(float x) {" in generated_code
+    assert "float cached = 1.0;" in generated_code
+    assert "float scale = 2.0;" in generated_code
 
 
 def test_standalone_array_and_member_assignment_targets_codegen():
@@ -210,6 +368,10 @@ def test_binary_expression_precedence_preserves_grouping_codegen():
     float divisor(float a, float b, float c) {
         return a / (b * c);
     }
+
+    bool comparisons(bool a, bool b, bool c, bool d) {
+        return a == b && c == d;
+    }
     """
 
     tokens = tokenize_code(code)
@@ -220,6 +382,26 @@ def test_binary_expression_precedence_preserves_grouping_codegen():
     assert "return a + b * c;" not in generated_code
     assert "return a / (b * c);" in generated_code
     assert "return a / b * c;" not in generated_code
+    assert "return a == b && c == d;" in generated_code
+    assert "return (a == b && c) == d;" not in generated_code
+
+
+def test_ternary_expression_precedence_preserves_grouping_codegen():
+    code = """
+    float choose(bool flag, float yes, float no) {
+        float selected = flag ? yes : no;
+        float shifted = (flag ? yes : no) + 1.0;
+        return shifted;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float selected = (flag ? yes : no);" in generated_code
+    assert "float shifted = (flag ? yes : no) + 1.0;" in generated_code
+    assert "float shifted = flag ? yes : no + 1.0;" not in generated_code
 
 
 def test_while_codegen():
@@ -346,7 +528,7 @@ def test_generic_resource_global_codegen():
     generated_code = generate_code(ast)
 
     assert "sampler2D albedo;" in generated_code
-    assert "SamplerState linearSampler;" in generated_code
+    assert "sampler linearSampler;" in generated_code
 
 
 def test_line_texture_resource_global_codegen():
@@ -426,7 +608,7 @@ def test_bound_generic_resource_global_codegen():
     assert ast.global_vars[0].register == "t0"
     assert ast.global_vars[1].register == "s0"
     assert "sampler2D albedo;" in generated_code
-    assert "SamplerState linearSampler;" in generated_code
+    assert "sampler linearSampler;" in generated_code
 
 
 def test_bound_cbuffer_codegen():
@@ -434,6 +616,8 @@ def test_bound_cbuffer_codegen():
     cbuffer Camera : register(b0) {
         float4x4 viewProj;
         float4 tint[2];
+        float weights[];
+        float4x4 transforms[2][3];
     };
     """
     tokens = tokenize_code(code)
@@ -444,6 +628,8 @@ def test_bound_cbuffer_codegen():
     assert "cbuffer Camera" in generated_code
     assert "mat4 viewProj;" in generated_code
     assert "vec4 tint[2];" in generated_code
+    assert "float weights[];" in generated_code
+    assert "mat4 transforms[2][3];" in generated_code
 
 
 def test_global_resource_array_codegen():
@@ -458,7 +644,51 @@ def test_global_resource_array_codegen():
 
     assert "StructuredBuffer<float> inputs[2];" in generated_code
     assert "sampler2D textures[3];" in generated_code
-    assert "SamplerState samplers[];" in generated_code
+    assert "sampler samplers[];" in generated_code
+
+
+def test_local_and_parameter_array_declarator_codegen():
+    code = """
+    float bump(float values[2], int idx) {
+        float local[2];
+        float grid[2][3];
+        return values[idx];
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float bump(float values[2], int idx)" in generated_code
+    assert "float local[2];" in generated_code
+    assert "float grid[2][3];" in generated_code
+    assert "return values[idx];" in generated_code
+
+
+def test_local_and_parameter_generic_resource_type_codegen():
+    code = """
+    float4 sample(Sampler2D<float4> tex, Texture2D<float4> image,
+                  SamplerState state, float2 uv) {
+        Sampler2D<float4> localTex;
+        Texture2D<float4> localImage;
+        SamplerState localState;
+        return tex.Sample(uv);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "vec4 sample(sampler2D tex, sampler2D image, sampler state, vec2 uv)"
+        in generated_code
+    )
+    assert "sampler2D localTex;" in generated_code
+    assert "sampler2D localImage;" in generated_code
+    assert "sampler localState;" in generated_code
+    assert "return texture(tex, uv);" in generated_code
+    assert "Sampler2D<float4>" not in generated_code
+    assert "Texture2D<float4>" not in generated_code
 
 
 def test_texture_method_call_codegen():
@@ -474,7 +704,100 @@ def test_texture_method_call_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "return albedo.Sample(linearSampler, uv);" in generated_code
+    assert "sampler2D albedo;" in generated_code
+    assert "sampler linearSampler;" in generated_code
+    assert "return texture(albedo, linearSampler, uv);" in generated_code
+    assert "return albedo.Sample(linearSampler, uv);" not in generated_code
+
+
+def test_combined_sampler_method_call_codegen():
+    code = """
+    Sampler2D<float4> colorMap;
+
+    float4 main(float2 uv) {
+        return colorMap.Sample(uv);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D colorMap;" in generated_code
+    assert "return texture(colorMap, uv);" in generated_code
+    assert "return colorMap.Sample(uv);" not in generated_code
+
+
+def test_texture_lod_and_grad_method_call_codegen():
+    code = """
+    Sampler2D<float4> tex;
+
+    float4 main(float2 uv, float2 ddx, float2 ddy) {
+        float4 mip = tex.SampleLevel(uv, 2.0);
+        float4 grad = tex.SampleGrad(uv, ddx, ddy);
+        return mip + grad;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D tex;" in generated_code
+    assert "vec4 mip = textureLod(tex, uv, 2.0);" in generated_code
+    assert "vec4 grad = textureGrad(tex, uv, ddx, ddy);" in generated_code
+    assert "tex.SampleLevel" not in generated_code
+    assert "tex.SampleGrad" not in generated_code
+
+
+def test_resource_array_sample_method_call_codegen():
+    code = """
+    Sampler2D<float4> textures[3];
+
+    float4 main(float2 uv) {
+        return textures[2].Sample(uv);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D textures[3];" in generated_code
+    assert "return texture(textures[2], uv);" in generated_code
+    assert "textures[2].Sample" not in generated_code
+
+
+def test_non_resource_sample_method_call_remains_method_call():
+    code = """
+    Filter filter;
+
+    float4 main(float2 uv) {
+        return filter.Sample(uv);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Filter filter;" in generated_code
+    assert "return filter.Sample(uv);" in generated_code
+    assert "return texture(filter, uv);" not in generated_code
+
+
+def test_translate_api_slang_sampler_method_to_crossgl(tmp_path):
+    code = """
+    Sampler2D<float4> colorMap;
+
+    float4 main(float2 uv) {
+        return colorMap.Sample(uv);
+    }
+    """
+    source_path = tmp_path / "sampler.slang"
+    source_path.write_text(code, encoding="utf-8")
+
+    generated_code = translate(str(source_path), backend="cgl", format_output=False)
+
+    assert "sampler2D colorMap;" in generated_code
+    assert "return texture(colorMap, uv);" in generated_code
+    assert "colorMap.Sample(uv)" not in generated_code
 
 
 def test_standalone_postfix_call_codegen():

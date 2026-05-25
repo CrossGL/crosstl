@@ -261,6 +261,22 @@ def test_for_in_range_codegen_lowers_range_call():
     assert "range(4)" not in generated_code
 
 
+def test_for_in_descending_range_codegen_uses_greater_than_condition():
+    code = """
+    fn main():
+        for i in range(4, 0, -1):
+            sink(i)
+        for j in range(4, 0, step):
+            sink(j)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (int i = 4; i > 0; i += (-1))" in generated_code
+    assert "for (int j = 4; j < 0; j += step)" in generated_code
+
+
 def test_while_codegen():
     code = """
     struct VSInput:
@@ -657,6 +673,43 @@ def test_user_defined_lerp_call_does_not_lower_to_mix():
     assert "let y = mix(1.0);" not in generated_code
 
 
+def test_user_defined_lerp_matching_arity_does_not_lower_to_mix():
+    code = """
+    fn lerp(a: Float32, b: Float32, t: Float32) -> Float32:
+        return a
+
+    fn main():
+        let y = lerp(0.0, 1.0, 0.25)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float lerp(float a, float b, float t)" in generated_code
+    assert "let y = lerp(0.0, 1.0, 0.25);" in generated_code
+    assert "let y = mix(0.0, 1.0, 0.25);" not in generated_code
+
+
+def test_class_method_lerp_does_not_shadow_builtin_lerp_arity():
+    code = """
+    class Mixer:
+        fn lerp(x: Float32) -> Float32:
+            return x
+
+    fn main():
+        let y = lerp(0.0, 1.0, 0.25)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float lerp(float x)" in generated_code
+    assert "let y = mix(0.0, 1.0, 0.25);" in generated_code
+    assert "let y = lerp(0.0, 1.0, 0.25);" not in generated_code
+
+
 def test_mojo_method_call_on_math_parameter_does_not_lower_to_builtin():
     code = """
     fn main(math: Mixer):
@@ -668,6 +721,23 @@ def test_mojo_method_call_on_math_parameter_does_not_lower_to_builtin():
     generated_code = generate_code(ast)
 
     assert "void main(Mixer math)" in generated_code
+    assert "let blended = math.lerp(0.0, 1.0, 0.25);" in generated_code
+    assert "let blended = mix(0.0, 1.0, 0.25);" not in generated_code
+
+
+def test_mojo_method_call_on_global_math_value_does_not_lower_to_builtin():
+    code = """
+    var math: Mixer
+
+    fn main():
+        let blended = math.lerp(0.0, 1.0, 0.25)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Mixer math;" in generated_code
     assert "let blended = math.lerp(0.0, 1.0, 0.25);" in generated_code
     assert "let blended = mix(0.0, 1.0, 0.25);" not in generated_code
 
@@ -808,6 +878,32 @@ def test_switch_explicit_break_not_duplicated_codegen():
         assert "Unhandled statement type: BreakNode" not in generated_code
     except SyntaxError:
         pytest.fail("Switch explicit break code generation not implemented.")
+
+
+def test_switch_fallthrough_codegen_does_not_insert_break():
+    code = """
+    fn main():
+        switch value:
+            case 0:
+                hit_zero()
+            case 1:
+                hit_one()
+                break
+            default:
+                hit_default()
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    case_zero_block = generated_code.split("case 0:", 1)[1].split("case 1:", 1)[0]
+    default_block = generated_code.split("default:", 1)[1].split("}", 1)[0]
+
+    assert "break;" not in case_zero_block
+    assert "break;" not in default_block
+    assert generated_code.count("break;") == 1
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_typed_local_declaration_codegen_preserves_type():

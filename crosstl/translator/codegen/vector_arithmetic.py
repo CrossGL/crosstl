@@ -99,7 +99,14 @@ class VectorArithmeticMixin:
         """Infer the best-effort result type for an expression node."""
         if node is None:
             return None
-        if isinstance(node, (IdentifierNode, VariableNode, ArrayAccessNode)):
+        if isinstance(node, (IdentifierNode, VariableNode)):
+            return self.get_expression_type(node)
+        if isinstance(node, ArrayAccessNode):
+            array_expr = getattr(node, "array_expr", getattr(node, "array", None))
+            array_type = self.expression_result_type(array_expr)
+            element_type = self.array_access_element_type(array_type)
+            if element_type is not None:
+                return element_type
             return self.get_expression_type(node)
         if isinstance(node, LiteralNode):
             literal_type = getattr(getattr(node, "literal_type", None), "name", None)
@@ -181,6 +188,34 @@ class VectorArithmeticMixin:
                     vector_info["component_type"], len(member)
                 )
         return None
+
+    def array_access_element_type(self, type_name):
+        """Return the element type yielded by one indexing operation."""
+        if type_name is None:
+            return None
+
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info["component_type"]
+
+        if not isinstance(type_name, str):
+            if type_name.__class__.__name__ == "ArrayType":
+                return getattr(type_name, "element_type", None)
+            type_name = self.convert_type_node_to_string(type_name)
+
+        if "[" not in type_name or "]" not in type_name:
+            return None
+
+        open_bracket = type_name.find("[")
+        close_bracket = type_name.find("]", open_bracket)
+        if close_bracket == -1:
+            return None
+
+        base_type = type_name[:open_bracket]
+        remaining_suffix = type_name[close_bracket + 1 :]
+        if remaining_suffix:
+            return f"{base_type}{remaining_suffix}"
+        return base_type
 
     def vector_type_info(self, type_name):
         """Return constructor and component metadata for a vector type."""
@@ -385,6 +420,286 @@ class VectorArithmeticMixin:
         self.helper_functions[helper_name] = helper
         return helper_name
 
+    def generate_vector_swizzle_single_eval_call(
+        self, result_info, source_info, object_node, object_expr, components
+    ):
+        """Return a helper call for multi-lane swizzles of complex expressions."""
+        if self.is_repeat_safe_expression(object_node):
+            return None
+
+        pieces = [
+            {
+                "kind": "vector",
+                "param_type": source_info["type"],
+                "arg_expr": object_expr,
+                "components": components,
+            }
+        ]
+        helper_name = self.require_vector_constructor_helper(result_info, pieces)
+        return f"{helper_name}({object_expr})"
+
+    def vector_operation_piece(
+        self,
+        node,
+        arg_expr,
+        vector_info,
+        component_count,
+        fallback_component_type,
+    ):
+        if vector_info is not None:
+            return {
+                "kind": "vector",
+                "param_type": vector_info["type"],
+                "arg_expr": arg_expr,
+                "components": vector_info["components"][:component_count],
+                "repeat_safe": self.is_repeat_safe_expression(node),
+            }
+
+        return {
+            "kind": "scalar",
+            "param_type": self.vector_constructor_scalar_parameter_type(
+                self.expression_result_type(node),
+                fallback_component_type,
+            ),
+            "arg_expr": arg_expr,
+            "components": (),
+            "repeat_safe": self.is_repeat_safe_expression(node),
+        }
+
+    def vector_operation_piece_expr(self, piece, component):
+        if piece["kind"] == "vector":
+            return f"{piece['arg_expr']}.{component}"
+        return piece["arg_expr"]
+
+    def vector_operation_piece_param_expr(self, piece, index, component):
+        if piece["kind"] == "vector":
+            return f"arg{index}.{component}"
+        return f"arg{index}"
+
+    def generate_vector_binary_single_eval_call(
+        self,
+        result_info,
+        operation_name,
+        operator,
+        pieces,
+    ):
+        if all(piece["repeat_safe"] for piece in pieces):
+            return None
+
+        helper_name = self.require_vector_binary_component_helper(
+            result_info,
+            operation_name,
+            operator,
+            pieces,
+        )
+        return f"{helper_name}({', '.join(piece['arg_expr'] for piece in pieces)})"
+
+    def require_vector_binary_component_helper(
+        self,
+        result_info,
+        operation_name,
+        operator,
+        pieces,
+    ):
+        signature = "_".join(
+            self.vector_constructor_piece_signature(piece) for piece in pieces
+        )
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{result_info['type']}_{operation_name}_{signature}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        params = [
+            f"{piece['param_type']} arg{index}" for index, piece in enumerate(pieces)
+        ]
+        component_args = []
+        for component in result_info["components"]:
+            left_value = self.vector_operation_piece_param_expr(pieces[0], 0, component)
+            right_value = self.vector_operation_piece_param_expr(
+                pieces[1], 1, component
+            )
+            component_args.append(f"({left_value} {operator} {right_value})")
+
+        helper = (
+            f"__device__ inline {result_info['type']} {helper_name}"
+            f"({', '.join(params)})\n"
+            "{\n"
+            f"    return {result_info['constructor']}({', '.join(component_args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def generate_vector_ternary_single_eval_call(self, result_info, pieces):
+        if all(piece["repeat_safe"] for piece in pieces):
+            return None
+
+        helper_name = self.require_vector_ternary_helper(result_info, pieces)
+        return f"{helper_name}({', '.join(piece['arg_expr'] for piece in pieces)})"
+
+    def generate_scalar_clamp_single_eval_call(self, scalar_type, raw_args, args):
+        if scalar_type in {"float", "double"}:
+            return None
+        if all(self.is_repeat_safe_expression(raw_arg) for raw_arg in raw_args):
+            return None
+
+        helper_name = self.require_scalar_clamp_helper(scalar_type)
+        return f"{helper_name}({', '.join(args)})"
+
+    def require_scalar_clamp_helper(self, scalar_type):
+        helper_name = self.sanitize_helper_name(f"cgl_{scalar_type}_clamp")
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}"
+            f"({scalar_type} value, {scalar_type} min_value, "
+            f"{scalar_type} max_value)\n"
+            "{\n"
+            "    return "
+            f"{self.format_clamp_component(scalar_type, 'value', 'min_value', 'max_value')};\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def generate_scalar_mix_single_eval_call(self, raw_args, args):
+        if all(self.is_repeat_safe_expression(raw_arg) for raw_arg in raw_args):
+            return None
+
+        scalar_type = self.scalar_mix_type(raw_args)
+        if scalar_type is None:
+            return None
+
+        helper_name = self.require_scalar_mix_helper(scalar_type)
+        return f"{helper_name}({', '.join(args)})"
+
+    def scalar_mix_type(self, raw_args):
+        component_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type not in {"float", "double", None}:
+                return None
+            component_types.append(component_type)
+        return "double" if "double" in component_types else "float"
+
+    def require_scalar_mix_helper(self, scalar_type):
+        helper_name = self.sanitize_helper_name(f"cgl_{scalar_type}_mix")
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}"
+            f"({scalar_type} x, {scalar_type} y, {scalar_type} a)\n"
+            "{\n"
+            f"    return {self.format_mix_component('x', 'y', 'a')};\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def lower_bool_scalar_mix_operation(
+        self,
+        x_node,
+        x_expr,
+        y_node,
+        y_expr,
+        factor_node,
+        factor_expr,
+    ):
+        """Lower mix(x, y, bool) using scalar selection semantics."""
+        factor_type = self.expression_result_type(factor_node)
+        if self.scalar_component_type(factor_type) != "bool":
+            return None
+
+        scalar_type = self.scalar_select_type(x_node, y_node)
+        if scalar_type is None:
+            return None
+
+        if all(
+            self.is_repeat_safe_expression(raw_arg)
+            for raw_arg in (x_node, y_node, factor_node)
+        ):
+            return f"({factor_expr} ? {y_expr} : {x_expr})"
+
+        helper_name = self.require_scalar_select_helper(scalar_type)
+        return f"{helper_name}({factor_expr}, {y_expr}, {x_expr})"
+
+    def scalar_select_type(self, true_or_false_node, other_node):
+        component_types = []
+        mapped_types = []
+        for raw_arg in (true_or_false_node, other_node):
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type is None:
+                return None
+            component_types.append(component_type)
+            mapped_types.append(self.map_vector_arithmetic_type(arg_type))
+
+        if set(component_types) <= {"float", "double"}:
+            return "double" if "double" in component_types else "float"
+        if len(set(component_types)) == 1:
+            if mapped_types[0] == mapped_types[1]:
+                return mapped_types[0]
+            return self.map_vector_arithmetic_type(component_types[0])
+        return None
+
+    def require_scalar_select_helper(self, scalar_type):
+        helper_name = self.sanitize_helper_name(f"cgl_{scalar_type}_select")
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}"
+            f"(bool condition, {scalar_type} true_value, "
+            f"{scalar_type} false_value)\n"
+            "{\n"
+            "    return condition ? true_value : false_value;\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_vector_ternary_helper(self, result_info, pieces):
+        signature = "_".join(
+            self.vector_constructor_piece_signature(piece) for piece in pieces
+        )
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{result_info['type']}_select_{signature}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        params = [
+            f"{piece['param_type']} arg{index}" for index, piece in enumerate(pieces)
+        ]
+        component_args = []
+        for component in result_info["components"]:
+            condition_value = self.vector_operation_piece_param_expr(
+                pieces[0], 0, component
+            )
+            true_value = self.vector_operation_piece_param_expr(pieces[1], 1, component)
+            false_value = self.vector_operation_piece_param_expr(
+                pieces[2], 2, component
+            )
+            component_args.append(f"({condition_value} ? {true_value} : {false_value})")
+
+        helper = (
+            f"__device__ inline {result_info['type']} {helper_name}"
+            f"({', '.join(params)})\n"
+            "{\n"
+            f"    return {result_info['constructor']}({', '.join(component_args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
     def vector_constructor_piece_signature(self, piece):
         if piece["kind"] == "vector":
             return f"{piece['param_type']}_{''.join(piece['components'])}"
@@ -488,6 +803,37 @@ class VectorArithmeticMixin:
             return f"fmodf({left_expr}, {right_expr})"
         return None
 
+    def generate_min_max_call(self, func_name, raw_args, args):
+        left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        right_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+        if not left_info and not right_info:
+            return None
+
+        if left_info and right_info:
+            if len(left_info["components"]) != len(right_info["components"]):
+                return None
+            helper_name = self.require_vector_min_max_helper(
+                left_info,
+                func_name,
+                "vector",
+            )
+        elif left_info:
+            helper_name = self.require_vector_min_max_helper(
+                left_info,
+                func_name,
+                "scalar_right",
+            )
+        else:
+            helper_name = self.require_vector_min_max_helper(
+                right_info,
+                func_name,
+                "scalar_left",
+            )
+
+        if helper_name is None:
+            return None
+        return f"{helper_name}({args[0]}, {args[1]})"
+
     def lower_vector_logical_operation(
         self,
         left_node,
@@ -518,28 +864,41 @@ class VectorArithmeticMixin:
         if vector_info["component_type"] != "bool":
             return None
 
+        component_count = len(vector_info["components"])
+        left_piece = self.vector_operation_piece(
+            left_node, left_expr, left_info, component_count, "bool"
+        )
+        right_piece = self.vector_operation_piece(
+            right_node, right_expr, right_info, component_count, "bool"
+        )
+
         if left_info and right_info:
             if (
                 len(left_info["components"]) != len(right_info["components"])
                 or right_info["component_type"] != "bool"
             ):
                 return None
-            component_args = [
-                f"({left_expr}.{component} {lowered_operator} {right_expr}.{component})"
-                for component in vector_info["components"]
-            ]
-        elif left_info and right_type == "bool":
-            component_args = [
-                f"({left_expr}.{component} {lowered_operator} {right_expr})"
-                for component in vector_info["components"]
-            ]
-        elif right_info and left_type == "bool":
-            component_args = [
-                f"({left_expr} {lowered_operator} {right_expr}.{component})"
-                for component in vector_info["components"]
-            ]
+        elif left_info and self.scalar_component_type(right_type) == "bool":
+            pass
+        elif right_info and self.scalar_component_type(left_type) == "bool":
+            pass
         else:
             return None
+
+        helper_call = self.generate_vector_binary_single_eval_call(
+            vector_info,
+            f"logical_{'and' if lowered_operator == '&&' else 'or'}",
+            lowered_operator,
+            (left_piece, right_piece),
+        )
+        if helper_call is not None:
+            return helper_call
+
+        component_args = []
+        for component in vector_info["components"]:
+            left_value = self.vector_operation_piece_expr(left_piece, component)
+            right_value = self.vector_operation_piece_expr(right_piece, component)
+            component_args.append(f"({left_value} {lowered_operator} {right_value})")
 
         return f"{vector_info['constructor']}({', '.join(component_args)})"
 
@@ -664,15 +1023,75 @@ class VectorArithmeticMixin:
         if result_info is None:
             return None
 
+        component_count = len(condition_info["components"])
+        pieces = (
+            self.vector_operation_piece(
+                condition_node,
+                condition_expr,
+                condition_info,
+                component_count,
+                "bool",
+            ),
+            self.vector_operation_piece(
+                true_node,
+                true_expr,
+                true_info,
+                component_count,
+                result_info["component_type"],
+            ),
+            self.vector_operation_piece(
+                false_node,
+                false_expr,
+                false_info,
+                component_count,
+                result_info["component_type"],
+            ),
+        )
+        helper_call = self.generate_vector_ternary_single_eval_call(result_info, pieces)
+        if helper_call is not None:
+            return helper_call
+
         component_args = []
         for component in condition_info["components"]:
-            true_value = f"{true_expr}.{component}" if true_info else true_expr
-            false_value = f"{false_expr}.{component}" if false_info else false_expr
-            component_args.append(
-                f"({condition_expr}.{component} ? {true_value} : {false_value})"
-            )
+            true_value = self.vector_operation_piece_expr(pieces[1], component)
+            false_value = self.vector_operation_piece_expr(pieces[2], component)
+            condition_value = self.vector_operation_piece_expr(pieces[0], component)
+            component_args.append(f"({condition_value} ? {true_value} : {false_value})")
 
         return f"{result_info['constructor']}({', '.join(component_args)})"
+
+    def lower_bool_vector_mix_operation(
+        self,
+        x_node,
+        x_expr,
+        y_node,
+        y_expr,
+        factor_node,
+        factor_expr,
+        x_info,
+        y_info,
+        factor_info,
+    ):
+        """Lower mix(x, y, bvec) using component-wise boolean selection."""
+        if factor_info is None or factor_info["component_type"] != "bool":
+            return None
+        if x_info is None or y_info is None:
+            return None
+        if (
+            len(x_info["components"]) != len(y_info["components"])
+            or len(factor_info["components"]) != len(x_info["components"])
+            or x_info["component_type"] != y_info["component_type"]
+        ):
+            return None
+
+        return self.lower_vector_ternary_operation(
+            factor_node,
+            factor_expr,
+            y_node,
+            y_expr,
+            x_node,
+            x_expr,
+        )
 
     def vector_ternary_result_info(
         self,
@@ -747,23 +1166,29 @@ class VectorArithmeticMixin:
             return None
 
         vector_info = left_info or right_info
+        component_count = len(vector_info["components"])
+        left_piece = self.vector_operation_piece(
+            left_node,
+            left_expr,
+            left_info,
+            component_count,
+            vector_info["component_type"],
+        )
+        right_piece = self.vector_operation_piece(
+            right_node,
+            right_expr,
+            right_info,
+            component_count,
+            vector_info["component_type"],
+        )
+
         if left_info and right_info:
             if len(left_info["components"]) != len(right_info["components"]):
                 return None
-            component_args = [
-                f"({left_expr}.{component} {operator} {right_expr}.{component})"
-                for component in vector_info["components"]
-            ]
         elif left_info and right_type is not None:
-            component_args = [
-                f"({left_expr}.{component} {operator} {right_expr})"
-                for component in vector_info["components"]
-            ]
+            pass
         elif right_info and left_type is not None:
-            component_args = [
-                f"({left_expr} {operator} {right_expr}.{component})"
-                for component in vector_info["components"]
-            ]
+            pass
         else:
             return None
 
@@ -774,7 +1199,102 @@ class VectorArithmeticMixin:
         result_info = self.vector_type_info(result_type)
         if result_info is None:
             return None
+        operator_names = {
+            "<": "lt",
+            "<=": "le",
+            ">": "gt",
+            ">=": "ge",
+            "==": "eq",
+            "!=": "ne",
+        }
+        helper_call = self.generate_vector_binary_single_eval_call(
+            result_info,
+            f"compare_{operator_names[operator]}",
+            operator,
+            (left_piece, right_piece),
+        )
+        if helper_call is not None:
+            return helper_call
+
+        component_args = []
+        for component in vector_info["components"]:
+            left_value = self.vector_operation_piece_expr(left_piece, component)
+            right_value = self.vector_operation_piece_expr(right_piece, component)
+            component_args.append(f"({left_value} {operator} {right_value})")
+
         return f"{result_info['constructor']}({', '.join(component_args)})"
+
+    def require_vector_min_max_helper(self, vector_info, func_name, operand_shape):
+        component_type = vector_info["component_type"]
+        if component_type == "bool":
+            return None
+
+        vector_type = vector_info["type"]
+        scalar_type = self.vector_scalar_parameter_type(vector_info)
+        helper_name = f"cgl_{vector_type}_{func_name}"
+        if operand_shape == "scalar_right":
+            helper_name += "_scalar"
+        elif operand_shape == "scalar_left":
+            helper_name = f"cgl_scalar_{func_name}_{vector_type}"
+
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = vector_info["components"]
+        constructor = vector_info["constructor"]
+        if operand_shape == "vector":
+            params = f"{vector_type} lhs, {vector_type} rhs"
+            args = [
+                self.format_min_max_component(
+                    func_name,
+                    component_type,
+                    f"lhs.{component}",
+                    f"rhs.{component}",
+                )
+                for component in components
+            ]
+        elif operand_shape == "scalar_right":
+            params = f"{vector_type} lhs, {scalar_type} rhs"
+            args = [
+                self.format_min_max_component(
+                    func_name,
+                    component_type,
+                    f"lhs.{component}",
+                    "rhs",
+                )
+                for component in components
+            ]
+        else:
+            params = f"{scalar_type} lhs, {vector_type} rhs"
+            args = [
+                self.format_min_max_component(
+                    func_name,
+                    component_type,
+                    "lhs",
+                    f"rhs.{component}",
+                )
+                for component in components
+            ]
+
+        helper = (
+            f"__device__ inline {vector_type} {helper_name}({params})\n"
+            "{\n"
+            f"    return {constructor}({', '.join(args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_min_max_component(self, func_name, component_type, left, right):
+        if component_type == "float":
+            intrinsic = "fminf" if func_name == "min" else "fmaxf"
+            return f"{intrinsic}({left}, {right})"
+        if component_type == "double":
+            intrinsic = "fmin" if func_name == "min" else "fmax"
+            return f"{intrinsic}({left}, {right})"
+
+        operator = "<" if func_name == "min" else ">"
+        return f"(({left}) {operator} ({right}) ? ({left}) : ({right}))"
 
     def require_vector_binary_helper(self, vector_info, operator, operand_shape):
         """Register and return a helper function for vector binary arithmetic."""

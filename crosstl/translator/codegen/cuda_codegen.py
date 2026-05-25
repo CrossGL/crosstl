@@ -306,6 +306,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level -= 1
         self.emit("};")
 
+    def visit_EnumNode(self, node):
+        self.emit(f"enum {node.name} {{")
+        self.indent_level += 1
+
+        variants = getattr(node, "variants", [])
+        for index, variant in enumerate(variants):
+            suffix = "," if index < len(variants) - 1 else ""
+            value = getattr(variant, "value", None)
+            if value is not None:
+                self.emit(f"{variant.name} = {self.visit(value)}{suffix}")
+            else:
+                self.emit(f"{variant.name}{suffix}")
+
+        self.indent_level -= 1
+        self.emit("};")
+
     def format_variable_declaration(self, node):
         var_type = None
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
@@ -564,6 +580,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         args = [self.visit(arg) for arg in raw_args]
 
+        if func_name == "lambda":
+            return self.generate_lambda_expression(raw_args)
+
         is_user_function = self.is_user_defined_function(func_name)
         if not is_user_function:
             resource_call = self.generate_resource_call(func_name, raw_args, args)
@@ -596,6 +615,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name == "clamp" and len(args) == 3:
             return self.generate_clamp_call(raw_args, args)
+
+        if func_name in {"min", "max"} and len(args) == 2:
+            min_max_call = self.generate_min_max_call(func_name, raw_args, args)
+            if min_max_call is not None:
+                return min_max_call
 
         if func_name == "atan2" and len(args) == 2:
             atan2_call = self.generate_atan2_call(raw_args, args)
@@ -644,6 +668,67 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def generate_lambda_expression(self, args):
+        """Render CrossGL's pseudo-lambda as a CUDA device lambda."""
+        if not args:
+            return "[&] __device__ () {}"
+
+        params = ", ".join(self.generate_lambda_parameter(arg) for arg in args[:-1])
+        body = self.generate_lambda_body(args[-1])
+        return f"[&] __device__ ({params}) {body}"
+
+    def generate_lambda_parameter(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        typed_param = self.split_lambda_typed_parameter(raw)
+        if typed_param is None:
+            param_name = self.lambda_fallback_parameter_name(raw)
+            return f"auto {param_name}" if param_name else "auto"
+
+        type_name, param_name = typed_param
+        mapped_type = self.lambda_parameter_type(type_name)
+        return f"{mapped_type} {param_name}"
+
+    def generate_lambda_body(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if raw.startswith("{") and raw.endswith("}"):
+            return raw
+        if raw:
+            return f"{{ return {raw}; }}"
+        return "{}"
+
+    def lambda_raw_argument_text(self, arg):
+        if isinstance(arg, IdentifierNode):
+            return arg.name
+        if isinstance(arg, str):
+            return arg
+        return self.visit(arg)
+
+    def split_lambda_typed_parameter(self, raw):
+        if not raw:
+            return None
+        if any(char in raw for char in "{}()"):
+            return None
+        parts = raw.rsplit(None, 1)
+        if len(parts) != 2:
+            return None
+        type_name, param_name = parts
+        if not param_name.isidentifier():
+            return None
+        return type_name, param_name
+
+    def lambda_parameter_type(self, type_name):
+        if "<" in type_name or ">" in type_name:
+            return "auto"
+        return self.convert_crossgl_type_to_cuda(type_name)
+
+    def lambda_fallback_parameter_name(self, raw):
+        if not raw:
+            return ""
+        candidate = raw.rsplit(None, 1)[-1]
+        if candidate.isidentifier():
+            return candidate
+        return raw
 
     def generate_fract_call(self, raw_args, args):
         arg_type = self.expression_result_type(raw_args[0])
@@ -786,8 +871,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         value_type = self.expression_result_type(raw_args[0])
         value_info = self.vector_type_info(value_type)
         if not value_info:
+            scalar_type = self.clamp_scalar_type(value_type)
+            scalar_call = self.generate_scalar_clamp_single_eval_call(
+                scalar_type,
+                raw_args,
+                args,
+            )
+            if scalar_call is not None:
+                return scalar_call
             return self.format_clamp_component(
-                self.clamp_scalar_type(value_type),
+                scalar_type,
                 args[0],
                 args[1],
                 args[2],
@@ -833,6 +926,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         factor_info = self.vector_type_info(factor_type)
 
         if not left_info and not right_info and not factor_info:
+            scalar_bool_mix = self.lower_bool_scalar_mix_operation(
+                raw_args[0],
+                args[0],
+                raw_args[1],
+                args[1],
+                raw_args[2],
+                args[2],
+            )
+            if scalar_bool_mix is not None:
+                return scalar_bool_mix
             return None
 
         if left_info is None or right_info is None:
@@ -842,6 +945,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             or left_info["component_type"] != right_info["component_type"]
         ):
             return None
+
+        bool_mix = self.lower_bool_vector_mix_operation(
+            raw_args[0],
+            args[0],
+            raw_args[1],
+            args[1],
+            raw_args[2],
+            args[2],
+            left_info,
+            right_info,
+            factor_info,
+        )
+        if bool_mix is not None:
+            return bool_mix
 
         if factor_info is not None and (
             len(factor_info["components"]) != len(left_info["components"])
@@ -1050,6 +1167,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         result_info = self.vector_type_info(result_type)
         if result_info is None:
             return None
+
+        swizzle_call = self.generate_vector_swizzle_single_eval_call(
+            result_info,
+            vector_info,
+            object_node,
+            object_expr,
+            components,
+        )
+        if swizzle_call is not None:
+            return swizzle_call
 
         args = [f"{object_expr}.{component}" for component in components]
         return f"{result_info['constructor']}({', '.join(args)})"

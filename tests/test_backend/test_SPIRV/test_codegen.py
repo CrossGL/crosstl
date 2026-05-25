@@ -230,7 +230,7 @@ def test_translate_api_accepts_spirv_source(tmp_path):
 
     assert "#[fragment_shader]" in generated_code
     assert "pub fn main()" in generated_code
-    assert "let mut color: float4 = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "let color: float4 = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
 
 
 def test_vulkan_layout_blocks_emit_crossgl_resources():
@@ -338,6 +338,30 @@ def test_vulkan_uniform_block_instance_member_access_flattens_to_cbuffer_member(
     assert "camera.viewProj" not in generated_code
 
 
+def test_vulkan_push_constant_block_emits_marked_cbuffer():
+    code = """
+    layout(push_constant) uniform PushConstants {
+        mat4 model;
+        vec4 tint;
+    } pc;
+    void main() {
+        gl_Position = pc.model * vec4(1.0, 0.0, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].push_constant is True
+    assert "cbuffer PushConstants @push_constant {" in generated_code
+    assert "cbuffer PushConstants {\n" not in generated_code
+    assert "float4x4 model;" in generated_code
+    assert "float4 tint;" in generated_code
+    assert "gl_Position = (model * float4(1.0, 0.0, 0.0, 1.0));" in generated_code
+    assert "pc.model" not in generated_code
+
+
 def test_vulkan_layout_blocks_preserve_array_members():
     tokens = tokenize_code(ARRAY_LAYOUT_SHADER)
     ast = parse_code(tokens)
@@ -356,6 +380,53 @@ def test_vulkan_layout_blocks_preserve_array_members():
     assert "float4 positions[128];" in generated_code
     assert "float masses[128];" in generated_code
     assert "transforms[0] * float4(1.0, 0.0, 0.0, 1.0)" in generated_code
+
+
+def test_vulkan_layout_blocks_preserve_custom_struct_members():
+    code = """
+    struct Light {
+        vec3 position;
+    };
+    layout(set = 0, binding = 0) uniform Scene {
+        Light lights[4];
+        mat4 view;
+    } scene;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].struct_fields == [
+        ("Light", "lights[4]"),
+        ("mat4", "view"),
+    ]
+    assert "struct Light" in generated_code
+    assert "float3 position;" in generated_code
+    assert "cbuffer Scene" in generated_code
+    assert "Light lights[4];" in generated_code
+    assert "float4x4 view;" in generated_code
+
+
+def test_vulkan_custom_struct_uniform_type_codegen():
+    code = """
+    struct Light {
+        vec3 position;
+    };
+    layout(set = 0, binding = 1) uniform Light activeLight;
+    uniform Light fallbackLight;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert ast.global_variables[0].data_type == "Light"
+    assert ast.global_variables[0].variable_name == "activeLight"
+    assert ast.global_variables[1].vtype == "Light"
+    assert ast.global_variables[1].name == "fallbackLight"
+    assert "Light activeLight;" in generated_code
+    assert "Light fallbackLight;" in generated_code
 
 
 def test_standalone_struct_array_members_codegen():
@@ -1031,13 +1102,53 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
     )
 
     assert "pub struct Particles" in generated_code
-    assert "static viewProj: float4x4 = Default::default();" in generated_code
     assert (
-        "static particles: RWStructuredBuffer<Particles> = Default::default();"
-        in generated_code
+        "static VIEW_PROJ: std::sync::LazyLock<float4x4> = "
+        "std::sync::LazyLock::new(|| Default::default());" in generated_code
     )
-    assert "static position: float3 = Default::default();" in generated_code
+    assert (
+        "static PARTICLES: std::sync::LazyLock<RWStructuredBuffer<Particles>> = "
+        "std::sync::LazyLock::new(|| Default::default());" in generated_code
+    )
+    assert (
+        "static POSITION: std::sync::LazyLock<float3> = "
+        "std::sync::LazyLock::new(|| Default::default());" in generated_code
+    )
     assert "#[vertex_shader]" in generated_code
+
+
+def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "push_constant_vertex.spirv"
+    shader_path.write_text(
+        """
+        layout(push_constant) uniform PushConstants {
+            mat4 model;
+            vec4 tint;
+        } pc;
+        void main() {
+            gl_Position = pc.model * vec4(1.0, 0.0, 0.0, 1.0);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated_cgl = crosstl.translate(
+        str(shader_path), backend="cgl", format_output=False
+    )
+    generated_rust = crosstl.translate(
+        str(shader_path), backend="rust", format_output=False
+    )
+
+    assert "cbuffer PushConstants @push_constant {" in generated_cgl
+    assert "pc.model" not in generated_cgl
+    assert "pub struct PushConstants" in generated_rust
+    assert (
+        "static MODEL: std::sync::LazyLock<float4x4> = "
+        "std::sync::LazyLock::new(|| Default::default());" in generated_rust
+    )
+    assert "#[vertex_shader]" in generated_rust
 
 
 def test_vulkan_bitwise_shift_precedence_codegen():
@@ -1179,6 +1290,53 @@ def test_for_structured_assignment_update_codegen():
 
     assert "for (int i = 0; (i < 4); items[i] += value) {" in generated_code
     assert "for (int i = 0; (i < 4); object.field = value) {" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_for_empty_clause_codegen():
+    code = """
+    void main() {
+        int i = 0;
+        for (; i < 4; i++) {
+        }
+        for (int j = 0; ; j++) {
+            break;
+        }
+        for (int k = 0; k < 4; ) {
+            k++;
+        }
+        for (; ; ) {
+            break;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (; (i < 4); i++) {" in generated_code
+    assert "for (int j = 0; ; j++) {" in generated_code
+    assert "for (int k = 0; (k < 4); ) {" in generated_code
+    assert "for (; ; ) {" in generated_code
+    assert "None" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_for_clause_comma_lists_codegen():
+    code = """
+    void main() {
+        for (int i = 0, j = 1; i < 4; i++, j--) {
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for (int i = 0, j = 1; (i < 4); i++, j--) {" in generated_code
+    assert "None" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -1561,6 +1719,10 @@ def test_bitwise_shift_ops_codegen():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         print(generated_code)
+        assert "uint result1 = (value << 1);" in generated_code
+        assert "uint result2 = (value >> 1);" in generated_code
+        assert "if (((result1 == 8) && (result2 == 2)))" in generated_code
+        assert "((result1 == 8) && result2) == 2" not in generated_code
     except SyntaxError:
         pytest.fail(
             "Bitwise shift operators parsing or code generation not implemented."

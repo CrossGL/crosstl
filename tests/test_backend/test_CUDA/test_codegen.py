@@ -171,6 +171,41 @@ class TestCudaCodeGen:
         assert "out[0] = mix(a, b, t);" in result
         assert "out[0] = lerp(a, b, t);" not in result
 
+    def test_lerp_with_bool_selector_converts_to_crossgl_mix(self):
+        """Test CUDA lerp conversion preserves selector-shaped mix calls."""
+        code = """
+        __global__ void blend(float* out, float a, float b, bool choose_b) {
+            out[0] = lerp(a, b, choose_b);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = mix(a, b, choose_b);" in result
+        assert "out[0] = lerp(a, b, choose_b);" not in result
+
+    def test_scalar_bool_ternary_selector_is_preserved(self):
+        """Test CUDA scalar bool ternaries round-trip as CrossGL ternaries."""
+        code = """
+        __global__ void choose(float* out, bool choose_b, float a, float b) {
+            out[0] = choose_b ? b : a;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = (choose_b ? b : a);" in result
+
     def test_user_defined_lerp_call_does_not_convert_to_mix(self):
         """Test user-defined CUDA functions shadow builtin call conversion."""
         code = """
@@ -956,6 +991,36 @@ class TestCudaCodeGen:
         assert "var cp: ptr<auto> = data;" in result
         assert "var q: ptr<auto> = data;" in result
         assert "var r: ptr<auto> = data;" in result
+
+    def test_device_lambda_expression_conversion(self):
+        """Test CUDA device lambdas convert to CrossGL pseudo-lambda calls."""
+        code = """
+        void host() {
+            auto folded = fold(values, 0,
+                [&] __device__ (int acc, int x) { return (acc + x); });
+            auto mapped = map(colors,
+                [] __device__ (float3 color) -> float3 {
+                    prepare(color);
+                    return color;
+                });
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var folded: auto = fold(values, 0, "
+            "lambda(i32 acc, i32 x, (acc + x)));" in result
+        )
+        assert (
+            "var mapped: auto = map(colors, "
+            "lambda(vec3<f32> color, { prepare(color); return color; }));" in result
+        )
 
     def test_restrict_pointer_qualifier_conversion(self):
         """Test __restrict__ pointer qualifiers are stripped during conversion"""

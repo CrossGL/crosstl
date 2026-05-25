@@ -1,5 +1,7 @@
 """Test HIP Parser"""
 
+import pytest
+
 from crosstl.backend.HIP.HipAst import (
     AssignmentNode,
     ArrayAccessNode,
@@ -34,6 +36,62 @@ from crosstl.backend.HIP.HipParser import HipParser, HipProgramNode
 
 
 class TestHipParser:
+    def parse_code(self, code):
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        return parser.parse()
+
+    def test_missing_semicolon_after_expression_statement_errors(self):
+        """Test expression statements require semicolons."""
+        code = """
+        void host() {
+            sink()
+        }
+        """
+
+        with pytest.raises(SyntaxError, match="Expected SEMICOLON"):
+            self.parse_code(code)
+
+    def test_missing_semicolon_between_assignments_errors(self):
+        """Test adjacent assignments cannot parse without separators."""
+        code = """
+        void host() {
+            x = 1 y = 2;
+        }
+        """
+
+        with pytest.raises(SyntaxError, match="Expected SEMICOLON"):
+            self.parse_code(code)
+
+    def test_missing_semicolon_between_declarations_errors(self):
+        """Test adjacent declarations cannot parse without separators."""
+        code = """
+        void host() {
+            int x = 1 float y = 2;
+        }
+        """
+
+        with pytest.raises(SyntaxError, match="Expected SEMICOLON"):
+            self.parse_code(code)
+
+    def test_for_initializer_declaration_keeps_internal_semicolon_parsing(self):
+        """Test for-loop declarations still leave semicolons to the for parser."""
+        code = """
+        void host(int n) {
+            for (int i = 0; i < n; i++) {
+                sink(i);
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        loop = ast.statements[0].body[0]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.init, VariableNode)
+        assert loop.init.name == "i"
+        assert isinstance(loop.body[0], FunctionCallNode)
+
     def test_hip_flat_builtin_alias_parsing(self):
         """Test HIP flat builtin aliases normalize to dotted builtin nodes."""
         code = """
@@ -514,6 +572,42 @@ class TestHipParser:
         )
         assert isinstance(duration_call.args[0], BinaryOpNode)
         assert body[4].value.op == "<"
+
+    def test_device_lambda_expression_parsing(self):
+        """Test HIP device lambdas parse into CrossGL pseudo-lambda calls."""
+        code = """
+        void host() {
+            auto folded = fold(values, 0,
+                [&] __device__ (int acc, int x) { return (acc + x); });
+            auto mapped = map(colors,
+                [] __device__ (float3 color) -> float3 {
+                    prepare(color);
+                    return color;
+                });
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        folded_lambda = body[0].value.args[2]
+        assert isinstance(folded_lambda, FunctionCallNode)
+        assert folded_lambda.name == "lambda"
+        assert [(arg.vtype, arg.name) for arg in folded_lambda.args[:-1]] == [
+            ("int", "acc"),
+            ("int", "x"),
+        ]
+        assert isinstance(folded_lambda.args[-1], BinaryOpNode)
+
+        mapped_lambda = body[1].value.args[1]
+        assert isinstance(mapped_lambda, FunctionCallNode)
+        assert mapped_lambda.name == "lambda"
+        assert isinstance(mapped_lambda.args[0], VariableNode)
+        assert mapped_lambda.args[0].vtype == "float3"
+        assert mapped_lambda.args[0].name == "color"
+        assert mapped_lambda.args[-1] == "{ prepare(color); return color; }"
 
     def test_std_vector_host_buffer_parsing(self):
         """Test scoped template host vector declarations and methods"""

@@ -257,6 +257,41 @@ class TestHipCodeGen:
         assert "out[0] = mix(a, b, t);" in result
         assert "out[0] = lerp(a, b, t);" not in result
 
+    def test_lerp_with_bool_selector_converts_to_crossgl_mix(self):
+        """Test HIP lerp conversion preserves selector-shaped mix calls."""
+        code = """
+        __global__ void blend(float* out, float a, float b, bool choose_b) {
+            out[0] = lerp(a, b, choose_b);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = mix(a, b, choose_b);" in result
+        assert "out[0] = lerp(a, b, choose_b);" not in result
+
+    def test_scalar_bool_ternary_selector_is_preserved(self):
+        """Test HIP scalar bool ternaries round-trip as CrossGL ternaries."""
+        code = """
+        __global__ void choose(float* out, bool choose_b, float a, float b) {
+            out[0] = choose_b ? b : a;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = (choose_b ? b : a);" in result
+
     def test_user_defined_lerp_call_does_not_convert_to_mix(self):
         """Test user-defined HIP functions shadow builtin call conversion."""
         code = """
@@ -747,7 +782,9 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "// HIP memory allocate: d, bytes: (n * sizeof(float))" in result
+        assert (
+            result.count("// HIP memory allocate: d, bytes: (n * sizeof(float))") == 2
+        )
         assert (
             "// HIP memory copy: h -> d, bytes: (n * sizeof(float)), "
             "kind: hipMemcpyHostToDevice"
@@ -756,12 +793,11 @@ class TestHipCodeGen:
         assert "// HIP device synchronize" in result
         assert "// HIP memory free: d" in result
         assert "workgroupBarrier();" not in result
-        assert (
-            "var err: hipError_t = "
-            "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)));"
-        ) in result
+        assert "var err: hipError_t = hipSuccess;" in result
         assert "if ((err != hipSuccess))" in result
-        assert "err = hipDeviceSynchronize();" in result
+        assert "err = hipSuccess;" in result
+        assert "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
+        assert "err = hipDeviceSynchronize();" not in result
 
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
@@ -827,7 +863,9 @@ class TestHipCodeGen:
         assert "// HIP event query: stop" in result
         assert "// HIP event destroy: start" in result
         assert "// HIP stream destroy: stream" in result
-        assert "var err: hipError_t = hipEventRecord(stop, stream);" in result
+        assert "// HIP event record: stop, stream: stream" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "var err: hipError_t = hipEventRecord(stop, stream);" not in result
 
     def test_std_chrono_benchmark_expression_conversion(self):
         """Test std::chrono benchmark expressions convert"""
@@ -1059,6 +1097,36 @@ class TestHipCodeGen:
         assert "var cp: ptr<auto> = data;" in result
         assert "var q: ptr<auto> = data;" in result
         assert "var r: ptr<auto> = data;" in result
+
+    def test_device_lambda_expression_conversion(self):
+        """Test HIP device lambdas convert to CrossGL pseudo-lambda calls."""
+        code = """
+        void host() {
+            auto folded = fold(values, 0,
+                [&] __device__ (int acc, int x) { return (acc + x); });
+            auto mapped = map(colors,
+                [] __device__ (float3 color) -> float3 {
+                    prepare(color);
+                    return color;
+                });
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var folded: auto = fold(values, 0, "
+            "lambda(i32 acc, i32 x, (acc + x)));" in result
+        )
+        assert (
+            "var mapped: auto = map(colors, "
+            "lambda(vec3<f32> color, { prepare(color); return color; }));" in result
+        )
 
     def test_restrict_pointer_qualifier_conversion(self):
         """Test __restrict__ pointer qualifiers are stripped during conversion"""

@@ -1,7 +1,20 @@
 import pytest
+import crosstl
+import crosstl.translator
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
 from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
+from crosstl.backend.Rust.RustAst import (
+    BinaryOpNode,
+    BlockNode,
+    ClosureNode,
+    ClosureParameterNode,
+    FunctionNode,
+    LetNode,
+    ReturnNode,
+    ShaderNode,
+    VariableNode,
+)
 
 
 def parse_and_generate(code: str) -> str:
@@ -92,11 +105,74 @@ def test_function_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "vertex {" in result
+        assert "vertex vertex_main {" in result
+        assert "vec4 main(vec3 vertex_)" in result
+        assert "vec4(vertex_.x, vertex_.y, vertex_.z, 1.0)" in result
         assert "pos = vec4(" in result
         assert "return pos;" in result
     except Exception as e:
         pytest.fail(f"Function conversion failed: {e}")
+
+
+def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
+    code = """
+    #[vertex_shader]
+    pub fn vertex_main(vertex: Vec3<f32>) -> Vec4<f32> {
+        let pos = Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
+        return pos;
+    }
+    """
+    rust_file = tmp_path / "shader.rs"
+    rust_file.write_text(code, encoding="utf-8")
+
+    cgl_result = crosstl.translate(str(rust_file), backend="cgl", format_output=False)
+    assert "vertex vertex_main {" in cgl_result
+    assert "vec4 main(vec3 vertex_)" in cgl_result
+    assert "vec4(vertex_.x, vertex_.y, vertex_.z, 1.0)" in cgl_result
+
+    rust_result = crosstl.translate(str(rust_file), backend="rust", format_output=False)
+    assert "pub fn vertex_main(vertex_: Vec3<f32>) -> Vec4<f32>" in rust_result
+    assert "Vec4::<f32>::new(vertex_.x, vertex_.y, vertex_.z, 1.0)" in rust_result
+    assert "pub fn main() -> ()" not in rust_result
+
+
+def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_path):
+    code = """
+    #[vertex_shader]
+    pub fn vertex_main(vertex: Vec3<f32>, condition: bool) -> Vec4<f32> {
+        let vertex = Vec4::new(vertex.x, vertex.y, vertex.z, 1.0);
+        if condition {
+            let vertex = Vec4::new(0.0, 0.0, 0.0, 1.0);
+        }
+        let fragment: Vec4<f32> = vertex;
+        return fragment;
+    }
+    """
+    rust_file = tmp_path / "shader.rs"
+    rust_file.write_text(code, encoding="utf-8")
+
+    cgl_result = crosstl.translate(str(rust_file), backend="cgl", format_output=False)
+    assert "vec4 main(vec3 vertex_, bool condition)" in cgl_result
+    assert "let vertex_1 = vec4(vertex_.x, vertex_.y, vertex_.z, 1.0);" in cgl_result
+    assert "let vertex_2 = vec4(0.0, 0.0, 0.0, 1.0);" in cgl_result
+    assert "vec4 fragment_ = vertex_1;" in cgl_result
+    assert "return fragment_;" in cgl_result
+
+    rust_result = crosstl.translate(str(rust_file), backend="rust", format_output=False)
+    assert (
+        "pub fn vertex_main(vertex_: Vec3<f32>, condition: bool) -> Vec4<f32>"
+        in rust_result
+    )
+    assert (
+        "let vertex_1: Vec4<f32> = "
+        "Vec4::<f32>::new(vertex_.x, vertex_.y, vertex_.z, 1.0);" in rust_result
+    )
+    assert (
+        "let vertex_2: Vec4<f32> = "
+        "Vec4::<f32>::new(0.0, 0.0, 0.0, 1.0);" in rust_result
+    )
+    assert "let fragment_: Vec4<f32> = vertex_1;" in rust_result
+    assert "return fragment_;" in rust_result
 
 
 def test_fragment_shader_conversion():
@@ -108,7 +184,8 @@ def test_fragment_shader_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "fragment {" in result
+        assert "fragment fragment_main {" in result
+        assert "vec4 main(vec2 input)" in result
         assert "vec4" in result
     except Exception as e:
         pytest.fail(f"Fragment shader conversion failed: {e}")
@@ -123,7 +200,8 @@ def test_compute_shader_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "compute {" in result
+        assert "compute compute_main {" in result
+        assert "void main()" in result
     except Exception as e:
         pytest.fail(f"Compute shader conversion failed: {e}")
 
@@ -708,6 +786,19 @@ def test_lerp_function_converts_to_crossgl_mix():
         pytest.fail(f"Lerp function conversion failed: {e}")
 
 
+def test_lerp_method_converts_to_crossgl_mix():
+    code = """
+    fn blend(a: f32, b: f32, t: f32) -> f32 {
+        let x = a.lerp(b, t);
+        x
+    }
+    """
+    result = parse_and_generate(code)
+
+    assert "x = mix(a, b, t);" in result
+    assert "a.lerp(b, t)" not in result
+
+
 def test_user_defined_lerp_call_does_not_convert_to_mix():
     code = """
     fn lerp(x: f32) -> f32 {
@@ -746,6 +837,30 @@ def test_current_module_qualified_user_defined_lerp_call_does_not_convert_to_mix
     assert "mix(x)" not in result
     assert "self::lerp" not in result
     assert "crate::lerp" not in result
+
+
+def test_user_defined_impl_lerp_method_does_not_convert_to_mix():
+    code = """
+    struct Wave {
+        value: f32,
+    }
+
+    impl Wave {
+        fn lerp(&self, other: Wave, t: f32) -> f32 {
+            return self.value + other.value + t;
+        }
+    }
+
+    fn sample(w: Wave, other: Wave, t: f32) -> f32 {
+        return w.lerp(other, t);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float Wave_lerp(" in result
+    assert "return Wave_lerp(w, other, t);" in result
+    assert "return mix(w, other, t);" not in result
 
 
 def test_user_defined_impl_method_named_like_scalar_builtin_does_not_lower_to_builtin():
@@ -1947,6 +2062,81 @@ def test_binary_operations_conversion():
         assert "(k ^ l)" in result
     except Exception as e:
         pytest.fail(f"Binary operations conversion failed: {e}")
+
+
+def test_if_expression_operand_conversion():
+    code = """
+    fn test_if_operand(a: bool, b: bool, c: bool, d: bool) {
+        let x = a || if b { c } else { d };
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let x = (a || (b ? c : d));" in result
+
+
+def test_match_and_loop_expression_operand_conversion():
+    code = """
+    fn test_expression_operands(a: bool, v: i32) {
+        let matched = a || match v {
+            0 => false,
+            _ => true,
+        };
+        let looped = check(loop {
+            break true;
+        });
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "lambda({" not in result
+    assert "auto _rust_expr_value_0;" in result
+    assert "if (a) {" in result
+    assert "_rust_expr_value_0 = true;" in result
+    assert "} else {" in result
+    assert "switch (v)" in result
+    assert "_rust_expr_value_1 = false;" in result
+    assert "_rust_expr_value_1 = true;" in result
+    assert "let matched = _rust_expr_value_0;" in result
+    assert "while (true)" in result
+    assert "let looped = check(_rust_expr_value_2);" in result
+    crosstl.translator.parse(result)
+
+
+def test_logical_and_match_operand_materialization_preserves_short_circuit():
+    code = """
+    fn test_and(a: bool, v: i32) -> bool {
+        return a && match v {
+            0 => false,
+            _ => true,
+        };
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "lambda({" not in result
+    assert "if (!a) {" in result
+    assert "_rust_expr_value_0 = false;" in result
+    assert "} else {" in result
+    assert "switch (v)" in result
+    assert "return _rust_expr_value_0;" in result
+    crosstl.translator.parse(result)
+
+
+def test_simple_block_expression_operand_stays_inline():
+    code = """
+    fn test_block_operand(a: bool, b: bool) {
+        let x = a || { b };
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let x = (a || b);" in result
+    assert "lambda({" not in result
 
 
 def test_unary_operations_conversion():
@@ -3822,6 +4012,25 @@ def test_closure_expression_conversion():
         pytest.fail(f"Closure expression conversion failed: {e}")
 
 
+def test_async_closure_expression_conversion():
+    code = """
+    fn async_closures(values: Values) {
+        let async_add = async |x| x + 1;
+        let async_moved = async move || true;
+        let mapped = values.map(async |x| x + 1);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "async_add = lambda(x, (x + 1));" in result
+        assert "async_moved = lambda(true);" in result
+        assert "mapped = map(values, lambda(x, (x + 1)));" in result
+        assert "async |" not in result
+        assert "async move" not in result
+    except Exception as e:
+        pytest.fail(f"Async closure expression conversion failed: {e}")
+
+
 def test_closure_iterator_method_conversion():
     code = """
     fn iterator_methods(values: Values) {
@@ -3841,6 +4050,138 @@ def test_closure_iterator_method_conversion():
         assert "total = fold(values, 0, lambda(acc, x, (acc + x)));" in result
     except Exception as e:
         pytest.fail(f"Closure iterator method conversion failed: {e}")
+
+
+def test_typed_noncapturing_closures_emit_helpers():
+    code = """
+    fn helper_closures(values: Values) {
+        let add = |x: i32, y: i32| -> i32 { x + y };
+        let mapped = values.map(|x: i32| -> i32 { x + 1 });
+        let filtered = values.filter(|x: i32| -> bool { x > 0 });
+        let total = values.fold(0, |acc: i32, x: i32| -> i32 { acc + x });
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int _rust_closure_add_0(int x, int y) {" in result
+        assert "return (x + y);" in result
+        assert "let add = _rust_closure_add_0;" in result
+        assert "int _rust_closure_map_1(int x) {" in result
+        assert "mapped = map(values, _rust_closure_map_1);" in result
+        assert "bool _rust_closure_filter_2(int x) {" in result
+        assert "filtered = filter(values, _rust_closure_filter_2);" in result
+        assert "int _rust_closure_fold_3(int acc, int x) {" in result
+        assert "total = fold(values, 0, _rust_closure_fold_3);" in result
+        assert "lambda(int x" not in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Typed noncapturing closure helper conversion failed: {e}")
+
+
+def test_typed_pattern_closures_emit_helpers():
+    code = """
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    fn pattern_helpers(values: Values) {
+        let projected = values.map(|Point { x, y }: Point| -> i32 { x + y });
+        let optional = values.map(|Some(v): Option<i32>| -> i32 { v });
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "int _rust_closure_map_0(Point _rust_closure_arg_0) {" in result
+        assert "auto x = _rust_closure_arg_0.x;" in result
+        assert "auto y = _rust_closure_arg_0.y;" in result
+        assert "projected = map(values, _rust_closure_map_0);" in result
+        assert "int _rust_closure_map_1(Option<i32> _rust_closure_arg_1) {" in result
+        assert "if (is_Some(_rust_closure_arg_1))" in result
+        assert "auto v = unwrap_Some(_rust_closure_arg_1);" in result
+        assert "optional = map(values, _rust_closure_map_1);" in result
+        assert "lambda(Point" not in result
+        assert "lambda(Option" not in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Typed pattern closure helper conversion failed: {e}")
+
+
+def test_tuple_typed_pattern_closure_stays_inline():
+    code = """
+    fn tuple_pattern(values: Values) {
+        let projected = values.map(|(x, y): (i32, i32)| -> i32 { x + y });
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "_rust_closure_map_0" not in result
+        assert "projected = map(values, lambda((i32, i32) _rust_closure_arg_0" in result
+        assert "auto x = _rust_tuple_0(_rust_closure_arg_0);" in result
+        assert "auto y = _rust_tuple_1(_rust_closure_arg_0);" in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Tuple typed pattern closure fallback conversion failed: {e}")
+
+
+def test_closure_helpers_fall_back_for_captures_untyped_and_try():
+    code = """
+    fn helper_fallbacks(values: Values, scale: i32, value: Result<i32, i32>) {
+        let captured = |x: i32| -> i32 { x * scale };
+        let untyped = |x| x + 1;
+        let parsed = |value: Result<i32, i32>| -> Result<i32, i32> {
+            let v: i32 = value?;
+            Ok(v)
+        };
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+        assert "_rust_closure_captured" not in result
+        assert "captured = lambda(int x, { return (x * scale); });" in result
+        assert "_rust_closure_untyped" not in result
+        assert "untyped = lambda(x, (x + 1));" in result
+        assert "_rust_closure_parsed" not in result
+        assert "parsed = lambda(Result<i32, i32> value, {" in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Closure helper fallback conversion failed: {e}")
+
+
+def test_closure_helper_names_avoid_user_function_collisions():
+    try:
+        ast = ShaderNode(
+            functions=[
+                FunctionNode(
+                    "i32",
+                    "_rust_closure_add_0",
+                    [VariableNode("i32", "x")],
+                    [ReturnNode("x")],
+                ),
+                FunctionNode(
+                    "void",
+                    "collision",
+                    [],
+                    [
+                        LetNode(
+                            "add",
+                            ClosureNode(
+                                [ClosureParameterNode("x", "i32")],
+                                BlockNode([], BinaryOpNode("x", "+", "1")),
+                                return_type="i32",
+                            ),
+                        )
+                    ],
+                ),
+            ]
+        )
+        result = RustToCrossGLConverter().generate(ast)
+        assert "int _rust_closure_add_0(int x) {" in result
+        assert "int _rust_closure_add_1(int x) {" in result
+        assert "let add = _rust_closure_add_1;" in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Closure helper name collision conversion failed: {e}")
 
 
 def test_closure_block_body_conversion():
@@ -3878,6 +4219,7 @@ def test_closure_block_body_conversion():
             "let choose = lambda(x, { if ((x > 0)) { let kept = x; return kept; } "
             "else { let fallback = 0; return fallback; } });"
         ) in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure block body conversion failed: {e}")
 
@@ -3906,6 +4248,7 @@ def test_closure_transparent_block_body_conversion():
         )
         assert "let folded = lambda({ let value = 2; return (value + 1); });" in result
         assert "let suspended = lambda(x, { let y = (x + 1); return y; });" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure transparent block body conversion failed: {e}")
 
@@ -3940,6 +4283,7 @@ def test_closure_pattern_parameter_conversion():
             "return v; } }));"
         ) in result
         assert "ignored = filter(values, lambda(_rust_closure_arg_3, true));" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure pattern parameter conversion failed: {e}")
 
@@ -3964,6 +4308,7 @@ def test_closure_explicit_result_try_conversion():
         assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
         assert "return Ok(v);" in result
         assert "return None;" not in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure explicit Result try conversion failed: {e}")
 
@@ -3988,6 +4333,7 @@ def test_closure_explicit_option_try_conversion():
         assert "auto _rust_try_value_0 = unwrap_Some(_rust_try_subject_0);" in result
         assert "return Some(v);" in result
         assert "return Err(unwrap_Err(_rust_try_subject_0));" not in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure explicit Option try conversion failed: {e}")
 
@@ -4013,6 +4359,7 @@ def test_closure_inferred_result_try_conversion():
         assert "inline = lambda(Result<i32, i32> value, {" in result
         assert "if (is_Err(_rust_try_subject_1))" in result
         assert "return Ok(_rust_try_value_1);" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure inferred Result try conversion failed: {e}")
 
@@ -4034,6 +4381,7 @@ def test_closure_inferred_option_try_conversion():
         assert "if (is_None(_rust_try_subject_0))" in result
         assert "return None;" in result
         assert "return Some(v);" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure inferred Option try conversion failed: {e}")
 
@@ -4524,14 +4872,17 @@ def test_result_try_block_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "Result<i32, i32> result = lambda({" in result
+        assert "lambda({" not in result
+        assert "Result<i32, i32> result;" in result
+        assert "do {" in result
         assert "auto _rust_try_subject_0 = value;" in result
         assert "if (is_Err(_rust_try_subject_0))" in result
-        assert "return Err(unwrap_Err(_rust_try_subject_0));" in result
+        assert "result = Err(unwrap_Err(_rust_try_subject_0));" in result
         assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_0);" in result
-        assert "return Ok((v + 1));" in result
-        assert "})();" in result
+        assert "result = Ok((v + 1));" in result
+        assert "} while (false);" in result
         assert "return result;" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Result try block conversion failed: {e}")
 
@@ -4549,13 +4900,17 @@ def test_option_try_block_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "Option<i32> result = lambda({" in result
+        assert "lambda({" not in result
+        assert "Option<i32> result;" in result
+        assert "do {" in result
         assert "auto _rust_try_subject_0 = value;" in result
         assert "if (is_None(_rust_try_subject_0))" in result
-        assert "return None;" in result
+        assert "result = None;" in result
         assert "auto _rust_try_value_0 = unwrap_Some(_rust_try_subject_0);" in result
-        assert "return Some((v + 1));" in result
+        assert "result = Some((v + 1));" in result
+        assert "} while (false);" in result
         assert "return result;" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Option try block conversion failed: {e}")
 
@@ -4573,13 +4928,16 @@ def test_try_block_as_try_operand_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "auto _rust_try_subject_0 = lambda({" in result
-        assert "return Ok((v + 1));" in result
+        assert "lambda({" not in result
+        assert "auto _rust_try_subject_0;" in result
+        assert "do {" in result
+        assert "_rust_try_subject_0 = Ok((v + 1));" in result
         assert "if (is_Err(_rust_try_subject_0))" in result
         assert "auto _rust_try_value_0 = unwrap_Ok(_rust_try_subject_1);" in result
         assert "auto _rust_try_value_1 = unwrap_Ok(_rust_try_subject_0);" in result
         assert "unwrapped = _rust_try_value_1;" in result
         assert "return Ok(unwrapped);" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Try block operand conversion failed: {e}")
 
@@ -4600,12 +4958,15 @@ def test_try_block_final_result_expression_conversion():
     try:
         result = parse_and_generate(code)
 
+        assert "lambda({" not in result
+        assert "do {" in result
         assert "auto _rust_try_value_0;" in result
         assert "if (ready)" in result
-        assert "return Err(unwrap_Err(_rust_try_subject_0));" in result
+        assert "result = Err(unwrap_Err(_rust_try_subject_0));" in result
         assert "_rust_try_value_0 = _rust_try_value_1;" in result
         assert "_rust_try_value_0 = 0;" in result
-        assert "return Ok(_rust_try_value_0);" in result
+        assert "result = Ok(_rust_try_value_0);" in result
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Try block final result expression conversion failed: {e}")
 
@@ -4655,8 +5016,8 @@ def test_complex_shader_conversion():
         assert "shader main {" in result
         assert "struct VertexInput {" in result
         assert "struct VertexOutput {" in result
-        assert "vertex {" in result
-        assert "fragment {" in result
+        assert "vertex vertex_main {" in result
+        assert "fragment fragment_main {" in result
         assert (
             "world_position = " in result
         )  # Variable assignments without explicit type

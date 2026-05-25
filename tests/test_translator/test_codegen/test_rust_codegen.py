@@ -1,5 +1,9 @@
 import pytest
 import crosstl.translator
+import shutil
+import subprocess
+import textwrap
+from pathlib import Path
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
@@ -47,6 +51,313 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+RUST_SMOKE_STUBS = """
+#![allow(dead_code)]
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
+#![allow(unused_imports)]
+#![allow(unused_parens)]
+
+mod math {
+    use std::marker::PhantomData;
+    use std::ops::{Add, Div, Mul, Neg, Sub};
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Vec2<T> {
+        pub x: T,
+        pub y: T,
+    }
+
+    impl<T> Vec2<T> {
+        pub fn new(x: T, y: T) -> Self {
+            Self { x, y }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Vec3<T> {
+        pub x: T,
+        pub y: T,
+        pub z: T,
+    }
+
+    impl<T> Vec3<T> {
+        pub fn new(x: T, y: T, z: T) -> Self {
+            Self { x, y, z }
+        }
+    }
+
+    impl Add for Vec3<f32> {
+        type Output = Self;
+
+        fn add(self, rhs: Self) -> Self::Output {
+            Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
+        }
+    }
+
+    impl Sub for Vec3<f32> {
+        type Output = Self;
+
+        fn sub(self, rhs: Self) -> Self::Output {
+            Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+        }
+    }
+
+    impl Mul for Vec3<f32> {
+        type Output = Self;
+
+        fn mul(self, rhs: Self) -> Self::Output {
+            Self::new(self.x * rhs.x, self.y * rhs.y, self.z * rhs.z)
+        }
+    }
+
+    impl Mul<f32> for Vec3<f32> {
+        type Output = Self;
+
+        fn mul(self, rhs: f32) -> Self::Output {
+            Self::new(self.x * rhs, self.y * rhs, self.z * rhs)
+        }
+    }
+
+    impl Mul<Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn mul(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self * rhs.x, self * rhs.y, self * rhs.z)
+        }
+    }
+
+    impl Div<f32> for Vec3<f32> {
+        type Output = Self;
+
+        fn div(self, rhs: f32) -> Self::Output {
+            Self::new(self.x / rhs, self.y / rhs, self.z / rhs)
+        }
+    }
+
+    impl Neg for Vec3<f32> {
+        type Output = Self;
+
+        fn neg(self) -> Self::Output {
+            Self::new(-self.x, -self.y, -self.z)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Vec4<T> {
+        pub x: T,
+        pub y: T,
+        pub z: T,
+        pub w: T,
+    }
+
+    impl<T> Vec4<T> {
+        pub fn new(x: T, y: T, z: T, w: T) -> Self {
+            Self { x, y, z, w }
+        }
+    }
+
+    impl Add for Vec4<f32> {
+        type Output = Self;
+
+        fn add(self, rhs: Self) -> Self::Output {
+            Self::new(
+                self.x + rhs.x,
+                self.y + rhs.y,
+                self.z + rhs.z,
+                self.w + rhs.w,
+            )
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat3<T>(PhantomData<T>);
+
+    impl<T> Default for Mat3<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat4<T>(PhantomData<T>);
+
+    impl<T> Default for Mat4<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    impl Mul<Vec3<f32>> for Mat3<f32> {
+        type Output = Vec3<f32>;
+
+        fn mul(self, rhs: Vec3<f32>) -> Self::Output {
+            rhs
+        }
+    }
+
+    impl Mul<Vec4<f32>> for Mat4<f32> {
+        type Output = Vec4<f32>;
+
+        fn mul(self, rhs: Vec4<f32>) -> Self::Output {
+            rhs
+        }
+    }
+
+    pub fn dot(left: Vec3<f32>, right: Vec3<f32>) -> f32 {
+        left.x * right.x + left.y * right.y + left.z * right.z
+    }
+
+    pub fn normalize(value: Vec3<f32>) -> Vec3<f32> {
+        value
+    }
+
+    pub fn reflect(incident: Vec3<f32>, normal: Vec3<f32>) -> Vec3<f32> {
+        incident - normal * (2.0 * dot(incident, normal))
+    }
+
+    pub fn max(left: f32, right: f32) -> f32 {
+        left.max(right)
+    }
+
+    pub fn min(left: f32, right: f32) -> f32 {
+        left.min(right)
+    }
+
+    pub fn pow(left: f32, right: f32) -> f32 {
+        left.powf(right)
+    }
+
+    pub fn sqrt(value: f32) -> f32 {
+        value.sqrt()
+    }
+
+    pub fn floor(value: f32) -> f32 {
+        value.floor()
+    }
+
+    pub fn smoothstep(_edge0: f32, _edge1: f32, value: f32) -> f32 {
+        value
+    }
+
+    pub trait Lerp<Rhs = Self, T = f32> {
+        type Output;
+
+        fn lerp(self, rhs: Rhs, t: T) -> Self::Output;
+    }
+
+    impl Lerp for f32 {
+        type Output = f32;
+
+        fn lerp(self, rhs: f32, t: f32) -> Self::Output {
+            self + (rhs - self) * t
+        }
+    }
+
+    impl Lerp for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn lerp(self, rhs: Vec3<f32>, t: f32) -> Self::Output {
+            self + (rhs - self) * t
+        }
+    }
+
+    pub fn lerp<Left, Right, Weight>(
+        left: Left,
+        right: Right,
+        weight: Weight,
+    ) -> <Left as Lerp<Right, Weight>>::Output
+    where
+        Left: Lerp<Right, Weight>,
+    {
+        left.lerp(right, weight)
+    }
+}
+
+mod gpu {
+    use super::math::{Vec2, Vec3, Vec4};
+    use std::marker::PhantomData;
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Texture2D<T>(PhantomData<T>);
+
+    impl<T> Default for Texture2D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Texture3D<T>(PhantomData<T>);
+
+    impl<T> Default for Texture3D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    pub trait TextureLike {}
+    impl<T> TextureLike for Texture2D<T> {}
+    impl<T> TextureLike for Texture3D<T> {}
+
+    pub trait SampleCoord {}
+    impl SampleCoord for Vec2<f32> {}
+    impl SampleCoord for Vec3<f32> {}
+
+    pub fn sample<Texture, Coord>(_texture: Texture, _coord: Coord) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+}
+"""
+
+
+def rustc_or_skip():
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc is not installed")
+    return rustc
+
+
+def rust_smoke_source(generated_code: str) -> str:
+    stripped_lines = [
+        line
+        for line in generated_code.splitlines()
+        if line.strip()
+        not in {
+            "#[vertex_shader]",
+            "#[fragment_shader]",
+            "#[compute_shader]",
+        }
+    ]
+    return textwrap.dedent(RUST_SMOKE_STUBS) + "\n" + "\n".join(stripped_lines)
+
+
+def assert_generated_rust_smoke_compiles(generated_code: str, tmp_path):
+    source = rust_smoke_source(generated_code)
+    source_path = tmp_path / "generated.rs"
+    output_path = tmp_path / "libgenerated.rlib"
+    source_path.write_text(source, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            rustc_or_skip(),
+            "--edition=2021",
+            "--crate-type=lib",
+            str(source_path),
+            "-o",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + source
+
+
 def test_struct():
     code = """
     struct VSInput {
@@ -89,6 +400,427 @@ def test_unsized_struct_arrays_do_not_derive_copy():
     assert "pub colors: [Vec3<f32>; 2]," in generated_code
 
 
+def test_legacy_generic_wrappers_emit_rust_generic_params():
+    code = """
+    shader GenericWrappers {
+        generic<T, U> struct Pair {
+            left: T;
+            right: U;
+        }
+
+        generic<T> struct Wrapper {
+            item: Option<int>;
+            result: Result<T, int>;
+        }
+
+        generic<T> fn identity(value: T) -> T {
+            return value;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub struct Pair<T, U>" in generated_code
+    assert "pub left: T," in generated_code
+    assert "pub right: U," in generated_code
+    assert "pub struct Wrapper<T>" in generated_code
+    assert "pub item: Option<i32>," in generated_code
+    assert "pub result: Result<T, i32>," in generated_code
+    assert "pub fn identity<T>(value: T) -> T" in generated_code
+
+
+def test_traits_and_generic_constraints_emit_rust_and_smoke_compile(tmp_path):
+    code = """
+    shader GenericBounds {
+        trait Numeric {
+            fn zero() -> Self;
+            fn add(self, other: Self) -> Self;
+            fn checked(self) -> Maybe<Self>;
+        }
+
+        struct ScalarBox<T: Numeric> {
+            value: T;
+        }
+
+        generic<T: Numeric> enum Maybe {
+            Some(T)
+        }
+
+        generic<T: Numeric + Copy> fn add_zero(value: T) -> T {
+            return value.add(T::zero());
+        }
+
+        generic<T: Numeric> fn is_same(a: T, b: T) -> bool {
+            return a == b;
+        }
+
+        generic<T: Numeric + Copy> fn operator_mix(a: T, b: T, c: T, d: T) -> T {
+            return (a + b) - (c / d);
+        }
+
+        generic<T: Numeric> fn divide(a: T, b: T) -> T {
+            return a / b;
+        }
+
+        generic<T: Numeric> fn call_divide(a: T, b: T) -> T {
+            return divide(a, b);
+        }
+
+        generic<T: Numeric> fn make_box(a: T, b: T) -> ScalarBox<T> {
+            return ScalarBox { value: a - b };
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub trait Numeric: Sized {" in generated_code
+    assert "fn zero() -> Self;" in generated_code
+    assert "fn add(self, other: Self) -> Self;" in generated_code
+    assert "fn checked(self) -> Maybe<Self>;" in generated_code
+    assert "impl Numeric for f32" not in generated_code
+    assert "pub struct ScalarBox<T: Numeric>" in generated_code
+    assert "pub enum Maybe<T: Numeric>" in generated_code
+    assert "impl<T: Numeric + Default> Default for Maybe<T>" in generated_code
+    assert "pub fn add_zero<T: Numeric + Copy>(value: T) -> T" in generated_code
+    assert "return Numeric::add(value, T::zero());" in generated_code
+    assert (
+        "pub fn is_same<T: Numeric + PartialEq>(a: T, b: T) -> bool" in generated_code
+    )
+    assert (
+        "pub fn operator_mix<T: Numeric + Copy + "
+        "std::ops::Add<Output = T> + std::ops::Div<Output = T> + "
+        "std::ops::Sub<Output = T>>"
+    ) in generated_code
+    assert (
+        "pub fn divide<T: Numeric + std::ops::Div<Output = T>>(a: T, b: T) -> T"
+        in generated_code
+    )
+    assert (
+        "pub fn call_divide<T: Numeric + std::ops::Div<Output = T>>(a: T, b: T) -> T"
+        in generated_code
+    )
+    assert "pub fn make_box<T: Numeric + std::ops::Sub<Output = T>>" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_canonical_numeric_trait_emits_primitive_impls_and_smoke_compiles(tmp_path):
+    code = """
+    shader PrimitiveNumericBounds {
+        trait Numeric {
+            fn add(self, other: Self) -> Self;
+            fn mul(self, other: Self) -> Self;
+            fn zero() -> Self;
+            fn one() -> Self;
+        }
+
+        struct ScalarBox<T: Numeric> {
+            value: T;
+        }
+
+        fn make_float_box(value: float) -> ScalarBox<float> {
+            return ScalarBox { value: value };
+        }
+
+        fn sum_float(a: float, b: float) -> float {
+            return Numeric::add(a, b);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "impl Numeric for f32" in generated_code
+    assert "impl Numeric for i32" in generated_code
+    assert "pub fn make_float_box(value: f32) -> ScalarBox<f32>" in generated_code
+    assert "pub fn sum_float(a: f32, b: f32) -> f32" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_generic_sqrt_adds_trait_bound_and_smoke_compiles(tmp_path):
+    code = """
+    shader GenericSqrt {
+        trait Numeric {
+            fn add(self, other: Self) -> Self;
+            fn mul(self, other: Self) -> Self;
+            fn zero() -> Self;
+            fn one() -> Self;
+        }
+
+        generic<T: Numeric> fn root_energy(value: T) -> T {
+            return sqrt(value);
+        }
+
+        fn root_float(value: float) -> float {
+            return sqrt(value);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub trait CglSqrt" in generated_code
+    assert "impl CglSqrt for f32" in generated_code
+    assert "impl CglSqrt for i32" in generated_code
+    assert "pub fn root_energy<T: Numeric + CglSqrt>(value: T) -> T" in generated_code
+    assert "return CglSqrt::cgl_sqrt(value);" in generated_code
+    assert "pub fn root_float(value: f32) -> f32" in generated_code
+    assert "return sqrt(value);" in generated_code
+    assert "pub fn root_float<T" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_generated_structs_emit_new_constructors_and_smoke_compile(tmp_path):
+    code = """
+    shader StructConstructors {
+        uniform float weight;
+
+        generic<T> struct Vec3 {
+            x: T;
+            y: T;
+            z: T;
+        }
+
+        struct Packed {
+            color: Vec3<float>;
+            weight: float;
+        }
+
+        fn make_vec() -> Vec3<float> {
+            return vec3(1.0, 2.0, 3.0);
+        }
+
+        fn make_packed() -> Packed {
+            return Packed::new(vec3(0.25, 0.5, 0.75), 1.0);
+        }
+
+        fn shade(light: vec3) -> vec3 {
+            let unit = normalize(light);
+            return vec3(unit.x, unit.y, unit.z);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "impl<T> Vec3<T> {" in generated_code
+    assert "pub fn new(x: T, y: T, z: T) -> Self" in generated_code
+    assert "impl Packed {" in generated_code
+    assert "pub fn new(color: Vec3<f32>, weight_value: f32) -> Self" in generated_code
+    assert "Self { color, weight: weight_value }" in generated_code
+    assert "return Vec3::<f32>::new(1.0, 2.0, 3.0);" in generated_code
+    assert (
+        "return Packed::new(Vec3::<f32>::new(0.25, 0.5, 0.75), 1.0);" in generated_code
+    )
+    assert "pub fn shade(light: math::Vec3<f32>) -> math::Vec3<f32>" in generated_code
+    assert "let unit: math::Vec3<f32> = normalize(light);" in generated_code
+    assert "return math::Vec3::<f32>::new(unit.x, unit.y, unit.z);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_nested_enum_wrapper_structs_emit_rust_enums():
+    code = """
+    shader GenericWrappers {
+        generic<T> struct Option {
+            enum OptionType {
+                Some(T),
+                None
+            }
+            OptionType variant;
+        }
+
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum Option<T>" in generated_code
+    )
+    assert "Some(T)," in generated_code
+    assert "    #[default]\n    None," in generated_code
+    assert "#[derive(Debug, Clone, Copy)]\npub enum Result<T, E>" in generated_code
+    assert "Ok(T)," in generated_code
+    assert "Err(E)," in generated_code
+    assert "impl<T: Default, E: Default> Default for Result<T, E>" in generated_code
+    assert "Self::Ok(Default::default())" in generated_code
+    assert "pub struct Option<T>" not in generated_code
+    assert "pub struct Result<T, E>" not in generated_code
+    assert "pub variant: OptionType," not in generated_code
+    assert "pub variant: ResultType," not in generated_code
+
+
+def test_top_level_enums_emit_rust_variants():
+    code = """
+    shader EnumCases {
+        enum MathError {
+            DivisionByZero,
+            InvalidInput
+        }
+
+        enum LightingModel {
+            Phong { ambient: vec3, shininess: float },
+            Toon { base_color: vec3 }
+        }
+
+        enum ShaderError {
+            MathError(MathError),
+            TextureError(str),
+            InvalidState
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum MathError {" in generated_code
+    )
+    assert "    #[default]\n    DivisionByZero," in generated_code
+    assert "DivisionByZero," in generated_code
+    assert "InvalidInput," in generated_code
+    assert "#[derive(Debug, Clone, Copy)]\npub enum LightingModel {" in generated_code
+    assert "Phong { ambient: Vec3<f32>, shininess: f32 }," in generated_code
+    assert "Toon { base_color: Vec3<f32> }," in generated_code
+    assert "impl Default for LightingModel {" in generated_code
+    assert (
+        "Self::Phong { ambient: Default::default(), " "shininess: Default::default() }"
+    ) in generated_code
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum ShaderError {"
+        in generated_code
+    )
+    assert "MathError(MathError)," in generated_code
+    assert "TextureError(&'static str)," in generated_code
+    assert "    #[default]\n    InvalidState," in generated_code
+    assert "InvalidState," in generated_code
+
+
+def test_top_level_enum_discriminants_emit_rust_values():
+    code = """
+    shader EnumCases {
+        enum OpCode {
+            Add = 1,
+            Multiply = 2
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub enum OpCode {" in generated_code
+    assert "Add = 1," in generated_code
+    assert "Multiply = 2," in generated_code
+
+
+def test_advanced_generic_pattern_matching_example_emits_referenced_enums():
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "examples/advanced/GenericPatternMatching.cgl").read_text()
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum Option<T>" in generated_code
+    )
+    assert "    #[default]\n    None," in generated_code
+    assert "#[derive(Debug, Clone, Copy)]\npub enum Result<T, E>" in generated_code
+    assert "impl<T: Default, E: Default> Default for Result<T, E>" in generated_code
+    assert "pub struct Option<T>" not in generated_code
+    assert "pub struct Result<T, E>" not in generated_code
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum MathError {" in generated_code
+    )
+    assert "DivisionByZero," in generated_code
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum ShaderError {"
+        in generated_code
+    )
+    assert "TextureError(&'static str)," in generated_code
+    assert "#[derive(Debug, Clone, Copy)]\npub enum LightingModel {" in generated_code
+    assert "impl Default for LightingModel {" in generated_code
+    assert (
+        "PBR { albedo: math::Vec3<f32>, metallic: f32, roughness: f32, ao: f32 },"
+        in generated_code
+    )
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum VectorOp {" in generated_code
+    )
+    assert "Normalize," in generated_code
+    assert "pub struct Geometry {" in generated_code
+    assert "pub struct Material {" in generated_code
+    assert (
+        "pub fn validate_material(material: Material) -> Result<i32, ShaderError>"
+        in generated_code
+    )
+    assert "match validate_material(material)" in generated_code
+    assert "material.validate()" not in generated_code
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum RenderOutput {"
+        in generated_code
+    )
+    assert "Success(RenderedFrame)," in generated_code
+    assert "Clear { color: Vec4<f32>, depth: f32 }," in generated_code
+
+
+def test_advanced_generic_pattern_matching_example_smoke_compiles(tmp_path):
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "examples/advanced/GenericPatternMatching.cgl").read_text()
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_generated_rust_enum_defaults_smoke_compile_with_rustc(tmp_path):
+    code = """
+    shader EnumSmoke {
+        generic<T> struct Option {
+            enum OptionType {
+                Some(T),
+                None
+            }
+            OptionType variant;
+        }
+
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero,
+            InvalidInput
+        }
+
+        enum LightingModel {
+            Phong { ambient: vec3, shininess: float },
+            Toon { base_color: vec3 }
+        }
+
+        struct RenderState {
+            Option<int> material_id;
+            Result<int, MathError> status;
+            LightingModel lighting_model;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_unsized_cbuffer_arrays_do_not_derive_copy():
     code = """
     cbuffer DynamicBlock {
@@ -105,8 +837,8 @@ def test_unsized_cbuffer_arrays_do_not_derive_copy():
     assert "#[derive(Debug, Clone, Copy)]" not in generated_code
     assert "pub weights: Vec<f32>," in generated_code
     assert "pub colors: [Vec3<f32>; 2]," in generated_code
-    assert "static weights: Vec<f32> = Vec::new();" in generated_code
-    assert "static weights: Vec<f32> = Default::default();" not in generated_code
+    assert "static WEIGHTS: Vec<f32> = Vec::new();" in generated_code
+    assert "static WEIGHTS: Vec<f32> = Default::default();" not in generated_code
 
 
 def test_cbuffer_scalar_statics_use_const_default_literals():
@@ -126,15 +858,15 @@ def test_cbuffer_scalar_statics_use_const_default_literals():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "static exposure: f32 = 0.0;" in generated_code
-    assert "static count: i32 = 0;" in generated_code
-    assert "static mask: u32 = 0;" in generated_code
-    assert "static enabled: bool = false;" in generated_code
-    assert "static values: [f32; 4] = [0.0; 4];" in generated_code
-    assert "static indices: [i32; 2] = [0; 2];" in generated_code
-    assert "static flags: [bool; 3] = [false; 3];" in generated_code
-    assert "static exposure: f32 = Default::default();" not in generated_code
-    assert "static values: [f32; 4] = Default::default();" not in generated_code
+    assert "static EXPOSURE: f32 = 0.0;" in generated_code
+    assert "static COUNT: i32 = 0;" in generated_code
+    assert "static MASK: u32 = 0;" in generated_code
+    assert "static ENABLED: bool = false;" in generated_code
+    assert "static VALUES: [f32; 4] = [0.0; 4];" in generated_code
+    assert "static INDICES: [i32; 2] = [0; 2];" in generated_code
+    assert "static FLAGS: [bool; 3] = [false; 3];" in generated_code
+    assert "static EXPOSURE: f32 = Default::default();" not in generated_code
+    assert "static VALUES: [f32; 4] = Default::default();" not in generated_code
 
 
 def test_vector_matrix_array_statics_use_zeroed_static_fallback():
@@ -155,29 +887,323 @@ def test_vector_matrix_array_statics_use_zeroed_static_fallback():
     generated_code = generate_code(ast)
 
     assert (
-        "static globalDirs: [Vec3<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static GLOBAL_DIRS: [Vec3<f32>; 2] = " "unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static globalPrecise: [Vec2<f64>; 3] = " "unsafe { std::mem::zeroed() };"
+        "static GLOBAL_PRECISE: [Vec2<f64>; 3] = " "unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static globalTransforms: [Mat4<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static GLOBAL_TRANSFORMS: [Mat4<f32>; 2] = " "unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static directions: [Vec3<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static DIRECTIONS: [Vec3<f32>; 2] = " "unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static transforms: [Mat4<f32>; 2] = " "unsafe { std::mem::zeroed() };"
+        "static TRANSFORMS: [Mat4<f32>; 2] = " "unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static precise: [Vec2<f64>; 3] = " "unsafe { std::mem::zeroed() };"
+        "static PRECISE: [Vec2<f64>; 3] = " "unsafe { std::mem::zeroed() };"
     ) in generated_code
     assert (
-        "static globalDirs: [Vec3<f32>; 2] = Default::default();" not in generated_code
+        "static GLOBAL_DIRS: [Vec3<f32>; 2] = Default::default();" not in generated_code
     )
     assert (
-        "static transforms: [Mat4<f32>; 2] = Default::default();" not in generated_code
+        "static TRANSFORMS: [Mat4<f32>; 2] = Default::default();" not in generated_code
     )
+
+
+def test_default_composite_statics_use_lazy_lock():
+    code = """
+    vec3 direction;
+    mat4 transform;
+
+    cbuffer Material {
+        vec3 tint;
+        mat4 model;
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "static DIRECTION: std::sync::LazyLock<Vec3<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert (
+        "static TRANSFORM: std::sync::LazyLock<Mat4<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert (
+        "static TINT: std::sync::LazyLock<Vec3<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert (
+        "static MODEL: std::sync::LazyLock<Mat4<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert "static DIRECTION: Vec3<f32> = Default::default();" not in generated_code
+    assert "static MODEL: Mat4<f32> = Default::default();" not in generated_code
+
+
+def test_lazy_lock_static_use_sites_are_dereferenced():
+    code = """
+    vec3 direction;
+    float values[] = {1.0, 2.0};
+
+    shader LazyUse {
+        compute {
+            float main() {
+                return direction.x + values[0];
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return ((*DIRECTION).x + (*VALUES)[0]);" in generated_code
+    assert "direction.x + values[0]" not in generated_code
+
+
+def test_colliding_static_symbol_names_are_suffixed_and_referenced():
+    code = """
+    float fooBar = 1.0;
+    float foo_bar = 2.0;
+    vec3 lightDir;
+    vec3 light_dir;
+
+    shader StaticCollision {
+        compute {
+            float main() {
+                return fooBar + foo_bar + lightDir.x + light_dir.y;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static FOO_BAR: f32 = 1.0;" in generated_code
+    assert "static FOO_BAR_2: f32 = 2.0;" in generated_code
+    assert "static LIGHT_DIR: std::sync::LazyLock<Vec3<f32>>" in generated_code
+    assert "static LIGHT_DIR_2: std::sync::LazyLock<Vec3<f32>>" in generated_code
+    assert (
+        "return (((FOO_BAR + FOO_BAR_2) + (*LIGHT_DIR).x) + (*LIGHT_DIR_2).y);"
+        in generated_code
+    )
+    assert "static FOO_BAR: f32 = 2.0;" not in generated_code
+    assert "fooBar + foo_bar" not in generated_code
+
+
+def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced():
+    code = """
+    vec3 direction;
+
+    shader LazyUse {
+        compute {
+            vec3 main() {
+                vec3 direction = vec3(1.0, 2.0, 3.0);
+                return direction;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let direction: Vec3<f32>" in generated_code
+    assert "return direction;" in generated_code
+    assert "return *direction;" not in generated_code
+
+
+def test_generated_rust_lazy_lock_statics_smoke_compile_with_rustc(tmp_path):
+    shaders = [
+        """
+        vec3 direction;
+        float values[] = {1.0, 2.0};
+
+        shader LazyUse {
+            compute {
+                float main(int index) {
+                    return direction.x + values[index];
+                }
+            }
+        }
+        """,
+        """
+        sampler3D volumeMap;
+
+        shader TextureUse {
+            fragment {
+                vec4 main(vec3 uv) @ gl_FragColor {
+                    return texture(volumeMap, uv);
+                }
+            }
+        }
+        """,
+        """
+        shader MatrixUse {
+            vertex {
+                uniform mat4 transform;
+
+                vec4 main(vec3 position) {
+                    transform * vec4(position, 1.0)
+                }
+            }
+        }
+        """,
+    ]
+
+    for shader in shaders:
+        generated_code = generate_code(parse_code(tokenize_code(shader)))
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_generated_rust_match_expressions_smoke_compile_with_rustc(tmp_path):
+    shaders = [
+        """
+        shader MatchSmoke {
+            generic<T, E> struct Result {
+                enum ResultType {
+                    Ok(T),
+                    Err(E)
+                }
+                ResultType variant;
+            }
+
+            enum MathError {
+                InvalidInput
+            }
+
+            enum VectorOp {
+                Add,
+                Cross
+            }
+
+            fn convert(op: VectorOp) -> Result<int, MathError> {
+                match op {
+                    VectorOp::Add => Result::Ok(1),
+                    _ => Result::Err(MathError::InvalidInput),
+                }
+            }
+        }
+        """,
+        """
+        shader MatchInitSmoke {
+            enum Mode {
+                Bright,
+                Dark
+            }
+
+            fn choose(mode: Mode) -> vec3 {
+                let color = match mode {
+                    Mode::Bright => vec3(1.0, 1.0, 1.0),
+                    _ => vec3(0.0, 0.0, 0.0),
+                };
+                color
+            }
+        }
+        """,
+    ]
+
+    for shader in shaders:
+        generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+        assert "match " in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_generated_rust_rich_match_patterns_smoke_compile_with_rustc(tmp_path):
+    code = """
+    shader RichPatternSmoke {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum MathError {
+            InvalidInput
+        }
+
+        enum LightingModel {
+            Phong {
+                ambient: vec3,
+                diffuse: vec3,
+                specular: vec3,
+                shininess: float
+            },
+            Toon { base_color: vec3 }
+        }
+
+        fn unwrap_result(result: Result<int, MathError>) -> int {
+            match result {
+                Result::Ok(value) => value,
+                Result::Err(_) => 0,
+            }
+        }
+
+        fn classify_model(model: LightingModel) -> int {
+            match model {
+                LightingModel::Phong { ambient, diffuse, specular, shininess } if shininess > 0.0 => 1,
+                LightingModel::Toon { base_color, .. } => 2,
+            }
+        }
+
+        fn guarded_literal(mode: int) -> int {
+            match mode {
+                0 if mode > 0 => 1,
+                _ => 2,
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Result::Ok(value) =>" in generated_code
+    assert "Result::Err(_) =>" in generated_code
+    assert (
+        "LightingModel::Phong { ambient: _ambient, diffuse: _diffuse, "
+        "specular: _specular, shininess } if (shininess > 0.0) =>" in generated_code
+    )
+    assert "LightingModel::Toon { base_color: _base_color, .. } =>" in generated_code
+    assert "0 if (mode > 0) =>" in generated_code
+    assert "_ => unreachable!()," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_generated_rust_duplicate_stage_main_names_smoke_compile_with_rustc(tmp_path):
+    code = """
+    shader MultiStageSmoke {
+        vertex {
+            vec4 main(vec3 position) {
+                vec4(position, 1.0)
+            }
+        }
+
+        fragment {
+            vec4 main(vec4 color) {
+                color
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn vertex_main(position: Vec3<f32>) -> Vec4<f32>" in generated_code
+    assert "pub fn fragment_main(color: Vec4<f32>) -> Vec4<f32>" in generated_code
+    assert "pub fn main(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock():
@@ -197,35 +1223,37 @@ def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock():
     generated_code = generate_code(ast)
 
     assert (
-        "static globalDirs: std::sync::LazyLock<[Vec3<f32>; 3]> = "
+        "static GLOBAL_DIRS: std::sync::LazyLock<[Vec3<f32>; 3]> = "
         "std::sync::LazyLock::new(|| ["
         "Vec3::<f32>::new(1.0, 0.0, 0.0), "
         "Vec3::<f32>::new(0.0, 1.0, 0.0), "
         "unsafe { std::mem::zeroed() }]);"
     ) in generated_code
     assert (
-        "static preciseDirs: std::sync::LazyLock<[Vec2<f64>; 2]> = "
+        "static PRECISE_DIRS: std::sync::LazyLock<[Vec2<f64>; 2]> = "
         "std::sync::LazyLock::new(|| ["
         "Vec2::<f64>::new(1.0, 2.0), "
         "unsafe { std::mem::zeroed() }]);"
     ) in generated_code
     assert (
-        "static transforms: std::sync::LazyLock<[Mat2<f32>; 2]> = "
+        "static TRANSFORMS: std::sync::LazyLock<[Mat2<f32>; 2]> = "
         "std::sync::LazyLock::new(|| ["
         "Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0), "
         "unsafe { std::mem::zeroed() }]);"
     ) in generated_code
     assert (
-        "static dynamicWeights: std::sync::LazyLock<Vec<f32>> = "
+        "static DYNAMIC_WEIGHTS: std::sync::LazyLock<Vec<f32>> = "
         "std::sync::LazyLock::new(|| vec![1.0, 2.0]);"
     ) in generated_code
     assert (
-        "static dynamicDirs: std::sync::LazyLock<Vec<Vec3<f32>>> = "
+        "static DYNAMIC_DIRS: std::sync::LazyLock<Vec<Vec3<f32>>> = "
         "std::sync::LazyLock::new(|| "
         "vec![Vec3::<f32>::new(0.0, 0.0, 1.0)]);"
     ) in generated_code
-    assert "static globalDirs: [Vec3<f32>; 3] = [Vec3::<f32>::new" not in generated_code
-    assert "static dynamicWeights: Vec<f32> = vec!" not in generated_code
+    assert (
+        "static GLOBAL_DIRS: [Vec3<f32>; 3] = [Vec3::<f32>::new" not in generated_code
+    )
+    assert "static DYNAMIC_WEIGHTS: Vec<f32> = vec!" not in generated_code
 
 
 def test_legacy_global_array_nodes_emit_static_declarations():
@@ -252,10 +1280,10 @@ def test_legacy_global_array_nodes_emit_static_declarations():
 
     generated_code = generate_code(ast)
 
-    assert "static weights: [f32; 4] = [0.0; 4];" in generated_code
-    assert "static indices: [i32; 2] = [0; 2];" in generated_code
-    assert "static dynamicWeights: Vec<f32> = Vec::new();" in generated_code
-    assert "static initialized: [f32; 4] = [1.0, 2.0, 0.0, 0.0];" in generated_code
+    assert "static WEIGHTS: [f32; 4] = [0.0; 4];" in generated_code
+    assert "static INDICES: [i32; 2] = [0; 2];" in generated_code
+    assert "static DYNAMIC_WEIGHTS: Vec<f32> = Vec::new();" in generated_code
+    assert "static INITIALIZED: [f32; 4] = [1.0, 2.0, 0.0, 0.0];" in generated_code
     assert "\nlet weights:" not in generated_code
     assert "\nlet initialized:" not in generated_code
 
@@ -288,7 +1316,8 @@ def test_basic_shader():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert generated_code is not None
-        assert "fn main(" in generated_code
+        assert "fn vertex_main(" in generated_code
+        assert "fn fragment_main(" in generated_code
         assert "#[vertex_shader]" in generated_code
         assert "#[fragment_shader]" in generated_code
         print(generated_code)
@@ -387,9 +1416,15 @@ def test_sampler3d_maps_to_texture3d_in_rust():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "static volumeMap: Texture3D<f32> = Default::default();" in generated_code
-    assert "static volumeMap: sampler3D" not in generated_code
-    assert "return sample(volumeMap, uv);" in generated_code
+    assert (
+        "static VOLUME_MAP: std::sync::LazyLock<Texture3D<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert (
+        "static VOLUME_MAP: Texture3D<f32> = Default::default();" not in generated_code
+    )
+    assert "static VOLUME_MAP: sampler3D" not in generated_code
+    assert "return sample(*VOLUME_MAP, uv);" in generated_code
 
 
 def test_for_statement():
@@ -681,14 +1716,14 @@ def test_increment_and_decrement_initializers_preserve_rust_value_order():
             for current, following in zip(lines, lines[1:])
         )
 
-    assert contains_adjacent("i += 1;", "let mut pre: i32 = i;")
-    assert contains_adjacent("let mut post: i32 = i;", "i += 1;")
-    assert contains_adjacent("i -= 1;", "let mut pre_dec: i32 = i;")
-    assert contains_adjacent("let mut post_dec: i32 = i;", "i -= 1;")
-    assert "let mut pre: i32 = i += 1;" not in generated_code
-    assert "let mut post: i32 = i += 1;" not in generated_code
-    assert "let mut pre_dec: i32 = i -= 1;" not in generated_code
-    assert "let mut post_dec: i32 = i -= 1;" not in generated_code
+    assert contains_adjacent("i += 1;", "let pre: i32 = i;")
+    assert contains_adjacent("let post: i32 = i;", "i += 1;")
+    assert contains_adjacent("i -= 1;", "let pre_dec: i32 = i;")
+    assert contains_adjacent("let post_dec: i32 = i;", "i -= 1;")
+    assert "let pre: i32 = i += 1;" not in generated_code
+    assert "let post: i32 = i += 1;" not in generated_code
+    assert "let pre_dec: i32 = i -= 1;" not in generated_code
+    assert "let post_dec: i32 = i -= 1;" not in generated_code
 
 
 def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
@@ -756,14 +1791,43 @@ def test_bool_string_and_char_literals_emit_rust_syntax():
 
     generated_code = generate_code(ast)
 
-    assert "let mut enabled: bool = true;" in generated_code
-    assert "let mut disabled: bool = false;" in generated_code
+    assert "let enabled: bool = true;" in generated_code
+    assert "let disabled: bool = false;" in generated_code
     assert 'let mut label: &\'static str = "debug";' in generated_code
     assert "let mut marker: char = 'x';" in generated_code
     assert 'label = "active";' in generated_code
     assert "marker = 'y';" in generated_code
     assert "True" not in generated_code
     assert "False" not in generated_code
+
+
+def test_local_bindings_are_mutable_only_when_reassigned_or_mutated():
+    code = """
+    shader LocalMutability {
+        struct Output {
+            value: int;
+        }
+
+        void main(int index) {
+            int immutableValue = 1;
+            int reassignedValue = 2;
+            Output output;
+            float values[2];
+
+            reassignedValue = immutableValue;
+            output.value = reassignedValue;
+            values[index] = 1.0;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let immutableValue: i32 = 1;" in generated_code
+    assert "let mut reassignedValue: i32 = 2;" in generated_code
+    assert "let mut output: Output = Default::default();" in generated_code
+    assert "let mut values: [f32; 2];" in generated_code
+    assert "let mut immutableValue" not in generated_code
 
 
 def test_direct_literal_nodes_emit_rust_escaping():
@@ -893,6 +1957,125 @@ def test_builtin_function_call_names_are_mapped():
     assert "saturate(" not in generated_code
 
 
+def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_path):
+    code = """
+    shader BuiltinInference {
+        fragment {
+            uniform sampler2D main_texture;
+
+            vec4 main(vec3 normal, vec3 light, vec3 albedo, vec2 uv) {
+                let unit = normalize(normal);
+                let reflected = reflect(-unit, light);
+                let ndotl = max(0.0, dot(reflected, light));
+                let gloss = pow(ndotl, 2.0);
+                let quantized = floor(gloss);
+                let smoothed = smoothstep(0.0, 1.0, quantized);
+                let mixed = mix(vec3(0.04), albedo, smoothed);
+                let tex = texture(main_texture, uv);
+                let color = mixed + tex.rgb * smoothed;
+                return vec4(color, tex.a);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let unit: Vec3<f32> = normalize(normal);" in generated_code
+    assert "let reflected: Vec3<f32> = reflect((-unit), light);" in generated_code
+    assert "let ndotl: f32 = max(0.0, dot(reflected, light));" in generated_code
+    assert "let mixed: Vec3<f32> = lerp(" in generated_code
+    assert "let tex: Vec4<f32> = sample(*MAIN_TEXTURE, uv);" in generated_code
+    assert "let unit: f32 = normalize" not in generated_code
+    assert "let reflected: f32 = reflect" not in generated_code
+    assert "let mixed: f32 = lerp" not in generated_code
+    assert "let tex: f32 = sample" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_scalar_left_vector_arithmetic_lowers_to_lane_constructors(tmp_path):
+    code = """
+    shader ScalarVectorOps {
+        fragment {
+            float nextScale() {
+                return 1.0;
+            }
+
+            vec3 nextColor() {
+                return vec3(0.25, 0.5, 0.75);
+            }
+
+            vec4 main(vec3 color, float exposure) {
+                let inverted = 1.0 - color;
+                let reciprocal = 1.0 / color;
+                let scaled = exposure * color;
+                let shifted = exposure + color;
+                let complex = nextScale() - nextColor();
+                let combined = inverted + reciprocal + scaled + shifted + complex;
+                return vec4(combined, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let inverted: Vec3<f32> = "
+        "Vec3::<f32>::new((1.0 - color.x), (1.0 - color.y), (1.0 - color.z));"
+        in generated_code
+    )
+    assert (
+        "let reciprocal: Vec3<f32> = "
+        "Vec3::<f32>::new((1.0 / color.x), (1.0 / color.y), (1.0 / color.z));"
+        in generated_code
+    )
+    assert (
+        "let scaled: Vec3<f32> = "
+        "Vec3::<f32>::new((exposure * color.x), "
+        "(exposure * color.y), (exposure * color.z));" in generated_code
+    )
+    assert (
+        "let shifted: Vec3<f32> = "
+        "Vec3::<f32>::new((exposure + color.x), "
+        "(exposure + color.y), (exposure + color.z));" in generated_code
+    )
+    assert (
+        "let complex: Vec3<f32> = "
+        "{ let __cgl_vec_arg_0 = nextScale(); let __cgl_vec_arg_1 = nextColor(); "
+        "Vec3::<f32>::new((__cgl_vec_arg_0 - __cgl_vec_arg_1.x), "
+        "(__cgl_vec_arg_0 - __cgl_vec_arg_1.y), "
+        "(__cgl_vec_arg_0 - __cgl_vec_arg_1.z)) };" in generated_code
+    )
+    assert "(1.0 - color)" not in generated_code
+    assert "(1.0 / color)" not in generated_code
+    assert "(exposure * color)" not in generated_code
+    assert "(exposure + color)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_lambda_call_emits_native_rust_closure():
+    code = """
+    shader main {
+        void apply(Values values) {
+            let mapped = map(values, lambda(x, { prepare(x); return (x + 1); }));
+            let folded = fold(values, 0, lambda(int acc, int x, (acc + x)));
+            let parsed = map(values, lambda(Result<i32, i32> value, { return value; }));
+            let always = lambda(true);
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(code)
+    generated_code = generate_code(ast)
+
+    assert "map(values, |x| { prepare(x); return (x + 1); })" in generated_code
+    assert "fold(values, 0, |acc: i32, x: i32| (acc + x))" in generated_code
+    assert "map(values, |value: Result<i32, i32>| { return value; })" in generated_code
+    assert "|| true" in generated_code
+    assert "lambda(" not in generated_code
+
+
 def test_user_defined_mix_function_is_not_lowered_to_lerp():
     code = """
     shader main {
@@ -914,8 +2097,96 @@ def test_user_defined_mix_function_is_not_lowered_to_lerp():
     generated_code = generate_code(ast)
 
     assert "pub fn mix(x: f32, y: f32, t: f32) -> f32" in generated_code
-    assert "let mut adjusted: f32 = mix(0.0, 1.0, 0.25);" in generated_code
-    assert "let mut adjusted: f32 = lerp(0.0, 1.0, 0.25);" not in generated_code
+    assert "let adjusted: f32 = mix(0.0, 1.0, 0.25);" in generated_code
+    assert "let adjusted: f32 = lerp(0.0, 1.0, 0.25);" not in generated_code
+
+
+def test_bool_scalar_mix_lowers_to_rust_select():
+    code = """
+    shader main {
+        fragment {
+            float nextX() {
+                return 0.0;
+            }
+
+            float nextY() {
+                return 1.0;
+            }
+
+            bool nextFlag() {
+                return true;
+            }
+
+            float main() {
+                bool flag = true;
+                float literal = mix(0.0, 1.0, flag);
+                float complexValue = mix(nextX(), nextY(), nextFlag());
+                return literal + complexValue;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let literal: f32 = (if flag { 1.0 } else { 0.0 });" in generated_code
+    assert (
+        "let complexValue: f32 = "
+        "(if nextFlag() { nextY() } else { nextX() });" in generated_code
+    )
+    assert "lerp(0.0, 1.0, flag)" not in generated_code
+    assert "lerp(nextX(), nextY(), nextFlag())" not in generated_code
+    assert "mix(0.0, 1.0, flag)" not in generated_code
+    assert "mix(nextX(), nextY(), nextFlag())" not in generated_code
+
+
+def test_bool_vector_mix_lowers_to_rust_lane_selectors():
+    code = """
+    bvec3 makeMask() {
+        return bvec3(true, false, true);
+    }
+
+    vec3 makeA() {
+        return vec3(1.0, 2.0, 3.0);
+    }
+
+    vec3 makeB() {
+        return vec3(4.0, 5.0, 6.0);
+    }
+
+    void probe(bvec3 mask, vec3 a, vec3 b) {
+        vec3 selected = mix(a, b, mask);
+        vec3 complexSelected = mix(makeA(), makeB(), makeMask());
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "let selected: Vec3<f32> = "
+        "Vec3::<f32>::new((if mask.x { b.x } else { a.x }), "
+        "(if mask.y { b.y } else { a.y }), "
+        "(if mask.z { b.z } else { a.z }));" in generated_code
+    )
+    assert (
+        "let complexSelected: Vec3<f32> = "
+        "{ let __cgl_vec_arg_0 = makeMask(); let __cgl_vec_arg_1 = makeB(); "
+        "let __cgl_vec_arg_2 = makeA(); "
+        "Vec3::<f32>::new((if __cgl_vec_arg_0.x { __cgl_vec_arg_1.x } "
+        "else { __cgl_vec_arg_2.x }), "
+        "(if __cgl_vec_arg_0.y { __cgl_vec_arg_1.y } "
+        "else { __cgl_vec_arg_2.y }), "
+        "(if __cgl_vec_arg_0.z { __cgl_vec_arg_1.z } "
+        "else { __cgl_vec_arg_2.z })) };" in generated_code
+    )
+    assert "lerp(a, b, mask)" not in generated_code
+    assert "lerp(makeA(), makeB(), makeMask())" not in generated_code
+    assert "mix(a, b, mask)" not in generated_code
+    assert "mix(makeA(), makeB(), makeMask())" not in generated_code
 
 
 def test_user_defined_function_call_scalar_args_cast_to_param_types():
@@ -939,12 +2210,12 @@ def test_user_defined_function_call_scalar_args_cast_to_param_types():
         "enabled: bool) -> f32" in generated_code
     )
     assert (
-        "let mut result: f32 = "
+        "let result: f32 = "
         "takesScalars((index as f32), (weight as f64), "
         "(index as u32), (index != 0));" in generated_code
     )
     assert (
-        "let mut fromBool: f32 = "
+        "let fromBool: f32 = "
         "takesScalars((if ready { 1.0 } else { 0.0 }), "
         "(1.0 as f64), 2, ready);" in generated_code
     )
@@ -974,12 +2245,12 @@ def test_user_defined_function_call_vector_args_cast_to_param_types():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut same: f32 = "
+        "let same: f32 = "
         "consumeVectors(amount, Vec3::<u32>::new(1, 2, 3), "
         "Vec2::<bool>::new(ready, false));" in generated_code
     )
     assert (
-        "let mut converted: f32 = "
+        "let converted: f32 = "
         "consumeVectors(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)), "
         "Vec3::<u32>::new((weights.x as u32), (weights.y as u32), "
         "(weights.z as u32)), "
@@ -1020,12 +2291,9 @@ def test_user_defined_function_call_matrix_args_cast_to_param_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    assert "let same: f32 = consumeMatrices(preciseInput, transform);" in generated_code
     assert (
-        "let mut same: f32 = consumeMatrices(preciseInput, transform);"
-        in generated_code
-    )
-    assert (
-        "let mut converted: f32 = "
+        "let converted: f32 = "
         "consumeMatrices(Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)), "
@@ -1386,21 +2654,17 @@ def test_double_vector_and_matrix_types_emit_rust_names():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    assert "let preciseUV: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
+    assert "let mask: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
+    assert "let flags: Vec3<bool>;" in generated_code
     assert (
-        "let mut preciseUV: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
-    )
-    assert (
-        "let mut mask: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
-    )
-    assert "let mut flags: Vec3<bool>;" in generated_code
-    assert (
-        "let mut transform: Mat2<f32> = " "Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0);"
+        "let transform: Mat2<f32> = " "Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0);"
     ) in generated_code
-    assert "let mut affine: Mat3x4<f32>;" in generated_code
+    assert "let affine: Mat3x4<f32>;" in generated_code
     assert (
-        "let mut precise: Mat2<f64> = " "Mat2::<f64>::new(1.0, 0.0, 0.0, 1.0);"
+        "let precise: Mat2<f64> = " "Mat2::<f64>::new(1.0, 0.0, 0.0, 1.0);"
     ) in generated_code
-    assert "let mut jacobian: Mat4x3<f64>;" in generated_code
+    assert "let jacobian: Mat4x3<f64>;" in generated_code
     assert "dvec2(" not in generated_code
     assert "bvec2(" not in generated_code
     assert "bool2" not in generated_code
@@ -1432,17 +2696,17 @@ def test_matrix_constructors_flatten_vector_args_once():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut localMatrix: Mat2<f32> = "
+        "let localMatrix: Mat2<f32> = "
         "Mat2::<f32>::new(a.x, a.y, b.x, b.y);" in generated_code
     )
     assert (
-        "let mut complexMatrix: Mat2<f32> = "
+        "let complexMatrix: Mat2<f32> = "
         "{ let __cgl_vec_arg_0 = makeCol0(); let __cgl_vec_arg_1 = makeCol1(); "
         "Mat2::<f32>::new(__cgl_vec_arg_0.x, __cgl_vec_arg_0.y, "
         "__cgl_vec_arg_1.x, __cgl_vec_arg_1.y) };" in generated_code
     )
     assert (
-        "let mut mixedMatrix: Mat2<f32> = "
+        "let mixedMatrix: Mat2<f32> = "
         "{ let __cgl_vec_arg_2 = makeCol0(); "
         "Mat2::<f32>::new(__cgl_vec_arg_2.x, __cgl_vec_arg_2.y, b.x, b.y) };"
         in generated_code
@@ -1466,15 +2730,15 @@ def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut mixedFloat: Mat2<f32> = "
+        "let mixedFloat: Mat2<f32> = "
         "Mat2::<f32>::new(weight, (index as f32), 2.0, 1.0);" in generated_code
     )
     assert (
-        "let mut mixedDouble: Mat2<f64> = "
+        "let mixedDouble: Mat2<f64> = "
         "Mat2::<f64>::new((weight as f64), (index as f64), 2.0, 1.0);" in generated_code
     )
     assert (
-        "let mut fromIntVector: Mat2<f32> = "
+        "let fromIntVector: Mat2<f32> = "
         "{ let __cgl_vec_arg_0 = Vec2::<i32>::new(index, 2); "
         "let __cgl_vec_arg_1 = Vec2::<f32>::new(weight, 1.0); "
         "Mat2::<f32>::new((__cgl_vec_arg_0.x as f32), "
@@ -1504,17 +2768,17 @@ def test_inferred_matrix_constructor_bindings_use_matrix_types():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut transform: Mat2<f32> = "
+        "let transform: Mat2<f32> = "
         "Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
     )
-    assert "let mut affine: Mat3x4<f32> = Mat3x4::<f32>::new(" in generated_code
+    assert "let affine: Mat3x4<f32> = Mat3x4::<f32>::new(" in generated_code
     assert (
-        "let mut precise: Mat2<f64> = "
+        "let precise: Mat2<f64> = "
         "Mat2::<f64>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
     )
-    assert "let mut transform: f32 = Mat2" not in generated_code
-    assert "let mut affine: f32 = Mat3x4" not in generated_code
-    assert "let mut precise: f32 = Mat2::<f64>" not in generated_code
+    assert "let transform: f32 = Mat2" not in generated_code
+    assert "let affine: f32 = Mat3x4" not in generated_code
+    assert "let precise: f32 = Mat2::<f64>" not in generated_code
 
 
 def test_inferred_matrix_binary_bindings_prefer_matrix_operands():
@@ -1532,15 +2796,15 @@ def test_inferred_matrix_binary_bindings_prefer_matrix_operands():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut leftScaled: Mat2<f32> = "
+        "let leftScaled: Mat2<f32> = "
         "(Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0) * 2.0);" in generated_code
     )
     assert (
-        "let mut rightScaled: Mat2<f32> = "
+        "let rightScaled: Mat2<f32> = "
         "(2.0 * Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0));" in generated_code
     )
-    assert "let mut combined: Mat2<f32> = " in generated_code
-    assert "let mut rightScaled: f32 = " not in generated_code
+    assert "let combined: Mat2<f32> = " in generated_code
+    assert "let rightScaled: f32 = " not in generated_code
 
 
 def test_mixed_vector_and_matrix_binary_operands_promote_before_operator():
@@ -1560,42 +2824,42 @@ def test_mixed_vector_and_matrix_binary_operands_promote_before_operator():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut inferredVec: Vec2<f32> = "
+        "let inferredVec: Vec2<f32> = "
         "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + amount);"
         in generated_code
     )
     assert (
-        "let mut inferredVecReverse: Vec2<f32> = "
+        "let inferredVecReverse: Vec2<f32> = "
         "(amount + Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)));"
         in generated_code
     )
     assert (
-        "let mut declaredVec: Vec2<f32> = "
+        "let declaredVec: Vec2<f32> = "
         "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + amount);"
         in generated_code
     )
     assert (
-        "let mut inferredMat: Mat2<f64> = "
+        "let inferredMat: Mat2<f64> = "
         "(Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) + preciseInput);" in generated_code
     )
     assert (
-        "let mut inferredMatReverse: Mat2<f64> = "
+        "let inferredMatReverse: Mat2<f64> = "
         "(preciseInput + Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)));" in generated_code
     )
     assert (
-        "let mut declaredMat: Mat2<f64> = "
+        "let declaredMat: Mat2<f64> = "
         "(Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) + preciseInput);" in generated_code
     )
     assert "(pixel + amount)" not in generated_code
     assert "(transform + preciseInput)" not in generated_code
-    assert "let mut inferredVec: Vec2<i32>" not in generated_code
-    assert "let mut inferredMat: Mat2<f32>" not in generated_code
+    assert "let inferredVec: Vec2<i32>" not in generated_code
+    assert "let inferredMat: Mat2<f32>" not in generated_code
     assert "{ let __cgl_vec_arg_" not in generated_code
     assert "{ let __cgl_mat_arg_" not in generated_code
 
@@ -1630,52 +2894,47 @@ def test_mixed_vector_and_matrix_scalar_binary_operands_cast_to_components():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut inferredVec: Vec2<f32> = "
+        "let inferredVec: Vec2<f32> = "
         "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + weight);"
         in generated_code
     )
     assert (
-        "let mut inferredVecReverse: Vec2<f32> = "
-        "(weight + Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)));"
-        in generated_code
+        "let inferredVecReverse: Vec2<f32> = "
+        "Vec2::<f32>::new((weight + (pixel.x as f32)), "
+        "(weight + (pixel.y as f32)));" in generated_code
     )
     assert (
-        "let mut declaredVec: Vec2<f32> = "
+        "let declaredVec: Vec2<f32> = "
         "(Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32)) + weight);"
         in generated_code
     )
     assert (
-        "let mut inferredDoubleVec: Vec2<f64> = "
+        "let inferredDoubleVec: Vec2<f64> = "
         "(Vec2::<f64>::new((amount.x as f64), (amount.y as f64)) + precise);"
         in generated_code
     )
+    assert "let indexedVec: Vec2<f32> = (amount + (index as f32));" in generated_code
     assert (
-        "let mut indexedVec: Vec2<f32> = (amount + (index as f32));" in generated_code
-    )
-    assert (
-        "let mut inferredMat: Mat2<f64> = "
+        "let inferredMat: Mat2<f64> = "
         "(Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) + precise);" in generated_code
     )
     assert (
-        "let mut inferredMatReverse: Mat2<f64> = "
+        "let inferredMatReverse: Mat2<f64> = "
         "(precise + Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)));" in generated_code
     )
     assert (
-        "let mut declaredMat: Mat2<f64> = "
+        "let declaredMat: Mat2<f64> = "
         "(Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) + precise);" in generated_code
     )
-    assert (
-        "let mut indexedMat: Mat2<f32> = (transform + (index as f32));"
-        in generated_code
-    )
-    assert "let mut sameVec: Vec2<f32> = (amount + weight);" in generated_code
-    assert "let mut sameMat: Mat2<f64> = (preciseInput + precise);" in generated_code
+    assert "let indexedMat: Mat2<f32> = (transform + (index as f32));" in generated_code
+    assert "let sameVec: Vec2<f32> = (amount + weight);" in generated_code
+    assert "let sameMat: Mat2<f64> = (preciseInput + precise);" in generated_code
     assert "(pixel + weight)" not in generated_code
     assert "(transform + precise)" not in generated_code
     assert "{ let __cgl_vec_arg_" not in generated_code
@@ -1711,52 +2970,52 @@ def test_matrix_vector_binary_operands_promote_components_and_result_size():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut inferredMatVec: Vec2<f64> = "
+        "let inferredMatVec: Vec2<f64> = "
         "(Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) * preciseAmount);" in generated_code
     )
     assert (
-        "let mut inferredMatVecReverseComponents: Vec2<f64> = "
+        "let inferredMatVecReverseComponents: Vec2<f64> = "
         "(preciseTransform * Vec2::<f64>::new((amount.x as f64), "
         "(amount.y as f64)));" in generated_code
     )
     assert (
-        "let mut inferredMatIntVec: Vec2<f32> = "
+        "let inferredMatIntVec: Vec2<f32> = "
         "(transform * Vec2::<f32>::new((pixel.x as f32), "
         "(pixel.y as f32)));" in generated_code
     )
     assert (
-        "let mut declaredMatVec: Vec2<f64> = "
+        "let declaredMatVec: Vec2<f64> = "
         "(Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) * Vec2::<f64>::new((amount.x as f64), "
         "(amount.y as f64)));" in generated_code
     )
     assert (
-        "let mut inferredVecMat: Vec2<f64> = "
+        "let inferredVecMat: Vec2<f64> = "
         "(preciseAmount * Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)));" in generated_code
     )
     assert (
-        "let mut inferredVecMatReverseComponents: Vec2<f64> = "
+        "let inferredVecMatReverseComponents: Vec2<f64> = "
         "(Vec2::<f64>::new((amount.x as f64), (amount.y as f64)) "
         "* preciseTransform);" in generated_code
     )
     assert (
-        "let mut declaredVecMat: Vec2<f64> = "
+        "let declaredVecMat: Vec2<f64> = "
         "(Vec2::<f64>::new((amount.x as f64), (amount.y as f64)) "
         "* Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)));" in generated_code
     )
-    assert "let mut rectMatVec: Vec3<f32> = (affine * uv);" in generated_code
-    assert "let mut rectVecMat: Vec2<f32> = (normal * affine);" in generated_code
-    assert "let mut inferredMatVecReverseComponents: Vec2<f32>" not in generated_code
-    assert "let mut inferredMatIntVec: Vec2<i32>" not in generated_code
-    assert "let mut rectMatVec: Vec2<f32>" not in generated_code
-    assert "let mut rectVecMat: Vec3<f32>" not in generated_code
+    assert "let rectMatVec: Vec3<f32> = (affine * uv);" in generated_code
+    assert "let rectVecMat: Vec2<f32> = (normal * affine);" in generated_code
+    assert "let inferredMatVecReverseComponents: Vec2<f32>" not in generated_code
+    assert "let inferredMatIntVec: Vec2<i32>" not in generated_code
+    assert "let rectMatVec: Vec2<f32>" not in generated_code
+    assert "let rectVecMat: Vec3<f32>" not in generated_code
     assert "{ let __cgl_vec_arg_" not in generated_code
     assert "{ let __cgl_mat_arg_" not in generated_code
 
@@ -1797,50 +3056,48 @@ def test_vector_comparison_binary_operands_emit_boolean_lanes():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut scalarCompare: bool = ((index as f32) < weight);" in generated_code
-    assert "let mut scalarEqual: bool = (count == (index as u32));" in generated_code
+    assert "let scalarCompare: bool = ((index as f32) < weight);" in generated_code
+    assert "let scalarEqual: bool = (count == (index as u32));" in generated_code
+    assert "let declaredCompare: bool = ((index as f64) < precise);" in generated_code
     assert (
-        "let mut declaredCompare: bool = ((index as f64) < precise);" in generated_code
-    )
-    assert (
-        "let mut vectorEqual: Vec2<bool> = "
+        "let vectorEqual: Vec2<bool> = "
         "Vec2::<bool>::new(((pixel.x as f32) == amount.x), "
         "((pixel.y as f32) == amount.y));" in generated_code
     )
     assert (
-        "let mut vectorNotEqual: Vec2<bool> = "
+        "let vectorNotEqual: Vec2<bool> = "
         "Vec2::<bool>::new((amount.x != (pixel.x as f32)), "
         "(amount.y != (pixel.y as f32)));" in generated_code
     )
     assert (
-        "let mut declaredMask: Vec2<bool> = "
+        "let declaredMask: Vec2<bool> = "
         "Vec2::<bool>::new(((pixel.x as f32) < amount.x), "
         "((pixel.y as f32) < amount.y));" in generated_code
     )
     assert (
-        "let mut vectorScalarCompare: Vec2<bool> = "
+        "let vectorScalarCompare: Vec2<bool> = "
         "Vec2::<bool>::new(((pixel.x as f32) < weight), "
         "((pixel.y as f32) < weight));" in generated_code
     )
     assert (
-        "let mut scalarVectorCompare: Vec2<bool> = "
+        "let scalarVectorCompare: Vec2<bool> = "
         "Vec2::<bool>::new((weight < (pixel.x as f32)), "
         "(weight < (pixel.y as f32)));" in generated_code
     )
     assert (
-        "let mut boolVectorEqual: Vec2<bool> = "
+        "let boolVectorEqual: Vec2<bool> = "
         "Vec2::<bool>::new(((mask.x as i32) == pixel.x), "
         "((mask.y as i32) == pixel.y));" in generated_code
     )
     assert (
-        "let mut complexCompare: Vec2<bool> = "
+        "let complexCompare: Vec2<bool> = "
         "{ let __cgl_vec_arg_0 = makeAmount(); "
         "let __cgl_vec_arg_1 = makeWeight(); "
         "Vec2::<bool>::new((__cgl_vec_arg_0.x > __cgl_vec_arg_1), "
         "(__cgl_vec_arg_0.y > __cgl_vec_arg_1)) };" in generated_code
     )
-    assert "let mut vectorEqual: Vec2<i32>" not in generated_code
-    assert "let mut vectorNotEqual: Vec2<f32>" not in generated_code
+    assert "let vectorEqual: Vec2<i32>" not in generated_code
+    assert "let vectorNotEqual: Vec2<f32>" not in generated_code
     assert "(pixel < amount)" not in generated_code
 
 
@@ -1868,38 +3125,38 @@ def test_bool_vector_logical_binary_operands_emit_boolean_lanes():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut scalarAnd: bool = (ready && makeFlag());" in generated_code
+    assert "let scalarAnd: bool = (ready && makeFlag());" in generated_code
     assert (
-        "let mut both: Vec3<bool> = "
+        "let both: Vec3<bool> = "
         "Vec3::<bool>::new((a.x && b.x), (a.y && b.y), (a.z && b.z));" in generated_code
     )
     assert (
-        "let mut either: Vec3<bool> = "
+        "let either: Vec3<bool> = "
         "Vec3::<bool>::new((a.x || b.x), (a.y || b.y), (a.z || b.z));" in generated_code
     )
     assert (
-        "let mut scalarRight: Vec3<bool> = "
+        "let scalarRight: Vec3<bool> = "
         "Vec3::<bool>::new((a.x && ready), (a.y && ready), (a.z && ready));"
         in generated_code
     )
     assert (
-        "let mut scalarLeft: Vec3<bool> = "
+        "let scalarLeft: Vec3<bool> = "
         "{ let __cgl_vec_arg_0 = makeFlag(); "
         "Vec3::<bool>::new((__cgl_vec_arg_0 || b.x), "
         "(__cgl_vec_arg_0 || b.y), (__cgl_vec_arg_0 || b.z)) };" in generated_code
     )
     assert (
-        "let mut complex: Vec3<bool> = "
+        "let complex: Vec3<bool> = "
         "{ let __cgl_vec_arg_1 = makeMask(); "
         "let __cgl_vec_arg_2 = makeFlag(); "
         "Vec3::<bool>::new((__cgl_vec_arg_1.x && __cgl_vec_arg_2), "
         "(__cgl_vec_arg_1.y && __cgl_vec_arg_2), "
         "(__cgl_vec_arg_1.z && __cgl_vec_arg_2)) };" in generated_code
     )
-    assert "let mut both: Vec3<bool> = (a && b);" not in generated_code
-    assert "let mut either: Vec3<bool> = (a || b);" not in generated_code
-    assert "let mut scalarRight: Vec3<bool> = (a && ready);" not in generated_code
-    assert "let mut scalarLeft: Vec3<bool> = (makeFlag() || b);" not in generated_code
+    assert "let both: Vec3<bool> = (a && b);" not in generated_code
+    assert "let either: Vec3<bool> = (a || b);" not in generated_code
+    assert "let scalarRight: Vec3<bool> = (a && ready);" not in generated_code
+    assert "let scalarLeft: Vec3<bool> = (makeFlag() || b);" not in generated_code
 
 
 def test_bool_vector_unary_not_emits_boolean_lanes():
@@ -1920,23 +3177,23 @@ def test_bool_vector_unary_not_emits_boolean_lanes():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut invFlag: bool = (!flag);" in generated_code
+    assert "let invFlag: bool = (!flag);" in generated_code
     assert (
-        "let mut inv2: Vec2<bool> = "
+        "let inv2: Vec2<bool> = "
         "Vec2::<bool>::new((!mask2.x), (!mask2.y));" in generated_code
     )
     assert (
-        "let mut inv3: Vec3<bool> = "
+        "let inv3: Vec3<bool> = "
         "Vec3::<bool>::new((!mask3.x), (!mask3.y), (!mask3.z));" in generated_code
     )
     assert (
-        "let mut inv4: Vec4<bool> = "
+        "let inv4: Vec4<bool> = "
         "{ let __cgl_vec_arg_0 = makeMask(); "
         "Vec4::<bool>::new((!__cgl_vec_arg_0.x), (!__cgl_vec_arg_0.y), "
         "(!__cgl_vec_arg_0.z), (!__cgl_vec_arg_0.z)) };" in generated_code
     )
-    assert "let mut inv2: Vec2<bool> = (!mask2);" not in generated_code
-    assert "let mut inv3: Vec3<bool> = (!mask3);" not in generated_code
+    assert "let inv2: Vec2<bool> = (!mask2);" not in generated_code
+    assert "let inv3: Vec3<bool> = (!mask3);" not in generated_code
     assert "!{ let __cgl_swizzle_" not in generated_code
 
 
@@ -1954,12 +3211,12 @@ def test_inferred_scalar_constructor_bindings_use_cast_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut index: i32 = (1.2 as i32);" in generated_code
-    assert "let mut unsignedIndex: u32 = (2 as u32);" in generated_code
-    assert "let mut precise: f64 = (1.0 as f64);" in generated_code
-    assert "let mut enabled: bool = (1 != 0);" in generated_code
-    assert "let mut index: f32 = " not in generated_code
-    assert "let mut enabled: f32 = " not in generated_code
+    assert "let index: i32 = (1.2 as i32);" in generated_code
+    assert "let unsignedIndex: u32 = (2 as u32);" in generated_code
+    assert "let precise: f64 = (1.0 as f64);" in generated_code
+    assert "let enabled: bool = (1 != 0);" in generated_code
+    assert "let index: f32 = " not in generated_code
+    assert "let enabled: f32 = " not in generated_code
 
 
 def test_inferred_scalar_binary_bindings_promote_cast_operands():
@@ -1975,11 +3232,11 @@ def test_inferred_scalar_binary_bindings_promote_cast_operands():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut rightUint: u32 = (3 + (2 as u32));" in generated_code
-    assert "let mut rightDouble: f64 = ((2.0 as f64) + (1.0 as f64));" in generated_code
-    assert "let mut compared: bool = ((1.2 as i32) < 3);" in generated_code
-    assert "let mut rightUint: i32 = " not in generated_code
-    assert "let mut rightDouble: f32 = " not in generated_code
+    assert "let rightUint: u32 = (3 + (2 as u32));" in generated_code
+    assert "let rightDouble: f64 = ((2.0 as f64) + (1.0 as f64));" in generated_code
+    assert "let compared: bool = ((1.2 as i32) < 3);" in generated_code
+    assert "let rightUint: i32 = " not in generated_code
+    assert "let rightDouble: f32 = " not in generated_code
 
 
 def test_mixed_scalar_binary_literals_match_float_operand_types():
@@ -1998,12 +3255,12 @@ def test_mixed_scalar_binary_literals_match_float_operand_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut intFloat: f32 = (3.0 + (1 as f32));" in generated_code
-    assert "let mut floatInt: f32 = ((1 as f32) + 3.0);" in generated_code
-    assert "let mut intDouble: f64 = (2.0 + (1.0 as f64));" in generated_code
-    assert "let mut doubleInt: f64 = ((1.0 as f64) + 2.0);" in generated_code
-    assert "let mut intUint: u32 = (3 + (2 as u32));" in generated_code
-    assert "let mut compareFloat: bool = (3.0 < (4 as f32));" in generated_code
+    assert "let intFloat: f32 = (3.0 + (1 as f32));" in generated_code
+    assert "let floatInt: f32 = ((1 as f32) + 3.0);" in generated_code
+    assert "let intDouble: f64 = (2.0 + (1.0 as f64));" in generated_code
+    assert "let doubleInt: f64 = ((1.0 as f64) + 2.0);" in generated_code
+    assert "let intUint: u32 = (3 + (2 as u32));" in generated_code
+    assert "let compareFloat: bool = (3.0 < (4 as f32));" in generated_code
     assert "(3 + (1 as f32))" not in generated_code
     assert "(3 < (4 as f32))" not in generated_code
 
@@ -2023,11 +3280,11 @@ def test_mixed_scalar_binary_variables_cast_to_promoted_operand_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut intFloat: f32 = ((index as f32) + (1 as f32));" in generated_code
-    assert "let mut floatInt: f32 = (weight + (index as f32));" in generated_code
-    assert "let mut intDouble: f64 = ((index as f64) + precise);" in generated_code
-    assert "let mut uintInt: u32 = (count + (index as u32));" in generated_code
-    assert "let mut compareFloat: bool = ((index as f32) < weight);" in generated_code
+    assert "let intFloat: f32 = ((index as f32) + (1 as f32));" in generated_code
+    assert "let floatInt: f32 = (weight + (index as f32));" in generated_code
+    assert "let intDouble: f64 = ((index as f64) + precise);" in generated_code
+    assert "let uintInt: u32 = (count + (index as u32));" in generated_code
+    assert "let compareFloat: bool = ((index as f32) < weight);" in generated_code
     assert "(weight + index)" not in generated_code
     assert "(index < weight)" not in generated_code
 
@@ -2076,15 +3333,15 @@ def test_mixed_scalar_simple_assignments_cast_rhs_to_lhs_type():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut declaredWeight: f32 = (index as f32);" in generated_code
-    assert "let mut declaredPrecise: f64 = (index as f64);" in generated_code
-    assert "let mut declaredCount: u32 = (index as u32);" in generated_code
+    assert "let declaredWeight: f32 = (index as f32);" in generated_code
+    assert "let declaredPrecise: f64 = (index as f64);" in generated_code
+    assert "let declaredCount: u32 = (index as u32);" in generated_code
     assert "weight = (index as f32);" in generated_code
     assert "precise = (index as f64);" in generated_code
     assert "count = (index as u32);" in generated_code
-    assert "let mut declaredWeight: f32 = index;" not in generated_code
-    assert "let mut declaredPrecise: f64 = index;" not in generated_code
-    assert "let mut declaredCount: u32 = index;" not in generated_code
+    assert "let declaredWeight: f32 = index;" not in generated_code
+    assert "let declaredPrecise: f64 = index;" not in generated_code
+    assert "let declaredCount: u32 = index;" not in generated_code
     assert "weight = index;" not in generated_code
     assert "precise = index;" not in generated_code
     assert "count = index;" not in generated_code
@@ -2112,7 +3369,7 @@ def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut declaredCoords: Vec2<f32> = "
+        "let declaredCoords: Vec2<f32> = "
         "Vec2::<f32>::new((pixel.x as f32), (pixel.y as f32));" in generated_code
     )
     assert (
@@ -2120,7 +3377,7 @@ def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types():
         "Vec2::<bool>::new((amount.x != 0.0), (amount.y != 0.0));" in generated_code
     )
     assert (
-        "let mut declaredPrecise: Mat2<f64> = "
+        "let declaredPrecise: Mat2<f64> = "
         "Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64));" in generated_code
@@ -2151,7 +3408,7 @@ def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types():
         "(preciseInput.c0.y as f32), (preciseInput.c1.x as f32), "
         "(preciseInput.c1.y as f32));" in generated_code
     )
-    assert "let mut declaredCoords: Vec2<f32> = pixel;" not in generated_code
+    assert "let declaredCoords: Vec2<f32> = pixel;" not in generated_code
     assert "coords = pixel;" not in generated_code
     assert "precise = transform;" not in generated_code
     assert "declaredRegular = preciseInput;" not in generated_code
@@ -2230,7 +3487,7 @@ def test_numeric_conditions_compare_against_zero_in_rust_bool_sites():
     assert "while (i != 0) {" in generated_code
     assert "if !((localIndex != 0)) {" in generated_code
     assert (
-        "let mut selected: f32 = (if (localIndex != 0) { weight } else { 0.0 });"
+        "let selected: f32 = (if (localIndex != 0) { weight } else { 0.0 });"
         in generated_code
     )
     assert "if (!((localIndex != 0)) || (ready && (count != 0))) {" in generated_code
@@ -2256,28 +3513,28 @@ def test_mixed_scalar_ternary_branches_cast_to_result_type():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut picked: f32 = (if ready { (index as f32) } else { weight });"
+        "let picked: f32 = (if ready { (index as f32) } else { weight });"
         in generated_code
     )
     assert (
-        "let mut reversed: f32 = (if ready { weight } else { (index as f32) });"
+        "let reversed: f32 = (if ready { weight } else { (index as f32) });"
         in generated_code
     )
     assert (
-        "let mut pickedCount: u32 = (if ready { (index as u32) } else { count });"
+        "let pickedCount: u32 = (if ready { (index as u32) } else { count });"
         in generated_code
     )
     assert (
-        "let mut inferred: f32 = (if ready { (index as f32) } else { weight });"
+        "let inferred: f32 = (if ready { (index as f32) } else { weight });"
         in generated_code
     )
     assert "return (if ready { weight } else { (index as f32) });" in generated_code
     assert (
-        "let mut picked: f32 = ((if ready { index } else { weight }) as f32);"
+        "let picked: f32 = ((if ready { index } else { weight }) as f32);"
         not in generated_code
     )
     assert (
-        "let mut pickedCount: u32 = ((if ready { index } else { count }) as u32);"
+        "let pickedCount: u32 = ((if ready { index } else { count }) as u32);"
         not in generated_code
     )
     assert "return (if ready { weight } else { index });" not in generated_code
@@ -2310,7 +3567,7 @@ def test_vector_and_matrix_ternary_branches_cast_to_result_type():
         "(pixel.y as f32)) } else { amount });" in generated_code
     )
     assert (
-        "let mut mask: Vec2<bool> = "
+        "let mask: Vec2<bool> = "
         "(if ready { Vec2::<bool>::new((amount.x != 0.0), "
         "(amount.y != 0.0)) } else { Vec2::<bool>::new((pixel.x != 0), "
         "(pixel.y != 0)) });" in generated_code
@@ -2330,7 +3587,7 @@ def test_vector_and_matrix_ternary_branches_cast_to_result_type():
         "(transform.c1.y as f64)) } else { preciseInput });" in generated_code
     )
     assert (
-        "let mut regular: Mat2<f32> = "
+        "let regular: Mat2<f32> = "
         "(if ready { Mat2::<f32>::new((preciseInput.c0.x as f32), "
         "(preciseInput.c0.y as f32), (preciseInput.c1.x as f32), "
         "(preciseInput.c1.y as f32)) } else { transform });" in generated_code
@@ -2380,35 +3637,34 @@ def test_bool_vector_ternary_conditions_emit_lane_selectors():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut scalarSelected: Vec3<f32> = (if cond { a } else { b });"
-        in generated_code
+        "let scalarSelected: Vec3<f32> = (if cond { a } else { b });" in generated_code
     )
     assert (
-        "let mut laneSelected: Vec3<f32> = "
+        "let laneSelected: Vec3<f32> = "
         "Vec3::<f32>::new((if mask.x { a.x } else { b.x }), "
         "(if mask.y { a.y } else { b.y }), "
         "(if mask.z { a.z } else { b.z }));" in generated_code
     )
     assert (
-        "let mut scalarArms: Vec3<f32> = "
+        "let scalarArms: Vec3<f32> = "
         "Vec3::<f32>::new((if mask.x { 1.0 } else { 0.0 }), "
         "(if mask.y { 1.0 } else { 0.0 }), "
         "(if mask.z { 1.0 } else { 0.0 }));" in generated_code
     )
     assert (
-        "let mut mixedArm: Vec3<f32> = "
+        "let mixedArm: Vec3<f32> = "
         "Vec3::<f32>::new((if mask.x { a.x } else { 0.0 }), "
         "(if mask.y { a.y } else { 0.0 }), "
         "(if mask.z { a.z } else { 0.0 }));" in generated_code
     )
     assert (
-        "let mut inferred: Vec3<f32> = "
+        "let inferred: Vec3<f32> = "
         "Vec3::<f32>::new((if mask.x { a.x } else { 0.0 }), "
         "(if mask.y { a.y } else { 0.0 }), "
         "(if mask.z { a.z } else { 0.0 }));" in generated_code
     )
     assert (
-        "let mut complex: Vec3<f32> = "
+        "let complex: Vec3<f32> = "
         "{ let __cgl_vec_arg_0 = makeMask(); let __cgl_vec_arg_1 = makeA(); "
         "let __cgl_vec_arg_2 = makeScalar(); "
         "Vec3::<f32>::new((if __cgl_vec_arg_0.x { __cgl_vec_arg_1.x } "
@@ -2437,29 +3693,29 @@ def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut inferredVec: Vec2<f32> = "
+        "let inferredVec: Vec2<f32> = "
         "(if ready { Vec2::<f32>::new((pixel.x as f32), "
         "(pixel.y as f32)) } else { amount });" in generated_code
     )
     assert (
-        "let mut inferredVecReverse: Vec2<f32> = "
+        "let inferredVecReverse: Vec2<f32> = "
         "(if ready { amount } else { Vec2::<f32>::new((pixel.x as f32), "
         "(pixel.y as f32)) });" in generated_code
     )
     assert (
-        "let mut inferredMat: Mat2<f64> = "
+        "let inferredMat: Mat2<f64> = "
         "(if ready { Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) } else { preciseInput });" in generated_code
     )
     assert (
-        "let mut inferredMatReverse: Mat2<f64> = "
+        "let inferredMatReverse: Mat2<f64> = "
         "(if ready { preciseInput } else { Mat2::<f64>::new((transform.c0.x as f64), "
         "(transform.c0.y as f64), (transform.c1.x as f64), "
         "(transform.c1.y as f64)) });" in generated_code
     )
-    assert "let mut inferredVec: Vec2<i32>" not in generated_code
-    assert "let mut inferredMat: Mat2<f32>" not in generated_code
+    assert "let inferredVec: Vec2<i32>" not in generated_code
+    assert "let inferredMat: Mat2<f32>" not in generated_code
 
 
 def test_generic_vector_constructors_emit_rust_names():
@@ -2480,12 +3736,10 @@ def test_generic_vector_constructors_emit_rust_names():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut precise: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
-    assert "let mut index: Vec3<i32> = Vec3::<i32>::new(1, 2, 3);" in generated_code
-    assert "let mut mask: Vec4<u32> = Vec4::<u32>::new(1, 2, 3, 4);" in generated_code
-    assert (
-        "let mut flags: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
-    )
+    assert "let precise: Vec2<f64> = Vec2::<f64>::new(1.0, 2.0);" in generated_code
+    assert "let index: Vec3<i32> = Vec3::<i32>::new(1, 2, 3);" in generated_code
+    assert "let mask: Vec4<u32> = Vec4::<u32>::new(1, 2, 3, 4);" in generated_code
+    assert "let flags: Vec2<bool> = Vec2::<bool>::new(true, false);" in generated_code
     assert "Vec2<f64>::new" not in generated_code
     assert "Vec3<i32>::new" not in generated_code
     assert "Vec4<u32>::new" not in generated_code
@@ -2512,11 +3766,10 @@ def test_inferred_let_vector_declarations_preserve_vector_type():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut value: Vec4<f32> = Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0);"
-        in generated_code
+        "let value: Vec4<f32> = Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0);" in generated_code
     )
-    assert "let mut x: f32 = value.x;" in generated_code
-    assert "let mut value: f32 = Vec4" not in generated_code
+    assert "let x: f32 = value.x;" in generated_code
+    assert "let value: f32 = Vec4" not in generated_code
 
 
 def test_scalar_vector_constructors_splat_rust_values():
@@ -2542,22 +3795,19 @@ def test_scalar_vector_constructors_splat_rust_values():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut base: Vec4<f32> = Vec4::<f32>::new(1.0, 1.0, 1.0, 1.0);"
+        "let base: Vec4<f32> = Vec4::<f32>::new(1.0, 1.0, 1.0, 1.0);" in generated_code
+    )
+    assert (
+        "let scaled: Vec3<f32> = Vec3::<f32>::new(weight, weight, weight);"
         in generated_code
     )
+    assert "let pixel: Vec2<i32> = Vec2::<i32>::new(index, index);" in generated_code
     assert (
-        "let mut scaled: Vec3<f32> = Vec3::<f32>::new(weight, weight, weight);"
-        in generated_code
-    )
-    assert (
-        "let mut pixel: Vec2<i32> = Vec2::<i32>::new(index, index);" in generated_code
-    )
-    assert (
-        "let mut mask: Vec4<bool> = "
+        "let mask: Vec4<bool> = "
         "Vec4::<bool>::new(enabled, enabled, enabled, enabled);" in generated_code
     )
     assert (
-        "let mut offset: Vec4<f32> = "
+        "let offset: Vec4<f32> = "
         "Vec4::<f32>::new(0.25, 0.5, 0.75, 1.0);" in generated_code
     )
     assert "Vec4::<f32>::new(1.0);" not in generated_code
@@ -2593,25 +3843,25 @@ def test_complex_scalar_vector_constructor_splats_use_single_evaluation_blocks()
     generated_code = generate_code(ast)
 
     assert (
-        "let mut fromCall: Vec3<f32> = "
+        "let fromCall: Vec3<f32> = "
         "{ let __cgl_vec_arg_0 = makeWeight(); "
         "Vec3::<f32>::new(__cgl_vec_arg_0, __cgl_vec_arg_0, "
         "__cgl_vec_arg_0) };" in generated_code
     )
     assert (
-        "let mut fromCast: Vec3<f32> = "
+        "let fromCast: Vec3<f32> = "
         "{ let __cgl_vec_arg_1 = (nextIndex() as f32); "
         "Vec3::<f32>::new(__cgl_vec_arg_1, __cgl_vec_arg_1, "
         "__cgl_vec_arg_1) };" in generated_code
     )
     assert (
-        "let mut fromBoolCall: Vec4<bool> = "
+        "let fromBoolCall: Vec4<bool> = "
         "{ let __cgl_vec_arg_2 = nextFlag(); "
         "Vec4::<bool>::new(__cgl_vec_arg_2, __cgl_vec_arg_2, "
         "__cgl_vec_arg_2, __cgl_vec_arg_2) };" in generated_code
     )
     assert (
-        "let mut fromInt: Vec2<bool> = "
+        "let fromInt: Vec2<bool> = "
         "{ let __cgl_vec_arg_3 = (nextIndex() != 0); "
         "Vec2::<bool>::new(__cgl_vec_arg_3, __cgl_vec_arg_3) };" in generated_code
     )
@@ -2646,24 +3896,24 @@ def test_mixed_scalar_vector_constructor_lanes_cast_to_component_type():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut mixedFloat: Vec2<f32> = "
+        "let mixedFloat: Vec2<f32> = "
         "Vec2::<f32>::new(weight, (index as f32));" in generated_code
     )
     assert (
-        "let mut mixedUint: Vec3<u32> = "
+        "let mixedUint: Vec3<u32> = "
         "Vec3::<u32>::new(count, (index as u32), 2);" in generated_code
     )
     assert (
-        "let mut splatFloat: Vec3<f32> = "
+        "let splatFloat: Vec3<f32> = "
         "Vec3::<f32>::new((index as f32), (index as f32), (index as f32));"
         in generated_code
     )
     assert (
-        "let mut boolMask: Vec2<bool> = "
+        "let boolMask: Vec2<bool> = "
         "Vec2::<bool>::new((index != 0), (weight != 0.0));" in generated_code
     )
     assert (
-        "let mut fromIntVector: Vec3<f32> = "
+        "let fromIntVector: Vec3<f32> = "
         "{ let __cgl_vec_arg_0 = Vec2::<i32>::new(index, 2); "
         "Vec3::<f32>::new((__cgl_vec_arg_0.x as f32), "
         "(__cgl_vec_arg_0.y as f32), weight) };" in generated_code
@@ -2697,19 +3947,19 @@ def test_composite_vector_constructors_flatten_rust_lanes():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut color: Vec4<f32> = "
+        "let color: Vec4<f32> = "
         "Vec4::<f32>::new(xy.x, xy.y, 0.0, 1.0);" in generated_code
     )
     assert (
-        "let mut position: Vec3<f32> = "
+        "let position: Vec3<f32> = "
         "Vec3::<f32>::new(xy.x, xy.y, 1.0);" in generated_code
     )
     assert (
-        "let mut rgb: Vec3<f32> = "
+        "let rgb: Vec3<f32> = "
         "Vec3::<f32>::new(color.x, color.y, color.z);" in generated_code
     )
     assert (
-        "let mut packed: Vec4<f32> = "
+        "let packed: Vec4<f32> = "
         "Vec4::<f32>::new(input.texCoord.x, input.texCoord.y, 0.0, 1.0);"
         in generated_code
     )
@@ -2745,19 +3995,19 @@ def test_complex_vector_constructor_args_use_single_evaluation_blocks():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut color: Vec4<f32> = "
+        "let color: Vec4<f32> = "
         "{ let __cgl_vec_arg_0 = makeUv(); "
         "Vec4::<f32>::new(__cgl_vec_arg_0.x, __cgl_vec_arg_0.y, 0.0, 1.0) };"
         in generated_code
     )
     assert (
-        "let mut packed: Vec4<f32> = "
+        "let packed: Vec4<f32> = "
         "{ let __cgl_vec_arg_1 = makeNormal(); "
         "Vec4::<f32>::new(__cgl_vec_arg_1.x, __cgl_vec_arg_1.y, "
         "__cgl_vec_arg_1.z, 1.0) };" in generated_code
     )
     assert (
-        "let mut mixed: Vec4<f32> = "
+        "let mixed: Vec4<f32> = "
         "{ let __cgl_vec_arg_2 = makeColor(); "
         "Vec4::<f32>::new(__cgl_vec_arg_2.x, __cgl_vec_arg_2.y, 0.0, 1.0) };"
         in generated_code
@@ -2782,14 +4032,14 @@ def test_standalone_vector_swizzles_emit_rust_constructors():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut rgb: Vec3<f32> = Vec3::<f32>::new(color.x, color.y, color.z);"
+        "let rgb: Vec3<f32> = Vec3::<f32>::new(color.x, color.y, color.z);"
         in generated_code
     )
     assert (
-        "let mut bgra: Vec4<f32> = "
+        "let bgra: Vec4<f32> = "
         "Vec4::<f32>::new(color.z, color.y, color.x, color.w);" in generated_code
     )
-    assert "let mut red: f32 = color.x;" in generated_code
+    assert "let red: f32 = color.x;" in generated_code
     assert "color.rgb" not in generated_code
     assert "color.bgra" not in generated_code
     assert "color.r;" not in generated_code
@@ -2813,17 +4063,17 @@ def test_complex_vector_swizzles_use_single_evaluation_blocks():
     generated_code = generate_code(ast)
 
     assert (
-        "let mut rgb: Vec3<f32> = "
+        "let rgb: Vec3<f32> = "
         "{ let __cgl_swizzle_0 = makeColor(); "
         "Vec3::<f32>::new(__cgl_swizzle_0.x, __cgl_swizzle_0.y, "
         "__cgl_swizzle_0.z) };" in generated_code
     )
     assert (
-        "let mut xy: Vec2<f32> = "
+        "let xy: Vec2<f32> = "
         "{ let __cgl_swizzle_1 = Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0); "
         "Vec2::<f32>::new(__cgl_swizzle_1.x, __cgl_swizzle_1.y) };" in generated_code
     )
-    assert "let mut red: f32 = makeColor().x;" in generated_code
+    assert "let red: f32 = makeColor().x;" in generated_code
     assert "makeColor().rgb" not in generated_code
     assert "Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0).xy" not in generated_code
 
@@ -2895,7 +4145,446 @@ def test_match_statement_emits_rust_match():
     assert "MatchArmNode" not in generated_code
 
 
-def test_match_guarded_arm_is_rejected_for_rust_codegen():
+def test_match_path_constructor_struct_and_guarded_patterns_emit_rust_match():
+    code = """
+    shader PatternCases {
+        fn inspect(result: Result<int, Error>, model: LightingModel) -> int {
+            match result {
+                Result::Ok(value) => value,
+                Result::Err(_) => 0,
+            }
+
+            match model {
+                LightingModel::Phong { ambient, diffuse, specular, shininess } if shininess > 0.0 => 1,
+                LightingModel::Toon { base_color, .. } => 2,
+            }
+
+            return 0;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "match result" in generated_code
+    assert "Result::Ok(value) =>" in generated_code
+    assert "Result::Err(_) =>" in generated_code
+    assert "match model" in generated_code
+    assert (
+        "LightingModel::Phong { ambient: _ambient, diffuse: _diffuse, "
+        "specular: _specular, shininess } if (shininess > 0.0) =>" in generated_code
+    )
+    assert "LightingModel::Toon { base_color: _base_color, .. } =>" in generated_code
+    assert "MatchNode" not in generated_code
+    assert "MatchArmNode" not in generated_code
+
+
+def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preserved():
+    code = """
+    shader PatternWarnings {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum Command {
+            Draw {
+                payload: int,
+                amount: int
+            },
+            Skip
+        }
+
+        fn unwrap(result: Result<int, int>) -> int {
+            match result {
+                Result::Ok(value) => value,
+                Result::Err(error) => 0,
+            }
+        }
+
+        fn inspect(command: Command) -> int {
+            match command {
+                Command::Draw { payload, amount } if amount > 0 => amount,
+                Command::Draw { payload, amount } => amount,
+                Command::Skip => 0,
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Result::Ok(value) =>" in generated_code
+    assert "Result::Err(_error) =>" in generated_code
+    assert (
+        "Command::Draw { payload: _payload, amount } if (amount > 0) =>"
+        in generated_code
+    )
+    assert "Command::Draw { payload: _payload, amount } =>" in generated_code
+    assert "amount: _amount" not in generated_code
+
+
+def test_match_arm_block_tail_expression_emits_without_semicolon():
+    code = """
+    shader PatternCases {
+        fn convert(op: VectorOp) -> Result<int, MathError> {
+            match op {
+                VectorOp::Cross => {
+                    Result::Ok(1)
+                },
+                _ => Result::Err(MathError::InvalidInput),
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "VectorOp::Cross => {\n            Result::Ok(1)\n        }" in generated_code
+    )
+    assert (
+        "_ => {\n            Result::Err(MathError::InvalidInput)\n        }"
+        in generated_code
+    )
+    assert "Result::Ok(1);" not in generated_code
+    assert "Result::Err(MathError::InvalidInput);" not in generated_code
+
+
+def test_keyword_like_let_binding_inside_match_arm_preserves_function_body():
+    code = """
+    shader KeywordBinding {
+        fn process_lighting_model(model: int) -> vec3 {
+            match model {
+                _ => {
+                    let geometry = 1.0;
+                    vec3(geometry, geometry, geometry)
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn process_lighting_model(model: i32) -> Vec3<f32> {" in generated_code
+    assert "match model" in generated_code
+    assert "let geometry: f32 = 1.0;" in generated_code
+    assert "Vec3::<f32>::new(geometry, geometry, geometry)" in generated_code
+    assert (
+        "pub fn process_lighting_model(model: i32) -> Vec3<f32> {\n}\n"
+        not in generated_code
+    )
+
+
+def test_match_expression_initializer_emits_rust_match_initializer():
+    code = """
+    shader MatchInitializer {
+        fn choose(model: int, fallback: vec3) -> vec3 {
+            let processed_normal = match model {
+                0 => vec3(1.0, 1.0, 1.0),
+                _ => fallback,
+            };
+            processed_normal
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let processed_normal: Vec3<f32> = match model {" in generated_code
+    assert "0 => {\n            Vec3::<f32>::new(1.0, 1.0, 1.0)" in generated_code
+    assert "_ => {\n            fallback" in generated_code
+    assert "};\n    processed_normal" in generated_code
+    assert "let processed_normal: f32 = match model" not in generated_code
+
+
+def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types():
+    code = """
+    shader StageInference {
+        generic<T> struct Vec3 {
+            T x;
+            T y;
+            T z;
+        }
+
+        vertex {
+            struct VertexInput {
+                position: vec3,
+                normal: vec3,
+            }
+
+            struct VertexOutput {
+                normal: Vec3<float>,
+            }
+
+            uniform mat4 model_matrix;
+            uniform mat3 normal_matrix;
+
+            VertexOutput main(VertexInput input) {
+                let world_pos = model_matrix * vec4(input.position, 1.0);
+                let world_normal = normalize(normal_matrix * input.normal);
+                let normal_vec3 = Vec3 { x: world_normal.x, y: world_normal.y, z: world_normal.z };
+                VertexOutput { normal: normal_vec3 }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub struct VertexInput" in generated_code
+    assert "pub position: math::Vec3<f32>," in generated_code
+    assert "pub normal: math::Vec3<f32>," in generated_code
+    assert (
+        "static MODEL_MATRIX: std::sync::LazyLock<Mat4<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert (
+        "static NORMAL_MATRIX: std::sync::LazyLock<Mat3<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert "static MODEL_MATRIX: Mat4<f32> = Default::default();" not in generated_code
+    assert "static NORMAL_MATRIX: Mat3<f32> = Default::default();" not in generated_code
+    assert (
+        "let world_pos: Vec4<f32> = "
+        "(*MODEL_MATRIX * Vec4::<f32>::new("
+        "input.position.x, input.position.y, input.position.z, 1.0));" in generated_code
+    )
+    assert (
+        "let world_normal: math::Vec3<f32> = "
+        "normalize((*NORMAL_MATRIX * input.normal));" in generated_code
+    )
+    assert (
+        "let normal_vec3: Vec3<f32> = "
+        "Vec3 { x: world_normal.x, y: world_normal.y, z: world_normal.z };"
+        in generated_code
+    )
+    assert "let world_pos: f32 = " not in generated_code
+    assert "let world_normal: f32 = normalize" not in generated_code
+    assert "let normal_vec3: Vec3 = Vec3" not in generated_code
+
+
+def test_stage_local_uniform_statics_are_emitted_once():
+    code = """
+    shader StageUniforms {
+        vertex {
+            uniform mat4 shared_transform;
+
+            vec4 main(vec3 position) {
+                shared_transform * vec4(position, 1.0)
+            }
+        }
+
+        fragment {
+            uniform mat4 shared_transform;
+            uniform sampler2D main_texture;
+
+            vec4 main(vec2 uv) {
+                texture(main_texture, uv)
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("static SHARED_TRANSFORM:") == 1
+    assert (
+        "static SHARED_TRANSFORM: std::sync::LazyLock<Mat4<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert (
+        "static MAIN_TEXTURE: std::sync::LazyLock<Texture2D<f32>> = "
+        "std::sync::LazyLock::new(|| Default::default());"
+    ) in generated_code
+    assert (
+        "static SHARED_TRANSFORM: Mat4<f32> = Default::default();" not in generated_code
+    )
+    assert (
+        "static MAIN_TEXTURE: Texture2D<f32> = Default::default();"
+        not in generated_code
+    )
+    assert "static MAIN_TEXTURE: sampler2D" not in generated_code
+    assert "(*SHARED_TRANSFORM * Vec4::<f32>::new" in generated_code
+    assert "sample(*MAIN_TEXTURE, uv)" in generated_code
+
+
+def test_method_calls_and_shorthand_path_constructors_emit_rust_syntax():
+    code = """
+    shader ConstructorCases {
+        fn build(v1: Vec3<T>, v2: Vec3<T>, color: vec4, depth: float, op: VectorOp) -> int {
+            match op {
+                VectorOp::Add => Result::Ok(Vec3 { x: v1.x.add(v2.x), y: v1.y.mul(v2.y), z: v1.z }),
+                _ => Result::Ok(RenderOutput::Clear { color, depth }),
+            }
+
+            return 0;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "v1.x.add(v2.x)" in generated_code
+    assert "v1.y.mul(v2.y)" in generated_code
+    assert "None(v2.x)" not in generated_code
+    assert "None(v2.y)" not in generated_code
+    assert "RenderOutput::Clear { color: color, depth: depth }" in generated_code
+    assert "RenderOutput::Clear::new(color, depth)" not in generated_code
+
+
+def test_non_wildcard_match_fallback_uses_never_expression():
+    code = """
+    shader PatternCases {
+        fn convert(op: VectorOp) -> Result<int, MathError> {
+            match op {
+                VectorOp::Cross => Result::Ok(1),
+                VectorOp::Add => Result::Err(MathError::InvalidInput),
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_ => unreachable!()," in generated_code
+    assert "_ => {}," not in generated_code
+
+
+def test_exhaustive_bool_result_and_enum_matches_omit_unreachable_fallback(tmp_path):
+    code = """
+    shader ExhaustivePatternCases {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum Mode {
+            Bright,
+            Dark
+        }
+
+        enum Command {
+            Draw {
+                payload: Result<int, int>,
+                amount: int
+            },
+            Skip
+        }
+
+        struct Pair {
+            left: int,
+            right: int
+        }
+
+        fn unwrap(result: Result<int, int>) -> int {
+            match result {
+                Result::Ok(value) => value,
+                Result::Err(_) => 0,
+            }
+        }
+
+        fn choose(mode: Mode) -> int {
+            match mode {
+                Mode::Bright => 1,
+                Mode::Dark => 0,
+            }
+        }
+
+        fn flag_to_int(flag: bool) -> int {
+            match flag {
+                true => 1,
+                false => 0,
+            }
+        }
+
+        fn sum_pair(pair: Pair) -> int {
+            match pair {
+                Pair { left, right } => left + right,
+            }
+        }
+
+        fn nested(command: Command) -> int {
+            match command {
+                Command::Draw { payload: Result::Ok(value), amount } => value + amount,
+                Command::Draw { payload: Result::Err(_), amount } => amount,
+                Command::Skip => 0,
+            }
+        }
+
+        fn partial(mode: Mode) -> int {
+            match mode {
+                Mode::Bright => 1,
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    def function_section(name):
+        start = generated_code.index(f"pub fn {name}")
+        next_start = generated_code.find("\npub fn ", start + 1)
+        if next_start == -1:
+            return generated_code[start:]
+        return generated_code[start:next_start]
+
+    assert "_ => unreachable!()," not in function_section("unwrap")
+    assert "_ => unreachable!()," not in function_section("choose")
+    assert "_ => unreachable!()," not in function_section("flag_to_int")
+    assert "_ => unreachable!()," not in function_section("sum_pair")
+    assert "_ => unreachable!()," not in function_section("nested")
+    assert "_ => unreachable!()," in function_section("partial")
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_inferred_generic_struct_literals_and_destructured_members_keep_generic_types():
+    code = """
+    shader InferredStructLiteral {
+        generic<T> struct Vec3 {
+            T x;
+            T y;
+            T z;
+        }
+
+        generic<T> struct Matrix3x3 {
+            Vec3<T> row0;
+            Vec3<T> row1;
+            Vec3<T> row2;
+        }
+
+        generic<T> fn make_vec(a: T, b: T, c: T) -> Vec3<T> {
+            let result = Vec3 { x: a, y: b, z: c };
+            return result;
+        }
+
+        generic<T> fn determinant(matrix: Matrix3x3<T>) -> T {
+            match matrix {
+                Matrix3x3 { row0, row1, row2 } => {
+                    let a = row0.x;
+                    a
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let result: Vec3<T> = Vec3 { x: a, y: b, z: c };" in generated_code
+    assert "let a: T = row0.x;" in generated_code
+    assert "let result: f32 = Vec3" not in generated_code
+    assert "let a: f32 = row0.x;" not in generated_code
+
+
+def test_match_guarded_literal_arm_emits_rust_guard():
     code = """
     shader main {
         compute {
@@ -2917,9 +4606,10 @@ def test_match_guarded_arm_is_rejected_for_rust_codegen():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    generated_code = generate_code(ast)
 
-    with pytest.raises(ValueError, match="Unsupported match arm for Rust"):
-        generate_code(ast)
+    assert "0 if (mode > 0) =>" in generated_code
+    assert "value = 1;" in generated_code
 
 
 def test_generic_vector_composite_types_emit_rust_names():
@@ -2997,9 +4687,9 @@ def test_array_access():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "values[0]" in generated_code
-        assert "values[1]" in generated_code
-        assert "values[2]" in generated_code
+        assert "VALUES[0]" in generated_code
+        assert "VALUES[1]" in generated_code
+        assert "VALUES[2]" in generated_code
         print(generated_code)
     except SyntaxError:
         pytest.fail("Array access codegen not implemented")
@@ -3029,15 +4719,15 @@ def test_array_literals_emit_rust_array_initializers():
     generated_code = generate_code(ast)
 
     assert (
-        "static globalWeights: [f32; 4] = " "[1.0, 2.0, 0.0, 0.0];"
+        "static GLOBAL_WEIGHTS: [f32; 4] = " "[1.0, 2.0, 0.0, 0.0];"
     ) in generated_code
-    assert "static globalWeights: [f32; 4] = [1.0, 2.0, Default" not in generated_code
-    assert "let mut values: [f32; 4] = [1.0, 2.0, 3.0, 4.0];" in generated_code
+    assert "static GLOBAL_WEIGHTS: [f32; 4] = [1.0, 2.0, Default" not in generated_code
+    assert "let values: [f32; 4] = [1.0, 2.0, 3.0, 4.0];" in generated_code
     assert (
         "return [1.0, 2.0, Default::default(), Default::default()];"
     ) in generated_code
     assert (
-        "let mut colors: [Vec3<f32>; 2] = "
+        "let colors: [Vec3<f32>; 2] = "
         "[Vec3::<f32>::new(1.0, 2.0, 3.0), "
         "Vec3::<f32>::new(4.0, 5.0, 6.0)];"
     ) in generated_code
@@ -3064,8 +4754,8 @@ def test_array_access_casts_non_literal_indices_to_usize():
     generated_code = generate_code(ast)
 
     assert "values[index as usize]" in generated_code
-    assert "globalWeights[index as usize]" in generated_code
-    assert "colors[index as usize]" in generated_code
+    assert "GLOBAL_WEIGHTS[index as usize]" in generated_code
+    assert "(*COLORS)[index as usize]" in generated_code
     assert "values[0]" in generated_code
     assert "values[0 as usize]" not in generated_code
     assert "values[index]" not in generated_code
@@ -3095,18 +4785,16 @@ def test_inferred_array_access_bindings_use_element_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut scalar: f32 = values[index as usize];" in generated_code
+    assert "let scalar: f32 = values[index as usize];" in generated_code
+    assert "let globalScalar: f32 = GLOBAL_WEIGHTS[index as usize];" in generated_code
+    assert "let color: Vec3<f32> = colors[index as usize];" in generated_code
     assert (
-        "let mut globalScalar: f32 = globalWeights[index as usize];" in generated_code
-    )
-    assert "let mut color: Vec3<f32> = colors[index as usize];" in generated_code
-    assert (
-        "let mut globalColor: Vec3<f32> = globalColors[index as usize];"
+        "let globalColor: Vec3<f32> = (*GLOBAL_COLORS)[index as usize];"
         in generated_code
     )
-    assert "let mut literalScalar: f32 = values[0];" in generated_code
-    assert "let mut scalar: [f32; 4]" not in generated_code
-    assert "let mut color: [Vec3<f32>; 2]" not in generated_code
+    assert "let literalScalar: f32 = values[0];" in generated_code
+    assert "let scalar: [f32; 4]" not in generated_code
+    assert "let color: [Vec3<f32>; 2]" not in generated_code
 
 
 def test_auto_typed_legacy_bindings_infer_initializer_types():
@@ -3140,8 +4828,8 @@ def test_auto_typed_legacy_bindings_infer_initializer_types():
 
     generated_code = generate_code(ast)
 
-    assert "let mut picked: f32 = values[0];" in generated_code
-    assert "let mut flag: bool = true;" in generated_code
+    assert "let picked: f32 = values[0];" in generated_code
+    assert "let flag: bool = true;" in generated_code
     assert ": auto" not in generated_code
 
 
@@ -3170,11 +4858,11 @@ def test_inferred_function_call_bindings_use_user_return_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let mut weight: f32 = pickWeight();" in generated_code
-    assert "let mut color: Vec3<f32> = makeColor();" in generated_code
-    assert "let mut enabled: bool = isEnabled();" in generated_code
-    assert "let mut color: f32 = makeColor();" not in generated_code
-    assert "let mut enabled: f32 = isEnabled();" not in generated_code
+    assert "let weight: f32 = pickWeight();" in generated_code
+    assert "let color: Vec3<f32> = makeColor();" in generated_code
+    assert "let enabled: bool = isEnabled();" in generated_code
+    assert "let color: f32 = makeColor();" not in generated_code
+    assert "let enabled: f32 = isEnabled();" not in generated_code
 
 
 def test_rust_imports():
@@ -3240,8 +4928,8 @@ def test_let_binding():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "let mut x:" in generated_code  # Rust let binding syntax
-        assert "let mut y:" in generated_code  # Rust let binding syntax
+        assert "let x:" in generated_code  # Rust let binding syntax
+        assert "let y:" in generated_code  # Rust let binding syntax
         print(generated_code)
     except SyntaxError:
         pytest.fail("Let binding codegen not implemented")
@@ -3311,8 +4999,8 @@ def test_rust_type_conversions():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        assert "let mut i: i32 = ((input.texCoord.x * 100.0) as i32);" in generated_code
-        assert "let mut f: f32 = (i as f32);" in generated_code
+        assert "let i: i32 = ((input.texCoord.x * 100.0) as i32);" in generated_code
+        assert "let f: f32 = (i as f32);" in generated_code
         assert "int(" not in generated_code
         assert "float(" not in generated_code
         print(generated_code)

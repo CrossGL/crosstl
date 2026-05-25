@@ -26,6 +26,7 @@ class MojoToCrossGLConverter:
     def __init__(self):
         """Initialize Mojo-to-CrossGL type, semantic, and function mappings."""
         self.user_function_names = set()
+        self.user_function_arities = {}
         self.scoped_value_names = []
         self.type_map = {
             # Scalar Types
@@ -152,7 +153,21 @@ class MojoToCrossGLConverter:
 
     def generate(self, ast):
         """Generate complete CrossGL source from a parsed Mojo AST."""
-        self.user_function_names = self.collect_user_function_names(ast)
+        self.user_function_arities = self.collect_user_function_arities(ast)
+        self.user_function_names = set(self.user_function_arities)
+        self.scoped_value_names = []
+        global_value_names = [
+            getattr(variable, "name", None)
+            for variable in getattr(ast, "global_variables", []) or []
+            if isinstance(variable, (VariableDeclarationNode, VariableNode))
+        ]
+        self.push_value_scope(global_value_names)
+        try:
+            return self.generate_shader(ast)
+        finally:
+            self.pop_value_scope()
+
+    def generate_shader(self, ast):
         code = "shader main {\n"
 
         if hasattr(ast, "functions") and ast.functions:
@@ -234,20 +249,30 @@ class MojoToCrossGLConverter:
         code += "}\n"
         return code
 
-    def collect_user_function_names(self, ast):
-        names = set()
+    def collect_user_function_arities(self, ast):
+        arities = {}
+
+        def record(function):
+            if not isinstance(function, FunctionNode) or function.name is None:
+                return
+            arities.setdefault(function.name, set()).add(
+                len(getattr(function, "params", []) or [])
+            )
+
         for node in getattr(ast, "functions", []):
             if isinstance(node, FunctionNode):
-                names.add(node.name)
+                record(node)
             elif isinstance(node, ClassNode):
                 for method in getattr(node, "methods", []):
-                    if isinstance(method, FunctionNode):
-                        names.add(method.name)
-        names.discard(None)
-        return names
+                    record(method)
+        return arities
 
-    def is_user_defined_function(self, func_name):
-        return isinstance(func_name, str) and func_name in self.user_function_names
+    def is_user_defined_function(self, func_name, arg_count=None):
+        if not isinstance(func_name, str):
+            return False
+        if arg_count is None:
+            return func_name in self.user_function_arities
+        return arg_count in self.user_function_arities.get(func_name, set())
 
     def push_value_scope(self, names=None):
         scope = set()
@@ -509,8 +534,41 @@ class MojoToCrossGLConverter:
             iterable = self.generate_expression(node.iterable)
             return f"for {node.name} in {iterable} {{\n"
 
+        comparison = ">" if self.is_negative_range_step(args, step) else "<"
         update = f"{node.name}++" if step == "1" else f"{node.name} += {step}"
-        return f"for (int {node.name} = {start}; {node.name} < {stop}; {update}) {{\n"
+        return f"for (int {node.name} = {start}; {node.name} {comparison} {stop}; {update}) {{\n"
+
+    def is_negative_range_step(self, args, generated_step):
+        if len(args) != 3:
+            return False
+
+        step = args[2]
+        if isinstance(step, UnaryOpNode) and step.op == "-":
+            return self.is_numeric_literal(step.operand)
+        return self.is_negative_numeric_literal(generated_step)
+
+    def is_numeric_literal(self, value):
+        if isinstance(value, (int, float)):
+            return True
+        if not isinstance(value, str):
+            return False
+        try:
+            float(value.rstrip("fF"))
+        except ValueError:
+            return False
+        return True
+
+    def is_negative_numeric_literal(self, value):
+        if isinstance(value, (int, float)):
+            return value < 0
+        if not isinstance(value, str):
+            return False
+        normalized = value.strip()
+        if normalized.startswith("(") and normalized.endswith(")"):
+            normalized = normalized[1:-1].strip()
+        if not normalized.startswith("-"):
+            return False
+        return self.is_numeric_literal(normalized[1:])
 
     def generate_while_loop(self, node, indent):
         indent_str = "    " * indent
@@ -569,43 +627,9 @@ class MojoToCrossGLConverter:
 
                 if hasattr(case, "body") and case.body:
                     code += self.generate_function_body(case.body, indent + 2)
-                if not self.body_ends_with_control_transfer(
-                    getattr(case, "body", []),
-                ):
-                    code += indent_str + "        break;\n"
 
         code += indent_str + "}\n"
         return code
-
-    def body_ends_with_control_transfer(self, body):
-        if not body:
-            return False
-
-        last_statement = body[-1]
-        if isinstance(last_statement, (BreakNode, ContinueNode, ReturnNode)):
-            return True
-
-        if isinstance(last_statement, IfNode):
-            return self.if_statement_ends_with_control_transfer(last_statement)
-
-        return False
-
-    def if_statement_ends_with_control_transfer(self, node):
-        if_body = getattr(node, "if_body", None) or []
-        else_body = getattr(node, "else_body", None)
-        if not self.body_ends_with_control_transfer(if_body):
-            return False
-
-        if isinstance(else_body, list):
-            return self.body_ends_with_control_transfer(else_body)
-
-        if isinstance(else_body, IfNode):
-            return self.if_statement_ends_with_control_transfer(else_body)
-
-        if else_body is not None:
-            return self.body_ends_with_control_transfer([else_body])
-
-        return False
 
     def generate_expression(self, expr):
         """Render a Mojo backend expression node as CrossGL syntax."""
@@ -642,7 +666,7 @@ class MojoToCrossGLConverter:
             if hasattr(expr, "args") and expr.args:
                 args = [self.generate_expression(arg) for arg in expr.args]
             args_str = ", ".join(args)
-            func_name = self.map_function(expr.name)
+            func_name = self.map_function(expr.name, len(args))
             return f"{func_name}({args_str})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object)
@@ -653,7 +677,7 @@ class MojoToCrossGLConverter:
             full_name = f"{obj}.{expr.method}"
             if self.is_scoped_value_name(obj):
                 return f"{obj}.{expr.method}({args_str})"
-            func_name = self.map_function(full_name)
+            func_name = self.map_function(full_name, len(args))
             if func_name != full_name:
                 return f"{func_name}({args_str})"
             return f"{obj}.{expr.method}({args_str})"
@@ -757,7 +781,7 @@ class MojoToCrossGLConverter:
         semantic = self.map_semantic(non_stage_attributes)
         return f" {semantic}" if semantic else ""
 
-    def map_function(self, func_name):
-        if self.is_user_defined_function(func_name):
+    def map_function(self, func_name, arg_count=None):
+        if self.is_user_defined_function(func_name, arg_count):
             return func_name
         return self.function_map.get(func_name, func_name)

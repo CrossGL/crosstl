@@ -38,6 +38,23 @@ class TestHipLexer:
         assert "CLASS" in token_types
         assert "STRUCT" in token_types
 
+    def test_device_lambda_capture_tokenization(self):
+        """Test HIP device lambda captures use existing bracket/operator tokens."""
+        code = "[&] __device__ (int x) { return x; }"
+        lexer = HipLexer(code)
+        tokens = [token for token in lexer.tokenize() if token.type != "NEWLINE"]
+
+        assert [(token.type, token.value) for token in tokens[:8]] == [
+            ("LBRACKET", "["),
+            ("AMPERSAND", "&"),
+            ("RBRACKET", "]"),
+            ("__DEVICE__", "__device__"),
+            ("LPAREN", "("),
+            ("INT", "int"),
+            ("IDENTIFIER", "x"),
+            ("RPAREN", ")"),
+        ]
+
     def test_hip_vector_types(self):
         """Test HIP vector type tokenization"""
         code = """

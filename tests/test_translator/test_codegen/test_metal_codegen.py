@@ -36,6 +36,802 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_metal_precision_aliases_map_to_native_metal_types():
+    shader = """
+    shader PrecisionAliasSmoke {
+        float16 tone(float16 input) {
+            float16 bias = float16(0.5);
+            return input + bias;
+        }
+
+        f16vec2 pair(f16vec2 input) {
+            f16vec2 scale = f16vec2(1.0, 2.0);
+            return input * scale;
+        }
+
+        min16float3 tint(min16float3 input) {
+            min16float3 offset = min16float3(1.0, 2.0, 3.0);
+            return input + offset;
+        }
+
+        min16uint2 bump(min16uint2 input) {
+            min16uint2 inc = min16uint2(1u, 2u);
+            return input + inc;
+        }
+
+        min12int clampInt(min12int input) {
+            min12int one = min12int(1);
+            return input + one;
+        }
+
+        min16float3x2 passMatrix(min16float3x2 input) {
+            min16float3x2 m = min16float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);
+            return input;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "half tone(half input)" in generated_code
+    assert "half bias = half(0.5);" in generated_code
+    assert "half2 pair(half2 input)" in generated_code
+    assert "half2 scale = half2(1.0, 2.0);" in generated_code
+    assert "half3 tint(half3 input)" in generated_code
+    assert "half3 offset = half3(1.0, 2.0, 3.0);" in generated_code
+    assert "uint2 bump(uint2 input)" in generated_code
+    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "int clampInt(int input)" in generated_code
+    assert "int one = int(1);" in generated_code
+    assert "half3x2 passMatrix(half3x2 input)" in generated_code
+    assert "half3x2 m = half3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    for invalid_token in (
+        "float16",
+        "f16vec2",
+        "min16float",
+        "min16uint",
+        "min12int",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_metal_float16_matrix_ir_aliases_map_to_half_matrices():
+    shader = """
+    shader Float16MatrixIRSmoke {
+        f16mat3x2 passMatrix(f16mat3x2 input) {
+            f16mat3x2 m = f16mat3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);
+            return input;
+        }
+
+        f16mat3 passSquare(f16mat3 input) {
+            f16mat3 m = f16mat3(1.0);
+            return input * m;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "half2x3 passMatrix(half2x3 input)" in generated_code
+    assert "half2x3 m = half2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    assert "half3x3 passSquare(half3x3 input)" in generated_code
+    assert "half3x3 m = half3x3(1.0);" in generated_code
+    assert "return input * m;" in generated_code
+    assert "f16mat3x2" not in generated_code
+    assert "f16mat3" not in generated_code
+
+
+def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
+    shader = """
+    shader NarrowIntegerAliasSmoke {
+        int8 signedScalar(int8 input) {
+            int8 one = int8(1);
+            return input + one;
+        }
+
+        uint8 unsignedScalar(uint8 input) {
+            uint8 one = uint8(1u);
+            return input + one;
+        }
+
+        i8vec2 signedPair(i8vec2 input) {
+            i8vec2 inc = i8vec2(1, 2);
+            return input + inc;
+        }
+
+        u8vec3 unsignedTriple(u8vec3 input) {
+            u8vec3 inc = u8vec3(1u, 2u, 3u);
+            return input + inc;
+        }
+
+        short2 signedShort(short2 input) {
+            short2 inc = short2(1, 2);
+            return input + inc;
+        }
+
+        ushort3 unsignedShort(ushort3 input) {
+            ushort3 inc = ushort3(1u, 2u, 3u);
+            return input + inc;
+        }
+
+        char4 signedChar(char4 input) {
+            char4 inc = char4(1, 2, 3, 4);
+            return input + inc;
+        }
+
+        uchar2 unsignedChar(uchar2 input) {
+            uchar2 inc = uchar2(1u, 2u);
+            return input + inc;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int signedScalar(int input)" in generated_code
+    assert "int one = int(1);" in generated_code
+    assert "uint unsignedScalar(uint input)" in generated_code
+    assert "uint one = uint(1u);" in generated_code
+    assert "int2 signedPair(int2 input)" in generated_code
+    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "uint3 unsignedTriple(uint3 input)" in generated_code
+    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert "int2 signedShort(int2 input)" in generated_code
+    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "uint3 unsignedShort(uint3 input)" in generated_code
+    assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
+    assert "int4 signedChar(int4 input)" in generated_code
+    assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
+    assert "uint2 unsignedChar(uint2 input)" in generated_code
+    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    for invalid_token in (
+        "int8",
+        "uint8",
+        "i8vec2",
+        "u8vec3",
+        "short2",
+        "ushort3",
+        "char4",
+        "uchar2",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_metal_packed_vector_aliases_map_to_standard_metal_vectors():
+    shader = """
+    shader PackedVectorAliasSmoke {
+        packed_float4 color(packed_float4 input) {
+            packed_float4 bias = packed_float4(1.0, 2.0, 3.0, 4.0);
+            return input + bias;
+        }
+
+        packed_half2 halfPair(packed_half2 input) {
+            packed_half2 scale = packed_half2(1.0, 2.0);
+            return input * scale;
+        }
+
+        packed_int3 signedTriple(packed_int3 input) {
+            packed_int3 inc = packed_int3(1, 2, 3);
+            return input + inc;
+        }
+
+        packed_uint4 unsignedQuad(packed_uint4 input) {
+            packed_uint4 inc = packed_uint4(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float4 color(float4 input)" in generated_code
+    assert "float4 bias = float4(1.0, 2.0, 3.0, 4.0);" in generated_code
+    assert "half2 halfPair(half2 input)" in generated_code
+    assert "half2 scale = half2(1.0, 2.0);" in generated_code
+    assert "int3 signedTriple(int3 input)" in generated_code
+    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "uint4 unsignedQuad(uint4 input)" in generated_code
+    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "packed_" not in generated_code
+
+
+def test_metal_simd_aliases_map_to_standard_metal_types():
+    shader = """
+    shader SimdAliasSmoke {
+        simd_float4 color(simd_float4 input) {
+            simd_float4 bias = simd_float4(1.0, 2.0, 3.0, 4.0);
+            return input + bias;
+        }
+
+        simd_int3 signedTriple(simd_int3 input) {
+            simd_int3 inc = simd_int3(1, 2, 3);
+            return input + inc;
+        }
+
+        simd_uint2 unsignedPair(simd_uint2 input) {
+            simd_uint2 inc = simd_uint2(1u, 2u);
+            return input + inc;
+        }
+
+        simd_float4x4 passSquare(simd_float4x4 input) {
+            simd_float4x4 m = simd_float4x4(1.0);
+            return input * m;
+        }
+
+        simd_float3x2 passMatrix(simd_float3x2 input) {
+            simd_float3x2 m = simd_float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);
+            return input;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float4 color(float4 input)" in generated_code
+    assert "float4 bias = float4(1.0, 2.0, 3.0, 4.0);" in generated_code
+    assert "int3 signedTriple(int3 input)" in generated_code
+    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "uint2 unsignedPair(uint2 input)" in generated_code
+    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "float4x4 passSquare(float4x4 input)" in generated_code
+    assert "float4x4 m = float4x4(1.0);" in generated_code
+    assert "float3x2 passMatrix(float3x2 input)" in generated_code
+    assert "float3x2 m = float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    assert "simd_" not in generated_code
+
+
+def test_metal_fixed_width_scalar_aliases_map_to_valid_metal_scalars():
+    shader = """
+    shader FixedWidthScalarAliasSmoke {
+        int8_t signedByte(int8_t input) {
+            int8_t one = int8_t(1);
+            return input + one;
+        }
+
+        uint8_t unsignedByte(uint8_t input) {
+            uint8_t one = uint8_t(1u);
+            return input + one;
+        }
+
+        int16_t signedShortScalar(int16_t input) {
+            int16_t one = int16_t(1);
+            return input + one;
+        }
+
+        uint16_t unsignedShortScalar(uint16_t input) {
+            uint16_t one = uint16_t(1u);
+            return input + one;
+        }
+
+        int32_t signedWord(int32_t input) {
+            int32_t one = int32_t(1);
+            return input + one;
+        }
+
+        uint32_t unsignedWord(uint32_t input) {
+            uint32_t one = uint32_t(1u);
+            return input + one;
+        }
+
+        int64 signedLong(int64 input) {
+            int64 one = int64(1);
+            return input + one;
+        }
+
+        uint64 unsignedLong(uint64 input) {
+            uint64 one = uint64(1u);
+            return input + one;
+        }
+
+        int64_t signedLongT(int64_t input) {
+            int64_t one = int64_t(1);
+            return input + one;
+        }
+
+        uint64_t unsignedLongT(uint64_t input) {
+            uint64_t one = uint64_t(1u);
+            return input + one;
+        }
+
+        size_t sizeValue(size_t input) {
+            size_t one = size_t(1u);
+            return input + one;
+        }
+
+        ptrdiff_t ptrDiff(ptrdiff_t input) {
+            ptrdiff_t one = ptrdiff_t(1);
+            return input + one;
+        }
+
+        long longValue(long input) {
+            long one = long(1);
+            return input + one;
+        }
+
+        ulong ulongValue(ulong input) {
+            ulong one = ulong(1u);
+            return input + one;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int signedByte(int input)" in generated_code
+    assert "uint unsignedByte(uint input)" in generated_code
+    assert "int signedShortScalar(int input)" in generated_code
+    assert "uint unsignedShortScalar(uint input)" in generated_code
+    assert "int signedWord(int input)" in generated_code
+    assert "uint unsignedWord(uint input)" in generated_code
+    assert "int64_t signedLong(int64_t input)" in generated_code
+    assert "uint64_t unsignedLong(uint64_t input)" in generated_code
+    assert "int64_t signedLongT(int64_t input)" in generated_code
+    assert "uint64_t unsignedLongT(uint64_t input)" in generated_code
+    assert "uint64_t sizeValue(uint64_t input)" in generated_code
+    assert "int64_t ptrDiff(int64_t input)" in generated_code
+    assert "int64_t longValue(int64_t input)" in generated_code
+    assert "uint64_t ulongValue(uint64_t input)" in generated_code
+    assert "int one = int(1);" in generated_code
+    assert "uint one = uint(1u);" in generated_code
+    assert "int64_t one = int64_t(1);" in generated_code
+    assert "uint64_t one = uint64_t(1u);" in generated_code
+    for invalid_token in (
+        "int8_t",
+        "uint8_t",
+        "int16_t",
+        "uint16_t",
+        "int32_t",
+        "uint32_t",
+        "int64 ",
+        "uint64 ",
+        "size_t",
+        "ptrdiff_t",
+        "long ",
+        "ulong ",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
+    shader = """
+    shader AliasArrayAggregateSmoke {
+        int8_t globalBytes[2];
+        uint64_t globalCounters[2];
+
+        struct AliasPayload {
+            int8_t bytes[2];
+            uint16_t words[3];
+            int64_t signedValue;
+            size_t offsets[2];
+        };
+
+        cbuffer AliasConstants @register(b1) {
+            int16_t smalls[2];
+            uint32_t count;
+            ptrdiff_t delta;
+        };
+
+        uint64_t bump(uint64_t counters[2], AliasPayload payload) {
+            uint64_t localCounters[2];
+            uint64_t one = uint64_t(1u);
+            localCounters[0] = counters[0] + one;
+            return localCounters[0] + payload.offsets[1];
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int bytes[2];" in generated_code
+    assert "uint words[3];" in generated_code
+    assert "int64_t signedValue;" in generated_code
+    assert "uint64_t offsets[2];" in generated_code
+    assert "int globalBytes[2];" in generated_code
+    assert "uint64_t globalCounters[2];" in generated_code
+    assert "int smalls[2];" in generated_code
+    assert "uint count;" in generated_code
+    assert "int64_t delta;" in generated_code
+    assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
+    assert "uint64_t localCounters[2];" in generated_code
+    assert "uint64_t one = uint64_t(1u);" in generated_code
+    for invalid_token in (
+        "int8_t",
+        "uint16_t",
+        "int16_t",
+        "uint32_t",
+        "int64 ",
+        "uint64 ",
+        "size_t",
+        "ptrdiff_t",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
+    shader = """
+    shader AliasNestedArraySmoke {
+        struct AliasGridPayload {
+            int8_t bytes[2][3];
+            size_t offsets[2][3];
+        };
+
+        uint16_t bumpNested(uint16_t values[2][3], int row, int col) {
+            uint16_t grid[2][3];
+            grid[row][col] = values[row][col] + uint16_t(1u);
+            return grid[row][col];
+        }
+
+        ptrdiff_t readPayload(AliasGridPayload payload, int row, int col) {
+            return ptrdiff_t(payload.bytes[row][col]) +
+                ptrdiff_t(payload.offsets[row][col]);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int bytes[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
+    assert "uint bumpNested(uint values[2][3], int row, int col)" in generated_code
+    assert "uint grid[2][3];" in generated_code
+    assert "uint(1u)" in generated_code
+    assert (
+        "int64_t readPayload(AliasGridPayload payload, int row, int col)"
+        in generated_code
+    )
+    assert "int64_t(payload.bytes[row][col])" in generated_code
+    assert "int64_t(payload.offsets[row][col])" in generated_code
+    assert "int[2] bytes[3]" not in generated_code
+    assert "uint64_t[2] offsets[3]" not in generated_code
+    for invalid_token in (
+        "int8_t",
+        "uint16_t",
+        "uint64 ",
+        "size_t",
+        "ptrdiff_t",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_metal_array_return_aliases_are_rejected_with_clear_diagnostic():
+    shader = """
+    shader AliasReturnArraySmoke {
+        uint64_t[2] makeCounters() {
+            uint64_t counters[2];
+            return counters;
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError, match="Metal output does not support C-style array return"
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_metal_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():
+    shader = """
+    shader AliasNestedCbufferArraySmoke {
+        cbuffer AliasNestedConstants @register(b2) {
+            int64_t signedGrid[2][3];
+            uint16_t unsignedGrid[2][3];
+            size_t offsets[2][3];
+        };
+
+        uint64_t readConstant(int row, int col) {
+            return uint64_t(offsets[row][col]) + uint64_t(unsignedGrid[row][col]);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "struct AliasNestedConstants" in generated_code
+    assert "int64_t signedGrid[2][3];" in generated_code
+    assert "uint unsignedGrid[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
+    assert "constant AliasNestedConstants& aliasNestedConstants" in generated_code
+    assert "uint64_t readConstant(int row, int col" in generated_code
+    assert "uint64_t(aliasNestedConstants.offsets[row][col])" in generated_code
+    assert "uint64_t(aliasNestedConstants.unsignedGrid[row][col])" in generated_code
+    assert "int64_t[2] signedGrid[3]" not in generated_code
+    assert "uint[2] unsignedGrid[3]" not in generated_code
+    for invalid_token in (
+        "uint16_t",
+        "uint64 ",
+        "size_t",
+    ):
+        assert invalid_token not in generated_code
+
+
+def test_metal_structured_buffer_fixed_width_aliases_map_to_device_pointers():
+    shader = """
+    shader AliasStructuredBufferMetal {
+        RWStructuredBuffer<uint16_t> counts @ binding(3);
+        StructuredBuffer<int64_t> signedValues @ binding(4);
+        RWStructuredBuffer<size_t> offsets @ binding(5);
+
+        uint64_t loadOffset(uint index) {
+            uint64_t offset = buffer_load(offsets, index);
+            uint16_t count = buffer_load(counts, index);
+            int64_t signedValue = buffer_load(signedValues, index);
+            buffer_store(counts, index, count + uint16_t(1u));
+            return offset + uint64_t(count) + uint64_t(signedValue);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "device uint* counts" in generated_code
+    assert "const device int64_t* signedValues" in generated_code
+    assert "device uint64_t* offsets" in generated_code
+    assert "uint count = counts[index];" in generated_code
+    assert "counts[index] = count + uint(1u);" in generated_code
+    assert "uint16_t" not in generated_code
+    assert "size_t" not in generated_code
+
+
+def test_metal_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
+    shader = """
+    shader AliasStructuredBufferArrayMetal {
+        RWStructuredBuffer<uint16_t> counts[2] @ binding(3);
+        StructuredBuffer<size_t> offsets[2] @ binding(5);
+
+        uint16_t readCount(RWStructuredBuffer<uint16_t> localCounts[], uint which, uint index) {
+            return buffer_load(localCounts[which], index);
+        }
+
+        uint64_t readOffset(StructuredBuffer<size_t> localOffsets[2], uint which, uint index) {
+            return buffer_load(localOffsets[which], index);
+        }
+
+        uint64_t combine(uint which, uint index) {
+            uint16_t count = readCount(counts, which, index);
+            uint64_t offset = readOffset(offsets, which, index);
+            buffer_store(counts[which], index, count + uint16_t(1u));
+            return offset + uint64_t(count);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "uint readCount(array<device uint*, 2> localCounts, uint which, uint index)"
+        in generated_code
+    )
+    assert (
+        "uint64_t readOffset(array<const device uint64_t*, 2> localOffsets, uint which, uint index)"
+        in generated_code
+    )
+    assert (
+        "uint64_t combine(uint which, uint index, array<device uint*, 2> counts, array<const device uint64_t*, 2> offsets)"
+        in generated_code
+    )
+    assert "return localCounts[which][index];" in generated_code
+    assert "counts[which][index] = count + uint(1u);" in generated_code
+    assert "device uint* localCounts" not in generated_code
+    assert "uint16_t" not in generated_code
+    assert "size_t" not in generated_code
+
+
+def test_metal_unsized_structured_buffer_arrays_infer_helper_size():
+    shader = """
+    shader UnsizedStructuredBufferArrayMetal {
+        RWStructuredBuffer<uint16_t> counts[] @ binding(3);
+        StructuredBuffer<size_t> offsets[] @ binding(8);
+        RWStructuredBuffer<uint16_t> afterCounts;
+
+        uint16_t readCount(RWStructuredBuffer<uint16_t> localCounts[], uint index) {
+            return buffer_load(localCounts[2], index);
+        }
+
+        uint64_t readOffset(StructuredBuffer<size_t> localOffsets[], uint index) {
+            return buffer_load(localOffsets[1], index);
+        }
+
+        uint64_t combine(uint index) {
+            uint16_t count = readCount(counts, index);
+            uint64_t offset = readOffset(offsets, index);
+            return offset + uint64_t(count) + uint64_t(buffer_load(afterCounts, index));
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "array<device uint*, 3> counts" in generated_code
+    assert "device uint* afterCounts" in generated_code
+    assert "array<const device uint64_t*, 2> offsets" in generated_code
+    assert (
+        "uint readCount(array<device uint*, 3> localCounts, uint index)"
+        in generated_code
+    )
+    assert (
+        "uint64_t readOffset(array<const device uint64_t*, 2> localOffsets, uint index)"
+        in generated_code
+    )
+    assert "return localCounts[2][index];" in generated_code
+    assert "return localOffsets[1][index];" in generated_code
+    assert "uint count = readCount(counts, index);" in generated_code
+    assert "uint64_t offset = readOffset(offsets, index);" in generated_code
+    assert "uint16_t" not in generated_code
+    assert "size_t" not in generated_code
+
+
+def test_metal_dynamic_only_unsized_structured_buffer_arrays_keep_fallback_size():
+    shader = """
+    shader DynamicOnlyUnsizedStructuredBufferArrayMetal {
+        RWStructuredBuffer<uint> counts[] @ binding(3);
+        RWStructuredBuffer<uint> afterCounts;
+
+        uint readCount(RWStructuredBuffer<uint> localCounts[], uint which, uint index) {
+            return buffer_load(localCounts[which], index);
+        }
+
+        uint combine(uint which, uint index) {
+            return readCount(counts, which, index) + buffer_load(afterCounts, index);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "array<device uint*, 1> counts" in generated_code
+    assert "device uint* afterCounts" in generated_code
+    assert (
+        "uint readCount(array<device uint*, 1> localCounts, uint which, uint index)"
+        in generated_code
+    )
+    assert "return localCounts[which][index];" in generated_code
+    assert (
+        "return readCount(counts, which, index) + afterCounts[index];" in generated_code
+    )
+    assert "array<device uint*, 2> counts" not in generated_code
+
+
+def test_metal_unsized_structured_buffer_array_rejects_multiple_fixed_helper_sizes():
+    shader = """
+    shader UnsizedStructuredBufferMultipleFixedHelpersMetal {
+        RWStructuredBuffer<uint> counts[] @ binding(3);
+
+        uint readThree(RWStructuredBuffer<uint> localCounts[3], uint index) {
+            return buffer_load(localCounts[2], index);
+        }
+
+        uint readFour(RWStructuredBuffer<uint> localCounts[4], uint index) {
+            return buffer_load(localCounts[3], index);
+        }
+
+        uint combine(uint index) {
+            return readThree(counts, index) + readFour(counts, index);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting fixed resource array sizes for 'counts': 3 and 4",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_metal_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
+    shader = """
+    shader NestedStructuredBufferArrayHelpersMetal {
+        RWStructuredBuffer<uint16_t> counts[] @ binding(3);
+        RWStructuredBuffer<uint16_t> afterCounts;
+
+        uint16_t readLeaf(RWStructuredBuffer<uint16_t> leafCounts[3], uint index) {
+            return buffer_load(leafCounts[2], index);
+        }
+
+        uint16_t readMid(RWStructuredBuffer<uint16_t> midCounts[], uint index) {
+            return readLeaf(midCounts, index);
+        }
+
+        uint16_t combine(uint index) {
+            return readMid(counts, index) + buffer_load(afterCounts, index);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "array<device uint*, 3> counts" in generated_code
+    assert "device uint* afterCounts" in generated_code
+    assert (
+        "uint readLeaf(array<device uint*, 3> leafCounts, uint index)" in generated_code
+    )
+    assert (
+        "uint readMid(array<device uint*, 3> midCounts, uint index)" in generated_code
+    )
+    assert "return leafCounts[2][index];" in generated_code
+    assert "return readLeaf(midCounts, index);" in generated_code
+    assert "return readMid(counts, index) + afterCounts[index];" in generated_code
+    assert "array<device uint*, 1> counts" not in generated_code
+    assert "uint16_t" not in generated_code
+
+
+def test_metal_structured_buffer_array_nested_helpers_reject_mixed_fixed_sizes():
+    shader = """
+    shader NestedStructuredBufferArrayConflictMetal {
+        RWStructuredBuffer<uint> counts[] @ binding(3);
+
+        uint readLeaf(RWStructuredBuffer<uint> leafCounts[3], uint index) {
+            return buffer_load(leafCounts[2], index);
+        }
+
+        uint readMid(RWStructuredBuffer<uint> midCounts[4], uint index) {
+            return readLeaf(midCounts, index);
+        }
+
+        uint combine(uint index) {
+            return readMid(counts, index);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting fixed resource array sizes for 'midCounts': 4 and 3",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
+    shader = """
+    shader AliasGlslBufferBlockMetal {
+        struct AliasBlock {
+            uint16_t words[2];
+            size_t offsets[];
+        };
+
+        AliasBlock aliasBlock @glsl_buffer_block(std430) @binding(7);
+
+        uint64_t readAlias(uint index) {
+            uint16_t word = aliasBlock.words[1];
+            return uint64_t(word) + uint64_t(aliasBlock.offsets[index]);
+        }
+
+        void writeAlias(uint index, uint16_t word, size_t offset) {
+            aliasBlock.words[1] = word;
+            aliasBlock.offsets[index] = offset;
+            aliasBlock.words[0] += uint16_t(1u);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "device uchar* aliasBlock" in generated_code
+    assert (
+        "uint word = (*reinterpret_cast<const device uint*>(aliasBlock + 4));"
+        in generated_code
+    )
+    assert (
+        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (8 + index * 4))))"
+        in generated_code
+    )
+    assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
+    assert (
+        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(word);"
+        in generated_code
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(aliasBlock + (8 + index * 4))) = uint(offset);"
+        in generated_code
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(1u)));"
+        in generated_code
+    )
+    assert "unsupported Metal GLSL buffer block" not in generated_code
+    assert "uint16_t" not in generated_code
+    assert "size_t" not in generated_code
+
+
 def test_structured_buffer_operations_lower_to_device_buffer():
     code = """
     shader StructuredBufferMetal {
@@ -150,6 +946,164 @@ def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
     assert "buffers[index][tid.x] = v + 1;" in generated
 
 
+def test_metal_structured_buffer_array_binding_overlap_raises():
+    code = """
+    shader StructuredBufferArrayBindingOverlapMetal {
+        RWStructuredBuffer<int> first[2] @ binding(3);
+        RWStructuredBuffer<int> second @ binding(4);
+
+        int read(uint index) {
+            return buffer_load(first[1], index) + buffer_load(second, index);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting Metal resource binding for 'second'",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_texture_array_binding_overlap_raises():
+    code = """
+    shader TextureArrayBindingOverlapMetal {
+        sampler2D first[2] @texture(3);
+        sampler2D second @texture(4);
+
+        vec4 read(vec2 uv) {
+            return texture(first[1], uv) + texture(second, uv);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting Metal resource binding for 'second'",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_sampler_array_binding_overlap_raises():
+    code = """
+    shader SamplerArrayBindingOverlapMetal {
+        sampler first[2] @sampler(1);
+        sampler second @sampler(2);
+        sampler2D tex;
+
+        vec4 read(vec2 uv) {
+            return texture(tex, first[1], uv) + texture(tex, second, uv);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting Metal resource binding for 'second'",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_texture_and_image_bindings_share_texture_namespace():
+    code = """
+    shader TextureImageBindingOverlapMetal {
+        sampler2D textures[2] @texture(3);
+        image2D storageImage @binding(4);
+
+        vec4 read(vec2 uv, ivec2 pixel) {
+            return texture(textures[1], uv) + imageLoad(storageImage, pixel);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting Metal resource binding for 'storageImage'",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_texture_sampler_and_buffer_bindings_are_independent():
+    code = """
+    shader ResourceBindingNamespacesMetal {
+        sampler2D colorMap @binding(0);
+        sampler linearSampler @binding(0);
+        RWStructuredBuffer<int> values @binding(0);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(colorMap, linearSampler, uv) + vec4(float(buffer_load(values, 0)));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    assert "device int* values [[buffer(0)]]" in generated_code
+    assert "colorMap.sample(linearSampler, uv)" in generated_code
+    assert "values[0]" in generated_code
+
+
+def test_metal_auto_bindings_skip_later_explicit_global_bindings():
+    code = """
+    shader LateExplicitBindingsMetal {
+        sampler2D autoTexture;
+        image2D autoImage;
+        RWStructuredBuffer<int> autoBuffer;
+        sampler autoSampler;
+
+        cbuffer AutoBlock {
+            vec4 autoTint;
+        };
+
+        cbuffer ExplicitBlock @buffer(0) {
+            vec4 explicitTint;
+        };
+
+        sampler2D explicitTexture @texture(0);
+        image2D explicitImage @texture(1);
+        RWStructuredBuffer<int> explicitBuffer @buffer(2);
+        sampler explicitSampler @sampler(0);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(autoImage, ivec2(0, 0));
+                int value = buffer_load(autoBuffer, 0) + buffer_load(explicitBuffer, 0);
+                return texture(autoTexture, autoSampler, uv) +
+                    texture(explicitTexture, explicitSampler, uv) +
+                    stored + autoTint + explicitTint + vec4(float(value));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "constant AutoBlock& autoBlock [[buffer(1)]]" in generated_code
+    assert "constant ExplicitBlock& explicitBlock [[buffer(0)]]" in generated_code
+    assert "device int* autoBuffer [[buffer(3)]]" in generated_code
+    assert "device int* explicitBuffer [[buffer(2)]]" in generated_code
+    assert "texture2d<float> autoTexture [[texture(2)]]" in generated_code
+    assert (
+        "texture2d<float, access::read_write> autoImage [[texture(3)]]"
+        in generated_code
+    )
+    assert "texture2d<float> explicitTexture [[texture(0)]]" in generated_code
+    assert (
+        "texture2d<float, access::read_write> explicitImage [[texture(1)]]"
+        in generated_code
+    )
+    assert "sampler autoSampler [[sampler(1)]]" in generated_code
+    assert "sampler explicitSampler [[sampler(0)]]" in generated_code
+
+
 def test_metal_unsigned_integer_literal_suffix_codegen():
     code = """
     shader UIntLiteralCodegen {
@@ -247,6 +1201,48 @@ def test_metal_stage_resource_binding_attributes_drive_indices():
     assert "sampler samp [[sampler(6)]]" in generated_code
 
 
+def test_metal_stage_parameter_texture_array_binding_overlap_raises():
+    code = """
+    shader StageParameterTextureArrayOverlap {
+        fragment {
+            vec4 main(
+                sampler2D textures[2] @texture(0),
+                sampler2D other @texture(1),
+                vec2 uv @TEXCOORD0
+            ) @gl_FragColor {
+                return texture(textures[0], uv) + texture(other, uv);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting Metal resource binding for 'other'",
+    ):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+def test_metal_stage_parameter_binding_conflicts_with_global_resource():
+    code = """
+    shader StageParameterGlobalBindingOverlap {
+        sampler2D globalTex @texture(0);
+
+        fragment {
+            vec4 main(sampler2D localTex @texture(0), vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(localTex, uv) + texture(globalTex, uv);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting Metal resource binding for 'localTex'",
+    ):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
 def test_metal_cbuffer_binding_attributes_drive_buffer_indices():
     code = """
     shader CBufferBindings {
@@ -277,6 +1273,58 @@ def test_metal_cbuffer_binding_attributes_drive_buffer_indices():
     assert "constant Camera& camera [[buffer(2)]]" in generated_code
     assert "constant Material& material [[buffer(4)]]" in generated_code
     assert "constant AutoBlock& autoBlock [[buffer(5)]]" in generated_code
+
+
+def test_metal_cbuffer_reserves_implicit_structured_buffer_indices():
+    code = """
+    shader CBufferStructuredBufferSlots {
+        cbuffer Constants {
+            float scale;
+        };
+
+        RWStructuredBuffer<int> values;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int value = buffer_load(values, tid.x);
+                buffer_store(values, tid.x, int(float(value) * scale));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "constant Constants& constants [[buffer(0)]]" in generated_code
+    assert "device int* values [[buffer(1)]]" in generated_code
+    assert "[[buffer(0)]], device int* values [[buffer(0)]]" not in generated_code
+
+
+def test_metal_cbuffer_and_structured_buffer_binding_overlap_raises():
+    code = """
+    shader CBufferStructuredBufferOverlap {
+        cbuffer Constants @binding(0) {
+            float scale;
+        };
+
+        RWStructuredBuffer<int> values @binding(0);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int value = buffer_load(values, tid.x);
+                buffer_store(values, tid.x, int(float(value) * scale));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting Metal resource binding for 'values'",
+    ):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
 
 
 def test_struct():
@@ -780,6 +1828,35 @@ def test_mesh_object_stage_codegen():
     assert "mesh void mesh_main" in generated
 
 
+def test_metal_rejects_unsupported_geometry_and_tessellation_stages():
+    geometry_code = """
+    shader geometry_stage {
+        geometry {
+            void main() { }
+        }
+    }
+    """
+    tessellation_code = """
+    shader tessellation_stage {
+        tessellation_control {
+            void main() { }
+        }
+
+        tessellation_evaluation {
+            void main() { }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="geometry"):
+        MetalCodeGen().generate_stage(
+            crosstl.translator.parse(geometry_code), "geometry"
+        )
+
+    with pytest.raises(ValueError, match="tessellation_control"):
+        MetalCodeGen().generate(crosstl.translator.parse(tessellation_code))
+
+
 def test_anyhit_stage_codegen():
     code = """
     shader rt {
@@ -840,6 +1917,89 @@ def test_generate_stage_filters_combined_vertex_fragment_units():
     assert "fragment float4 fragment_main" not in vertex_code
     assert "fragment float4 fragment_main" in fragment_code
     assert "vertex VSOutput vertex_main" not in fragment_code
+
+
+def test_metal_stage_local_helpers_order_by_dependencies_before_entrypoint():
+    shader = """
+    shader StageLocalHelperDependencyOrder {
+        fragment {
+            vec4 first(vec2 uv) {
+                return second(uv);
+            }
+
+            vec4 second(vec2 uv) {
+                return vec4(uv, 0.0, 1.0);
+            }
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return first(uv);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    second_index = generated_code.index("float4 second(float2 uv)")
+    first_index = generated_code.index("float4 first(float2 uv)")
+    entry_index = generated_code.index("fragment float4 fragment_main")
+
+    assert second_index < first_index < entry_index
+    assert "return second(uv);" in generated_code
+    assert "return first(uv);" in generated_code
+
+
+def test_metal_stage_entry_name_avoids_global_helper_collision():
+    shader = """
+    shader StageEntryGlobalHelperCollision {
+        vec4 fragment_main(vec2 uv) {
+            return vec4(uv, 0.0, 1.0);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return vec4(uv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float4 fragment_main(float2 uv)" in generated_code
+    assert (
+        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+    )
+
+
+def test_metal_stage_entry_name_avoids_local_helper_collision():
+    shader = """
+    shader StageEntryLocalHelperCollision {
+        fragment {
+            vec4 fragment_main(vec2 uv) {
+                return vec4(uv, 0.0, 1.0);
+            }
+
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return fragment_main(uv);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float4 fragment_main(float2 uv)" in generated_code
+    assert (
+        "fragment float4 fragment_main_2(float2 uv [[attribute(5)]])" in generated_code
+    )
+    assert "return fragment_main(uv);" in generated_code
 
 
 def test_metal_atomic_fetch_codegen():

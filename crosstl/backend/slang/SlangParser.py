@@ -8,6 +8,12 @@ class SlangParser:
     """Parse Slang tokens into the Slang backend AST."""
 
     DECLARATION_TYPE_TOKENS = {"FLOAT", "FVECTOR", "INT", "UINT", "BOOL", "MATRIX"}
+    RESOURCE_TYPE_TOKENS = {"TEXTURE2D", "SAMPLER_STATE"}
+    QUALIFIER_TOKENS = {"CONST", "CONSTEXPR", "INLINE", "STATIC"}
+    TYPE_NAME_TOKENS = (
+        DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"IDENTIFIER", "VOID"}
+    )
+    TOP_LEVEL_DECLARATION_TOKENS = TYPE_NAME_TOKENS | QUALIFIER_TOKENS | {"GENERIC"}
 
     def __init__(self, tokens):
         """Initialize the parser with a token stream from ``SlangLexer``."""
@@ -73,19 +79,7 @@ class SlangParser:
                 functions.append(
                     self.parse_function(type_shader, attributes=function_attributes)
                 )
-            elif self.current_token[0] in [
-                "VOID",
-                "FLOAT",
-                "FVECTOR",
-                "INT",
-                "UINT",
-                "BOOL",
-                "MATRIX",
-                "IDENTIFIER",
-                "GENERIC",
-                "TEXTURE2D",
-                "SAMPLER_STATE",
-            ]:
+            elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
                 if self.is_function():
                     functions.append(self.parse_function(attributes=pending_attributes))
                 else:
@@ -104,10 +98,10 @@ class SlangParser:
         )
 
     def is_function(self):
-        current_pos = self.pos
-        if self.tokens[current_pos][0] == "GENERIC":
-            current_pos += 1
-        if self.tokens[current_pos][0] == "EOF":
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        if current_pos >= len(self.tokens) or self.tokens[current_pos][0] == "EOF":
             return False
 
         current_pos += 1
@@ -116,6 +110,36 @@ class SlangParser:
             return False
         current_pos += 1
         return self.tokens[current_pos][0] == "LPAREN"
+
+    def skip_declaration_prefix_tokens(self, current_pos, include_generic=False):
+        prefix_tokens = set(self.QUALIFIER_TOKENS)
+        if include_generic:
+            prefix_tokens.add("GENERIC")
+
+        while (
+            current_pos < len(self.tokens)
+            and self.tokens[current_pos][0] in prefix_tokens
+        ):
+            current_pos += 1
+        return current_pos
+
+    def parse_qualifiers(self):
+        qualifiers = []
+        while self.current_token[0] in self.QUALIFIER_TOKENS:
+            qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+        return qualifiers
+
+    def parse_declaration_prefixes(self):
+        qualifiers = []
+        is_generic = False
+        while self.current_token[0] in self.QUALIFIER_TOKENS | {"GENERIC"}:
+            if self.current_token[0] == "GENERIC":
+                is_generic = True
+            else:
+                qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+        return qualifiers, is_generic
 
     def skip_generic_type_suffix_tokens(self, current_pos):
         if self.tokens[current_pos][0] != "LESS_THAN":
@@ -260,14 +284,9 @@ class SlangParser:
             self.eat(self.current_token[0])
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if self.current_token[0] == "LBRACKET":
-                self.eat("LBRACKET")
-                size = self.current_token[1]
-                self.eat("NUMBER")
-                self.eat("RBRACKET")
-                var_name += f"[{size}]"
+            array_sizes = self.parse_array_suffixes()
             self.eat("SEMICOLON")
-            members.append(VariableNode(vtype, var_name))
+            members.append(VariableNode(vtype, var_name, array_sizes=array_sizes))
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -276,6 +295,7 @@ class SlangParser:
         return node
 
     def parse_global_variable(self):
+        qualifiers = self.parse_qualifiers()
         var_type = self.parse_type_name()
         var_name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -285,6 +305,7 @@ class SlangParser:
         return VariableNode(
             var_type,
             var_name,
+            qualifiers=qualifiers,
             array_sizes=array_sizes,
             register=register_name,
         )
@@ -300,7 +321,7 @@ class SlangParser:
         self.eat("EXPORT")
         exported_item = (
             self.parse_function()
-            if self.current_token[0] in ["VOID", "FLOAT", "FVECTOR", "IDENTIFIER"]
+            if self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS
             else self.parse_struct()
         )
         return ExportNode(exported_item)
@@ -337,10 +358,7 @@ class SlangParser:
 
     def parse_function(self, shader_type=None, attributes=None):
         attributes = attributes or []
-        is_generic = False
-        if self.current_token[0] == "GENERIC":
-            is_generic = True
-            self.eat("GENERIC")
+        qualifiers, is_generic = self.parse_declaration_prefixes()
         return_type = self.parse_type_name()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -358,6 +376,7 @@ class SlangParser:
             name,
             params,
             body,
+            qualifiers=qualifiers,
             qualifier=shader_type,
             semantic=semantic,
             is_generic=is_generic,
@@ -368,20 +387,29 @@ class SlangParser:
     def parse_parameters(self):
         params = []
         while self.current_token[0] != "RPAREN":
-            struct_def = " "
-            vtype = self.current_token[1]
-            self.eat(self.current_token[0])
+            struct_def = ""
+            qualifiers = self.parse_qualifiers()
+            vtype = self.parse_type_name()
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+            array_sizes = self.parse_array_suffixes()
             semantic = None
             if self.current_token[0] == "IDENTIFIER":
-                struct_def = self.current_token[1]
+                struct_def = f" {self.current_token[1]}"
                 self.eat("IDENTIFIER")
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 semantic = self.current_token[1]
                 self.eat(self.current_token[0])
-            params.append(VariableNode(vtype + struct_def, name, semantic=semantic))
+            params.append(
+                VariableNode(
+                    vtype + struct_def,
+                    name,
+                    qualifiers=qualifiers,
+                    semantic=semantic,
+                    array_sizes=array_sizes,
+                )
+            )
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
         return params
@@ -401,7 +429,7 @@ class SlangParser:
             "DOT",
         }:
             return self.parse_expression_statement()
-        if self.current_token[0] in self.DECLARATION_TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.is_variable_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         elif self.current_token[0] == "IF":
             return self.parse_if_statement()
@@ -419,108 +447,69 @@ class SlangParser:
             return self.parse_break_statement()
         elif self.current_token[0] == "CONTINUE":
             return self.parse_continue_statement()
+        elif self.current_token[0] == "DISCARD":
+            return self.parse_discard_statement()
         else:
             return self.parse_expression_statement()
 
-    def parse_variable_declaration_or_assignment(self):
-        if self.current_token[0] in self.DECLARATION_TYPE_TOKENS | {"IDENTIFIER"}:
-            first_token = self.current_token
-            self.eat(self.current_token[0])
+    def is_variable_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        if current_pos >= len(self.tokens):
+            return False
 
-            if self.current_token[0] == "IDENTIFIER":
-                name = self.current_token[1]
-                self.eat("IDENTIFIER")
-                if self.current_token[0] == "SEMICOLON":
-                    self.eat("SEMICOLON")
-                    return VariableNode(first_token[1], name)
-                elif self.current_token[0] in [
-                    "EQUALS",
-                    "PLUS_EQUALS",
-                    "MINUS_EQUALS",
-                    "MULTIPLY_EQUALS",
-                    "DIVIDE_EQUALS",
-                ]:
-                    op = self.current_token[1]
-                    self.eat(self.current_token[0])
-                    value = self.parse_expression()
-                    if self.current_token[0] == "LPAREN":
-                        # This handles cases like "float3 test = float3(1.0, 1.0, 1.0);"
-                        self.eat("LPAREN")
-                        args = []
-                        while self.current_token[0] != "RPAREN":
-                            args.append(self.parse_expression())
-                            if self.current_token[0] == "COMMA":
-                                self.eat("COMMA")
-                        self.eat("RPAREN")
-                        self.eat("SEMICOLON")
-                        return AssignmentNode(
-                            VariableNode(first_token[1], name),
-                            VectorConstructorNode(first_token[1], args),
-                            op,
-                        )
-                    elif self.current_token[0] == "LBRACKET":
-                        self.eat("LBRACKET")
-                        index = self.current_token[1]
-                        self.eat("IDENTIFIER")
-                        self.eat("RBRACKET")
-                        if self.current_token[0] == "SEMICOLON":
-                            self.eat("SEMICOLON")
-                        return AssignmentNode(
-                            VariableNode(first_token[1], f"{name}[{index}]"), value, op
-                        )
-                    self.eat("SEMICOLON")
-                    return AssignmentNode(VariableNode(first_token[1], name), value, op)
-            elif self.current_token[0] in [
-                "EQUALS",
-                "PLUS_EQUALS",
-                "MINUS_EQUALS",
-                "MULTIPLY_EQUALS",
-                "DIVIDE_EQUALS",
-            ]:
-                # This handles cases like "test = float3(1.0, 1.0, 1.0);"
-                op = self.current_token[1]
-                self.eat(self.current_token[0])
-                value = self.parse_expression()
-                self.eat("SEMICOLON")
-                return AssignmentNode(VariableNode("", first_token[1]), value, op)
-            elif self.current_token[0] == "DOT":
-                left = self.parse_postfix_suffixes(VariableNode("", first_token[1]))
-                if self.current_token[0] in [
-                    "EQUALS",
-                    "PLUS_EQUALS",
-                    "MINUS_EQUALS",
-                    "MULTIPLY_EQUALS",
-                    "DIVIDE_EQUALS",
-                ]:
-                    op = self.current_token[1]
-                    self.eat(self.current_token[0])
-                    right = self.parse_expression()
-                    self.eat("SEMICOLON")
-                    return AssignmentNode(left, right, op)
-                else:
-                    self.eat("SEMICOLON")
-                    return left
-            else:
-                if self.current_token[0] in [
-                    "PLUS_EQUALS",
-                    "MINUS_EQUALS",
-                    "MULTIPLY_EQUALS",
-                    "DIVIDE_EQUALS",
-                    "EQUAL",
-                ]:
-                    op = self.current_token[1]
-                    self.eat(self.current_token[0])
-                    expr = self.parse_expression()
-                    self.eat("SEMICOLON")
-                    return BinaryOpNode(VariableNode("", first_token[1]), op, expr)
-                else:
-                    expr = self.parse_expression()
-                    self.eat("SEMICOLON")
-                    return expr
-        else:
-            expr = self.parse_expression()
+        token_type = self.tokens[current_pos][0]
+        if token_type not in (
+            self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS | {"IDENTIFIER"}
+        ):
+            return False
+        if token_type == "IDENTIFIER" and self.tokens[current_pos + 1][0] not in {
+            "IDENTIFIER",
+            "LESS_THAN",
+        }:
+            return False
+
+        next_pos = self.skip_generic_type_suffix_tokens(current_pos + 1)
+        return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "IDENTIFIER"
+
+    def parse_variable_declaration_or_assignment(self):
+        qualifiers = self.parse_qualifiers()
+        var_type = self.parse_type_name()
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        array_sizes = self.parse_array_suffixes()
+
+        if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return expr
+            return VariableNode(
+                var_type,
+                name,
+                qualifiers=qualifiers,
+                array_sizes=array_sizes,
+            )
+
+        if self.current_token[0] in [
+            "EQUALS",
+            "PLUS_EQUALS",
+            "MINUS_EQUALS",
+            "MULTIPLY_EQUALS",
+            "DIVIDE_EQUALS",
+        ]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            value = self.parse_expression()
+            self.eat("SEMICOLON")
+            return AssignmentNode(
+                VariableNode(
+                    var_type,
+                    name,
+                    qualifiers=qualifiers,
+                    array_sizes=array_sizes,
+                ),
+                value,
+                op,
+            )
+
+        raise SyntaxError(f"Unexpected token in declaration: {self.current_token[0]}")
 
     def parse_if_statement(self):
         self.eat("IF")
@@ -554,28 +543,42 @@ class SlangParser:
         self.eat("FOR")
         self.eat("LPAREN")
 
-        if self.current_token[0] in self.DECLARATION_TYPE_TOKENS:
-            type_name = self.current_token[1]
-            self.eat(self.current_token[0])
-            var_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-            self.eat("EQUALS")
-            init_value = self.parse_expression()
-            init = VariableNode(type_name, var_name)
-            init = AssignmentNode(init, init_value)
-        else:
-            init = self.parse_expression()
-        self.eat("SEMICOLON")
+        init = self.parse_for_initializer()
 
-        condition = self.parse_expression()
-        self.eat("SEMICOLON")
+        condition = self.parse_for_condition()
 
-        update = self.parse_expression()
+        update = self.parse_for_update()
         self.eat("RPAREN")
 
         body = self.parse_block()
 
         return ForNode(init, condition, update, body)
+
+    def parse_for_initializer(self):
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return None
+
+        if self.is_variable_declaration_start():
+            return self.parse_variable_declaration_or_assignment()
+
+        init = self.parse_expression()
+        self.eat("SEMICOLON")
+        return init
+
+    def parse_for_condition(self):
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return None
+
+        condition = self.parse_expression()
+        self.eat("SEMICOLON")
+        return condition
+
+    def parse_for_update(self):
+        if self.current_token[0] == "RPAREN":
+            return None
+        return self.parse_expression()
 
     def parse_while_statement(self):
         self.eat("WHILE")
@@ -603,6 +606,7 @@ class SlangParser:
         self.eat("LBRACE")
 
         cases = []
+        ordered_cases = []
         default_case = None
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "SEMICOLON":
@@ -619,7 +623,9 @@ class SlangParser:
                         self.eat("SEMICOLON")
                         continue
                     body.append(self.parse_statement())
-                cases.append(CaseNode(value, body))
+                case = CaseNode(value, body)
+                cases.append(case)
+                ordered_cases.append(case)
                 continue
 
             if self.current_token[0] == "DEFAULT":
@@ -631,12 +637,15 @@ class SlangParser:
                         self.eat("SEMICOLON")
                         continue
                     default_case.append(self.parse_statement())
+                ordered_cases.append(CaseNode(None, default_case))
                 continue
 
             raise SyntaxError(f"Unexpected token in switch: {self.current_token[0]}")
 
         self.eat("RBRACE")
-        return SwitchNode(expression, cases, default_case)
+        switch = SwitchNode(expression, cases, default_case)
+        switch.ordered_cases = ordered_cases
+        return switch
 
     def parse_return_statement(self):
         self.eat("RETURN")
@@ -655,6 +664,11 @@ class SlangParser:
         self.eat("CONTINUE")
         self.eat("SEMICOLON")
         return ContinueNode()
+
+    def parse_discard_statement(self):
+        self.eat("DISCARD")
+        self.eat("SEMICOLON")
+        return DiscardNode()
 
     def parse_expression_statement(self):
         expr = self.parse_expression()
@@ -750,6 +764,12 @@ class SlangParser:
         return left
 
     def parse_unary(self):
+        if self.current_token[0] == "INCREMENT":
+            self.eat("INCREMENT")
+            return UnaryOpNode("PRE_INCREMENT", self.parse_unary())
+        if self.current_token[0] == "DECREMENT":
+            self.eat("DECREMENT")
+            return UnaryOpNode("PRE_DECREMENT", self.parse_unary())
         if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT", "NOT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -796,6 +816,8 @@ class SlangParser:
             self.eat("NUMBER")
             return value
         elif self.current_token[0] == "LPAREN":
+            if self.is_lambda_expression_start():
+                return self.parse_lambda_expression()
             self.eat("LPAREN")
             expr = self.parse_expression()
             self.eat("RPAREN")
@@ -814,6 +836,138 @@ class SlangParser:
                 self.eat("COMMA")
         self.eat("RPAREN")
         return VectorConstructorNode(type_name, args)
+
+    def is_lambda_expression_start(self):
+        if self.current_token[0] != "LPAREN":
+            return False
+
+        depth = 0
+        index = self.pos
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    next_index = index + 1
+                    return (
+                        next_index < len(self.tokens)
+                        and self.tokens[next_index][0] == "FAT_ARROW"
+                    )
+            elif token_type == "EOF":
+                return False
+            index += 1
+
+        return False
+
+    def parse_lambda_expression(self):
+        self.eat("LPAREN")
+        args = []
+        while self.current_token[0] != "RPAREN":
+            args.append(self.parse_lambda_parameter())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+            elif self.current_token[0] != "RPAREN":
+                raise SyntaxError(
+                    f"Expected COMMA or RPAREN in lambda parameters, got {self.current_token[0]}"
+                )
+        self.eat("RPAREN")
+        self.eat("FAT_ARROW")
+
+        if self.current_token[0] == "LBRACE":
+            args.append(self.parse_lambda_block_body())
+        else:
+            args.append(self.parse_expression())
+        return FunctionCallNode("lambda", args)
+
+    def parse_lambda_parameter(self):
+        tokens = []
+        angle_depth = 0
+        paren_depth = 0
+        bracket_depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if (
+                token_type in {"COMMA", "RPAREN"}
+                and angle_depth == 0
+                and paren_depth == 0
+                and bracket_depth == 0
+            ):
+                break
+
+            if token_type == "LESS_THAN":
+                angle_depth += 1
+            elif token_type == "GREATER_THAN" and angle_depth > 0:
+                angle_depth -= 1
+            elif token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+
+            tokens.append(self.current_token)
+            self.eat(token_type)
+
+        raw = self.format_lambda_raw_tokens(tokens).strip()
+        if not raw:
+            raise SyntaxError("Expected lambda parameter")
+
+        parts = raw.rsplit(None, 1)
+        if len(parts) == 1:
+            return VariableNode("", raw)
+        return VariableNode(parts[0], parts[1])
+
+    def parse_lambda_block_body(self):
+        tokens = []
+        depth = 0
+        while self.current_token[0] != "EOF":
+            token = self.current_token
+            token_type = token[0]
+            tokens.append(token)
+            self.eat(token_type)
+            if token_type == "LBRACE":
+                depth += 1
+            elif token_type == "RBRACE":
+                depth -= 1
+                if depth == 0:
+                    return self.format_lambda_raw_tokens(tokens)
+
+        raise SyntaxError("Unterminated lambda block body")
+
+    def format_lambda_raw_tokens(self, tokens):
+        text = ""
+        previous = None
+        for token_type, value in tokens:
+            value = str(value)
+            if not text:
+                text = "{ " if value == "{" else value
+            elif value in {")", "]", ";", ",", ":"}:
+                text = text.rstrip() + value
+                if value in {";", ","}:
+                    text += " "
+            elif value == "}":
+                if not text.endswith((" ", "{")):
+                    text += " "
+                text += value
+            elif value in {"(", "[", "."}:
+                text = text.rstrip() + value
+            elif value == "{":
+                if not text.endswith(" "):
+                    text += " "
+                text += value + " "
+            elif previous and previous[1] in {"(", "[", "."}:
+                text += value
+            elif text.endswith((" ", "{")):
+                text += value
+            else:
+                text += " " + value
+            previous = (token_type, value)
+        return text.strip()
 
     def parse_function_call_or_identifier(self):
         name = self.current_token[1]
@@ -870,7 +1024,20 @@ class SlangParser:
                 node = ArrayAccessNode(node, index)
                 continue
 
+            if self.current_token[0] == "INCREMENT":
+                self.eat("INCREMENT")
+                return UnaryOpNode("POST_INCREMENT", self.valid_postfix_update(node))
+
+            if self.current_token[0] == "DECREMENT":
+                self.eat("DECREMENT")
+                return UnaryOpNode("POST_DECREMENT", self.valid_postfix_update(node))
+
             return node
+
+    def valid_postfix_update(self, node):
+        if isinstance(node, (VariableNode, MemberAccessNode, ArrayAccessNode)):
+            return node
+        raise SyntaxError(f"Invalid postfix update target: {type(node).__name__}")
 
     def parse_function_call(self, name):
         return FunctionCallNode(name, self.parse_call_arguments())

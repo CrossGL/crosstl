@@ -229,6 +229,7 @@ class StageNode(ASTNode):
         entry_point: "FunctionNode",
         local_variables: List["VariableNode"] = None,
         local_functions: List["FunctionNode"] = None,
+        local_structs: List["StructNode"] = None,
         execution_config: Dict[str, Any] = None,
         **kwargs,
     ):
@@ -237,6 +238,7 @@ class StageNode(ASTNode):
         self.entry_point = entry_point
         self.local_variables = local_variables or []
         self.local_functions = local_functions or []
+        self.local_structs = local_structs or []
         self.execution_config = execution_config or {}
 
     def __repr__(self):
@@ -405,6 +407,7 @@ class ParameterNode(ASTNode):
         param_type: TypeNode,
         default_value: Optional["ExpressionNode"] = None,
         attributes: List["AttributeNode"] = None,
+        qualifiers: List[str] = None,
         is_mutable: bool = False,
         **kwargs,
     ):
@@ -413,6 +416,7 @@ class ParameterNode(ASTNode):
         self.param_type = param_type
         self.default_value = default_value
         self.attributes = attributes or []
+        self.qualifiers = qualifiers or []
         self.is_mutable = is_mutable
 
     def __repr__(self):
@@ -532,9 +536,15 @@ class BlockNode(StatementNode):
 class ExpressionStatementNode(StatementNode):
     """Expression used as a statement."""
 
-    def __init__(self, expression: "ExpressionNode", **kwargs):
+    def __init__(
+        self,
+        expression: "ExpressionNode",
+        is_tail_expression: bool = False,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.expression = expression
+        self.is_tail_expression = is_tail_expression
 
     def __repr__(self):
         return f"ExpressionStatementNode(expression={self.expression})"
@@ -1050,15 +1060,32 @@ class LiteralPatternNode(PatternNode):
         return f"LiteralPatternNode(literal={self.literal})"
 
 
+class ConstructorPatternNode(PatternNode):
+    """Tuple-like enum or constructor pattern."""
+
+    def __init__(self, type_name: str, arguments: List[PatternNode], **kwargs):
+        super().__init__(**kwargs)
+        self.type_name = type_name
+        self.arguments = arguments
+
+    def __repr__(self):
+        return f"ConstructorPatternNode(type_name={self.type_name})"
+
+
 class StructPatternNode(PatternNode):
     """Struct destructuring pattern."""
 
     def __init__(
-        self, type_name: str, field_patterns: Dict[str, PatternNode], **kwargs
+        self,
+        type_name: str,
+        field_patterns: Dict[str, PatternNode],
+        has_rest: bool = False,
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.type_name = type_name
         self.field_patterns = field_patterns
+        self.has_rest = has_rest
 
     def __repr__(self):
         return f"StructPatternNode(type_name={self.type_name})"

@@ -168,10 +168,34 @@ def std430_matrix_type_entries():
     return entries
 
 
+STD430_SCALAR_TYPE_ALIASES = {
+    "int8_t": "int",
+    "int16_t": "int",
+    "int32_t": "int",
+    "int64": "int",
+    "int64_t": "int",
+    "long": "int",
+    "signed long": "int",
+    "ptrdiff_t": "int",
+    "uint8_t": "uint",
+    "uint16_t": "uint",
+    "uint32_t": "uint",
+    "uint64": "uint",
+    "uint64_t": "uint",
+    "ulong": "uint",
+    "unsigned long": "uint",
+    "size_t": "uint",
+}
+
+
+def std430_layout_type_name(type_name):
+    return STD430_SCALAR_TYPE_ALIASES.get(str(type_name), str(type_name))
+
+
 def std430_value_type_info(type_name):
     type_info = std430_scalar_vector_type_entries()
     type_info.update(std430_matrix_type_entries())
-    info = type_info.get(type_name)
+    info = type_info.get(std430_layout_type_name(type_name))
     return None if info is None else dict(info)
 
 
@@ -242,11 +266,13 @@ def glsl_buffer_block_member_type(
         return None
 
     type_name = str(type_name)
-    type_info = std430_value_type_info(type_name)
+    layout_type_name = std430_layout_type_name(type_name)
+    type_info = std430_value_type_info(layout_type_name)
     if type_info is None:
         return None
     return {
         "type": type_name,
+        "layout_type": layout_type_name,
         **type_info,
         target_type_key: map_type(type_name),
         "is_array": is_array,

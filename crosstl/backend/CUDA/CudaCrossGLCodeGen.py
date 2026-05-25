@@ -571,9 +571,12 @@ class CudaToCrossGLConverter:
         if self.is_get_method_call(node):
             return self.visit(node.name.object)
 
+        raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
+        if raw_name == "lambda":
+            return self.format_lambda_call(node.args)
+
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
-        raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
         make_unique = self.format_make_unique_call(raw_name, args)
         if make_unique is not None:
             return make_unique
@@ -587,6 +590,28 @@ class CudaToCrossGLConverter:
 
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_lambda_call(self, args):
+        if not args:
+            return "lambda()"
+
+        rendered_args = [self.format_lambda_parameter(arg) for arg in args[:-1]] + [
+            self.format_lambda_body(args[-1])
+        ]
+        return f"lambda({', '.join(rendered_args)})"
+
+    def format_lambda_parameter(self, arg):
+        if isinstance(arg, VariableNode):
+            if arg.vtype:
+                param_type = self.convert_cuda_type_to_crossgl(arg.vtype)
+                return f"{param_type} {arg.name}"
+            return arg.name
+        return self.format_lambda_body(arg)
+
+    def format_lambda_body(self, arg):
+        if isinstance(arg, str):
+            return arg
+        return self.visit(arg)
 
     def is_get_method_call(self, node):
         return (

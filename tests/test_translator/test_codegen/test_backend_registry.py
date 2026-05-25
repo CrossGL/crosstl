@@ -55,6 +55,17 @@ shader main {
 }
 """
 
+TRANSLATE_API_ROUNDTRIP_BACKENDS = (
+    "metal",
+    "directx",
+    "opengl",
+    "cuda",
+    "hip",
+    "mojo",
+    "rust",
+    "spirv",
+)
+
 
 def _backend_root():
     return os.path.abspath(
@@ -154,14 +165,14 @@ def test_backend_extension_is_available(backend):
     assert ext.startswith(".")
 
 
-def test_translate_api_roundtrip(tmp_path):
+@pytest.mark.parametrize("backend", TRANSLATE_API_ROUNDTRIP_BACKENDS)
+def test_translate_api_roundtrip(tmp_path, backend):
     """Verify the crosstl.translate() API works end-to-end with a CGL file."""
     import crosstl
 
     cgl_file = tmp_path / "test_shader.cgl"
     cgl_file.write_text(SMOKE_SHADER, encoding="utf-8")
 
-    for backend in ["metal", "directx", "opengl"]:
-        output = crosstl.translate(str(cgl_file), backend=backend)
-        assert isinstance(output, str)
-        assert len(output) > 50, f"{backend} output too small: {len(output)}"
+    output = crosstl.translate(str(cgl_file), backend=backend)
+    assert isinstance(output, str)
+    assert len(output) > 50, f"{backend} output too small: {len(output)}"

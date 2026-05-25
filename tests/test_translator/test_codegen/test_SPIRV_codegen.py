@@ -869,6 +869,59 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_function_variables_are_first_block_declarations(spv_code)
         assert "WARNING" not in spv_code
 
+    def test_ternary_arms_convert_to_common_spirv_type(self):
+        source_code = """
+        shader TernaryCoercions {
+            compute {
+                float chooseFloat(bool useFirst) {
+                    return useFirst ? 1 : 2.0;
+                }
+
+                vec3 chooseVector(bool useFirst) {
+                    return useFirst
+                        ? ivec3(1, 2, 3)
+                        : vec3(4.0, 5.0, 6.0);
+                }
+
+                void main() {
+                    float scalarValue = chooseFloat(true);
+                    vec3 vectorValue = chooseVector(false);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        float_type_id = float_type.group(1)
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type_id)} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+
+        converted_values = re.findall(
+            rf"(%\d+) = OpConvertSToF {re.escape(float_type_id)} %\d+",
+            spv_code,
+        )
+        assert len(converted_values) >= 4
+        assert re.search(
+            rf"%\d+ = OpSelect {re.escape(float_type_id)} "
+            rf"%\d+ {re.escape(converted_values[0])} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpCompositeConstruct {re.escape(vec3_type.group(1))} "
+            rf"%\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert "OpSelectionMerge" in spv_code
+        assert "WARNING" not in spv_code
+
     def test_vector_scalar_arithmetic_splats_scalar_operands(self):
         source_code = """
         shader VectorScalarArithmetic {
@@ -1043,6 +1096,352 @@ class TestVulkanSPIRVCodeGen:
             result_ids = spirv_result_ids_for_opcode(spv_code, opcode)
             assert result_ids, f"Missing {opcode}"
             assert set(result_ids) <= decorated_ids
+        assert "WARNING" not in spv_code
+
+    def test_store_values_convert_to_declared_pointer_type(self):
+        source_code = """
+        shader TypedStoreConversions {
+            struct Payload {
+                double value;
+            };
+
+            compute {
+                void main() {
+                    double localDouble = 0.0;
+                    localDouble = 1.0;
+                    int localInt = 2.5;
+                    Payload payload;
+                    payload.value = 3.0;
+                    double values[2];
+                    values[0] = 4.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+
+        assert double_type is not None
+        assert int_type is not None
+        assert (
+            len(
+                re.findall(
+                    rf"%\d+ = OpFConvert {re.escape(double_type.group(1))} %\d+",
+                    spv_code,
+                )
+            )
+            >= 4
+        )
+        assert re.search(
+            rf"%\d+ = OpConvertFToS {re.escape(int_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+
+    def test_return_values_convert_to_declared_function_type(self):
+        source_code = """
+        shader TypedReturnConversions {
+            compute {
+                double makeDouble() {
+                    return 0.0;
+                }
+
+                int makeInt() {
+                    return 2.5;
+                }
+
+                void main() {
+                    double x = makeDouble();
+                    int y = makeInt();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+
+        assert double_type is not None
+        assert int_type is not None
+        assert re.search(
+            rf"(?P<result>%\d+) = OpFConvert "
+            rf"{re.escape(double_type.group(1))} %\d+\n"
+            rf"OpReturnValue (?P=result)",
+            spv_code,
+        )
+        assert re.search(
+            rf"(?P<result>%\d+) = OpConvertFToS "
+            rf"{re.escape(int_type.group(1))} %\d+\n"
+            rf"OpReturnValue (?P=result)",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+
+    def test_function_call_arguments_convert_to_declared_parameter_type(self):
+        source_code = """
+        shader TypedCallConversions {
+            compute {
+                double useDouble(double value) {
+                    return value;
+                }
+
+                int useInt(int value) {
+                    return value;
+                }
+
+                void main() {
+                    double x = useDouble(0.0);
+                    int y = useInt(2.5);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+
+        assert double_type is not None
+        assert int_type is not None
+        assert re.search(
+            rf"(?P<arg>%\d+) = OpFConvert "
+            rf"{re.escape(double_type.group(1))} %\d+\n"
+            rf"%\d+ = OpFunctionCall {re.escape(double_type.group(1))} %\d+ "
+            rf"(?P=arg)",
+            spv_code,
+        )
+        assert re.search(
+            rf"(?P<arg>%\d+) = OpConvertFToS "
+            rf"{re.escape(int_type.group(1))} %\d+\n"
+            rf"%\d+ = OpFunctionCall {re.escape(int_type.group(1))} %\d+ "
+            rf"(?P=arg)",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+
+    def test_lambda_call_emits_explicit_unsupported_spirv_fallback(self):
+        source_code = """
+        shader UnsupportedLambda {
+            compute {
+                void main() {
+                    float direct = lambda(true);
+                    float mapped = map(values, lambda(int acc, int x, (acc + x)));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "SPIR-V backend does not support CrossGL lambda expressions "
+            "in lambda expression" in spv_code
+        )
+        assert (
+            "SPIR-V backend does not support CrossGL lambda expressions "
+            "in call to map" in spv_code
+        )
+        assert not re.search(r"OpExtInst .* Lambda\b", spv_code)
+        assert not re.search(r"OpExtInst .* Map\b", spv_code)
+        assert " Lambda " not in spv_code
+        assert " Map " not in spv_code
+        assert "Unknown variable int acc" not in spv_code
+        assert "Unknown variable int x" not in spv_code
+
+    def test_lambda_argument_to_user_function_uses_declared_spirv_return_type_fallback(
+        self,
+    ):
+        source_code = """
+        shader UnsupportedTypedLambda {
+            compute {
+                int apply(int value) {
+                    return value;
+                }
+
+                void main() {
+                    int mapped = apply(lambda(int x, x));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+
+        assert int_type is not None
+        assert (
+            "SPIR-V backend does not support CrossGL lambda expressions "
+            "in call to apply" in spv_code
+        )
+        assert re.search(
+            rf"%\d+ = OpConstant {re.escape(int_type.group(1))} 0",
+            spv_code,
+        )
+        assert "OpFunctionCall" not in spv_code
+        assert " Lambda " not in spv_code
+
+    def test_struct_constructor_arguments_convert_to_member_types(self):
+        source_code = """
+        struct Payload {
+            float weight;
+            vec3 color;
+            double gain;
+            int index;
+        };
+
+        shader StructConstructorCoercions {
+            compute {
+                void main() {
+                    Payload payload = Payload(1, 2u, 3.0, 4.5);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        struct_id = spirv_named_id(spv_code, "Payload")
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        assert int_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+
+        construct = re.search(
+            rf"%\d+ = OpCompositeConstruct {re.escape(struct_id)} "
+            rf"(?P<weight>%\d+) (?P<color>%\d+) "
+            rf"(?P<gain>%\d+) (?P<index>%\d+)",
+            spv_code,
+        )
+        assert construct is not None
+        assert re.search(
+            rf"{re.escape(construct.group('weight'))} = OpConvertSToF "
+            rf"{re.escape(float_type.group(1))} %\d+",
+            spv_code,
+        )
+        color = re.search(
+            rf"{re.escape(construct.group('color'))} = OpCompositeConstruct "
+            rf"{re.escape(vec3_type.group(1))} (?P<lane>%\d+) (?P=lane) (?P=lane)",
+            spv_code,
+        )
+        assert color is not None
+        assert re.search(
+            rf"{re.escape(color.group('lane'))} = OpConvertUToF "
+            rf"{re.escape(float_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"{re.escape(construct.group('gain'))} = OpFConvert "
+            rf"{re.escape(double_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"{re.escape(construct.group('index'))} = OpConvertFToS "
+            rf"{re.escape(int_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+
+    def test_private_global_initializers_preserve_scalar_vector_and_struct_values(self):
+        source_code = """
+        struct GlobalPayload {
+            float weight;
+            vec3 color;
+            double gain;
+            int index;
+        };
+
+        shader PrivateGlobalInitializers {
+            float globalWeight = 1;
+            vec3 globalColor = vec3(1, 2u, 3);
+            GlobalPayload globalPayload =
+                GlobalPayload(4, vec3(5, 6u, 7), 8.0, 9.5);
+
+            compute {
+                void main() {
+                    float value = globalWeight + globalColor.x + globalPayload.weight;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        struct_id = spirv_named_id(spv_code, "GlobalPayload")
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        assert int_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+
+        global_weight = spirv_named_variable(
+            spv_code, "globalWeight", storage_class="Private"
+        )
+        global_color = spirv_named_variable(
+            spv_code, "globalColor", storage_class="Private"
+        )
+        global_payload = spirv_named_variable(
+            spv_code, "globalPayload", storage_class="Private"
+        )
+        weight_initializer = re.search(
+            rf"{re.escape(global_weight)} = OpVariable %\d+ Private (?P<init>%\d+)",
+            spv_code,
+        )
+        color_initializer = re.search(
+            rf"{re.escape(global_color)} = OpVariable %\d+ Private (?P<init>%\d+)",
+            spv_code,
+        )
+        payload_initializer = re.search(
+            rf"{re.escape(global_payload)} = OpVariable %\d+ Private (?P<init>%\d+)",
+            spv_code,
+        )
+        assert weight_initializer is not None
+        assert color_initializer is not None
+        assert payload_initializer is not None
+        assert re.search(
+            rf"{re.escape(weight_initializer.group('init'))} = OpConstant "
+            rf"{re.escape(float_type.group(1))} 1.0",
+            spv_code,
+        )
+        assert re.search(
+            rf"{re.escape(color_initializer.group('init'))} = OpConstantComposite "
+            rf"{re.escape(vec3_type.group(1))} %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"{re.escape(payload_initializer.group('init'))} = OpConstantComposite "
+            rf"{re.escape(struct_id)} %\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
         assert "WARNING" not in spv_code
 
     def test_compound_assignments_handle_member_and_precise_array_targets(self):
@@ -1591,6 +1990,167 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert " Saturate " not in spv_code
+
+    def test_bool_mix_builtins_lower_to_spirv_select(self):
+        source_code = """
+        shader BoolMix {
+            compute {
+                float nextX() {
+                    return 0.0;
+                }
+
+                float nextY() {
+                    return 1.0;
+                }
+
+                bool nextFlag() {
+                    return true;
+                }
+
+                vec3 makeA() {
+                    return vec3(1.0, 2.0, 3.0);
+                }
+
+                vec3 makeB() {
+                    return vec3(4.0, 5.0, 6.0);
+                }
+
+                bvec3 makeMask() {
+                    return bvec3(true, false, true);
+                }
+
+                void main() {
+                    bool flag = true;
+                    float literal = mix(0.0, 1.0, flag);
+                    float complexValue = mix(nextX(), nextY(), nextFlag());
+                    vec3 a = vec3(1.0, 2.0, 3.0);
+                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    bvec3 mask = bvec3(true, false, true);
+                    vec3 selected = mix(a, b, mask);
+                    vec3 complexSelected = mix(makeA(), makeB(), makeMask());
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert bool_type is not None
+        assert float_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        bvec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(bool_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert bvec3_type is not None
+
+        assert (
+            len(re.findall(rf"OpSelect {re.escape(float_type.group(1))} ", spv_code))
+            == 2
+        )
+        assert (
+            len(re.findall(rf"OpSelect {re.escape(vec3_type.group(1))} ", spv_code))
+            == 2
+        )
+        assert " Mix " not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_numeric_mix_builtins_use_spirv_operand_result_type(self):
+        source_code = """
+        shader NumericMix {
+            compute {
+                void main() {
+                    float sx = mix(0.0, 1.0, 0.25);
+                    double dx;
+                    double dy;
+                    double sd = mix(dx, dy, 0.25);
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 vv = mix(vx, vy, 0.25);
+                    dvec2 px = dvec2(1.0, 2.0);
+                    dvec2 py = dvec2(3.0, 4.0);
+                    dvec2 pv = mix(px, py, dvec2(0.25, 0.75));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec2_type is not None
+
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(float_type.group(1))} %\d+ FMix",
+                    spv_code,
+                )
+            )
+            == 1
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(double_type.group(1))} %\d+ FMix",
+                    spv_code,
+                )
+            )
+            == 1
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ FMix",
+                    spv_code,
+                )
+            )
+            == 1
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(dvec2_type.group(1))} %\d+ FMix",
+                    spv_code,
+                )
+            )
+            == 1
+        )
+
+        scalar_splat = re.search(
+            rf"(?P<splat>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(vec3_type.group(1))} (%\d+) \2 \2",
+            spv_code,
+        )
+        assert scalar_splat is not None
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ FMix "
+            rf"%\d+ %\d+ {re.escape(scalar_splat.group('splat'))}",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
 
     def test_float_min_max_clamp_builtins_use_typed_spirv_extinsts(self):
         source_code = """
@@ -2453,6 +3013,64 @@ class TestVulkanSPIRVCodeGen:
         assert '"textures"' in spv_code
         assert "using float as default" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_resource_globals_respect_explicit_spirv_bindings_and_sets(self):
+        source_code = """
+        shader Resources {
+            sampler2d reservedColor @binding(1);
+            sampler linearSampler;
+            sampler2d colorMap;
+            image2D outputImage @binding(3);
+            image2D autoImage;
+            sampler2d setOneReserved @set(1) @binding(0);
+            sampler2d setOneAuto @set(1);
+            sampler2d groupTwoTex @group(2) @binding(0);
+
+            compute {
+                void main() {
+                    float x = 1.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        expected_slots = {
+            "reservedColor": (0, 1),
+            "linearSampler": (0, 0),
+            "colorMap": (0, 2),
+            "outputImage": (0, 3),
+            "autoImage": (0, 4),
+            "setOneReserved": (1, 0),
+            "setOneAuto": (1, 1),
+            "groupTwoTex": (2, 0),
+        }
+        for name, (descriptor_set, binding) in expected_slots.items():
+            resource_id = spirv_named_variable(
+                spv_code, name, storage_class="UniformConstant"
+            )
+            assert (
+                f"OpDecorate {resource_id} DescriptorSet {descriptor_set}" in spv_code
+            )
+            assert f"OpDecorate {resource_id} Binding {binding}" in spv_code
+
+        assert "WARNING" not in spv_code
+
+    def test_resource_globals_reject_duplicate_explicit_spirv_bindings(self):
+        source_code = """
+        shader Resources {
+            sampler2d first @binding(0);
+            image2D second @binding(0);
+        }
+        """
+
+        with pytest.raises(
+            ValueError, match="Duplicate SPIR-V resource binding set 0 binding 0"
+        ):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
@@ -5577,6 +6195,67 @@ class TestVulkanSPIRVCodeGen:
         )
         assert spv_code.count("OpCompositeConstruct") >= 4
         assert "ArrayLiteralNode" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_array_literals_convert_elements_to_declared_element_type(self):
+        source_code = """
+        shader ArrayLiteralCoercions {
+            float globalWeights[3] = {1, 2u, 3};
+            vec3 globalColors[1] = { vec3(1, 2u, 3) };
+
+            compute {
+                void main() {
+                    float localWeights[3] = {1, 2u, 3};
+                    vec3 localColors[1] = { vec3(1, 2u, 3) };
+                    float sum = localWeights[0] + globalWeights[1];
+                    vec3 color = localColors[0] + globalColors[0];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        float_type_id = float_type.group(1)
+        float_constants = {
+            value: const_id
+            for const_id, value in re.findall(
+                rf"(%\d+) = OpConstant {re.escape(float_type_id)} (1.0|2.0|3.0)\b",
+                spv_code,
+            )
+        }
+        assert set(float_constants) == {"1.0", "2.0", "3.0"}
+
+        float_array_type = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(float_type_id)} %\d+",
+            spv_code,
+        )
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type_id)} 3",
+            spv_code,
+        )
+        assert float_array_type is not None
+        assert vec3_type is not None
+        assert re.search(
+            rf"OpConstantComposite {re.escape(float_array_type.group(1))} "
+            rf"{re.escape(float_constants['1.0'])} "
+            rf"{re.escape(float_constants['2.0'])} "
+            rf"{re.escape(float_constants['3.0'])}",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpConstantComposite {re.escape(vec3_type.group(1))} "
+            rf"{re.escape(float_constants['1.0'])} "
+            rf"{re.escape(float_constants['2.0'])} "
+            rf"{re.escape(float_constants['3.0'])}",
+            spv_code,
+        )
+        assert re.search(rf"OpConvertSToF {re.escape(float_type_id)} %\d+", spv_code)
+        assert re.search(rf"OpConvertUToF {re.escape(float_type_id)} %\d+", spv_code)
         assert "WARNING" not in spv_code
 
     def test_nested_array_and_struct_member_params_use_spirv_local_copies(self):

@@ -246,6 +246,79 @@ def test_for_update_parses_structured_assignment_targets():
     assert member_loop.update.right.name == "value"
 
 
+def test_for_parses_empty_clauses():
+    code = """
+    void main() {
+        int i = 0;
+        for (; i < 4; i++) {
+        }
+        for (int j = 0; ; j++) {
+            break;
+        }
+        for (int k = 0; k < 4; ) {
+            k++;
+        }
+        for (; ; ) {
+            break;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loops = ast.functions[0].body[1:]
+
+    init_empty_loop = loops[0]
+    condition_empty_loop = loops[1]
+    update_empty_loop = loops[2]
+    all_empty_loop = loops[3]
+
+    assert isinstance(init_empty_loop, ForNode)
+    assert init_empty_loop.init is None
+    assert isinstance(init_empty_loop.condition, BinaryOpNode)
+    assert isinstance(init_empty_loop.update, UnaryOpNode)
+
+    assert isinstance(condition_empty_loop.init, AssignmentNode)
+    assert condition_empty_loop.condition is None
+    assert isinstance(condition_empty_loop.update, UnaryOpNode)
+    assert isinstance(condition_empty_loop.body[0], BreakNode)
+
+    assert isinstance(update_empty_loop.init, AssignmentNode)
+    assert isinstance(update_empty_loop.condition, BinaryOpNode)
+    assert update_empty_loop.update is None
+
+    assert all_empty_loop.init is None
+    assert all_empty_loop.condition is None
+    assert all_empty_loop.update is None
+
+
+def test_for_clause_comma_lists_parse():
+    code = """
+    void main() {
+        for (int i = 0, j = 1; i < 4; i++, j--) {
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop.init, list)
+    assert len(loop.init) == 2
+    assert all(isinstance(item, AssignmentNode) for item in loop.init)
+    assert loop.init[0].left.vtype == "int"
+    assert loop.init[0].left.name == "i"
+    assert loop.init[1].left.vtype == "int"
+    assert loop.init[1].left.name == "j"
+
+    assert isinstance(loop.update, list)
+    assert [update.op for update in loop.update] == [
+        "POST_INCREMENT",
+        "POST_DECREMENT",
+    ]
+
+
 def test_for_update_rejects_method_call_target():
     code = """
     void main() {
@@ -551,6 +624,52 @@ def test_layout_array_member_parsing():
         pytest.fail("Layout array member parsing not implemented")
 
 
+def test_layout_custom_struct_member_type_parsing():
+    code = """
+    struct Light {
+        vec3 position;
+    };
+    layout(set = 0, binding = 0) uniform Scene {
+        Light lights[4];
+        mat4 view;
+    } scene;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.layout_type == "UNIFORM"
+    assert layout.block_name == "Scene"
+    assert layout.variable_name == "scene"
+    assert layout.struct_fields == [("Light", "lights[4]"), ("mat4", "view")]
+
+
+def test_custom_struct_uniform_type_parsing():
+    code = """
+    struct Light {
+        vec3 position;
+    };
+    layout(set = 0, binding = 1) uniform Light activeLight;
+    uniform Light fallbackLight;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+    uniform = ast.global_variables[1]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.block_name is None
+    assert layout.layout_type == "UNIFORM"
+    assert layout.data_type == "Light"
+    assert layout.variable_name == "activeLight"
+    assert isinstance(uniform, UniformNode)
+    assert uniform.vtype == "Light"
+    assert uniform.name == "fallbackLight"
+
+
 def test_layout_resource_uniform_parsing():
     code = """
     layout(set = 0, binding = 1) uniform sampler2D albedoTex;
@@ -568,6 +687,27 @@ def test_layout_resource_uniform_parsing():
     assert layout.data_type == "sampler2D"
     assert layout.variable_name == "albedoTex"
     assert layout.struct_fields == []
+
+
+def test_layout_push_constant_block_parsing():
+    code = """
+    layout(push_constant) uniform PushConstants {
+        mat4 model;
+        vec4 tint;
+    } pc;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.push_constant is True
+    assert layout.qualifiers == []
+    assert layout.layout_type == "UNIFORM"
+    assert layout.block_name == "PushConstants"
+    assert layout.variable_name == "pc"
+    assert layout.struct_fields == [("mat4", "model"), ("vec4", "tint")]
 
 
 def test_version_and_extension_directives_before_layout_parse():
@@ -1037,6 +1177,26 @@ def test_bitwise_and_shift_precedence_parsing():
     assert expression.op == "&"
     assert isinstance(expression.right, BinaryOpNode)
     assert expression.right.op == "<<"
+
+
+def test_logical_and_keeps_equality_operands_grouped():
+    code = """
+    void main() {
+        bool selected = result1 == 8u && result2 == 2u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    assignment = ast.functions[0].body[0]
+    expression = assignment.right
+
+    assert isinstance(expression, BinaryOpNode)
+    assert expression.op == "&&"
+    assert isinstance(expression.left, BinaryOpNode)
+    assert expression.left.op == "=="
+    assert isinstance(expression.right, BinaryOpNode)
+    assert expression.right.op == "=="
 
 
 def test_unknown_identifier_statement_is_rejected_instead_of_dropped():
