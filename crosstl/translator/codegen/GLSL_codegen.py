@@ -8,6 +8,7 @@ from ..ast import (
     BlockNode,
     BreakNode,
     ContinueNode,
+    ConstructorNode,
     DoWhileNode,
     ForInNode,
     ForNode,
@@ -92,6 +93,14 @@ from .enum_utils import (
     generate_enum_constants,
     generate_enum_structs,
     generic_enum_specialized_type_name,
+)
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    generate_generic_struct_constructor_expression,
+    generate_generic_structs,
+    generic_struct_specialized_type_name,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
@@ -296,6 +305,8 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
         self.struct_member_types = {}
+        self.generic_struct_definitions = {}
+        self.generic_struct_specializations = {}
         self.structured_buffer_instance_members = {}
         self.glsl_buffer_block_struct_names = set()
         self.semantic_map = {
@@ -735,15 +746,30 @@ class GLSLCodeGen:
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
             getattr(ast, "structs", [])
         )
+        self.generic_struct_definitions = collect_generic_struct_definitions(
+            getattr(ast, "structs", []),
+            excluded_names=set(self.generic_enum_struct_definitions),
+        )
         self.generic_enum_specializations = collect_generic_enum_specializations(
             ast,
             self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+        self.generic_struct_specializations = collect_generic_struct_specializations(
+            ast,
+            self.generic_struct_definitions,
             self.type_name_string,
         )
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
                 self,
                 self.generic_enum_specializations,
+            )
+        )
+        self.struct_member_types.update(
+            collect_generic_struct_specialization_member_types(
+                self,
+                self.generic_struct_specializations,
             )
         )
         self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
@@ -820,6 +846,7 @@ class GLSLCodeGen:
             qualifier="const",
         )
         code += self.generate_constants(ast)
+        code += generate_generic_structs(self, self.generic_struct_specializations)
         code += generate_enum_structs(self, self.struct_payload_enums)
         code += generate_generic_enum_structs(self, self.generic_enum_specializations)
         code += generate_enum_constructor_functions(self, self.struct_payload_enums)
@@ -880,6 +907,8 @@ class GLSLCodeGen:
         for node in structs:
             if isinstance(node, StructNode):
                 if node.name in self.generic_enum_struct_definitions:
+                    continue
+                if node.name in self.generic_struct_definitions:
                     continue
                 if node.name in self.glsl_buffer_block_struct_names:
                     continue
@@ -3221,6 +3250,11 @@ class GLSLCodeGen:
                 return f"{array}[{index}]"
             else:
                 return str(expr)
+        elif isinstance(expr, ConstructorNode):
+            constructor = generate_generic_struct_constructor_expression(self, expr)
+            if constructor is not None:
+                return constructor
+            return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
             # Map function names to GLSL equivalents
             func_expr = getattr(expr, "function", getattr(expr, "name", expr))
@@ -6456,6 +6490,10 @@ class GLSLCodeGen:
         generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
         if generic_enum_type is not None:
             return generic_enum_type
+
+        generic_struct_type = generic_struct_specialized_type_name(self, vtype_str)
+        if generic_struct_type is not None:
+            return generic_struct_type
 
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"

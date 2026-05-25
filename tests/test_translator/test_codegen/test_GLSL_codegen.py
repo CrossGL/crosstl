@@ -4254,6 +4254,61 @@ def test_generic_enum_function_call_match_infers_result_type_once():
     assert "MatchNode(" not in generated_code
 
 
+def test_generic_struct_concrete_constructor_and_member_access():
+    shader = """
+    shader GenericStructConcrete {
+        generic<T> struct Box {
+            value: T;
+        }
+
+        generic<T> struct PairBox {
+            first: Box<T>;
+            second: T;
+        }
+
+        Box<int> make(int value) {
+            return Box { value: value };
+        }
+
+        int read(Box<int> item) {
+            return item.value;
+        }
+
+        PairBox<int> make_pair(int value) {
+            return PairBox {
+                first: Box { value: value },
+                second: value
+            };
+        }
+
+        int read_pair(PairBox<int> item) {
+            return item.first.value + item.second;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Box_int {" in generated_code
+    assert "int value;" in generated_code
+    assert "struct PairBox_int {" in generated_code
+    assert "Box_int first;" in generated_code
+    assert "int second;" in generated_code
+    assert "struct Box {" not in generated_code
+    assert "struct PairBox {" not in generated_code
+    assert "Box_int make(int value)" in generated_code
+    assert "return Box_int(value);" in generated_code
+    assert "int read(Box_int item)" in generated_code
+    assert "return item.value;" in generated_code
+    assert "PairBox_int make_pair(int value)" in generated_code
+    assert "return PairBox_int(Box_int(value), value);" in generated_code
+    assert "int read_pair(PairBox_int item)" in generated_code
+    assert "item.first.value + item.second" in generated_code
+    assert "Box<" not in generated_code
+    assert "PairBox<" not in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
 def test_else_statement():
     code = """
     shader main {
