@@ -162,9 +162,7 @@ def test_collect_stage_local_variables_filters_by_stage_and_predicate():
     ast = DummyAst(
         stages={
             "vertex": DummyStageNode(local_variables=[vertex_tex]),
-            "fragment": DummyStageNode(
-                local_variables=[fragment_tex, fragment_scalar]
-            ),
+            "fragment": DummyStageNode(local_variables=[fragment_tex, fragment_scalar]),
         }
     )
 
