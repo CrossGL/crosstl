@@ -3990,11 +3990,10 @@ class HLSLCodeGen:
                         args[0], global_resource_types
                     )
                 texture_func = self.expression_name(func_expr)
-                if (
-                    self.texture_call_is_diagnostic_only(texture_func, texture_type)
-                    and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
-                        texture_func, texture_type
-                    )
+                if self.texture_call_is_diagnostic_only(
+                    texture_func, texture_type
+                ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
+                    texture_func, texture_type
                 ):
                     continue
                 sampler_name = self.expression_name(args[1])
