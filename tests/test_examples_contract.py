@@ -97,6 +97,7 @@ def test_primary_graphics_examples_with_stage_local_resources_translate(
         ):
             assert marker not in generated
         assert re.search(r"\bT\b", generated) is None
+        assert re.search(r"\bstr\b", generated) is None
 
 
 @pytest.mark.parametrize(

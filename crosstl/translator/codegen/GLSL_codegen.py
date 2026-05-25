@@ -33,7 +33,6 @@ from ..ast import (
 )
 from .array_utils import (
     parse_array_type,
-    format_array_type,
     format_c_style_array_declaration,
     split_array_type_suffix,
     get_array_size_from_node,
@@ -118,8 +117,6 @@ from .generic_function_utils import (
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
-    TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
-    TEXTURE_GATHER_INTRINSIC_NAMES,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
     default_storage_image_channel_count,
@@ -184,7 +181,6 @@ from .image_access_contracts import (
     is_texture_compare_lod_operation,
     is_texture_compare_offset_operation,
     is_texture_gather_compare_operation,
-    is_texture_gather_compare_offset_operation,
     is_texture_gather_basic_operation,
     is_texture_gather_operation,
     is_texture_gather_multi_offset_operation,
@@ -194,7 +190,6 @@ from .image_access_contracts import (
     is_texture_query_lod_operation,
     is_texture_samples_query_operation,
     is_texture_sampling_operation,
-    is_texture_sampling_offset_operation,
     is_texture_sample_offset_operation,
     is_two_component_image_format,
     numeric_component_count_from_type,
@@ -421,6 +416,7 @@ class GLSLCodeGen:
             "double2": "dvec2",
             "double3": "dvec3",
             "double4": "dvec4",
+            "str": "int",
             "ivec2": "ivec2",
             "ivec3": "ivec3",
             "ivec4": "ivec4",
@@ -3147,7 +3143,7 @@ class GLSLCodeGen:
                 code += f"{indent_str}}}"
 
         if hasattr(node, "else_body") and node.else_body:
-            code += f" else {{\n"
+            code += " else {\n"
             else_body = node.else_body
             code += self.generate_scoped_statement_body(else_body, indent + 1)
             code += f"{indent_str}}}"
@@ -7227,12 +7223,10 @@ class GLSLCodeGen:
             "MOD": "%",
             "BITWISE_OR": "|",
             "BITWISE_AND": "&",
-            "BITWISE_XOR": "^",
             "ASSIGN_SHIFT_LEFT": "<<=",
             "ASSIGN_SHIFT_RIGHT": ">>=",
             "ASSIGN_AND": "&=",
             "LOGICAL_AND": "&&",
-            "ASSIGN_XOR": "^=",
             "BITWISE_SHIFT_RIGHT": ">>",
             "BITWISE_SHIFT_LEFT": "<<",
         }

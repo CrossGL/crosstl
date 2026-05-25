@@ -33,7 +33,6 @@ from ..ast import (
 )
 from .array_utils import (
     parse_array_type,
-    format_array_type,
     format_c_style_array_declaration,
     split_array_type_suffix,
     get_array_size_from_node,
@@ -184,7 +183,6 @@ from .image_access_contracts import (
     is_storage_image_texture_operation,
     is_texel_fetch_basic_operation,
     is_texel_fetch_offset_operation,
-    is_texture_compare_any_offset_operation,
     is_texture_compare_operation,
     is_texture_compare_basic_operation,
     is_texture_gather_compare_operation,
@@ -209,7 +207,6 @@ from .image_access_contracts import (
     is_texture_sample_lod_offset_operation,
     is_texture_sample_lod_operation,
     is_texture_sample_operation,
-    is_texture_sampling_offset_operation,
     is_texture_sample_offset_operation,
     numeric_component_count_from_type,
     numeric_component_kind_from_type,
@@ -222,7 +219,6 @@ from .image_access_contracts import (
     image_resource_metadata,
     record_explicit_image_metadata,
     resolve_image_atomic_component_kind,
-    resource_query_get_dimensions_descriptor,
     resource_query_scalar_constant_helper_descriptor,
     resource_query_scalar_helper_descriptor,
     resource_query_size_components_descriptor,
@@ -402,6 +398,7 @@ class HLSLCodeGen:
             "f16vec3": "half3",
             "f16vec4": "half4",
             "double": "double",
+            "str": "int",
             "char": "int",
             "signed char": "int",
             "int8": "int",
@@ -3997,10 +3994,11 @@ class HLSLCodeGen:
                         args[0], global_resource_types
                     )
                 texture_func = self.expression_name(func_expr)
-                if self.texture_call_is_diagnostic_only(
-                    texture_func, texture_type
-                ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
-                    texture_func, texture_type
+                if (
+                    self.texture_call_is_diagnostic_only(texture_func, texture_type)
+                    and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
+                        texture_func, texture_type
+                    )
                 ):
                     continue
                 sampler_name = self.expression_name(args[1])

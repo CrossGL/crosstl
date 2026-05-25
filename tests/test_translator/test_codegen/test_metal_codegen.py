@@ -1,10 +1,13 @@
+import re
+from typing import List
+
 import pytest
+
 import crosstl.translator
-from crosstl.translator.parser import Parser
-from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import PrimitiveType, StructMemberNode, StructNode
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
-from typing import List
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -2029,6 +2032,37 @@ def test_match_tuple_enum_pattern_binds_payload_fields():
     assert "return MaybeInt_Missing_make();" in generated_code
     assert "MaybeInt::" not in generated_code
     assert "MatchNode(" not in generated_code
+
+
+def test_string_payload_enum_maps_to_shader_token_type():
+    shader = """
+    shader StringPayloadEnum {
+        enum ShaderError {
+            TextureError(str),
+            BufferError(str),
+            InvalidState
+        }
+
+        ShaderError texture_error(int code) {
+            return ShaderError::TextureError(code);
+        }
+
+        ShaderError invalid_state() {
+            return ShaderError::InvalidState;
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct ShaderError {" in generated_code
+    assert "int TextureError_0;" in generated_code
+    assert "int BufferError_0;" in generated_code
+    assert "ShaderError ShaderError_TextureError_make(int payload0)" in generated_code
+    assert "ShaderError ShaderError_InvalidState_make()" in generated_code
+    assert "return ShaderError_TextureError_make(code);" in generated_code
+    assert "return ShaderError_InvalidState_make();" in generated_code
+    assert re.search(r"\bstr\b", generated_code) is None
 
 
 def test_tuple_enum_constructor_wrong_arity_raises():
