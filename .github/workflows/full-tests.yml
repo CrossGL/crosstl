@@ -22,6 +22,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install optional shader validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -30,3 +35,38 @@ jobs:
 
       - name: Run complete test suite
         run: python -m pytest tests --durations=25
+
+  shader-validators:
+    name: Shader Validators (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macOS-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install optional shader validators
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install -r requirements.txt
+
+      - name: Run external shader validator tests
+        run: >
+          python -m pytest
+          tests/test_translator/test_codegen/test_external_shader_validators.py
+          -rs

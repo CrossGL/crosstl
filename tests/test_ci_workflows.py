@@ -19,7 +19,12 @@ def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
     assert full_suite, "full-tests.yml must exist"
     assert re.search(r"\bpull_request\s*:", full_suite)
     assert re.search(r"\bpush\s*:", full_suite)
+    assert "glslang-tools" in full_suite
+    assert "shader-validators:" in full_suite
+    assert "macOS-latest" in full_suite
+    assert "windows-latest" in full_suite
     assert re.search(r"python\s+-m\s+pytest\s+tests\b", full_suite)
+    assert "test_external_shader_validators.py" in full_suite
 
 
 def test_backend_and_translator_compatibility_matrices_remain_enabled():
