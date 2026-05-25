@@ -24,7 +24,7 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "directx",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="guarded match arms are not lowerable to HLSL switch yet",
+            reason="identifier and destructuring match patterns are not lowerable to HLSL yet",
         ),
     ),
     pytest.param(
@@ -32,7 +32,7 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "metal",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="guarded match arms are not lowerable to Metal switch yet",
+            reason="identifier and destructuring match patterns are not lowerable to Metal yet",
         ),
     ),
     pytest.param(
@@ -40,7 +40,7 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
         "opengl",
         marks=pytest.mark.xfail(
             strict=True,
-            reason="guarded match arms are not lowerable to GLSL switch yet",
+            reason="identifier and destructuring match patterns are not lowerable to GLSL yet",
         ),
     ),
 )
@@ -60,8 +60,8 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "directx",
         ValueError,
         (
-            "Unsupported match arm for HLSL codegen; only unguarded literal and "
-            "wildcard patterns can be lowered to switch"
+            "Unsupported match arm for HLSL codegen; only literal and wildcard "
+            "patterns are supported"
         ),
     ),
     (
@@ -69,8 +69,8 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "metal",
         ValueError,
         (
-            "Unsupported match arm for Metal codegen; only unguarded literal and "
-            "wildcard patterns can be lowered to switch"
+            "Unsupported match arm for Metal codegen; only literal and wildcard "
+            "patterns are supported"
         ),
     ),
     (
@@ -78,8 +78,8 @@ KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
         "opengl",
         ValueError,
         (
-            "Unsupported match arm for GLSL codegen; only unguarded literal and "
-            "wildcard patterns can be lowered to switch"
+            "Unsupported match arm for GLSL codegen; only literal and wildcard "
+            "patterns are supported"
         ),
     ),
 )

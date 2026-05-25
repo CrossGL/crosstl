@@ -2052,8 +2052,40 @@ def test_match_return_arms_do_not_emit_extra_breaks():
     assert "MatchNode(" not in generated_code
 
 
-def test_match_unsupported_binding_or_guarded_arm_raises():
-    binding_shader = """
+def test_match_guarded_literal_and_wildcard_arms_lower_to_if_chain():
+    shader = """
+    shader MatchGuardPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 if mode > 0 => { value = 1; }
+                0 => { value = 2; }
+                _ if mode < 10 => { value = 3; }
+                _ => { value = 4; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" not in generated_code
+    assert "if (((mode == 0) &&" in generated_code
+    assert "mode > 0" in generated_code
+    assert "else if ((mode == 0))" in generated_code
+    assert "else if" in generated_code
+    assert "mode < 10" in generated_code
+    assert "else {" in generated_code
+    assert "value = 1;" in generated_code
+    assert "value = 2;" in generated_code
+    assert "value = 3;" in generated_code
+    assert "value = 4;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_unsupported_binding_arm_raises():
+    shader = """
     shader MatchBindingPattern {
         int helper(int mode) {
             int value = 0;
@@ -2064,22 +2096,9 @@ def test_match_unsupported_binding_or_guarded_arm_raises():
         }
     }
     """
-    guarded_shader = """
-    shader MatchGuardPattern {
-        int helper(int mode) {
-            int value = 0;
-            match mode {
-                0 if mode > 0 => { value = 1; }
-                _ => { value = 2; }
-            }
-            return value;
-        }
-    }
-    """
 
-    for shader in (binding_shader, guarded_shader):
-        with pytest.raises(ValueError, match="Unsupported match arm"):
-            HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    with pytest.raises(ValueError, match="Unsupported match arm"):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_ray_payload_semantics():

@@ -13,7 +13,6 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     IfNode,
-    LiteralPatternNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -30,7 +29,6 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
     WhileNode,
-    WildcardPatternNode,
 )
 from .array_utils import (
     parse_array_type,
@@ -219,6 +217,11 @@ from .image_access_contracts import (
     unsupported_texture_query_levels_expression,
     unsupported_texture_query_lod_expression,
     unsupported_texture_samples_query_call_expression,
+)
+from .match_utils import (
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    is_switch_lowerable_match,
 )
 
 
@@ -2991,33 +2994,9 @@ class GLSLCodeGen:
         return code
 
     def generate_match(self, node, indent):
-        indent_str = "    " * indent
-        expression = self.generate_expression(getattr(node, "expression", ""))
-
-        code = f"{indent_str}switch ({expression}) {{\n"
-        for arm in getattr(node, "arms", []) or []:
-            pattern = getattr(arm, "pattern", None)
-            if not self.is_supported_switch_match_arm(arm):
-                raise ValueError(
-                    "Unsupported match arm for GLSL codegen; only unguarded "
-                    "literal and wildcard patterns can be lowered to switch"
-                )
-
-            if isinstance(pattern, WildcardPatternNode):
-                label = "default"
-            else:
-                label = f"case {self.generate_expression(pattern.literal)}"
-            body = getattr(arm, "body", [])
-            code += self.generate_switch_case(label, body, indent + 1, auto_break=True)
-
-        code += f"{indent_str}}}\n"
-        return code
-
-    def is_supported_switch_match_arm(self, arm):
-        if getattr(arm, "guard", None) is not None:
-            return False
-        pattern = getattr(arm, "pattern", None)
-        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+        if is_switch_lowerable_match(node):
+            return generate_switch_match(self, node, indent)
+        return generate_ordered_conditional_match(self, node, indent, "GLSL")
 
     def statement_body_terminates(self, body):
         if hasattr(body, "statements"):
