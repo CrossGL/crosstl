@@ -10741,10 +10741,7 @@ def test_metal_texture_3d_sample_offsets_use_sample_offsets():
         in generated_code
     )
     assert "float4 plain = volume.sample(s, uvw, offset);" in generated_code
-    assert (
-        "float4 biased = volume.sample(s, uvw, bias(0.5), offset);"
-        in generated_code
-    )
+    assert "float4 biased = volume.sample(s, uvw, bias(0.5), offset);" in generated_code
     assert (
         "float4 lodSample = volume.sample(s, uvw, level(lod), offset);"
         in generated_code
