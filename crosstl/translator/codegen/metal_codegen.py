@@ -4017,9 +4017,8 @@ class MetalCodeGen:
                 or is_projected_texture_lod_offset_operation(func_name)
                 or is_projected_texture_grad_offset_operation(func_name)
             ):
-                return (
-                    texture_type.startswith("texture2d<")
-                    or texture_type.startswith("texture2d_array<")
+                return texture_type.startswith("texture2d<") or texture_type.startswith(
+                    "texture2d_array<"
                 )
             return (
                 texture_type.startswith("texture1d<")

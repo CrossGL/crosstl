@@ -9047,8 +9047,12 @@ def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
     )
     expected_cube_diagnostics = {
         "textureCompareProjOffset": "offsets require 2D or 2D-array shadow samplers",
-        "textureCompareProjLodOffset": "explicit LOD offsets require 2D shadow samplers",
-        "textureCompareProjGradOffset": "explicit gradient offsets require 2D or 2D-array shadow samplers",
+        "textureCompareProjLodOffset": (
+            "explicit LOD offsets require 2D shadow samplers"
+        ),
+        "textureCompareProjGradOffset": (
+            "explicit gradient offsets require 2D or 2D-array shadow samplers"
+        ),
     }
     for func_name, reason in expected_cube_diagnostics.items():
         assert (
