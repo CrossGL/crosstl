@@ -378,6 +378,26 @@ def test_switch_parsing_preserves_cases_default_and_breaks():
     assert isinstance(switch.cases[2].body[-1], BreakNode)
 
 
+def test_switch_rejects_duplicate_default_labels():
+    code = """
+    void main() {
+        int value = 0;
+        switch (value) {
+            default:
+                value = 1;
+            case 0:
+                value = 2;
+            default:
+                value = 3;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    with pytest.raises(SyntaxError, match="duplicate default"):
+        parse_code(tokens)
+
+
 def test_switch_node_preserves_empty_default_case():
     switch = SwitchNode("value", [], default_case=[])
 
@@ -863,6 +883,24 @@ def test_layout_storage_image_format_and_access_qualifier_parsing():
     assert out_image.variable_name == "outImage"
 
 
+def test_layout_identifier_qualifier_values_parse():
+    code = """
+    layout(set = MATERIAL_SET, binding = ALBEDO_BINDING) uniform sampler2D albedoTex;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+
+    assert isinstance(layout, LayoutNode)
+    assert layout.qualifiers == [
+        ("set", "MATERIAL_SET"),
+        ("binding", "ALBEDO_BINDING"),
+    ]
+    assert layout.data_type == "sampler2D"
+    assert layout.variable_name == "albedoTex"
+
+
 def test_compute_local_size_layout_parsing():
     code = """
     layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
@@ -1015,7 +1053,9 @@ def test_expression_statement_parses_unary_prefix_forms():
     code = """
     void main() {
         int value = 1;
+        bool enabled;
         +value;
+        !enabled;
         ++value;
         --value;
         (1 + 2);
@@ -1024,13 +1064,16 @@ def test_expression_statement_parses_unary_prefix_forms():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    positive = ast.functions[0].body[1]
-    increment = ast.functions[0].body[2]
-    decrement = ast.functions[0].body[3]
-    parenthesized = ast.functions[0].body[4]
+    positive = ast.functions[0].body[2]
+    logical_not = ast.functions[0].body[3]
+    increment = ast.functions[0].body[4]
+    decrement = ast.functions[0].body[5]
+    parenthesized = ast.functions[0].body[6]
 
     assert isinstance(positive, UnaryOpNode)
     assert positive.op == "+"
+    assert isinstance(logical_not, UnaryOpNode)
+    assert logical_not.op == "!"
     assert isinstance(increment, UnaryOpNode)
     assert increment.op == "PRE_INCREMENT"
     assert isinstance(decrement, UnaryOpNode)
@@ -1156,6 +1199,41 @@ def test_custom_type_local_declaration_preserves_type_and_name():
     assert isinstance(declaration, VariableNode)
     assert declaration.vtype == "VertexOutput"
     assert declaration.name == "output"
+
+
+def test_const_local_declaration_parsing():
+    code = """
+    void main() {
+        const float scale = 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    declaration = ast.functions[0].body[0]
+
+    assert isinstance(declaration, AssignmentNode)
+    assert isinstance(declaration.left, VariableNode)
+    assert declaration.left.vtype == "const float"
+    assert declaration.left.name == "scale"
+    assert declaration.right == "1.0"
+
+
+def test_const_global_declaration_parsing():
+    code = """
+    const int MAX_LIGHTS = 4;
+    void main() {}
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    declaration = ast.global_variables[0]
+
+    assert isinstance(declaration, AssignmentNode)
+    assert isinstance(declaration.left, VariableNode)
+    assert declaration.left.vtype == "const int"
+    assert declaration.left.name == "MAX_LIGHTS"
+    assert declaration.right == "4"
 
 
 def test_bitwise_and_shift_precedence_parsing():

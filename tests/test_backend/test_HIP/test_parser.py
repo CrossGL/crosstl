@@ -429,6 +429,40 @@ class TestHipParser:
         assert launch.stream == "0"
         assert launch.args == ["packedArgs"]
 
+    def test_hip_launch_kernel_api_parsing(self):
+        """Test hipLaunchKernel parses as a kernel launch"""
+        code = """
+        void host(float* data, int n, int stream) {
+            dim3 grid(16);
+            dim3 block(32);
+            void* packedArgs[] = { &data, &n };
+            hipLaunchKernel((const void*)kernel, grid, block, packedArgs, 0, stream);
+            hipLaunchKernel(kernel);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        packed_args = ast.statements[0].body[2]
+        assert packed_args.vtype == "void *[]"
+        assert isinstance(packed_args.value, InitializerListNode)
+        assert packed_args.value.elements[0].op == "&"
+        assert packed_args.value.elements[0].operand == "data"
+        assert packed_args.value.elements[1].operand == "n"
+
+        launch = ast.statements[0].body[3]
+        assert isinstance(launch, KernelLaunchNode)
+        assert launch.kernel_name == "kernel"
+        assert launch.blocks == "grid"
+        assert launch.threads == "block"
+        assert launch.shared_mem == "0"
+        assert launch.stream == "stream"
+        assert launch.args == ["packedArgs"]
+        assert isinstance(ast.statements[0].body[4], FunctionCallNode)
+        assert ast.statements[0].body[4].name == "hipLaunchKernel"
+
     def test_templated_hip_launch_kernel_ggl_parsing(self):
         """Test hipLaunchKernelGGL accepts a template-id kernel argument"""
         code = """
@@ -1015,6 +1049,27 @@ class TestHipParser:
             "BufferPtr",
         ]
         assert function.body[5].name == "consume"
+
+    def test_type_alias_c_style_cast_parsing(self):
+        """Test C-style casts to typedef aliases parse as cast nodes"""
+        code = """
+        typedef unsigned int LaneMask;
+
+        LaneMask helper(float x) {
+            return (LaneMask)x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[1].body
+        assert len(body) == 1
+        assert isinstance(body[0], ReturnNode)
+        assert isinstance(body[0].value, CastNode)
+        assert body[0].value.target_type == "LaneMask"
+        assert body[0].value.expression == "x"
 
     def test_auto_pointer_reference_local_declarations_parsing(self):
         """Test auto pointer and reference local declarations"""

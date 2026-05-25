@@ -178,6 +178,10 @@ class VulkanToCrossGLConverter:
                 code += self.generate_struct(node)
             elif isinstance(node, UniformNode):
                 code += self.generate_uniform(node)
+            elif isinstance(node, VariableNode):
+                code += f"    {self.map_type(self.variable_type(node))} {node.name};\n"
+            elif isinstance(node, AssignmentNode):
+                code += f"    {self.generate_assignment(node)};\n"
             elif isinstance(node, FunctionNode):
                 # Determine if this is a vertex or fragment shader based on the function name
                 if node.name == "main":
@@ -747,4 +751,12 @@ class VulkanToCrossGLConverter:
         """Map a Vulkan/SPIR-V type name to the closest CrossGL type name."""
         if vulkan_type in self.type_map:
             return self.type_map[vulkan_type]
+
+        type_parts = vulkan_type.split()
+        if len(type_parts) > 1:
+            qualifiers = type_parts[:-1]
+            base_type = type_parts[-1]
+            mapped_base = self.type_map.get(base_type, base_type)
+            return " ".join([*qualifiers, mapped_base])
+
         return vulkan_type

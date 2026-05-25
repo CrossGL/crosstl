@@ -665,12 +665,27 @@ class HLSLCodeGen:
                             node.name, member.name, element_type
                         )
                         if member.size:
-                            code += (
-                                f"    {member_type} {member.name}" f"[{member.size}];\n"
-                            )
+                            declaration_type = f"{member_type}[{member.size}]"
                         else:
                             # Dynamic arrays in HLSL
-                            code += f"    {member_type}[] {member.name};\n"
+                            declaration_type = f"{member_type}[]"
+                        semantic = self.semantic_from_array_node(member)
+                        self.validate_hlsl_struct_member_semantic_type(
+                            node.name, member.name, declaration_type, semantic
+                        )
+                        semantic_attr = self.map_semantic(semantic)
+                        tess_factor_declaration = (
+                            self.hlsl_tess_factor_member_declaration(
+                                declaration_type, member.name, semantic
+                            )
+                        )
+                        if tess_factor_declaration is not None:
+                            code += f"    {tess_factor_declaration} {semantic_attr};\n"
+                        else:
+                            declaration = format_c_style_array_declaration(
+                                declaration_type, member.name
+                            )
+                            code += f"    {declaration}{semantic_attr};\n"
                     else:
                         # Handle both old and new AST member structures
                         if hasattr(member, "member_type"):
@@ -713,6 +728,9 @@ class HLSLCodeGen:
                             }
                             semantic = name_semantics.get(member.name)
 
+                        self.validate_hlsl_struct_member_semantic_type(
+                            node.name, member.name, member_type, semantic
+                        )
                         semantic_attr = self.map_semantic(semantic)
                         tess_factor_declaration = (
                             self.hlsl_tess_factor_member_declaration(
@@ -1657,13 +1675,26 @@ class HLSLCodeGen:
 
         effective_shader_type = shader_type or qualifier
 
+        return_semantic = self.hlsl_function_return_semantic(func)
+
+        if effective_shader_type is not None:
+            self.validate_hlsl_function_return_semantic(
+                func, effective_shader_type, raw_return_type, return_semantic
+            )
+            self.validate_hlsl_stage_return_semantics(
+                func, effective_shader_type, return_semantic
+            )
+
         if effective_shader_type in shader_map:
-            return_semantic = self.map_semantic(self.semantic_from_node(func))
+            return_semantic_attr = self.map_semantic(return_semantic)
             code += f"// {effective_shader_type.capitalize()} Shader\n"
             if effective_shader_type == "compute":
+                self.validate_hlsl_stage_parameter_requirements(
+                    func, effective_shader_type
+                )
                 code += self.generate_compute_numthreads(execution_config)
             function_name = entry_name or shader_map[effective_shader_type]
-            code += f"{return_type} {function_name}({params_str}){return_semantic} {{\n"
+            code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
             self.validate_hlsl_stage_requirements(func, effective_shader_type)
@@ -1671,7 +1702,8 @@ class HLSLCodeGen:
             if shader_attr:
                 code += f'[shader("{shader_attr}")]\n'
             function_name = entry_name or func.name
-            code += f"{return_type} {function_name}({params_str}) {{\n"
+            return_semantic_attr = self.map_semantic(return_semantic)
+            code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -4232,6 +4264,13 @@ class HLSLCodeGen:
         arguments = type_name.split("<", 1)[1][:-1].strip()
         return self.split_hlsl_generic_argument_string(arguments)
 
+    def hlsl_parameter_type_generic_argument(self, parameter, index):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        generic_args = self.hlsl_type_generic_arguments(param_type)
+        if len(generic_args) <= index:
+            return None
+        return self.type_name_string(generic_args[index])
+
     def hlsl_patch_control_point_count(self, parameters, patch_type):
         for parameter in parameters:
             if self.hlsl_parameter_type_base(parameter) != patch_type:
@@ -4506,6 +4545,211 @@ class HLSLCodeGen:
                 parameters, shader_type, semantic
             )
 
+    def validate_hlsl_exact_semantic_type(
+        self, parameters, shader_type, semantic, expected_type, expected_description
+    ):
+        for parameter in parameters:
+            if not self.hlsl_parameter_has_semantic(parameter, semantic):
+                continue
+
+            base_type, array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+                parameter
+            )
+            if base_type is None:
+                continue
+            if array_suffix or base_type != expected_type:
+                raise ValueError(
+                    f"DirectX {shader_type} stage {semantic} "
+                    f"parameter '{parameter.name}' "
+                    f"must be {expected_description}"
+                )
+
+    def validate_hlsl_compute_system_value_types(self, parameters):
+        self.validate_hlsl_exact_semantic_type(
+            parameters, "compute", "SV_GroupIndex", "uint", "scalar uint"
+        )
+        for semantic in (
+            "SV_GroupID",
+            "SV_GroupThreadID",
+            "SV_DispatchThreadID",
+        ):
+            self.validate_hlsl_exact_semantic_type(
+                parameters, "compute", semantic, "uint3", "uint3"
+            )
+
+    def validate_hlsl_function_return_semantic(
+        self, func, shader_type, raw_return_type=None, semantic=None
+    ):
+        if semantic is None:
+            semantic = self.hlsl_function_return_semantic(func)
+        if semantic is None:
+            return
+        mapped_semantic = self.hlsl_canonical_semantic(semantic)
+        function_name = getattr(func, "name", "<anonymous>")
+        actual_type = self.map_type(
+            raw_return_type or getattr(func, "return_type", None)
+        )
+        actual_base_type, array_suffix = split_array_type_suffix(actual_type)
+        if not array_suffix and actual_base_type == "void":
+            raise ValueError(
+                f"DirectX {shader_type} function '{function_name}' cannot use "
+                f"return semantic '{semantic}' with void return type"
+            )
+
+        invalid_return_semantics = {
+            "gl_VertexID",
+            "gl_InstanceID",
+            "gl_PrimitiveID",
+            "gl_IsFrontFace",
+            "gl_FragCoord",
+            "gl_FrontFacing",
+            "gl_PointCoord",
+            "gl_GlobalInvocationID",
+            "gl_LocalInvocationID",
+            "gl_WorkGroupID",
+            "gl_LocalInvocationIndex",
+            "gl_WorkGroupSize",
+            "gl_NumWorkGroups",
+            "SV_VertexID",
+            "SV_InstanceID",
+            "SV_PrimitiveID",
+            "PRIMITIVE_ID",
+            "FRONT_FACE",
+            "SV_IsFrontFace",
+            "SV_GroupIndex",
+            "SV_GroupID",
+            "SV_GroupThreadID",
+            "SV_DispatchThreadID",
+        }
+        if (
+            str(semantic) in invalid_return_semantics
+            or mapped_semantic in invalid_return_semantics
+        ):
+            raise ValueError(
+                f"DirectX {shader_type} semantic '{semantic}' cannot be used "
+                "as a function return semantic"
+            )
+
+        expected_type = self.hlsl_output_builtin_semantic_type(mapped_semantic)
+        if expected_type is None:
+            return
+
+        if array_suffix or actual_base_type != expected_type:
+            raise ValueError(
+                f"DirectX {shader_type} return semantic '{semantic}' maps to "
+                f"'{mapped_semantic}' and requires function '{function_name}' "
+                f"to return {expected_type}, got {actual_type}"
+            )
+
+    def validate_hlsl_struct_member_semantic_type(
+        self, struct_name, member_name, member_type, semantic
+    ):
+        if semantic is None:
+            return
+
+        mapped_semantic = self.hlsl_canonical_semantic(semantic)
+        expected_type = self.hlsl_output_builtin_semantic_type(mapped_semantic)
+        if expected_type is None:
+            return
+
+        actual_type = self.map_type(member_type)
+        actual_base_type, array_suffix = split_array_type_suffix(actual_type)
+        if array_suffix or actual_base_type != expected_type:
+            raise ValueError(
+                f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
+                f"'{mapped_semantic}' and requires member '{member_name}' to "
+                f"have type {expected_type}, got {actual_type}"
+            )
+
+    def hlsl_output_builtin_semantic_type(self, mapped_semantic):
+        if mapped_semantic is None:
+            return None
+
+        semantic_key = str(mapped_semantic).upper()
+        output_types = {
+            "SV_POSITION": "float4",
+            "SV_DEPTH": "float",
+        }
+        if semantic_key in output_types:
+            return output_types[semantic_key]
+        if semantic_key.startswith("SV_TARGET"):
+            suffix = semantic_key[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "float4"
+        return None
+
+    def validate_hlsl_stage_return_semantics(self, func, shader_type, semantic=None):
+        if semantic is None:
+            semantic = self.hlsl_function_return_semantic(func)
+        self.validate_hlsl_stage_output_semantic(
+            shader_type,
+            semantic,
+            "function return",
+            getattr(func, "name", "<anonymous>"),
+        )
+
+        return_struct = self.hlsl_return_struct(func)
+        if return_struct is None:
+            return
+
+        struct_name = getattr(return_struct, "name", "<anonymous>")
+        for member in getattr(return_struct, "members", []) or []:
+            self.validate_hlsl_stage_output_semantic(
+                shader_type,
+                self.semantic_from_struct_member(member),
+                f"return struct '{struct_name}' member",
+                getattr(member, "name", "<anonymous>"),
+            )
+
+    def validate_hlsl_stage_output_semantic(
+        self, shader_type, semantic, context, name
+    ):
+        if semantic is None:
+            return
+
+        mapped_semantic = self.hlsl_canonical_semantic(semantic)
+        semantic_key = str(mapped_semantic).upper()
+        forbidden_description = None
+        if shader_type == "vertex" and (
+            semantic_key == "SV_DEPTH" or self.is_hlsl_target_semantic(semantic_key)
+        ):
+            forbidden_description = "fragment output"
+        elif shader_type in {
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+        } and (
+            semantic_key == "SV_DEPTH" or self.is_hlsl_target_semantic(semantic_key)
+        ):
+            forbidden_description = "fragment output"
+        elif shader_type == "fragment" and semantic_key == "SV_POSITION":
+            forbidden_description = "vertex position output"
+        elif shader_type == "compute" and (
+            semantic_key in {"SV_POSITION", "SV_DEPTH"}
+            or self.is_hlsl_target_semantic(semantic_key)
+        ):
+            forbidden_description = "graphics output"
+
+        if forbidden_description is None:
+            return
+
+        raise ValueError(
+            f"DirectX {shader_type} stage {context} '{name}' cannot use "
+            f"{forbidden_description} semantic '{mapped_semantic}'"
+        )
+
+    def is_hlsl_target_semantic(self, semantic_key):
+        if not semantic_key.startswith("SV_TARGET"):
+            return False
+        suffix = semantic_key[len("SV_TARGET") :]
+        return suffix == "" or suffix.isdigit()
+
+    def hlsl_canonical_semantic(self, semantic):
+        if semantic is None:
+            return None
+        return self.semantic_map.get(str(semantic), str(semantic))
+
     def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
         parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
         if not parameters:
@@ -4539,6 +4783,7 @@ class HLSLCodeGen:
                 "geometry",
                 ("SV_PrimitiveID", "SV_GSInstanceID"),
             )
+            self.validate_hlsl_geometry_stream_output_semantics(parameters)
 
         if shader_type == "tessellation_control":
             if "InputPatch" not in parameter_type_bases:
@@ -4583,6 +4828,32 @@ class HLSLCodeGen:
                 "tessellation_evaluation",
                 ("SV_PrimitiveID",),
             )
+
+        if shader_type == "compute":
+            self.validate_hlsl_compute_system_value_types(parameters)
+
+    def validate_hlsl_geometry_stream_output_semantics(self, parameters):
+        stream_types = {"PointStream", "LineStream", "TriangleStream"}
+        for parameter in parameters:
+            if self.hlsl_parameter_type_base(parameter) not in stream_types:
+                continue
+
+            stream_type_name = self.hlsl_parameter_type_generic_argument(parameter, 0)
+            if stream_type_name is None:
+                continue
+
+            stream_type_name = stream_type_name.split("<", 1)[0].split("[", 1)[0].strip()
+            stream_struct = self.structs_by_name.get(stream_type_name)
+            if stream_struct is None:
+                continue
+
+            for member in getattr(stream_struct, "members", []) or []:
+                self.validate_hlsl_stage_output_semantic(
+                    "geometry",
+                    self.semantic_from_struct_member(member),
+                    f"output stream struct '{stream_type_name}' member",
+                    getattr(member, "name", "<anonymous>"),
+                )
 
     def validate_hlsl_patch_constant_function(self, func, shader_type):
         if shader_type != "tessellation_control":
@@ -7779,6 +8050,51 @@ class HLSLCodeGen:
             if hasattr(attr, "name"):
                 return attr.name
         return None
+
+    def hlsl_function_return_semantic(self, func):
+        semantic = getattr(func, "semantic", None)
+        if semantic is not None:
+            return semantic
+        if not hasattr(func, "attributes"):
+            return None
+        for attr in func.attributes:
+            if self.hlsl_stage_attribute_name(attr):
+                continue
+            if (
+                is_image_format_attribute(attr)
+                or self.is_resource_binding_attribute(attr)
+                or is_resource_access_attribute(attr)
+                or self.is_resource_memory_attribute(attr)
+                or self.is_glsl_buffer_block_attribute(attr)
+            ):
+                continue
+            if hasattr(attr, "name"):
+                return attr.name
+        return None
+
+    def semantic_from_array_node(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic is not None:
+            return semantic
+        if not hasattr(node, "attributes"):
+            return None
+        for attr in node.attributes:
+            if (
+                is_image_format_attribute(attr)
+                or self.is_resource_binding_attribute(attr)
+                or is_resource_access_attribute(attr)
+                or self.is_resource_memory_attribute(attr)
+                or self.is_glsl_buffer_block_attribute(attr)
+            ):
+                continue
+            if hasattr(attr, "name"):
+                return attr.name
+        return None
+
+    def semantic_from_struct_member(self, member):
+        if isinstance(member, ArrayNode):
+            return self.semantic_from_array_node(member)
+        return self.semantic_from_node(member)
 
     def map_resource_parameter_type_with_hint(
         self, vtype, node=None, function_name=None

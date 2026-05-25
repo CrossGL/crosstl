@@ -1475,6 +1475,20 @@ class HipParser:
                 args[5:],
             )
 
+        if (
+            function_name == "hipLaunchKernel"
+            and len(args) == 6
+            and function_name not in self.user_function_names
+        ):
+            return KernelLaunchNode(
+                self.unwrap_hip_kernel_function_arg(args[0]),
+                args[1],
+                args[2],
+                args[4],
+                args[5],
+                [args[3]],
+            )
+
         return FunctionCallNode(function_name, args)
 
     def parse_cpp_named_cast_call(self, function_name, args):
@@ -1487,6 +1501,11 @@ class HipParser:
                 return CastNode(function_name[len(prefix) : -1], args[0])
 
         return None
+
+    def unwrap_hip_kernel_function_arg(self, function_arg):
+        if isinstance(function_arg, CastNode):
+            return function_arg.expression
+        return function_arg
 
     def parse_kernel_launch(self, kernel_name):
         self.consume("KERNEL_LAUNCH_START")
@@ -2033,7 +2052,10 @@ class HipParser:
             while self.match(*self.TYPE_QUALIFIER_TOKENS):
                 self.advance()
 
-            if not self.is_type_token(allow_identifier=False):
+            if not self.is_type_token(allow_identifier=False) and not (
+                self.match("IDENTIFIER")
+                and self.current_token.value in self.type_aliases
+            ):
                 return False
 
             self.advance()

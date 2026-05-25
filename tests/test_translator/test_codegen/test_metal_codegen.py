@@ -2026,19 +2026,47 @@ def test_compute_builtin_semantics_roundtrip():
             void main(uvec3 gid @ gl_GlobalInvocationID,
                       uvec3 lid @ gl_LocalInvocationID,
                       uvec3 group @ gl_WorkGroupID,
-                      uint idx @ gl_LocalInvocationIndex) { }
+                      uint idx @ gl_LocalInvocationIndex,
+                      uvec3 size @ gl_WorkGroupSize,
+                      uvec3 groups @ gl_NumWorkGroups) { }
         }
     }
     """
     ast = crosstl.translator.parse(code)
     generated = MetalCodeGen().generate(ast)
     for expected in [
-        "thread_position_in_grid",
-        "thread_position_in_threadgroup",
-        "threadgroup_position_in_grid",
-        "thread_index_in_threadgroup",
+        "uint3 gid [[thread_position_in_grid]]",
+        "uint3 lid [[thread_position_in_threadgroup]]",
+        "uint3 group [[threadgroup_position_in_grid]]",
+        "uint idx [[thread_index_in_threadgroup]]",
+        "uint3 size [[threads_per_threadgroup]]",
+        "uint3 groups [[threadgroups_per_grid]]",
     ]:
         assert expected in generated
+
+
+@pytest.mark.parametrize(
+    ("param_type", "semantic", "metal_semantic", "expected_type"),
+    [
+        ("float", "gl_GlobalInvocationID", "thread_position_in_grid", "uint3"),
+        ("uvec2", "gl_LocalInvocationID", "thread_position_in_threadgroup", "uint3"),
+        ("int", "gl_LocalInvocationIndex", "thread_index_in_threadgroup", "uint"),
+        ("vec3", "gl_NumWorkGroups", "threadgroups_per_grid", "uint3"),
+    ],
+)
+def test_compute_builtin_parameter_types_are_validated(
+    param_type, semantic, metal_semantic, expected_type
+):
+    code = f"""
+    shader cs {{
+        compute {{
+            void main({param_type} value @ {semantic}) {{ }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(code)
+    with pytest.raises(ValueError, match=f"{metal_semantic}.*{expected_type}"):
+        MetalCodeGen().generate_stage(ast, "compute")
 
 
 def test_compute_direct_builtin_references_inject_metal_parameters():
@@ -2066,6 +2094,365 @@ def test_compute_direct_builtin_references_inject_metal_parameters():
     assert "uint3 gl_WorkGroupSize [[threads_per_threadgroup]]" in generated
     assert "uint3 gl_NumWorkGroups [[threadgroups_per_grid]]" in generated
     assert "uint gx = gl_GlobalInvocationID.x;" in generated
+
+
+def test_graphics_builtin_parameter_semantics_roundtrip():
+    code = """
+    shader GraphicsBuiltinMetal {
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        struct FSOutput {
+            vec4 color @ gl_FragColor;
+        };
+
+        vertex {
+            VSOutput main(
+                VSInput input,
+                uint vertexID @ gl_VertexID,
+                uint instanceID @ gl_InstanceID
+            ) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.position.x = output.position.x + float(vertexID + instanceID);
+                return output;
+            }
+        }
+
+        fragment {
+            FSOutput main(
+                VSOutput input,
+                uint primitiveID @ gl_PrimitiveID,
+                bool frontFacing @ gl_FrontFacing,
+                vec4 coord @ gl_FragCoord,
+                vec2 point @ gl_PointCoord
+            ) {
+                FSOutput output;
+                output.color = coord + vec4(point, float(primitiveID), 1.0);
+                if (frontFacing) {
+                    output.color.x = output.color.x + 1.0;
+                }
+                return output;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+
+    vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
+    assert "uint vertexID [[vertex_id]]" in vertex_code
+    assert "uint instanceID [[instance_id]]" in vertex_code
+
+    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
+    assert "uint primitiveID [[primitive_id]]" in fragment_code
+    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "float4 coord [[position]]" in fragment_code
+    assert "float2 point [[point_coord]]" in fragment_code
+
+
+@pytest.mark.parametrize(
+    ("stage", "param_type", "semantic", "metal_semantic", "expected_type"),
+    [
+        ("vertex", "int", "gl_VertexID", "vertex_id", "uint"),
+        ("vertex", "float", "gl_InstanceID", "instance_id", "uint"),
+        ("fragment", "int", "gl_PrimitiveID", "primitive_id", "uint"),
+        ("fragment", "int", "gl_FrontFacing", "is_front_facing", "bool"),
+        ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
+        ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
+    ],
+)
+def test_graphics_builtin_parameter_types_are_validated(
+    stage, param_type, semantic, metal_semantic, expected_type
+):
+    output_struct = (
+        "struct VSOutput { vec4 position @ gl_Position; };"
+        if stage == "vertex"
+        else "struct FSOutput { vec4 color @ gl_FragColor; };"
+    )
+    return_type = "VSOutput" if stage == "vertex" else "FSOutput"
+    body = (
+        "VSOutput output; output.position = vec4(0.0); return output;"
+        if stage == "vertex"
+        else "FSOutput output; output.color = vec4(0.0); return output;"
+    )
+    code = f"""
+    shader BadGraphicsBuiltinType {{
+        {output_struct}
+        {stage} {{
+            {return_type} main({param_type} value @ {semantic}) {{
+                {body}
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(code)
+    with pytest.raises(ValueError, match=f"{metal_semantic}.*{expected_type}"):
+        MetalCodeGen().generate_stage(ast, stage)
+
+
+def test_struct_builtin_member_semantics_are_validated():
+    valid_code = """
+    shader ValidStructBuiltins {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            float pointSize @ gl_PointSize;
+        };
+
+        struct FSInput {
+            vec4 coord @ gl_FragCoord;
+            vec2 point @ gl_PointCoord;
+            bool frontFacing @ gl_FrontFacing;
+            uint primitiveID @ gl_PrimitiveID;
+        };
+
+        struct FSOutput {
+            vec4 color @ gl_FragColor;
+            float depth @ gl_FragDepth;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                output.position = vec4(0.0);
+                output.pointSize = 1.0;
+                return output;
+            }
+        }
+
+        fragment {
+            FSOutput main(FSInput input) {
+                FSOutput output;
+                output.color = input.coord + vec4(input.point, float(input.primitiveID), 1.0);
+                output.depth = 0.5;
+                return output;
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate(crosstl.translator.parse(valid_code))
+    assert "float4 position [[position]];" in generated
+    assert "float pointSize [[point_size]];" in generated
+    assert "float4 coord [[position]];" in generated
+    assert "float2 point [[point_coord]];" in generated
+    assert "bool frontFacing [[is_front_facing]];" in generated
+    assert "uint primitiveID [[primitive_id]];" in generated
+    assert "float4 color [[color(0)]];" in generated
+    assert "float depth [[depth(any)]];" in generated
+
+
+@pytest.mark.parametrize(
+    ("member_decl", "metal_semantic", "expected_type"),
+    [
+        ("vec3 position @ gl_Position", "position", "float4"),
+        ("vec3 color @ gl_FragColor", "color\\(0\\)", "float4"),
+        ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
+        ("int frontFacing @ gl_FrontFacing", "is_front_facing", "bool"),
+        ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
+        ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
+        ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
+    ],
+)
+def test_struct_builtin_member_types_are_validated(
+    member_decl, metal_semantic, expected_type
+):
+    code = f"""
+    shader BadStructBuiltin {{
+        struct BadIO {{
+            {member_decl};
+        }};
+
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                return vec4(0.0);
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(code)
+    with pytest.raises(ValueError, match=f"{metal_semantic}.*{expected_type}"):
+        MetalCodeGen().generate(ast)
+
+
+def test_function_return_builtin_semantics_are_validated():
+    valid_code = """
+    shader ValidReturnBuiltins {
+        vertex {
+            vec4 main() @ gl_Position {
+                return vec4(0.0);
+            }
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor1 {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(valid_code)
+    assert "vertex float4 vertex_main()" in MetalCodeGen().generate_stage(ast, "vertex")
+    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
+    assert "struct fragment_main_Return" in fragment_code
+    assert "float4 color [[color(1)]];" in fragment_code
+    assert "fragment fragment_main_Return fragment_main()" in fragment_code
+    assert "return fragment_main_Return{float4(1.0)};" in fragment_code
+
+
+def test_function_return_semantics_lower_to_output_structs_when_required():
+    depth_code = """
+    shader DepthReturnBuiltin {
+        fragment {
+            float main() @ gl_FragDepth {
+                return 0.5;
+            }
+        }
+    }
+    """
+    depth_output = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(depth_code), "fragment"
+    )
+    assert "struct fragment_main_Return" in depth_output
+    assert "float depth [[depth(any)]];" in depth_output
+    assert "fragment fragment_main_Return fragment_main()" in depth_output
+    assert "return fragment_main_Return{0.5};" in depth_output
+
+
+def test_function_return_semantic_ignores_stage_control_attributes():
+    code = """
+    shader ReturnSemanticWithStageControls {
+        vertex {
+            vec4 main() @max_vertices(3) @gl_Position {
+                return vec4(0.0);
+            }
+        }
+
+        fragment {
+            vec4 main() @max_vertices(3) @gl_FragColor1 {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+
+    vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
+    assert "vertex float4 vertex_main()" in vertex_code
+
+    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
+    assert "struct fragment_main_Return" in fragment_code
+    assert "float4 color [[color(1)]];" in fragment_code
+    assert "return fragment_main_Return{float4(1.0)};" in fragment_code
+
+
+@pytest.mark.parametrize(
+    ("stage", "semantic"),
+    [
+        ("vertex", "gl_Position"),
+        ("fragment", "gl_FragColor"),
+        ("fragment", "TEXCOORD0"),
+    ],
+)
+def test_void_function_return_semantics_are_rejected(stage, semantic):
+    code = f"""
+    shader BadVoidReturnSemantic {{
+        {stage} {{
+            void main() @ {semantic} {{ }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(code)
+
+    with pytest.raises(ValueError, match=f"{stage}.*{semantic}.*void return type"):
+        MetalCodeGen().generate_stage(ast, stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "metal_semantic", "expected_type"),
+    [
+        ("vertex", "int", "gl_Position", "position", "float4"),
+        ("fragment", "vec3", "gl_FragColor", "color\\(0\\)", "float4"),
+        ("fragment", "vec4", "gl_FragDepth", "depth\\(any\\)", "float"),
+    ],
+)
+def test_function_return_builtin_types_are_validated(
+    stage, return_type, semantic, metal_semantic, expected_type
+):
+    value = {
+        "int": "0",
+        "vec2": "vec2(0.0)",
+        "vec3": "vec3(0.0)",
+        "vec4": "vec4(0.0)",
+    }[return_type]
+    code = f"""
+    shader BadReturnBuiltin {{
+        {stage} {{
+            {return_type} main() @ {semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(code)
+    with pytest.raises(ValueError, match=f"{metal_semantic}.*{expected_type}"):
+        MetalCodeGen().generate_stage(ast, stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "value"),
+    [
+        ("vertex", "uint", "gl_VertexID", "0u"),
+        ("vertex", "float", "gl_PointSize", "2.0"),
+        ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
+        ("fragment", "bool", "gl_FrontFacing", "true"),
+        ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+    ],
+)
+def test_input_only_builtin_semantics_are_rejected_on_function_returns(
+    stage, return_type, semantic, value
+):
+    code = f"""
+    shader BadInputReturnBuiltin {{
+        {stage} {{
+            {return_type} main() @ {semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(code)
+    with pytest.raises(ValueError, match=f"{semantic}.*return semantic"):
+        MetalCodeGen().generate_stage(ast, stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "value", "expected"),
+    [
+        ("vertex", "vec4", "gl_FragColor", "vec4(0.0)", "fragment output"),
+        ("vertex", "float", "gl_FragDepth", "0.5", "fragment output"),
+        ("fragment", "vec4", "gl_Position", "vec4(0.0)", "vertex output"),
+    ],
+)
+def test_function_return_output_builtin_stages_are_validated(
+    stage, return_type, semantic, value, expected
+):
+    code = f"""
+    shader BadReturnOutputStage {{
+        {stage} {{
+            {return_type} main() @ {semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(code)
+
+    with pytest.raises(ValueError, match=f"{stage}.*{expected}.*{semantic}"):
+        MetalCodeGen().generate_stage(ast, stage)
 
 
 def test_metal_raytrace_and_mesh_intrinsics():
@@ -2360,7 +2747,7 @@ def test_metal_attributes_semantics():
         };
         
         vertex {
-            VSOutput main(VSInput input, int vertexID @ gl_VertexID) {
+            VSOutput main(VSInput input, uint vertexID @ gl_VertexID) {
                 VSOutput output;
                 output.position = vec4(input.position, 1.0);
                 output.worldNormal = input.normal;
@@ -2395,7 +2782,7 @@ def test_metal_attributes_semantics():
         assert "[[color(0)]]" in generated_code  # gl_FragColor
 
         # Check vertex ID
-        assert "[[vertex_id]]" in generated_code or "[[stage_in]]" in generated_code
+        assert "uint vertexID [[vertex_id]]" in generated_code
     except SyntaxError as e:
         pytest.fail(f"Metal attributes/semantics conversion failed: {e}")
 

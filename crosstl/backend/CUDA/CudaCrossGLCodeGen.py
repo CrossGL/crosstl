@@ -156,6 +156,18 @@ class CudaToCrossGLConverter:
             self.emit(comment)
         return True
 
+    def format_cuda_runtime_status_expression(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        if self.is_user_defined_function(value.name):
+            return None
+
+        comments = self.format_cuda_runtime_call(value)
+        if comments is None:
+            return None
+
+        return comments, "cudaSuccess"
+
     def format_cuda_runtime_call(self, node):
         args = [self.visit(arg) for arg in node.args]
         name = node.name
@@ -177,25 +189,45 @@ class CudaToCrossGLConverter:
                 if len(args) >= 5:
                     comment += f", stream: {args[4]}"
                 return [comment]
-        elif name == "cudaMemset":
+        elif name in {"cudaMemset", "cudaMemsetAsync"}:
             if len(args) >= 3:
-                return [
+                comment = (
                     f"// CUDA memory set: {args[0]}, value: {args[1]}, "
                     f"bytes: {args[2]}"
-                ]
+                )
+                if len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
         elif name in {"cudaDeviceSynchronize", "cudaStreamSynchronize"}:
             if args:
                 return [f"// CUDA synchronize: {args[0]}"]
             return ["// CUDA device synchronize"]
-        elif name in {"cudaStreamCreate", "cudaStreamDestroy"}:
+        elif name in {
+            "cudaStreamCreate",
+            "cudaStreamCreateWithFlags",
+            "cudaStreamCreateWithPriority",
+            "cudaStreamDestroy",
+        }:
             if args:
-                action = "create" if name == "cudaStreamCreate" else "destroy"
+                action = "destroy" if name == "cudaStreamDestroy" else "create"
                 stream = (
                     self.format_runtime_pointer_target(node.args[0])
                     if action == "create"
                     else args[0]
                 )
-                return [f"// CUDA stream {action}: {stream}"]
+                comment = f"// CUDA stream {action}: {stream}"
+                if (
+                    name
+                    in {
+                        "cudaStreamCreateWithFlags",
+                        "cudaStreamCreateWithPriority",
+                    }
+                    and len(args) >= 2
+                ):
+                    comment += f", flags: {args[1]}"
+                if name == "cudaStreamCreateWithPriority" and len(args) >= 3:
+                    comment += f", priority: {args[2]}"
+                return [comment]
         elif name in {"cudaEventCreate", "cudaEventCreateWithFlags"}:
             if args:
                 event = self.format_runtime_pointer_target(node.args[0])
@@ -231,6 +263,10 @@ class CudaToCrossGLConverter:
                 if len(args) >= 3:
                     comment += f", flags: {args[2]}"
                 return [comment]
+        elif name == "cudaGetLastError":
+            return ["// CUDA get last error"]
+        elif name == "cudaPeekAtLastError":
+            return ["// CUDA peek at last error"]
 
         return None
 
@@ -320,10 +356,6 @@ class CudaToCrossGLConverter:
 
     def visit_FunctionNode(self, node):
         """Render a CUDA function node as a CrossGL function."""
-        # Skip device functions in CrossGL (they become inline)
-        if "__device__" in node.qualifiers:
-            return
-
         return_type = self.convert_cuda_type_to_crossgl(node.return_type)
         params = []
 
@@ -421,6 +453,14 @@ class CudaToCrossGLConverter:
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
         if node.value:
+            runtime_status = self.format_cuda_runtime_status_expression(node.value)
+            if runtime_status is not None:
+                comments, value = runtime_status
+                for comment in comments:
+                    self.emit(comment)
+                self.emit(f"var {node.name}: {var_type} = {value};")
+                return
+
             value = self.visit(node.value)
             self.emit(f"var {node.name}: {var_type} = {value};")
         else:
@@ -552,8 +592,21 @@ class CudaToCrossGLConverter:
 
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)
+        operator = getattr(node, "operator", "=")
+        runtime_status = (
+            self.format_cuda_runtime_status_expression(node.right)
+            if operator == "="
+            else None
+        )
+        if runtime_status is not None:
+            comments, value = runtime_status
+            for comment in comments:
+                self.emit(comment)
+            self.emit(f"{left} = {value};")
+            return None
+
         right = self.visit(node.right)
-        return f"{left} {node.operator} {right}"
+        return f"{left} {operator} {right}"
 
     def visit_BinaryOpNode(self, node):
         left = self.visit(node.left)

@@ -601,6 +601,27 @@ def test_for_loop_pattern_parsing():
         pytest.fail(f"For loop pattern parsing failed: {e}")
 
 
+def test_for_loop_enumerate_iter_pattern_parsing():
+    code = """
+    fn test_enumerate(values: Buffer) {
+        for (i, value) in values.iter().enumerate() {
+            consume(i, value);
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        loop = ast.functions[0].body[0]
+
+        assert isinstance(loop.pattern, TupleNode)
+        assert loop.pattern.elements == ["i", "value"]
+        assert isinstance(loop.iterable, FunctionCallNode)
+        assert isinstance(loop.iterable.name, MemberAccessNode)
+        assert loop.iterable.name.member == "enumerate"
+    except Exception as e:
+        pytest.fail(f"For loop enumerate pattern parsing failed: {e}")
+
+
 def test_for_loop_step_by_range_parsing():
     code = """
     fn test_for_step_by() {
@@ -631,6 +652,71 @@ def test_for_loop_step_by_range_parsing():
         assert second_iterable.args == ["step"]
     except Exception as e:
         pytest.fail(f"For loop step_by range parsing failed: {e}")
+
+
+def test_for_loop_rev_range_parsing():
+    code = """
+    fn test_for_rev(limit: i32) {
+        for i in (0..4).rev() {
+            use_index(i);
+        }
+        for j in (1..=4).rev() {
+            use_index(j);
+        }
+        for k in (0..limit).rev() {
+            use_index(k);
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        body = ast.functions[0].body
+
+        first_iterable = body[0].iterable
+        assert isinstance(first_iterable, FunctionCallNode)
+        assert isinstance(first_iterable.name, MemberAccessNode)
+        assert first_iterable.name.member == "rev"
+        assert isinstance(first_iterable.name.object, RangeNode)
+        assert first_iterable.name.object.start == "0"
+        assert first_iterable.name.object.end == "4"
+        assert first_iterable.args == []
+
+        second_range = body[1].iterable.name.object
+        assert isinstance(second_range, RangeNode)
+        assert second_range.inclusive is True
+
+        third_range = body[2].iterable.name.object
+        assert isinstance(third_range, RangeNode)
+        assert third_range.end == "limit"
+    except Exception as e:
+        pytest.fail(f"For loop rev range parsing failed: {e}")
+
+
+def test_for_loop_step_by_rev_range_parsing():
+    code = """
+    fn test_for_step_by_rev() {
+        for i in (0..10).step_by(2).rev() {
+            use_index(i);
+        }
+    }
+    """
+    try:
+        ast = parse_code(code)
+        iterable = ast.functions[0].body[0].iterable
+
+        assert isinstance(iterable, FunctionCallNode)
+        assert isinstance(iterable.name, MemberAccessNode)
+        assert iterable.name.member == "rev"
+        step_call = iterable.name.object
+        assert isinstance(step_call, FunctionCallNode)
+        assert isinstance(step_call.name, MemberAccessNode)
+        assert step_call.name.member == "step_by"
+        assert isinstance(step_call.name.object, RangeNode)
+        assert step_call.name.object.start == "0"
+        assert step_call.name.object.end == "10"
+        assert step_call.args == ["2"]
+    except Exception as e:
+        pytest.fail(f"For loop step_by rev range parsing failed: {e}")
 
 
 def test_for_loop_range_bounds_parse_additive_expressions():

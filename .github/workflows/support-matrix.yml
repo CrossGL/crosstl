@@ -1,0 +1,50 @@
+name: Support Matrix
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate support matrix
+        run: python tools/support_matrix.py check
+
+  docs-probe:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Probe backend documentation sources
+        run: python tools/support_matrix.py docs --output support/generated/backend-docs-report.json
+
+      - name: Upload documentation probe report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-docs-report
+          path: support/generated/backend-docs-report.json

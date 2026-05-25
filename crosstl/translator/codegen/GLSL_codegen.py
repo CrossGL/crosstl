@@ -1393,6 +1393,11 @@ class GLSLCodeGen:
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
 
+        if shader_type == "compute":
+            self.validate_compute_builtin_parameter_types(param_list)
+        elif shader_type is not None:
+            self.validate_graphics_builtin_parameter_types(param_list, shader_type)
+
         params_str = ", ".join(params)
 
         stage_entry_types = {
@@ -1413,6 +1418,9 @@ class GLSLCodeGen:
             "ray_miss",
             "ray_callable",
         }
+
+        if shader_type is not None:
+            self.validate_function_return_semantic(func, shader_type)
 
         stage_output = self.stage_return_output(func, shader_type)
         if stage_output and stage_output["declaration"]:
@@ -1647,6 +1655,122 @@ class GLSLCodeGen:
     def is_stage_builtin_semantic(self, semantic):
         mapped_semantic = self.map_semantic(semantic)
         return mapped_semantic.startswith("gl_")
+
+    def parameter_has_mapped_semantic(self, parameter, expected_semantic):
+        semantic = self.semantic_from_node(parameter)
+        if semantic is None:
+            return False
+        return self.map_semantic(semantic).lower() == expected_semantic.lower()
+
+    def validate_exact_mapped_semantic_type(
+        self, parameters, stage_name, semantic, expected_type, expected_description
+    ):
+        for parameter in parameters:
+            if not self.parameter_has_mapped_semantic(parameter, semantic):
+                continue
+
+            mapped_type = self.map_type(self.resource_node_type(parameter))
+            base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+            if array_suffix or base_type != expected_type:
+                raise ValueError(
+                    f"OpenGL {stage_name} stage {semantic} "
+                    f"parameter '{parameter.name}' "
+                    f"must be {expected_description}"
+                )
+
+    def validate_compute_builtin_parameter_types(self, parameters):
+        for semantic in (
+            "gl_GlobalInvocationID",
+            "gl_LocalInvocationID",
+            "gl_WorkGroupID",
+            "gl_WorkGroupSize",
+            "gl_NumWorkGroups",
+        ):
+            self.validate_exact_mapped_semantic_type(
+                parameters, "compute", semantic, "uvec3", "uvec3"
+            )
+        self.validate_exact_mapped_semantic_type(
+            parameters,
+            "compute",
+            "gl_LocalInvocationIndex",
+            "uint",
+            "scalar uint",
+        )
+
+    def validate_graphics_builtin_parameter_types(self, parameters, stage_name):
+        for semantic in ("gl_VertexID", "gl_InstanceID", "gl_PrimitiveID"):
+            self.validate_exact_mapped_semantic_type(
+                parameters, stage_name, semantic, "int", "scalar int"
+            )
+        self.validate_exact_mapped_semantic_type(
+            parameters, stage_name, "gl_FrontFacing", "bool", "scalar bool"
+        )
+        self.validate_exact_mapped_semantic_type(
+            parameters, stage_name, "gl_FragCoord", "vec4", "vec4"
+        )
+        self.validate_exact_mapped_semantic_type(
+            parameters, stage_name, "gl_PointCoord", "vec2", "vec2"
+        )
+
+    def validate_function_return_semantic(self, func, stage_name):
+        semantic = self.function_return_semantic(func)
+        if semantic is None:
+            return
+        mapped_semantic = self.map_semantic(semantic)
+        return_type = self.function_return_type(func)
+        return_base_type, array_suffix = split_array_type_suffix(str(return_type))
+        if not array_suffix and return_base_type == "void":
+            function_name = getattr(func, "name", "<anonymous>")
+            raise ValueError(
+                f"OpenGL {stage_name} function '{function_name}' cannot use "
+                f"return semantic '{semantic}' with void return type"
+            )
+
+        self.validate_function_return_semantic_stage(stage_name, semantic)
+
+        invalid_return_semantics = {
+            "gl_VertexID",
+            "gl_InstanceID",
+            "gl_PrimitiveID",
+            "gl_FrontFacing",
+            "gl_FragCoord",
+            "gl_PointCoord",
+            "gl_GlobalInvocationID",
+            "gl_LocalInvocationID",
+            "gl_WorkGroupID",
+            "gl_LocalInvocationIndex",
+            "gl_WorkGroupSize",
+            "gl_NumWorkGroups",
+        }
+        if mapped_semantic in invalid_return_semantics:
+            raise ValueError(
+                f"OpenGL {stage_name} semantic '{semantic}' cannot be used as "
+                "a function return semantic"
+            )
+
+    def validate_function_return_semantic_stage(self, stage_name, semantic):
+        mapped_semantic = self.map_semantic(semantic)
+        semantic_text = str(semantic)
+        is_fragment_output = semantic_text == "gl_FragDepth" or semantic_text.startswith(
+            "gl_FragColor"
+        )
+        is_vertex_output = self.is_vertex_builtin_output(mapped_semantic)
+
+        if stage_name == "vertex" and is_fragment_output:
+            raise ValueError(
+                f"OpenGL vertex stage function return cannot use fragment output "
+                f"semantic '{semantic}'"
+            )
+        if stage_name == "fragment" and is_vertex_output:
+            raise ValueError(
+                f"OpenGL fragment stage function return cannot use vertex output "
+                f"semantic '{semantic}'"
+            )
+        if stage_name == "compute" and (is_fragment_output or is_vertex_output):
+            raise ValueError(
+                f"OpenGL compute stage function return cannot use graphics output "
+                f"semantic '{semantic}'"
+            )
 
     def generate_stage_parameter_input_declarations(self, ast, target_stage=None):
         declarations = []
@@ -2127,7 +2251,7 @@ class GLSLCodeGen:
         if output_type == "void":
             return None
 
-        semantic = self.semantic_from_node(func)
+        semantic = self.function_return_semantic(func)
         mapped_semantic = self.map_semantic(semantic)
         if not mapped_semantic and output_type == "vec4":
             mapped_semantic = "gl_Position"
@@ -2208,7 +2332,7 @@ class GLSLCodeGen:
         if output_type in self.structs_by_name:
             return None
 
-        semantic = self.semantic_from_node(func) or "gl_FragColor"
+        semantic = self.function_return_semantic(func) or "gl_FragColor"
         if semantic == "gl_FragDepth":
             return {
                 "name": "gl_FragDepth",
@@ -6412,6 +6536,73 @@ class GLSLCodeGen:
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
+            if (
+                is_image_format_attribute(attr)
+                or self.is_resource_binding_attribute(attr)
+                or is_resource_access_attribute(attr)
+                or self.is_resource_memory_attribute(attr)
+                or (
+                    getattr(attr, "name", None)
+                    and str(getattr(attr, "name")).lower() == "glsl_buffer_block"
+                )
+            ):
+                continue
+            if hasattr(attr, "name"):
+                return attr.name
+        return None
+
+    def glsl_stage_control_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("glsl_"):
+            normalized = normalized[len("glsl_") :]
+
+        valid_names = {
+            "cw",
+            "ccw",
+            "domain",
+            "equal_spacing",
+            "fractional_even_spacing",
+            "fractional_odd_spacing",
+            "invocations",
+            "isolines",
+            "layout",
+            "line_strip",
+            "lines",
+            "lines_adjacency",
+            "local_size_x",
+            "local_size_y",
+            "local_size_z",
+            "max_vertices",
+            "maxvertexcount",
+            "outputcontrolpoints",
+            "outputtopology",
+            "partitioning",
+            "patchconstantfunc",
+            "point_mode",
+            "points",
+            "quads",
+            "triangles",
+            "triangles_adjacency",
+            "triangle_strip",
+            "vertices",
+        }
+        if normalized in valid_names:
+            return normalized
+        return None
+
+    def function_return_semantic(self, func):
+        semantic = getattr(func, "semantic", None)
+        if semantic is not None:
+            return semantic
+        if not hasattr(func, "attributes"):
+            return None
+        for attr in func.attributes:
+            if self.glsl_stage_control_attribute_name(attr):
+                continue
             if (
                 is_image_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)

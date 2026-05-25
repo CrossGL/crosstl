@@ -49,8 +49,8 @@ class TestHipCodeGen:
     def test_device_function_conversion(self):
         """Test device function conversion"""
         code = """
-        __device__ float add() {
-            return 1.0;
+        __device__ float add(float a, float b) {
+            return a + b;
         }
         """
         lexer = HipLexer(code)
@@ -63,6 +63,29 @@ class TestHipCodeGen:
 
         assert "// HIP to CrossGL conversion" in result
         assert "// Function: add" in result
+
+    def test_device_function_body_emitted_when_kernel_calls_it(self):
+        """Test device helpers are emitted when kernels call them."""
+        code = """
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+
+        __global__ void kernel(float* out) {
+            out[0] = add(1.0f, 2.0f);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "f32 add(f32 a, f32 b) {" in result
+        assert "return (a + b);" in result
+        assert "out[0] = add(1.0f, 2.0f);" in result
 
     def test_multiple_kernels_conversion(self):
         """Test multiple kernels conversion"""
@@ -585,6 +608,54 @@ class TestHipCodeGen:
         assert "// Arguments: data, n" in result
         assert "hipLaunchKernelGGL" not in result
 
+    def test_hip_launch_kernel_api_conversion(self):
+        """Test hipLaunchKernel converts through kernel launch metadata"""
+        code = """
+        void host(float* data, int n, int stream) {
+            dim3 grid(16);
+            dim3 block(32);
+            void** packedArgs = (void*[]){ &data, &n };
+            hipLaunchKernel((const void*)kernel, grid, block, packedArgs, 0, stream);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel launch: kernel<<<grid, block, 0, stream>>>()" in result
+        assert "// Arguments: data, n" in result
+        assert "hipLaunchKernel(" not in result
+
+    def test_user_defined_hip_launch_kernel_call_is_not_kernel_launch(self):
+        """Test user-defined hipLaunchKernel shadows launch lowering."""
+        code = """
+        void hipLaunchKernel(float* out, int grid, int block, void* args, int shared, int stream) {
+            return;
+        }
+
+        void host(float* out, int grid, int block, void* args) {
+            hipLaunchKernel(out, grid, block, args, 0, 0);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "void hipLaunchKernel(ptr<f32> out, i32 grid, i32 block, "
+            "ptr<void> args, i32 shared, i32 stream)"
+        ) in result
+        assert "hipLaunchKernel(out, grid, block, args, 0, 0);" in result
+        assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
+
     def test_user_defined_hip_launch_kernel_ggl_call_is_not_kernel_launch(self):
         """Test user-defined hipLaunchKernelGGL shadows launch lowering."""
         code = """
@@ -799,6 +870,57 @@ class TestHipCodeGen:
         assert "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
         assert "err = hipDeviceSynchronize();" not in result
 
+    def test_hip_runtime_memset_async_conversion(self):
+        """Test hipMemsetAsync emits metadata comments and status success"""
+        code = """
+        void host(float* d, int n, hipStream_t stream) {
+            hipMemsetAsync(d, 0, n * sizeof(float), stream);
+            hipError_t err = hipMemsetAsync(d, 1, n * sizeof(float), stream);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP memory set: d, value: 0, bytes: (n * sizeof(float)), "
+            "stream: stream"
+        ) in result
+        assert (
+            "// HIP memory set: d, value: 1, bytes: (n * sizeof(float)), "
+            "stream: stream"
+        ) in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "hipMemsetAsync(" not in result
+
+    def test_hip_runtime_last_error_query_conversion(self):
+        """Test HIP runtime error query calls emit metadata comments"""
+        code = """
+        void host() {
+            hipGetLastError();
+            hipError_t err = hipGetLastError();
+            err = hipPeekAtLastError();
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("// HIP get last error") == 2
+        assert "// HIP peek at last error" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "err = hipSuccess;" in result
+        assert "hipGetLastError(" not in result
+        assert "hipPeekAtLastError(" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """
@@ -833,6 +955,7 @@ class TestHipCodeGen:
             hipEvent_t stop;
             float ms;
             hipStreamCreate(&stream);
+            hipStreamCreateWithFlags(&stream, hipStreamNonBlocking);
             hipEventCreate(&start);
             hipEventCreateWithFlags(&stop, hipEventDisableTiming);
             hipEventRecord(start, stream);
@@ -854,6 +977,7 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "// HIP stream create: stream" in result
+        assert "// HIP stream create: stream, flags: hipStreamNonBlocking" in result
         assert "// HIP event create: start" in result
         assert "// HIP event create: stop, flags: hipEventDisableTiming" in result
         assert "// HIP event record: start, stream: stream" in result
@@ -866,6 +990,56 @@ class TestHipCodeGen:
         assert "// HIP event record: stop, stream: stream" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "var err: hipError_t = hipEventRecord(stop, stream);" not in result
+        assert "hipStreamCreateWithFlags(" not in result
+
+    def test_hip_runtime_stream_create_with_flags_status_conversion(self):
+        """Test hipStreamCreateWithFlags status expressions lower to success"""
+        code = """
+        void bench() {
+            hipStream_t stream;
+            hipError_t err = hipStreamCreateWithFlags(&stream, hipStreamNonBlocking);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// HIP stream create: stream, flags: hipStreamNonBlocking" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "hipStreamCreateWithFlags(" not in result
+
+    def test_hip_runtime_stream_create_with_priority_status_conversion(self):
+        """Test hipStreamCreateWithPriority emits priority metadata"""
+        code = """
+        void bench() {
+            hipStream_t stream;
+            hipStreamCreateWithPriority(&stream, hipStreamNonBlocking, 3);
+            hipError_t err = hipStreamCreateWithPriority(
+                &stream, hipStreamNonBlocking, 3
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            result.count(
+                "// HIP stream create: stream, flags: hipStreamNonBlocking, "
+                "priority: 3"
+            )
+            == 2
+        )
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "hipStreamCreateWithPriority(" not in result
 
     def test_std_chrono_benchmark_expression_conversion(self):
         """Test std::chrono benchmark expressions convert"""
@@ -1423,6 +1597,28 @@ class TestHipCodeGen:
         assert "var hp: BufferPtr = (&h);" in result
         assert "consume(h);" in result
         assert "array<std::unique_ptr" not in result
+
+    def test_type_alias_c_style_cast_conversion(self):
+        """Test C-style casts to typedef aliases convert without stray statements"""
+        code = """
+        typedef unsigned int LaneMask;
+
+        LaneMask helper(float x) {
+            return (LaneMask)x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "typedef u32 LaneMask;" in result
+        assert "return LaneMask(x);" in result
+        assert "return LaneMask;" not in result
+        assert "x;" not in result
 
     def test_range_based_for_loop_conversion(self):
         """Test C++ range-based for loops lower to CrossGL for-in loops"""

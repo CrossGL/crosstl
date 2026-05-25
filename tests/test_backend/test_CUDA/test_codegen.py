@@ -45,6 +45,29 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
         assert "// Function: add" in result
 
+    def test_device_function_body_emitted_when_kernel_calls_it(self):
+        """Test device helpers are emitted when kernels call them."""
+        code = """
+        __device__ float add(float a, float b) {
+            return a + b;
+        }
+
+        __global__ void kernel(float* out) {
+            out[0] = add(1.0f, 2.0f);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "f32 add(f32 a, f32 b) {" in result
+        assert "return (a + b);" in result
+        assert "out[0] = add(1.0f, 2.0f);" in result
+
     def test_multiple_kernels_conversion(self):
         """Test multiple kernels conversion"""
         code = """
@@ -646,6 +669,8 @@ class TestCudaCodeGen:
             cudaDeviceSynchronize();
             cudaFree(d);
             cudaError_t err = cudaMalloc((void**)&d, n * sizeof(float));
+            if (err != cudaSuccess) { return; }
+            err = cudaDeviceSynchronize();
         }
         """
         lexer = CudaLexer(code)
@@ -656,18 +681,72 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "// CUDA memory allocate: d, bytes: (n * sizeof(float))" in result
+        assert (
+            result.count("// CUDA memory allocate: d, bytes: (n * sizeof(float))") == 2
+        )
         assert (
             "// CUDA memory copy: h -> d, bytes: (n * sizeof(float)), "
             "kind: cudaMemcpyHostToDevice"
         ) in result
         assert "// CUDA memory set: d, value: 0, bytes: (n * sizeof(float))" in result
-        assert "// CUDA device synchronize" in result
+        assert result.count("// CUDA device synchronize") == 2
         assert "// CUDA memory free: d" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "if ((err != cudaSuccess))" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
+        assert "err = cudaDeviceSynchronize();" not in result
+
+    def test_cuda_runtime_memset_async_conversion(self):
+        """Test cudaMemsetAsync emits metadata comments and status success"""
+        code = """
+        void host(float* d, int n, cudaStream_t stream) {
+            cudaMemsetAsync(d, 0, n * sizeof(float), stream);
+            cudaError_t err = cudaMemsetAsync(d, 1, n * sizeof(float), stream);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
         assert (
-            "var err: cudaError_t = "
-            "cudaMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)));"
+            "// CUDA memory set: d, value: 0, bytes: (n * sizeof(float)), "
+            "stream: stream"
         ) in result
+        assert (
+            "// CUDA memory set: d, value: 1, bytes: (n * sizeof(float)), "
+            "stream: stream"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "cudaMemsetAsync(" not in result
+
+    def test_cuda_runtime_last_error_query_conversion(self):
+        """Test CUDA runtime error query calls emit metadata comments"""
+        code = """
+        void host() {
+            cudaGetLastError();
+            cudaError_t err = cudaGetLastError();
+            err = cudaPeekAtLastError();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("// CUDA get last error") == 2
+        assert "// CUDA peek at last error" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaGetLastError(" not in result
+        assert "cudaPeekAtLastError(" not in result
 
     def test_cuda_runtime_event_api_conversion(self):
         """Test CUDA stream and event API calls emit metadata comments"""
@@ -678,6 +757,7 @@ class TestCudaCodeGen:
             cudaEvent_t stop;
             float ms;
             cudaStreamCreate(&stream);
+            cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
             cudaEventCreate(&start);
             cudaEventCreateWithFlags(&stop, cudaEventDisableTiming);
             cudaEventRecord(start, stream);
@@ -699,16 +779,49 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert "// CUDA stream create: stream" in result
+        assert "// CUDA stream create: stream, flags: cudaStreamNonBlocking" in result
         assert "// CUDA event create: start" in result
         assert "// CUDA event create: stop, flags: cudaEventDisableTiming" in result
         assert "// CUDA event record: start, stream: stream" in result
+        assert "// CUDA event record: stop, stream: stream" in result
         assert "// CUDA stream wait event: stream waits for start, flags: 0" in result
         assert "// CUDA event synchronize: stop" in result
         assert "// CUDA event elapsed time: start -> stop, output: ms" in result
         assert "// CUDA event query: stop" in result
         assert "// CUDA event destroy: start" in result
         assert "// CUDA stream destroy: stream" in result
-        assert "var err: cudaError_t = cudaEventRecord(stop, stream);" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "cudaEventRecord(stop, stream)" not in result
+        assert "cudaStreamCreateWithFlags(" not in result
+
+    def test_cuda_runtime_stream_create_with_priority_status_conversion(self):
+        """Test cudaStreamCreateWithPriority emits priority metadata"""
+        code = """
+        void bench() {
+            cudaStream_t stream;
+            cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, 3);
+            cudaError_t err = cudaStreamCreateWithPriority(
+                &stream, cudaStreamNonBlocking, 3
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            result.count(
+                "// CUDA stream create: stream, flags: cudaStreamNonBlocking, "
+                "priority: 3"
+            )
+            == 2
+        )
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "cudaStreamCreateWithPriority(" not in result
 
     def test_std_chrono_benchmark_expression_conversion(self):
         """Test std::chrono benchmark expressions convert"""
@@ -1317,6 +1430,28 @@ class TestCudaCodeGen:
         assert "var hp: BufferPtr = (&h);" in result
         assert "consume(h);" in result
         assert "array<std::unique_ptr" not in result
+
+    def test_type_alias_c_style_cast_conversion(self):
+        """Test C-style casts to typedef aliases convert without stray statements"""
+        code = """
+        typedef unsigned int LaneMask;
+
+        LaneMask helper(float x) {
+            return (LaneMask)x;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "typedef u32 LaneMask;" in result
+        assert "return LaneMask(x);" in result
+        assert "return LaneMask;" not in result
+        assert "x;" not in result
 
     def test_range_based_for_loop_conversion(self):
         """Test C++ range-based for loops lower to CrossGL for-in loops"""

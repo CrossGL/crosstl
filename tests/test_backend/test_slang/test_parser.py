@@ -14,12 +14,14 @@ from crosstl.backend.slang.SlangAst import (
     DoWhileNode,
     ForNode,
     FunctionCallNode,
+    InitializerListNode,
     MemberAccessNode,
     MethodCallNode,
     ReturnNode,
     SwitchNode,
     UnaryOpNode,
     VariableNode,
+    VectorConstructorNode,
     WhileNode,
 )
 
@@ -61,6 +63,26 @@ def test_struct_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Struct parsing not implemented.")
+
+
+def test_struct_array_member_declarator_parsing():
+    code = """
+    struct Cluster {
+        float weights[4];
+        float4 colors[2][3] : COLOR0;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    members = ast.structs[0].members
+
+    assert [
+        (member.vtype, member.name, member.array_sizes, member.semantic)
+        for member in members
+    ] == [
+        ("float", "weights", ["4"], None),
+        ("float4", "colors", ["2", "3"], "COLOR0"),
+    ]
 
 
 def test_if_parsing():
@@ -483,6 +505,48 @@ def test_logical_and_keeps_equality_operands_grouped():
     assert expression.right.op == "=="
 
 
+def test_binary_bitwise_and_shift_precedence_parsing():
+    code = """
+    uint combine(uint a, uint b, uint c, uint d) {
+        uint value = a | b ^ c & d << 1;
+        return value;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    expression = find_function(ast, "combine").body[0].right
+
+    assert expression.op == "|"
+    assert expression.left.name == "a"
+    assert expression.right.op == "^"
+    assert expression.right.left.name == "b"
+    assert expression.right.right.op == "&"
+    assert expression.right.right.left.name == "c"
+    assert expression.right.right.right.op == "<<"
+    assert expression.right.right.right.left.name == "d"
+    assert expression.right.right.right.right == "1"
+
+
+def test_compound_bitwise_and_shift_assignment_parsing():
+    code = """
+    void update(uint value, uint mask) {
+        value &= mask;
+        value |= 1;
+        value ^= mask;
+        value <<= 1;
+        value >>= 2;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "update").body
+
+    assert [stmt.operator for stmt in body] == ["&=", "|=", "^=", "<<=", ">>="]
+    assert all(isinstance(stmt, AssignmentNode) for stmt in body)
+
+
 def test_while_parsing():
     code = """
     float countDown(float x) {
@@ -729,6 +793,29 @@ def test_texture_method_call_parsing():
     assert call.args[1].name == "uv"
 
 
+def test_texture_load_method_parsing():
+    code = """
+    Texture2D<float4> albedo;
+
+    float4 main(int2 pixel, int mip) {
+        return albedo.Load(int3(pixel, mip));
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    call = function.body[0].value
+
+    assert isinstance(call, MethodCallNode)
+    assert isinstance(call.object, VariableNode)
+    assert call.object.name == "albedo"
+    assert call.method == "Load"
+    assert isinstance(call.args[0], FunctionCallNode)
+    assert call.args[0].name == "int3"
+    assert call.args[0].args[0].name == "pixel"
+    assert call.args[0].args[1].name == "mip"
+
+
 def test_standalone_postfix_call_parsing():
     code = """
     void main() {
@@ -766,6 +853,87 @@ def test_scalar_and_matrix_top_level_declarations_parsing():
     ]
 
 
+def test_initialized_top_level_global_parsing():
+    code = """
+    static const float threshold = 0.5;
+    float4 tint = float4(1.0, 0.5, 0.0, 1.0);
+    float gain : register(c0) = 1f;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    threshold = ast.global_vars[0]
+    assert isinstance(threshold, AssignmentNode)
+    assert threshold.left.vtype == "float"
+    assert threshold.left.name == "threshold"
+    assert threshold.left.qualifiers == ["static", "const"]
+    assert threshold.right == "0.5"
+
+    tint = ast.global_vars[1]
+    assert isinstance(tint, AssignmentNode)
+    assert tint.left.vtype == "float4"
+    assert tint.left.name == "tint"
+    assert isinstance(tint.right, VectorConstructorNode)
+    assert tint.right.type_name == "float4"
+
+    gain = ast.global_vars[2]
+    assert isinstance(gain, AssignmentNode)
+    assert gain.left.register == "c0"
+    assert gain.right == "1f"
+
+
+def test_initializer_list_declaration_parsing():
+    code = """
+    float weights[2] = {1.0, 2.0};
+
+    void main() {
+        float local[2] = {.5f, 1f,};
+        float4 colors[1] = {float4(1.0, 0.5, 0.0, 1.0)};
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    global_weights = ast.global_vars[0]
+    assert isinstance(global_weights, AssignmentNode)
+    assert global_weights.left.name == "weights"
+    assert global_weights.left.array_sizes == ["2"]
+    assert isinstance(global_weights.right, InitializerListNode)
+    assert global_weights.right.elements == ["1.0", "2.0"]
+
+    body = find_function(ast, "main").body
+    local = body[0]
+    assert isinstance(local.right, InitializerListNode)
+    assert local.right.elements == [".5f", "1f"]
+
+    colors = body[1]
+    assert isinstance(colors.right, InitializerListNode)
+    assert isinstance(colors.right.elements[0], VectorConstructorNode)
+
+
+def test_typed_brace_constructor_parsing():
+    code = """
+    float4 tint = float4{1.0, .5f, 0.0, 1.0};
+
+    void main() {
+        float4 local = float4{0.0, 1.0, 0.0, 1.0};
+        float4 colors[1] = {float4{1.0, 0.0, 0.0, 1.0}};
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    tint = ast.global_vars[0]
+    assert isinstance(tint.right, VectorConstructorNode)
+    assert tint.right.type_name == "float4"
+    assert tint.right.args == ["1.0", ".5f", "0.0", "1.0"]
+
+    body = find_function(ast, "main").body
+    assert isinstance(body[0].right, VectorConstructorNode)
+    assert body[0].right.type_name == "float4"
+    assert isinstance(body[1].right.elements[0], VectorConstructorNode)
+
+
 def test_local_matrix_declaration_parsing():
     code = """
     void main() {
@@ -780,6 +948,25 @@ def test_local_matrix_declaration_parsing():
     assert isinstance(declaration, VariableNode)
     assert declaration.vtype == "float4x4"
     assert declaration.name == "transform"
+
+
+def test_local_matrix_constructor_declaration_parsing():
+    code = """
+    void main() {
+        float4x4 model = float4x4(1.0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration, AssignmentNode)
+    assert declaration.left.vtype == "float4x4"
+    assert declaration.left.name == "model"
+    assert isinstance(declaration.right, VectorConstructorNode)
+    assert declaration.right.type_name == "float4x4"
+    assert declaration.right.args == ["1.0"]
 
 
 def test_qualified_function_parameters_globals_and_locals_parsing():

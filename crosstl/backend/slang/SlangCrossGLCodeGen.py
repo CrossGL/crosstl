@@ -1,5 +1,8 @@
 """Reverse code generator that emits CrossGL from Slang AST nodes."""
 
+import re
+from decimal import Decimal, InvalidOperation
+
 from .SlangAst import *
 from .SlangParser import *
 from .SlangLexer import *
@@ -29,11 +32,18 @@ class SlangToCrossGLConverter:
         "%": 10,
     }
     ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+    DECIMAL_NUMERIC_LITERAL = re.compile(
+        r"^(?P<body>(?:\d+\.\d*|\.\d+|\d+)"
+        r"(?:[eE][+-]?\d+)?)(?P<suffix>[fFhHuUlL]*)$"
+    )
+    HEX_NUMERIC_LITERAL = re.compile(r"^0[xX][0-9a-fA-F]+[uUlL]*$")
     SAMPLE_METHOD_MAP = {
         "Sample": "texture",
         "SampleBias": "texture",
+        "SampleCmp": "textureCompare",
         "SampleLevel": "textureLod",
         "SampleGrad": "textureGrad",
+        "Load": "texelFetch",
     }
     SAMPLEABLE_RESOURCE_TYPES = {
         "Texture1D",
@@ -243,13 +253,15 @@ class SlangToCrossGLConverter:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
-                    code += f"        {self.map_type(member.vtype)} {member.name} {self.map_semantic(member.semantic)};\n"
+                    semantic = self.map_semantic(member.semantic)
+                    semantic_suffix = f" {semantic}" if semantic else ""
+                    code += (
+                        f"        {self.map_type(member.vtype)} {member.name}"
+                        f"{self.format_array_suffixes(member)}{semantic_suffix};\n"
+                    )
                 code += "    }\n"
         for node in ast.global_vars:
-            code += (
-                f"    {self.map_type(node.vtype)} "
-                f"{node.name}{self.format_array_suffixes(node)};\n"
-            )
+            code += self.generate_global_variable(node)
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -466,6 +478,14 @@ class SlangToCrossGLConverter:
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
+    def generate_global_variable(self, node):
+        if isinstance(node, AssignmentNode):
+            return f"    {self.generate_assignment(node, False)};\n"
+        return (
+            f"    {self.map_type(node.vtype)} "
+            f"{node.name}{self.format_array_suffixes(node)};\n"
+        )
+
     def binary_precedence(self, op):
         return self.BINARY_PRECEDENCE.get(op, 0)
 
@@ -495,7 +515,7 @@ class SlangToCrossGLConverter:
     def generate_expression(self, expr, is_main=False):
         """Render a Slang backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
-            return expr
+            return self.normalize_numeric_literal(expr)
         elif isinstance(expr, VariableNode):
             if expr.vtype:
                 return (
@@ -539,11 +559,12 @@ class SlangToCrossGLConverter:
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
-            args = [self.generate_expression(arg, is_main) for arg in expr.args]
             texture_func = self.crossgl_texture_function(expr)
             if texture_func is not None:
+                args = self.format_texture_method_args(expr, is_main)
                 return f"{texture_func}({', '.join([obj] + args)})"
 
+            args = [self.generate_expression(arg, is_main) for arg in expr.args]
             args = ", ".join(args)
             return f"{obj}.{expr.method}({args})"
         elif isinstance(expr, CallNode):
@@ -564,6 +585,11 @@ class SlangToCrossGLConverter:
             true_expr = self.generate_expression(expr.true_expr, is_main)
             false_expr = self.generate_expression(expr.false_expr, is_main)
             return f"({condition} ? {true_expr} : {false_expr})"
+        elif isinstance(expr, InitializerListNode):
+            elements = ", ".join(
+                self.generate_expression(element, is_main) for element in expr.elements
+            )
+            return f"{{{elements}}}"
         elif isinstance(expr, VectorConstructorNode):
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
@@ -571,6 +597,34 @@ class SlangToCrossGLConverter:
             return f"{self.map_type(expr.type_name)}({args})"
         else:
             return str(expr)
+
+    def normalize_numeric_literal(self, value):
+        """Convert Slang decimal float forms to CrossGL lexer-friendly literals."""
+        if not isinstance(value, str):
+            return value
+        if self.HEX_NUMERIC_LITERAL.match(value):
+            return value
+
+        match = self.DECIMAL_NUMERIC_LITERAL.match(value)
+        if not match:
+            return value
+
+        body = match.group("body")
+        suffix = match.group("suffix")
+        float_suffix = any(char in "fFhH" for char in suffix)
+        integer_suffix = "".join(char for char in suffix if char not in "fFhH")
+        float_like = "." in body or "e" in body.lower() or float_suffix
+        if not float_like or integer_suffix:
+            return value
+
+        try:
+            normalized = format(Decimal(body), "f")
+        except InvalidOperation:
+            return value
+
+        if "." not in normalized:
+            normalized = f"{normalized}.0"
+        return normalized
 
     def map_type(self, slang_type):
         """Map a Slang type name to the closest CrossGL type name."""
@@ -585,8 +639,9 @@ class SlangToCrossGLConverter:
     def collect_sampleable_resources(self, ast):
         resources = set()
         for node in getattr(ast, "global_vars", []) or []:
-            if self.is_sampleable_resource_type(getattr(node, "vtype", None)):
-                resources.add(getattr(node, "name", None))
+            declaration = node.left if isinstance(node, AssignmentNode) else node
+            if self.is_sampleable_resource_type(getattr(declaration, "vtype", None)):
+                resources.add(getattr(declaration, "name", None))
         resources.discard(None)
         return resources
 
@@ -619,6 +674,44 @@ class SlangToCrossGLConverter:
         if not self.is_sampleable_resource_expression(expr.object):
             return None
         return self.SAMPLE_METHOD_MAP[expr.method]
+
+    def format_texture_method_args(self, expr, is_main=False):
+        if expr.method == "Load":
+            return self.format_texture_load_args(expr.args, is_main)
+        return [self.generate_expression(arg, is_main) for arg in expr.args]
+
+    def format_texture_load_args(self, args, is_main=False):
+        if len(args) == 1:
+            load_args = self.split_texture_load_vector_argument(args[0], is_main)
+            if load_args is not None:
+                return load_args
+        return [self.generate_expression(arg, is_main) for arg in args]
+
+    def split_texture_load_vector_argument(self, arg, is_main=False):
+        vector_type = None
+        vector_args = None
+
+        if isinstance(arg, VectorConstructorNode):
+            vector_type = arg.type_name
+            vector_args = arg.args
+        elif isinstance(arg, FunctionCallNode):
+            vector_type = arg.name
+            vector_args = arg.args
+
+        if vector_type not in {"int3", "uint3"}:
+            return None
+
+        if len(vector_args) == 2:
+            return [self.generate_expression(item, is_main) for item in vector_args]
+
+        if len(vector_args) == 3:
+            coord_type = "ivec2" if vector_type == "int3" else "uvec2"
+            x = self.generate_expression(vector_args[0], is_main)
+            y = self.generate_expression(vector_args[1], is_main)
+            mip = self.generate_expression(vector_args[2], is_main)
+            return [f"{coord_type}({x}, {y})", mip]
+
+        return None
 
     def is_sampleable_resource_expression(self, expr):
         name = self.expression_base_name(expr)

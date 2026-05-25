@@ -19,6 +19,7 @@ from crosstl.backend.CUDA.CudaAst import (
     MemberAccessNode,
     NewNode,
     RangeForNode,
+    ReturnNode,
     ShaderNode,
     SwitchNode,
     TernaryOpNode,
@@ -777,6 +778,27 @@ class TestCudaParser:
             "BufferPtr",
         ]
         assert function.body[5].name == "consume"
+
+    def test_type_alias_c_style_cast_parsing(self):
+        """Test C-style casts to typedef aliases parse as cast nodes"""
+        code = """
+        typedef unsigned int LaneMask;
+
+        LaneMask helper(float x) {
+            return (LaneMask)x;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        assert len(body) == 1
+        assert isinstance(body[0], ReturnNode)
+        assert isinstance(body[0].value, CastNode)
+        assert body[0].value.target_type == "LaneMask"
+        assert body[0].value.expression == "x"
 
     def test_auto_pointer_reference_local_declarations_parsing(self):
         """Test auto pointer and reference local declarations"""

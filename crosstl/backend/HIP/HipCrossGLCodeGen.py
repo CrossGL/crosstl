@@ -214,26 +214,46 @@ class HipToCrossGLConverter:
                 if len(args) >= 5:
                     comment += f", stream: {args[4]}"
                 return [comment]
-        elif name == "hipMemset":
+        elif name in {"hipMemset", "hipMemsetAsync"}:
             if len(args) >= 3:
-                return [
+                comment = (
                     f"// HIP memory set: {args[0]}, value: {args[1]}, "
                     f"bytes: {args[2]}"
-                ]
+                )
+                if len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
         elif name in {"hipStreamSynchronize"}:
             if args:
                 return [f"// HIP synchronize: {args[0]}"]
         elif name == "hipDeviceSynchronize":
             return ["// HIP device synchronize"]
-        elif name in {"hipStreamCreate", "hipStreamDestroy"}:
+        elif name in {
+            "hipStreamCreate",
+            "hipStreamCreateWithFlags",
+            "hipStreamCreateWithPriority",
+            "hipStreamDestroy",
+        }:
             if args:
-                action = "create" if name == "hipStreamCreate" else "destroy"
+                action = "destroy" if name == "hipStreamDestroy" else "create"
                 stream = (
                     self.format_runtime_pointer_target(node.args[0])
                     if action == "create"
                     else args[0]
                 )
-                return [f"// HIP stream {action}: {stream}"]
+                comment = f"// HIP stream {action}: {stream}"
+                if (
+                    name
+                    in {
+                        "hipStreamCreateWithFlags",
+                        "hipStreamCreateWithPriority",
+                    }
+                    and len(args) >= 2
+                ):
+                    comment += f", flags: {args[1]}"
+                if name == "hipStreamCreateWithPriority" and len(args) >= 3:
+                    comment += f", priority: {args[2]}"
+                return [comment]
         elif name in {"hipEventCreate", "hipEventCreateWithFlags"}:
             if args:
                 event = self.format_runtime_pointer_target(node.args[0])
@@ -269,6 +289,10 @@ class HipToCrossGLConverter:
                 if len(args) >= 3:
                     comment += f", flags: {args[2]}"
                 return [comment]
+        elif name == "hipGetLastError":
+            return ["// HIP get last error"]
+        elif name == "hipPeekAtLastError":
+            return ["// HIP peek at last error"]
 
         return None
 
@@ -328,12 +352,6 @@ class HipToCrossGLConverter:
 
     def visit_FunctionNode(self, node):
         """Render a HIP function node as a CrossGL function."""
-        # Skip device functions in CrossGL (they become inline)
-        if hasattr(node, "qualifiers") and "__device__" in getattr(
-            node, "qualifiers", []
-        ):
-            return
-
         return_type = self.convert_hip_type_to_crossgl(
             node.return_type if hasattr(node, "return_type") else "void"
         )

@@ -301,14 +301,22 @@ class SlangParser:
         self.eat("IDENTIFIER")
         array_sizes = self.parse_array_suffixes()
         register_name = self.parse_register_annotation()
-        self.eat("SEMICOLON")
-        return VariableNode(
+        variable = VariableNode(
             var_type,
             var_name,
             qualifiers=qualifiers,
             array_sizes=array_sizes,
             register=register_name,
         )
+        if self.current_token[0] == "EQUALS":
+            op = self.current_token[1]
+            self.eat("EQUALS")
+            value = self.parse_expression()
+            self.eat("SEMICOLON")
+            return AssignmentNode(variable, value, op)
+
+        self.eat("SEMICOLON")
+        return variable
 
     def parse_import(self):
         self.eat("IMPORT")
@@ -337,13 +345,21 @@ class SlangParser:
             self.eat(self.current_token[0])  # Eat the type (FVECTOR, FLOAT, etc.)
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
+            array_sizes = self.parse_array_suffixes()
             semantic = None
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 semantic = self.current_token[1]
                 self.eat(self.current_token[0])
             self.eat("SEMICOLON")
-            members.append(VariableNode(vtype, var_name, semantic=semantic))
+            members.append(
+                VariableNode(
+                    vtype,
+                    var_name,
+                    array_sizes=array_sizes,
+                    semantic=semantic,
+                )
+            )
         self.eat("RBRACE")
         return StructNode(name, members)
 
@@ -493,6 +509,11 @@ class SlangParser:
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -683,6 +704,11 @@ class SlangParser:
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
+            "ASSIGN_AND",
+            "ASSIGN_OR",
+            "ASSIGN_XOR",
+            "ASSIGN_SHIFT_LEFT",
+            "ASSIGN_SHIFT_RIGHT",
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
@@ -714,10 +740,37 @@ class SlangParser:
         return left
 
     def parse_logical_and(self):
-        left = self.parse_equality()
+        left = self.parse_bitwise_or()
         while self.current_token[0] == "AND":
             op = self.current_token[1]
             self.eat("AND")
+            right = self.parse_bitwise_or()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_or(self):
+        left = self.parse_bitwise_xor()
+        while self.current_token[0] == "BITWISE_OR":
+            op = self.current_token[1]
+            self.eat("BITWISE_OR")
+            right = self.parse_bitwise_xor()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_xor(self):
+        left = self.parse_bitwise_and()
+        while self.current_token[0] == "BITWISE_XOR":
+            op = self.current_token[1]
+            self.eat("BITWISE_XOR")
+            right = self.parse_bitwise_and()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_bitwise_and(self):
+        left = self.parse_equality()
+        while self.current_token[0] == "BITWISE_AND":
+            op = self.current_token[1]
+            self.eat("BITWISE_AND")
             right = self.parse_equality()
             left = BinaryOpNode(left, op, right)
         return left
@@ -732,13 +785,22 @@ class SlangParser:
         return left
 
     def parse_relational(self):
-        left = self.parse_additive()
+        left = self.parse_shift()
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
         ]:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_shift()
+            left = BinaryOpNode(left, op, right)
+        return left
+
+    def parse_shift(self):
+        left = self.parse_additive()
+        while self.current_token[0] in ["BITWISE_SHIFT_LEFT", "BITWISE_SHIFT_RIGHT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_additive()
@@ -783,9 +845,20 @@ class SlangParser:
             "INT",
             "FLOAT",
             "FVECTOR",
+            "MATRIX",
+            "UINT",
+            "BOOL",
             "GENERIC",
         ]:
-            if self.current_token[0] in ["INT", "FLOAT", "FVECTOR", "GENERIC"]:
+            if self.current_token[0] in [
+                "INT",
+                "FLOAT",
+                "FVECTOR",
+                "MATRIX",
+                "UINT",
+                "BOOL",
+                "GENERIC",
+            ]:
                 type_name = self.current_token[1]
                 self.eat(self.current_token[0])
                 if self.current_token[0] == "IDENTIFIER":
@@ -803,6 +876,12 @@ class SlangParser:
                     return VariableNode(type_name, var_name)
                 elif self.current_token[0] == "LPAREN":
                     return self.parse_vector_constructor(type_name)
+                elif self.current_token[0] == "LBRACE":
+                    return self.parse_vector_constructor(
+                        type_name,
+                        open_token="LBRACE",
+                        close_token="RBRACE",
+                    )
             return self.parse_function_call_or_identifier()
 
         if self.current_token[0] == "LBRAKET":
@@ -810,6 +889,9 @@ class SlangParser:
             expr = self.parse_expression()
             self.eat("RBRAKET")
             return expr
+
+        if self.current_token[0] == "LBRACE":
+            return self.parse_initializer_list()
 
         elif self.current_token[0] == "NUMBER":
             value = self.current_token[1]
@@ -827,14 +909,39 @@ class SlangParser:
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
 
-    def parse_vector_constructor(self, type_name):
-        self.eat("LPAREN")
+    def parse_initializer_list(self):
+        elements = []
+        self.eat("LBRACE")
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated initializer list")
+            elements.append(self.parse_expression())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+            elif self.current_token[0] != "RBRACE":
+                raise SyntaxError(
+                    f"Expected COMMA or RBRACE in initializer list, got {self.current_token[0]}"
+                )
+        self.eat("RBRACE")
+        return InitializerListNode(elements)
+
+    def parse_vector_constructor(
+        self,
+        type_name,
+        open_token="LPAREN",
+        close_token="RPAREN",
+    ):
+        self.eat(open_token)
         args = []
-        while self.current_token[0] != "RPAREN":
+        while self.current_token[0] != close_token:
             args.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-        self.eat("RPAREN")
+            elif self.current_token[0] != close_token:
+                raise SyntaxError(
+                    f"Expected COMMA or {close_token}, got {self.current_token[0]}"
+                )
+        self.eat(close_token)
         return VectorConstructorNode(type_name, args)
 
     def is_lambda_expression_start(self):

@@ -551,6 +551,52 @@ def test_for_loop_pattern_conversion():
         pytest.fail(f"For loop pattern conversion failed: {e}")
 
 
+def test_for_loop_enumerate_iter_tuple_pattern_conversion():
+    code = """
+    fn test_enumerate(values: Buffer) {
+        for (i, value) in values.iter().enumerate() {
+            consume(i, value);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "for (int i = 0; i < values.length; i++)" in result
+        assert "auto value = values[i];" in result
+        assert "consume(i, value);" in result
+        assert "values.iter().enumerate()" not in result
+        assert "_for_bound" not in result
+    except Exception as e:
+        pytest.fail(f"For loop enumerate tuple pattern conversion failed: {e}")
+
+
+def test_for_loop_enumerate_iter_side_effect_source_conversion():
+    code = """
+    fn test_enumerate_side_effect_source() {
+        for (_, value) in next_values().iter().enumerate() {
+            consume(value);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "auto _for_iterable_0 = next_values();" in result
+        assert (
+            "for (int _for_index_0 = 0; "
+            "_for_index_0 < _for_iterable_0.length; _for_index_0++)"
+        ) in result
+        assert "auto value = _for_iterable_0[_for_index_0];" in result
+        assert "consume(value);" in result
+        assert result.count("next_values()") == 1
+        assert "next_values().iter().enumerate()" not in result
+    except Exception as e:
+        pytest.fail(
+            f"For loop enumerate side-effect source conversion failed: {e}"
+        )
+
+
 def test_for_loop_step_by_range_conversion():
     code = """
     fn test_for_step_by() {
@@ -577,6 +623,56 @@ def test_for_loop_step_by_range_conversion():
         assert ".step_by" not in result
     except Exception as e:
         pytest.fail(f"For loop step_by range conversion failed: {e}")
+
+
+def test_for_loop_rev_range_conversion():
+    code = """
+    fn test_for_rev(limit: i32) {
+        for i in (0..4).rev() {
+            use_index(i);
+        }
+        for j in (1..=4).rev() {
+            use_index(j);
+        }
+        for k in (0..limit).rev() {
+            use_index(k);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "for (int i = 3; i >= 0; i--)" in result
+        assert "for (int j = 4; j >= 1; j--)" in result
+        assert "for (int k = (limit - 1); k >= 0; k--)" in result
+        assert "RangeNode" not in result
+        assert "0.." not in result
+        assert ".rev" not in result
+    except Exception as e:
+        pytest.fail(f"For loop rev range conversion failed: {e}")
+
+
+def test_for_loop_step_by_rev_range_conversion():
+    code = """
+    fn test_for_step_by_rev() {
+        for i in (0..10).step_by(2).rev() {
+            use_index(i);
+        }
+        for j in (0..10).rev().step_by(2) {
+            use_index(j);
+        }
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "for (int i = 8; i >= 0; i -= 2)" in result
+        assert "for (int j = 9; j >= 0; j -= 2)" in result
+        assert "0..10" not in result
+        assert ".step_by" not in result
+        assert ".rev" not in result
+    except Exception as e:
+        pytest.fail(f"For loop step_by rev range conversion failed: {e}")
 
 
 def test_for_loop_range_bound_additive_precedence_conversion():

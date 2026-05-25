@@ -52,6 +52,13 @@ class VulkanParser:
             ]  # Return the type of the token at the peeked index
         return None
 
+    def peek_value(self, offset):
+        """Look ahead by offset tokens and return the token value."""
+        peek_index = self.pos + offset
+        if peek_index < len(self.tokens):
+            return self.tokens[peek_index][1]
+        return None
+
     def skip_until(self, token_type):
         """Skip tokens until the specified token type is found"""
         while self.current_token[0] != token_type and self.current_token[0] != "EOF":
@@ -116,23 +123,20 @@ class VulkanParser:
             ):
                 functions.append(self.parse_function())
             elif (
-                self.current_token[0] == "IDENTIFIER"
-                or self.current_token[0]
-                in [
-                    "FLOAT",
-                    "INT",
-                    "UINT",
-                    "BOOL",
-                    "VEC2",
-                    "VEC3",
-                    "VEC4",
-                    "MAT2",
-                    "MAT3",
-                    "MAT4",
-                ]
-                or self.current_token[1] in VALID_DATA_TYPES
+                (self.current_token[0] == "IDENTIFIER" and self.peek(1) == "IDENTIFIER")
+                or (
+                    self.current_token[1] in VALID_DATA_TYPES
+                    and self.peek(1) == "IDENTIFIER"
+                )
+                or (
+                    self.current_token[0] == "CONST"
+                    and (
+                        self.peek_value(1) in VALID_DATA_TYPES
+                        or self.peek(1) == "IDENTIFIER"
+                    )
+                )
             ):
-                global_variables.append(self.parse_variable(self.current_token[1]))
+                global_variables.append(self.parse_assignment_or_function_call())
             else:
                 self.eat(self.current_token[0])
         return ShaderNode(
@@ -168,8 +172,7 @@ class VulkanParser:
 
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
-                binding_value = self.current_token[1]
-                self.eat("NUMBER")
+                binding_value = self.parse_layout_qualifier_value()
                 bindings.append((binding_name, binding_value))
             else:
                 bindings.append((binding_name, None))
@@ -242,6 +245,15 @@ class VulkanParser:
             struct_fields=struct_fields,
             block_name=block_name,
             declaration_qualifiers=declaration_qualifiers,
+        )
+
+    def parse_layout_qualifier_value(self):
+        if self.current_token[0] in {"NUMBER", "IDENTIFIER"}:
+            value = self.current_token[1]
+            self.eat(self.current_token[0])
+            return value
+        raise SyntaxError(
+            f"Expected layout qualifier value, got {self.current_token[0]}"
         )
 
     def is_data_type_token(self, allow_identifier=False):
@@ -381,6 +393,8 @@ class VulkanParser:
     def parse_body(self):
         token_type = self.current_token[0]
 
+        if token_type == "CONST":
+            return self.parse_assignment_or_function_call()
         if token_type == "IDENTIFIER" and (
             self.peek(1) in ["LPAREN", "LBRACKET"]
             or self.looks_like_member_call_statement()
@@ -802,7 +816,23 @@ class VulkanParser:
     ):
         terminators = terminators or {"SEMICOLON"}
         type_name = ""
-        if self.current_token[0] == "IDENTIFIER" and self.peek(1) in [
+        qualifiers = []
+        while self.current_token[0] == "CONST":
+            qualifiers.append(self.current_token[1])
+            self.eat("CONST")
+
+        if qualifiers:
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                or self.current_token[1] in VALID_DATA_TYPES
+            ):
+                type_name = " ".join([*qualifiers, self.current_token[1]])
+                self.eat(self.current_token[0])
+            else:
+                raise SyntaxError(
+                    f"Unexpected token after const: {self.current_token[0]}"
+                )
+        elif self.current_token[0] == "IDENTIFIER" and self.peek(1) in [
             "POST_INCREMENT",
             "POST_DECREMENT",
         ]:
@@ -1035,7 +1065,7 @@ class VulkanParser:
         return UniformNode(var_type, name)
 
     def parse_unary(self):
-        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT"]:
+        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT", "NOT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             operand = self.parse_unary()

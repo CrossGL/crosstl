@@ -226,6 +226,7 @@ class RustToCrossGLConverter:
         self.for_loop_index_counter = 0
         self.for_loop_step_counter = 0
         self.for_loop_bound_counter = 0
+        self.for_loop_iterable_counter = 0
         self.match_chain_counter = 0
         self.match_subject_counter = 0
         self.match_payload_counter = 0
@@ -2950,12 +2951,21 @@ class RustToCrossGLConverter:
 
     def generate_for_loop(self, node, indent, loop_contexts=None):
         indent_str = "    " * indent
-        pattern = self.generate_for_loop_pattern(node.pattern)
         nested_contexts = self.extend_loop_contexts(loop_contexts, node)
         loop_context = nested_contexts[-1]
 
         # Convert Rust for-in loop to C-style for loop
         code = self.generate_labeled_control_declarations(loop_context, indent)
+        enumerate_loop = self.generate_enumerate_for_loop(
+            node,
+            indent,
+            loop_contexts,
+            nested_contexts,
+        )
+        if enumerate_loop is not None:
+            return code + enumerate_loop
+
+        pattern = self.generate_for_loop_pattern(node.pattern)
         code += self.generate_for_loop_header(
             pattern,
             node.iterable,
@@ -2987,9 +2997,126 @@ class RustToCrossGLConverter:
         self.for_loop_bound_counter += 1
         return name
 
+    def next_for_loop_iterable_name(self):
+        name = f"_for_iterable_{self.for_loop_iterable_counter}"
+        self.for_loop_iterable_counter += 1
+        return name
+
+    def generate_enumerate_for_loop(
+        self,
+        node,
+        indent,
+        loop_contexts=None,
+        nested_contexts=None,
+    ):
+        enumerate_parts = self.parse_for_enumerate_iterable(node.pattern, node.iterable)
+        if enumerate_parts is None:
+            return None
+
+        index_pattern, value_pattern, collection = enumerate_parts
+        indent_str = "    " * indent
+
+        collection_setup, collection_expr = self.generate_for_loop_iterable_expression(
+            collection,
+            indent,
+            loop_contexts,
+        )
+        index_name = self.generate_enumerate_index_name(index_pattern)
+
+        code = collection_setup
+        code += (
+            f"{indent_str}for (int {index_name} = 0; "
+            f"{index_name} < {collection_expr}.length; {index_name}++) {{\n"
+        )
+        code += self.generate_enumerate_value_binding(
+            value_pattern,
+            collection_expr,
+            index_name,
+            indent + 1,
+        )
+        code += self.generate_function_body(
+            node.body,
+            indent + 1,
+            nested_contexts,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def parse_for_enumerate_iterable(self, pattern, iterable):
+        if not (
+            isinstance(pattern, TupleNode)
+            and len(pattern.elements) == 2
+            and isinstance(iterable, FunctionCallNode)
+            and isinstance(iterable.name, MemberAccessNode)
+            and iterable.name.member == "enumerate"
+            and not iterable.args
+        ):
+            return None
+
+        iterator = iterable.name.object
+        if not (
+            isinstance(iterator, FunctionCallNode)
+            and isinstance(iterator.name, MemberAccessNode)
+            and iterator.name.member in {"iter", "iter_mut", "into_iter"}
+            and not iterator.args
+        ):
+            return None
+
+        return pattern.elements[0], pattern.elements[1], iterator.name.object
+
+    def generate_for_loop_iterable_expression(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        indent_str = "    " * indent
+        setup, value = self.generate_try_expression(
+            expression,
+            indent,
+            loop_contexts,
+        )
+
+        if setup:
+            if isinstance(expression, TryNode):
+                return setup, value
+            name = self.next_for_loop_iterable_name()
+            return setup + f"{indent_str}auto {name} = {value};\n", name
+
+        if self.expression_has_side_effects(expression):
+            name = self.next_for_loop_iterable_name()
+            return f"{indent_str}auto {name} = {value};\n", name
+
+        return "", value
+
+    def generate_enumerate_index_name(self, index_pattern):
+        if isinstance(index_pattern, str) and not self.is_discard_pattern(
+            index_pattern
+        ):
+            return index_pattern
+        return self.next_for_loop_index_name()
+
+    def generate_enumerate_value_binding(
+        self,
+        value_pattern,
+        collection_expr,
+        index_name,
+        indent,
+    ):
+        if not isinstance(value_pattern, str) or self.is_discard_pattern(value_pattern):
+            return ""
+
+        indent_str = "    " * indent
+        return f"{indent_str}auto {value_pattern} = {collection_expr}[{index_name}];\n"
+
     def generate_for_loop_header(self, pattern, iterable, indent, loop_contexts=None):
         indent_str = "    " * indent
-        range_node, step_expression = self.parse_for_range_iterable(iterable)
+        (
+            range_node,
+            step_expression,
+            is_reverse,
+            align_reverse_step,
+        ) = self.parse_for_range_iterable(iterable)
 
         if range_node is not None:
             start_setup, start = self.generate_for_loop_setup_expression(
@@ -3000,6 +3127,8 @@ class RustToCrossGLConverter:
             )
             setup = start_setup
             condition = ""
+            step = None
+
             if range_node.end is not None:
                 end_setup, end = self.generate_for_loop_setup_expression(
                     range_node.end,
@@ -3008,23 +3137,53 @@ class RustToCrossGLConverter:
                     loop_contexts,
                 )
                 setup += end_setup
-                comparison = "<=" if range_node.inclusive else "<"
-                condition = f"{pattern} {comparison} {end}"
+                if step_expression is not None:
+                    step_setup, step = self.generate_for_loop_setup_expression(
+                        step_expression,
+                        indent,
+                        self.next_for_loop_step_name,
+                        loop_contexts,
+                    )
+                    setup += step_setup
 
-            if step_expression is None:
-                increment = f"{pattern}++"
+                if is_reverse:
+                    if step is not None and align_reverse_step:
+                        initial_value = self.format_reverse_stepped_range_start(
+                            start,
+                            end,
+                            step,
+                            range_node.inclusive,
+                        )
+                    else:
+                        initial_value = (
+                            end
+                            if range_node.inclusive
+                            else self.format_reverse_exclusive_range_start(end)
+                        )
+                    condition = f"{pattern} >= {start}"
+                else:
+                    initial_value = start
+                    comparison = "<=" if range_node.inclusive else "<"
+                    condition = f"{pattern} {comparison} {end}"
             else:
-                step_setup, step = self.generate_for_loop_setup_expression(
-                    step_expression,
-                    indent,
-                    self.next_for_loop_step_name,
-                    loop_contexts,
-                )
-                setup += step_setup
-                increment = f"{pattern} += {step}"
+                initial_value = start
+                if step_expression is not None:
+                    step_setup, step = self.generate_for_loop_setup_expression(
+                        step_expression,
+                        indent,
+                        self.next_for_loop_step_name,
+                        loop_contexts,
+                    )
+                    setup += step_setup
+
+            if step is None:
+                increment = f"{pattern}--" if is_reverse else f"{pattern}++"
+            else:
+                operator = "-=" if is_reverse else "+="
+                increment = f"{pattern} {operator} {step}"
 
             return (
-                setup + f"{indent_str}for (int {pattern} = {start}; "
+                setup + f"{indent_str}for (int {pattern} = {initial_value}; "
                 f"{condition}; {increment}) {{\n"
             )
 
@@ -3067,23 +3226,78 @@ class RustToCrossGLConverter:
 
         return "", value
 
+    def format_reverse_exclusive_range_start(self, end):
+        if isinstance(end, str) and re.fullmatch(r"-?\d+", end):
+            return str(int(end) - 1)
+        return f"({end} - 1)"
+
+    def format_reverse_stepped_range_start(self, start, end, step, inclusive):
+        start_value = self.parse_integer_literal(start)
+        end_value = self.parse_integer_literal(end)
+        step_value = self.parse_integer_literal(step)
+
+        if (
+            start_value is not None
+            and end_value is not None
+            and step_value is not None
+            and step_value != 0
+        ):
+            final_value = end_value if inclusive else end_value - 1
+            step_count = (final_value - start_value) // step_value
+            return str(start_value + (step_count * step_value))
+
+        final_expr = (
+            end if inclusive else self.format_reverse_exclusive_range_start(end)
+        )
+        if start == "0":
+            return f"({final_expr} - ({final_expr} % {step}))"
+        return f"({start} + ((({final_expr} - {start}) / {step}) * {step}))"
+
+    def parse_integer_literal(self, value):
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and re.fullmatch(r"-?\d+", value):
+            return int(value)
+        return None
+
     def parse_for_range_iterable(self, iterable):
         if isinstance(iterable, RangeNode):
-            return iterable, None
+            return iterable, None, False, False
 
         if not isinstance(iterable, FunctionCallNode):
-            return None, None
+            return None, None, False, False
 
         callee = iterable.name
-        if not (
+        if (
+            isinstance(callee, MemberAccessNode)
+            and callee.member == "rev"
+            and not iterable.args
+        ):
+            range_node, step_expression, _, align_reverse_step = (
+                self.parse_for_range_iterable(callee.object)
+            )
+            if range_node is not None and range_node.end is not None:
+                return (
+                    range_node,
+                    step_expression,
+                    True,
+                    step_expression is not None or align_reverse_step,
+                )
+
+        if (
             isinstance(callee, MemberAccessNode)
             and callee.member == "step_by"
-            and isinstance(callee.object, RangeNode)
             and len(iterable.args) == 1
         ):
-            return None, None
+            range_node, _, is_reverse, align_reverse_step = (
+                self.parse_for_range_iterable(callee.object)
+            )
+            if range_node is not None and is_reverse:
+                return range_node, iterable.args[0], True, align_reverse_step
+            if isinstance(callee.object, RangeNode):
+                return callee.object, iterable.args[0], False, False
 
-        return callee.object, iterable.args[0]
+        return None, None, False, False
 
     def generate_while_loop(self, node, indent, loop_contexts=None):
         if isinstance(node.condition, ConditionChainNode):

@@ -3,10 +3,12 @@ import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
+    ArrayNode,
     PrimitiveType,
     ShaderStage,
     StructMemberNode,
     StructNode,
+    create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from typing import List
@@ -1116,6 +1118,291 @@ def test_hlsl_implicit_shadow_sampler_split_inherits_global_texture_register_spa
     assert "shadowMap.SampleCmp(shadowMapSampler, uv, depth)" in generated_code
 
 
+def test_hlsl_output_return_semantics_still_emit():
+    depth_code = """
+    shader ValidReturnSemantics {
+        vertex {
+            vec4 main() @gl_Position {
+                return vec4(0.0);
+            }
+        }
+
+        fragment {
+            float main() @gl_FragDepth {
+                return 0.5;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(depth_code)
+
+    vertex_code = HLSLCodeGen().generate_stage(ast, "vertex")
+    assert "float4 VSMain(): SV_POSITION" in vertex_code
+
+    fragment_code = HLSLCodeGen().generate_stage(ast, "fragment")
+    assert "float PSMain(): SV_DEPTH" in fragment_code
+
+    color_code = """
+    shader ValidColorReturnSemantic {
+        fragment {
+            vec4 main() @gl_FragColor1 {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    color_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(color_code), "fragment"
+    )
+    assert "float4 PSMain(): SV_TARGET1" in color_output
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
+    [
+        ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
+        ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
+        ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
+        ("fragment", "float", "SV_TARGET1", "0.0", "SV_TARGET1", "float4"),
+    ],
+)
+def test_hlsl_function_return_output_builtin_types_are_validated(
+    stage, return_type, semantic, value, hlsl_semantic, expected_type
+):
+    code = f"""
+    shader BadReturnBuiltinType {{
+        {stage} {{
+            {return_type} main() @{semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=f"{hlsl_semantic}.*{expected_type}"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "value", "hlsl_semantic"),
+    [
+        ("vertex", "vec4", "gl_FragColor", "vec4(0.0)", "SV_TARGET"),
+        ("vertex", "float", "gl_FragDepth", "0.5", "SV_DEPTH"),
+        ("fragment", "vec4", "gl_Position", "vec4(0.0)", "SV_POSITION"),
+        ("compute", "vec4", "gl_Position", "vec4(0.0)", "SV_POSITION"),
+    ],
+)
+def test_hlsl_function_return_output_builtin_stages_are_validated(
+    stage, return_type, semantic, value, hlsl_semantic
+):
+    code = f"""
+    shader BadReturnBuiltinStage {{
+        {stage} {{
+            {return_type} main() @{semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"{stage}.*{hlsl_semantic}"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "semantic"),
+    [
+        ("vertex", "gl_Position"),
+        ("fragment", "SV_TARGET0"),
+    ],
+)
+def test_hlsl_void_function_return_semantics_are_rejected(stage, semantic):
+    code = f"""
+    shader BadVoidReturnSemantic {{
+        {stage} {{
+            void main() @{semantic} {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"{stage}.*{semantic}.*void return type"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_hlsl_struct_output_builtin_semantics_still_emit():
+    code = """
+    shader ValidStructOutputSemantics {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        struct FSOutput {
+            vec4 color @ gl_FragColor1;
+            float depth @ gl_FragDepth;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                output.position = vec4(0.0);
+                return output;
+            }
+        }
+
+        fragment {
+            FSOutput main() {
+                FSOutput output;
+                output.color = vec4(1.0);
+                output.depth = 0.5;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float4 position: SV_POSITION;" in generated
+    assert "float4 color: SV_TARGET1;" in generated
+    assert "float depth: SV_DEPTH;" in generated
+
+
+def test_hlsl_struct_array_member_semantics_are_preserved():
+    code = """
+    shader ArrayStructSemantics {
+        struct FSInput {
+            float weights[4] @ TEXCOORD0;
+        };
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float weights[4]: TEXCOORD0;" in generated
+
+
+def test_hlsl_legacy_array_node_struct_member_semantics_are_preserved():
+    ast = create_legacy_shader_node(
+        structs=[
+            StructNode(
+                "LegacyInput",
+                [ArrayNode(PrimitiveType("float"), "weights", 4, "TEXCOORD0")],
+            )
+        ],
+        functions=[],
+        global_variables=[],
+        cbuffers=[],
+    )
+
+    generated = HLSLCodeGen().generate(ast)
+
+    assert "float weights[4]: TEXCOORD0;" in generated
+
+
+def test_hlsl_struct_output_builtin_array_member_types_are_validated():
+    code = """
+    shader BadStructOutputArrayBuiltin {
+        struct BadOutput {
+            vec4 colors[2] @ gl_FragColor;
+        };
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="SV_TARGET.*float4"):
+        HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
+@pytest.mark.parametrize(
+    ("stage", "struct_name", "member_decl", "hlsl_semantic"),
+    [
+        ("vertex", "VSOutput", "vec4 color @ gl_FragColor", "SV_TARGET"),
+        ("fragment", "FSOutput", "vec4 position @ gl_Position", "SV_POSITION"),
+    ],
+)
+def test_hlsl_struct_return_output_builtin_stages_are_validated(
+    stage, struct_name, member_decl, hlsl_semantic
+):
+    code = f"""
+    shader BadStructReturnBuiltinStage {{
+        struct {struct_name} {{
+            {member_decl};
+        }};
+
+        {stage} {{
+            {struct_name} main() {{
+                {struct_name} output;
+                return output;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"{stage}.*{hlsl_semantic}"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
+    ("member_decl", "hlsl_semantic", "expected_type"),
+    [
+        ("float position @ gl_Position", "SV_POSITION", "float4"),
+        ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
+        ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
+        ("float rawColor @ SV_TARGET1", "SV_TARGET1", "float4"),
+    ],
+)
+def test_hlsl_struct_output_builtin_types_are_validated(
+    member_decl, hlsl_semantic, expected_type
+):
+    code = f"""
+    shader BadStructOutputBuiltin {{
+        struct BadOutput {{
+            {member_decl};
+        }};
+
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                return vec4(0.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"{hlsl_semantic}.*{expected_type}"):
+        HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "value"),
+    [
+        ("vertex", "uint", "gl_VertexID", "0"),
+        ("vertex", "uint", "SV_VertexID", "0"),
+        ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
+        ("fragment", "bool", "gl_FrontFacing", "true"),
+        ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+        ("compute", "uvec3", "gl_GlobalInvocationID", "uvec3(0u)"),
+    ],
+)
+def test_hlsl_function_return_input_only_builtin_semantics_are_rejected(
+    stage, return_type, semantic, value
+):
+    code = f"""
+    shader BadReturnBuiltin {{
+        {stage} {{
+            {return_type} main() @{semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=f"{semantic}.*return semantic"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
 def test_hlsl_cbuffer_binding_attributes_drive_registers():
     code = """
     shader CBufferBindings {
@@ -2135,6 +2422,186 @@ def test_directx_advanced_stage_signature_validation_rejects_partial_hlsl_shapes
     with pytest.raises(ValueError, match="OutputPatch"):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(domain_code), "tessellation_evaluation"
+        )
+
+
+def test_directx_geometry_stream_output_builtin_stages_are_validated():
+    code = """
+    shader bad_geometry_stream_output_semantic {
+        struct GSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct GSOutput {
+            vec4 color @ gl_FragColor;
+        };
+
+        geometry {
+            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
+                @maxvertexcount(3) { }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="geometry.*SV_TARGET"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_decl", "stage_body", "hlsl_semantic"),
+    [
+        (
+            "tessellation_evaluation",
+            "HSOutput main(OutputPatch<HSOutput, 3> patch, vec3 bary @ SV_DomainLocation) "
+            "@domain(tri)",
+            "HSOutput output; return output;",
+            "SV_TARGET",
+        ),
+        (
+            "tessellation_control",
+            "HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID) "
+            "@domain(tri) @partitioning(fractional_odd) @outputtopology(triangle_cw) "
+            "@outputcontrolpoints(3) @patchconstantfunc(HSConst)",
+            "HSOutput output; return output;",
+            "SV_TARGET",
+        ),
+    ],
+)
+def test_directx_tessellation_output_builtin_stages_are_validated(
+    stage, return_decl, stage_body, hlsl_semantic
+):
+    code = f"""
+    shader bad_tessellation_output_semantic {{
+        struct HSInput {{
+            vec3 position @ POSITION;
+        }};
+
+        struct HSOutput {{
+            vec4 color @ gl_FragColor;
+        }};
+
+        struct HSConstData {{
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        }};
+
+        HSConstData HSConst(InputPatch<HSInput, 3> patch) {{
+            HSConstData constants;
+            return constants;
+        }}
+
+        {stage} {{
+            {return_decl} {{
+                {stage_body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"{stage}.*{hlsl_semantic}"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_directx_tessellation_direct_return_semantic_ignores_stage_attributes():
+    code = """
+    shader domain_direct_return_semantic {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(
+                OutputPatch<HSOutput, 3> patch,
+                vec3 bary @ SV_DomainLocation
+            ) @domain(tri) @gl_Position {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_evaluation"
+    )
+
+    assert '[domain("tri")]' in generated
+    assert (
+        "float4 DSMain(OutputPatch<HSOutput, 3> patch, "
+        "float3 bary : SV_DomainLocation): SV_POSITION"
+    ) in generated
+
+
+def test_directx_tessellation_direct_return_builtin_stage_is_validated():
+    code = """
+    shader bad_domain_direct_return_semantic {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec4 main(
+                OutputPatch<HSOutput, 3> patch,
+                vec3 bary @ SV_DomainLocation
+            ) @domain(tri) @gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="tessellation_evaluation.*SV_TARGET"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
+        )
+
+
+def test_directx_tessellation_custom_direct_return_semantic_emits():
+    code = """
+    shader domain_custom_direct_return_semantic {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            vec2 main(
+                OutputPatch<HSOutput, 3> patch,
+                vec3 bary @ SV_DomainLocation
+            ) @domain(tri) @TEXCOORD0 {
+                return vec2(0.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_evaluation"
+    )
+
+    assert (
+        "float2 DSMain(OutputPatch<HSOutput, 3> patch, "
+        "float3 bary : SV_DomainLocation): TEXCOORD0"
+    ) in generated
+
+
+def test_directx_tessellation_void_direct_return_semantic_is_rejected():
+    code = """
+    shader bad_domain_void_direct_return_semantic {
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            void main(
+                OutputPatch<HSOutput, 3> patch,
+                vec3 bary @ SV_DomainLocation
+            ) @domain(tri) @TEXCOORD0 { }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="tessellation_evaluation.*TEXCOORD0.*void"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
         )
 
 
@@ -3786,6 +4253,76 @@ def test_compute_stage_uses_execution_config_numthreads():
     compute_code = HLSLCodeGen().generate_stage(ast, "compute")
 
     assert "[numthreads(8, 4, 2)]" in compute_code
+
+
+def test_compute_stage_validates_system_value_parameter_types():
+    float_group_index_code = """
+    shader BadComputeGroupIndex {
+        compute {
+            void main(float groupIndex @ SV_GroupIndex) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_GroupIndex.*scalar uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_group_index_code), "compute"
+        )
+
+    vector_group_index_code = """
+    shader BadComputeVectorGroupIndex {
+        compute {
+            void main(uvec2 groupIndex @ SV_GroupIndex) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_GroupIndex.*scalar uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_group_index_code), "compute"
+        )
+
+    dispatch_vec2_code = """
+    shader BadComputeDispatchThreadId {
+        compute {
+            void main(uvec2 dispatchId @ SV_DispatchThreadID) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_DispatchThreadID.*uint3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(dispatch_vec2_code), "compute"
+        )
+
+    signed_group_id_code = """
+    shader BadComputeSignedGroupId {
+        compute {
+            void main(ivec3 groupId @ SV_GroupID) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_GroupID.*uint3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(signed_group_id_code), "compute"
+        )
+
+    valid_code = """
+    shader ValidComputeSystemValues {
+        compute {
+            void main(
+                uvec3 groupId @ SV_GroupID,
+                uvec3 groupThreadId @ SV_GroupThreadID,
+                uvec3 dispatchId @ SV_DispatchThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "compute"
+    )
+    assert "uint3 groupId : SV_GroupID" in generated
+    assert "uint3 groupThreadId : SV_GroupThreadID" in generated
+    assert "uint3 dispatchId : SV_DispatchThreadID" in generated
+    assert "uint groupIndex : SV_GroupIndex" in generated
 
 
 def test_wave_and_rayquery_intrinsics_codegen():

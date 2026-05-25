@@ -127,6 +127,28 @@ def test_bitwise_not_tokenization():
     assert has_not, "Bitwise NOT operator (~) not tokenized correctly"
 
 
+def test_binary_bitwise_and_shift_tokenization():
+    tokens = tokenize_code("a & b | c ^ d << 1 >> 2 && e || f;")
+
+    assert ("BITWISE_AND", "&") in tokens
+    assert ("BITWISE_OR", "|") in tokens
+    assert ("BITWISE_XOR", "^") in tokens
+    assert ("BITWISE_SHIFT_LEFT", "<<") in tokens
+    assert ("BITWISE_SHIFT_RIGHT", ">>") in tokens
+    assert ("AND", "&&") in tokens
+    assert ("OR", "||") in tokens
+
+
+def test_compound_bitwise_and_shift_assignment_tokenization():
+    tokens = tokenize_code("a &= b; a |= c; a ^= d; a <<= 1; a >>= 2;")
+
+    assert ("ASSIGN_AND", "&=") in tokens
+    assert ("ASSIGN_OR", "|=") in tokens
+    assert ("ASSIGN_XOR", "^=") in tokens
+    assert ("ASSIGN_SHIFT_LEFT", "<<=") in tokens
+    assert ("ASSIGN_SHIFT_RIGHT", ">>=") in tokens
+
+
 def test_logical_not_tokenization():
     tokens = tokenize_code("bool enabled = !disabled; disabled != enabled;")
 

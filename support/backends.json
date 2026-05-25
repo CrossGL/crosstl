@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "backends": [
+    {
+      "id": "directx",
+      "name": "DirectX / HLSL",
+      "aliases": ["hlsl", "dx"],
+      "target_extension": ".hlsl",
+      "translator_codegen": "crosstl/translator/codegen/directx_codegen.py",
+      "native_backend": "crosstl/backend/DirectX",
+      "tests": [
+        "tests/test_translator/test_codegen/test_directx_codegen.py",
+        "tests/test_backend/test_directx"
+      ],
+      "docs": [
+        {
+          "name": "Microsoft Learn HLSL reference",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-reference"
+        },
+        {
+          "name": "HLSL specification project",
+          "url": "https://microsoft.github.io/hlsl-specs/"
+        }
+      ]
+    },
+    {
+      "id": "opengl",
+      "name": "OpenGL / GLSL",
+      "aliases": ["glsl", "ogl"],
+      "target_extension": ".glsl",
+      "translator_codegen": "crosstl/translator/codegen/GLSL_codegen.py",
+      "native_backend": "crosstl/backend/GLSL",
+      "tests": [
+        "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+        "tests/test_backend/test_GLSL"
+      ],
+      "docs": [
+        {
+          "name": "GLSL 4.60 specification",
+          "url": "https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html"
+        },
+        {
+          "name": "OpenGL registry",
+          "url": "https://registry.khronos.org/OpenGL/"
+        }
+      ]
+    },
+    {
+      "id": "metal",
+      "name": "Metal",
+      "aliases": ["metal", "msl"],
+      "target_extension": ".metal",
+      "translator_codegen": "crosstl/translator/codegen/metal_codegen.py",
+      "native_backend": "crosstl/backend/Metal",
+      "tests": [
+        "tests/test_translator/test_codegen/test_metal_codegen.py",
+        "tests/test_backend/test_metal"
+      ],
+      "docs": [
+        {
+          "name": "Apple Metal resources",
+          "url": "https://developer.apple.com/metal/resources/"
+        },
+        {
+          "name": "Metal Shading Language specification",
+          "url": "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf"
+        }
+      ]
+    },
+    {
+      "id": "vulkan",
+      "name": "Vulkan SPIR-V",
+      "aliases": ["spirv", "spv"],
+      "target_extension": ".spirv",
+      "translator_codegen": "crosstl/translator/codegen/SPIRV_codegen.py",
+      "native_backend": "crosstl/backend/SPIRV",
+      "tests": [
+        "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
+        "tests/test_backend/test_SPIRV"
+      ],
+      "docs": [
+        {
+          "name": "SPIR-V unified specification",
+          "url": "https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html"
+        },
+        {
+          "name": "Khronos SPIR-V registry",
+          "url": "https://registry.khronos.org/SPIR-V/"
+        }
+      ]
+    },
+    {
+      "id": "cuda",
+      "name": "CUDA",
+      "aliases": ["cu"],
+      "target_extension": ".cu",
+      "translator_codegen": "crosstl/translator/codegen/cuda_codegen.py",
+      "native_backend": "crosstl/backend/CUDA",
+      "tests": [
+        "tests/test_translator/test_codegen/test_CUDA_codegen.py",
+        "tests/test_backend/test_CUDA"
+      ],
+      "docs": [
+        {
+          "name": "CUDA C++ programming guide",
+          "url": "https://docs.nvidia.com/cuda/cuda-c-programming-guide/"
+        }
+      ]
+    },
+    {
+      "id": "hip",
+      "name": "HIP",
+      "aliases": ["hip"],
+      "target_extension": ".hip",
+      "translator_codegen": "crosstl/translator/codegen/hip_codegen.py",
+      "native_backend": "crosstl/backend/HIP",
+      "tests": [
+        "tests/test_translator/test_codegen/test_hip_codegen.py",
+        "tests/test_backend/test_HIP"
+      ],
+      "docs": [
+        {
+          "name": "ROCm HIP documentation",
+          "url": "https://rocm.docs.amd.com/projects/HIP/en/latest/"
+        }
+      ]
+    },
+    {
+      "id": "mojo",
+      "name": "Mojo",
+      "aliases": ["mojo"],
+      "target_extension": ".mojo",
+      "translator_codegen": "crosstl/translator/codegen/mojo_codegen.py",
+      "native_backend": "crosstl/backend/Mojo",
+      "tests": [
+        "tests/test_translator/test_codegen/test_mojo_codegen.py",
+        "tests/test_backend/test_mojo"
+      ],
+      "docs": [
+        {
+          "name": "Mojo manual",
+          "url": "https://mojolang.org/docs/manual/"
+        }
+      ]
+    },
+    {
+      "id": "rust",
+      "name": "Rust",
+      "aliases": ["rs"],
+      "target_extension": ".rs",
+      "translator_codegen": "crosstl/translator/codegen/rust_codegen.py",
+      "native_backend": "crosstl/backend/Rust",
+      "tests": [
+        "tests/test_translator/test_codegen/test_rust_codegen.py",
+        "tests/test_backend/test_rust"
+      ],
+      "docs": [
+        {
+          "name": "Rust reference",
+          "url": "https://doc.rust-lang.org/reference/"
+        }
+      ]
+    },
+    {
+      "id": "slang",
+      "name": "Slang",
+      "aliases": ["slang"],
+      "target_extension": ".slang",
+      "translator_codegen": "crosstl/translator/codegen/slang_codegen.py",
+      "native_backend": "crosstl/backend/slang",
+      "tests": [
+        "tests/test_translator/test_codegen/test_slang_codegen.py",
+        "tests/test_backend/test_slang"
+      ],
+      "docs": [
+        {
+          "name": "Slang user guide",
+          "url": "https://shader-slang.org/slang/user-guide/"
+        }
+      ]
+    }
+  ]
+}

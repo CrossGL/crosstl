@@ -274,7 +274,29 @@ def test_for_in_descending_range_codegen_uses_greater_than_condition():
     generated_code = generate_code(ast)
 
     assert "for (int i = 4; i > 0; i += (-1))" in generated_code
-    assert "for (int j = 4; j < 0; j += step)" in generated_code
+    assert (
+        "for (int j = 4; ((step > 0) ? (j < 0) : (j > 0)); j += step)" in generated_code
+    )
+
+
+def test_for_in_dynamic_step_range_codegen_uses_step_sign_condition():
+    code = """
+    fn main(step: Int):
+        for j in range(4, 0, step):
+            sink(j)
+        for k in range(0, 4, step):
+            sink(k)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "for (int j = 4; ((step > 0) ? (j < 0) : (j > 0)); j += step)" in generated_code
+    )
+    assert (
+        "for (int k = 0; ((step > 0) ? (k < 4) : (k > 4)); k += step)" in generated_code
+    )
 
 
 def test_while_codegen():

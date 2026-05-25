@@ -1,0 +1,710 @@
+{
+  "schema_version": 1,
+  "statuses": {
+    "supported": "Implemented with positive tests for the repo-owned CrossGL contract.",
+    "partial": "Implemented for common cases, but known target features or edge cases are missing.",
+    "diagnostic": "The backend emits a deterministic diagnostic or fallback instead of full target code.",
+    "unsupported": "The backend intentionally does not support this capability yet.",
+    "validated_rejection": "The backend rejects this shape with an explicit validation error.",
+    "unknown": "Not audited yet. Do not treat this as supported."
+  },
+  "features": [
+    {
+      "id": "target.codegen",
+      "category": "target",
+      "name": "CrossGL to target code generation",
+      "description": "Emit target-language source or target representation from CrossGL.",
+      "support": {
+        "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_"]},
+        "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_"]},
+        "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_"]},
+        "vulkan": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_"]},
+        "cuda": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_"]},
+        "hip": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_"]},
+        "mojo": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_"]},
+        "rust": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_"]},
+        "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_"]}
+      }
+    },
+    {
+      "id": "source.native_to_crossgl",
+      "category": "source",
+      "name": "Native source to CrossGL",
+      "description": "Parse backend source language and regenerate CrossGL.",
+      "support": {
+        "directx": {"status": "supported", "evidence": ["tests/test_backend/test_directx/test_parser.py::def test_"]},
+        "opengl": {"status": "supported", "evidence": ["tests/test_backend/test_GLSL/test_parser.py::def test_"]},
+        "metal": {"status": "supported", "evidence": ["tests/test_backend/test_metal/test_parser.py::def test_"]},
+        "vulkan": {"status": "supported", "evidence": ["tests/test_backend/test_SPIRV/test_parser.py::def test_"]},
+        "cuda": {"status": "supported", "evidence": ["tests/test_backend/test_CUDA/test_parser.py::def test_"]},
+        "hip": {"status": "supported", "evidence": ["tests/test_backend/test_HIP/test_parser.py::def test_"]},
+        "mojo": {"status": "supported", "evidence": ["tests/test_backend/test_mojo/test_parser.py::def test_"]},
+        "rust": {"status": "supported", "evidence": ["tests/test_backend/test_rust/test_parser.py::def test_"]},
+        "slang": {"status": "supported", "evidence": ["tests/test_backend/test_slang/test_parser.py::def test_"]}
+      }
+    },
+    {
+      "id": "source.lexing",
+      "category": "source",
+      "name": "Native lexer coverage",
+      "description": "Tokenize backend source language constructs used by the native parser.",
+      "support": {
+        "directx": {"status": "supported", "evidence": ["tests/test_backend/test_directx/test_lexer.py::def test_"]},
+        "opengl": {"status": "supported", "evidence": ["tests/test_backend/test_GLSL/test_lexer.py::def test_"]},
+        "metal": {"status": "supported", "evidence": ["tests/test_backend/test_metal/test_lexer.py::def test_"]},
+        "vulkan": {"status": "supported", "evidence": ["tests/test_backend/test_SPIRV/test_lexer.py::def test_"]},
+        "cuda": {"status": "supported", "evidence": ["tests/test_backend/test_CUDA/test_lexer.py::def test_"]},
+        "hip": {"status": "supported", "evidence": ["tests/test_backend/test_HIP/test_lexer.py::def test_"]},
+        "mojo": {"status": "supported", "evidence": ["tests/test_backend/test_mojo/test_lexer.py::def test_"]},
+        "rust": {"status": "supported", "evidence": ["tests/test_backend/test_rust/test_lexer.py::def test_"]},
+        "slang": {"status": "supported", "evidence": ["tests/test_backend/test_slang/test_lexer.py::def test_"]}
+      }
+    },
+    {
+      "id": "source.preprocessing",
+      "category": "source",
+      "name": "Native preprocessor handling",
+      "description": "Handle native preprocessor directives, includes, defines, and conditional compilation where the backend language exposes them.",
+      "support": {
+        "directx": {"status": "supported", "evidence": ["tests/test_backend/test_directx/test_preprocessor.py::def test_"]},
+        "opengl": {"status": "supported", "evidence": ["tests/test_backend/test_GLSL/test_preprocessor.py::def test_"]},
+        "metal": {"status": "unknown"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "stage.vertex",
+      "category": "stages",
+      "name": "Vertex stage",
+      "description": "CrossGL vertex entry point lowering.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "supported"},
+        "cuda": {"status": "partial", "notes": "Graphics examples lower to CUDA-shaped code, not native raster pipeline stages."},
+        "hip": {"status": "partial", "notes": "Graphics examples lower to HIP-shaped code, not native raster pipeline stages."},
+        "mojo": {"status": "partial"},
+        "rust": {"status": "partial"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "stage.fragment",
+      "category": "stages",
+      "name": "Fragment/pixel stage",
+      "description": "CrossGL fragment entry point lowering.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "supported"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "partial"},
+        "rust": {"status": "partial"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "stage.compute",
+      "category": "stages",
+      "name": "Compute stage",
+      "description": "CrossGL compute entry point lowering.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "supported"},
+        "cuda": {"status": "supported"},
+        "hip": {"status": "supported"},
+        "mojo": {"status": "supported"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "stage.geometry",
+      "category": "stages",
+      "name": "Geometry stage",
+      "description": "Geometry shader stage and primitive stream shape validation.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "unsupported", "evidence": ["crosstl/translator/codegen/metal_codegen.py::does not support stage type"]},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unsupported"},
+        "hip": {"status": "unsupported"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "stage.tessellation",
+      "category": "stages",
+      "name": "Tessellation stages",
+      "description": "Tessellation control/hull and tessellation evaluation/domain stages.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "unsupported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::unsupported_geometry_and_tessellation"]},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unsupported"},
+        "hip": {"status": "unsupported"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "stage.mesh_task",
+      "category": "stages",
+      "name": "Mesh/task/amplification stages",
+      "description": "Modern mesh-style stage entry points.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "unknown"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unsupported"},
+        "hip": {"status": "unsupported"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "stage.ray_tracing",
+      "category": "stages",
+      "name": "Ray tracing stages",
+      "description": "Ray generation, hit, miss, callable, and intersection stages.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "unknown"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "io.stage_parameters",
+      "category": "stage I/O",
+      "name": "Stage parameter semantics",
+      "description": "Input parameter semantics and target builtin attributes.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "partial"},
+        "rust": {"status": "partial"},
+        "slang": {"status": "partial"}
+      }
+    },
+    {
+      "id": "io.return_semantics",
+      "category": "stage I/O",
+      "name": "Direct function return semantics",
+      "description": "Function return semantics, wrapper output structs, and invalid-return validation.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "io.struct_semantics",
+      "category": "stage I/O",
+      "name": "Struct member semantics",
+      "description": "Input/output struct member semantics and builtin type validation.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "partial"},
+        "rust": {"status": "partial"},
+        "slang": {"status": "partial"}
+      }
+    },
+    {
+      "id": "resources.bindings",
+      "category": "resources",
+      "name": "Explicit and automatic resource bindings",
+      "description": "Resource binding/register/location assignment and collision avoidance.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "partial"}
+      }
+    },
+    {
+      "id": "resources.constant_buffers",
+      "category": "resources",
+      "name": "Constant/uniform buffers",
+      "description": "CrossGL cbuffer/uniform block lowering.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "partial"},
+        "rust": {"status": "partial"},
+        "slang": {"status": "partial"}
+      }
+    },
+    {
+      "id": "resources.structured_buffers",
+      "category": "resources",
+      "name": "Structured/storage buffers",
+      "description": "StructuredBuffer, RWStructuredBuffer, SSBO-style storage, and access helpers.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "resources.resource_arrays",
+      "category": "resources",
+      "name": "Resource arrays",
+      "description": "Fixed and unsized texture, sampler, image, and buffer arrays.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "resources.texture_sampler_split",
+      "category": "resources",
+      "name": "Texture and sampler object model",
+      "description": "Represent combined and separate texture/sampler models without binding collisions.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "partial"}
+      }
+    },
+    {
+      "id": "resources.glsl_buffer_blocks",
+      "category": "resources",
+      "name": "GLSL buffer block lowering",
+      "description": "Lower GLSL-style buffer blocks and preserve deterministic diagnostics for unsupported target shapes.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "resources.memory_qualifiers",
+      "category": "resources",
+      "name": "Resource memory qualifiers",
+      "description": "Translate readonly/writeonly/coherent/volatile/restrict-style resource qualifiers where the target has an equivalent.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.sampling",
+      "category": "textures",
+      "name": "Texture sampling",
+      "description": "Basic sampling with regular and shadow samplers.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "partial"}
+      }
+    },
+    {
+      "id": "texture.lod_grad_offset",
+      "category": "textures",
+      "name": "Texture LOD, gradient, and offset operations",
+      "description": "Lower explicit LOD, gradient, bias, and offset texture operations.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.projected",
+      "category": "textures",
+      "name": "Projected texture operations",
+      "description": "Lower projection-coordinate texture sampling and shadow comparison variants.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.gather",
+      "category": "textures",
+      "name": "Texture gather operations",
+      "description": "Lower gather, gather-offset, and gather-offsets texture operations.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.shadow_compare",
+      "category": "textures",
+      "name": "Shadow compare texture operations",
+      "description": "Lower shadow sampler compare operations, including offset and LOD variants where target semantics allow them.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.query",
+      "category": "textures",
+      "name": "Texture query operations",
+      "description": "Lower size, LOD, levels, and sample-count resource query operations.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.texel_fetch",
+      "category": "textures",
+      "name": "Texel fetch operations",
+      "description": "Lower integer-coordinate texel fetch and fetch-offset operations.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.multisample",
+      "category": "textures",
+      "name": "Multisample texture operations",
+      "description": "Lower multisample texture fetch, query, and comparison forms with deterministic diagnostics for unsupported combinations.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "texture.advanced_sampling",
+      "category": "textures",
+      "name": "Advanced texture operations",
+      "description": "LOD, gradients, offsets, projected coordinates, gathers, compares, and resource queries.",
+      "support": {
+        "directx": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
+        "opengl": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
+        "metal": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "image.storage",
+      "category": "images",
+      "name": "Storage image load/store",
+      "description": "Readable and writable image resources with explicit formats and access qualifiers.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "image.atomics",
+      "category": "images",
+      "name": "Image atomics",
+      "description": "Atomic operations on image resources.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "image.multisample_storage",
+      "category": "images",
+      "name": "Multisample storage images",
+      "description": "Represent multisample storage images and report unsupported load/store/atomic combinations deterministically.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {"status": "unknown"}
+      }
+    },
+    {
+      "id": "language.structs",
+      "category": "language",
+      "name": "Struct declarations and construction",
+      "description": "Lower struct declarations, member access, initialization, and return values.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "supported"},
+        "hip": {"status": "supported"},
+        "mojo": {"status": "supported"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "language.arrays",
+      "category": "language",
+      "name": "Array declarations and access",
+      "description": "Lower fixed arrays, array parameters, indexing, and array return diagnostics.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "supported"},
+        "hip": {"status": "supported"},
+        "mojo": {"status": "supported"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "language.functions",
+      "category": "language",
+      "name": "Function declarations and calls",
+      "description": "Lower helper functions, entry functions, call expressions, and return statements.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "supported"},
+        "hip": {"status": "supported"},
+        "mojo": {"status": "supported"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "language.control_flow",
+      "category": "language",
+      "name": "Control flow",
+      "description": "if/else, loops, switch, break, continue, and return statements.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "supported"},
+        "hip": {"status": "supported"},
+        "mojo": {"status": "supported"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "language.match",
+      "category": "language",
+      "name": "Match/pattern lowering",
+      "description": "CrossGL match expressions and pattern arms.",
+      "support": {
+        "directx": {"status": "partial"},
+        "opengl": {"status": "partial"},
+        "metal": {"status": "partial"},
+        "vulkan": {"status": "unknown"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "partial"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "partial"}
+      }
+    },
+    {
+      "id": "language.vector_matrix",
+      "category": "language",
+      "name": "Vector and matrix expressions",
+      "description": "Vector/matrix constructors, arithmetic, swizzles, casts, and helper intrinsics.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "supported"},
+        "hip": {"status": "supported"},
+        "mojo": {"status": "supported"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "language.bitwise",
+      "category": "language",
+      "name": "Bitwise operations",
+      "description": "Integer bitwise operators and assignment variants.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "supported"},
+        "hip": {"status": "supported"},
+        "mojo": {"status": "supported"},
+        "rust": {"status": "supported"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "validation.invalid_shapes",
+      "category": "validation",
+      "name": "Invalid shader shape validation",
+      "description": "Backend-specific validation for invalid semantics, stages, resource shapes, and builtin types.",
+      "support": {
+        "directx": {"status": "supported"},
+        "opengl": {"status": "supported"},
+        "metal": {"status": "supported"},
+        "vulkan": {"status": "partial"},
+        "cuda": {"status": "partial"},
+        "hip": {"status": "partial"},
+        "mojo": {"status": "partial"},
+        "rust": {"status": "partial"},
+        "slang": {"status": "partial"}
+      }
+    }
+  ]
+}

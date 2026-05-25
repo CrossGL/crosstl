@@ -83,6 +83,71 @@ def test_structured_buffer_operations_lower_to_ssbo():
     assert "buffer_dimensions" not in generated
 
 
+def test_compute_stage_validates_builtin_parameter_types():
+    float_global_id_code = """
+    shader BadComputeGlobalInvocationID {
+        compute {
+            void main(float gid @ gl_GlobalInvocationID) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_GlobalInvocationID.*uvec3"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_global_id_code), "compute"
+        )
+
+    vector_local_id_code = """
+    shader BadComputeLocalInvocationID {
+        compute {
+            void main(uint2 lid @ gl_LocalInvocationID) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LocalInvocationID.*uvec3"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_local_id_code), "compute"
+        )
+
+    signed_local_index_code = """
+    shader BadComputeLocalInvocationIndex {
+        compute {
+            void main(int index @ gl_LocalInvocationIndex) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LocalInvocationIndex.*scalar uint"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(signed_local_index_code), "compute"
+        )
+
+    valid_code = """
+    shader ValidComputeBuiltinParameters {
+        compute {
+            void main(
+                uint3 gid @ gl_GlobalInvocationID,
+                uint3 lid @ gl_LocalInvocationID,
+                uint3 group @ gl_WorkGroupID,
+                uint3 size @ gl_WorkGroupSize,
+                uint3 groups @ gl_NumWorkGroups,
+                uint index @ gl_LocalInvocationIndex
+            ) {
+                uint value = gid.x + lid.x + group.x + size.x + groups.x + index;
+            }
+        }
+    }
+    """
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "compute"
+    )
+    assert "void main()" in generated
+    assert (
+        "uint value = (((((gl_GlobalInvocationID.x + gl_LocalInvocationID.x) + "
+        "gl_WorkGroupID.x) + gl_WorkGroupSize.x) + gl_NumWorkGroups.x) + "
+        "gl_LocalInvocationIndex);"
+    ) in generated
+    assert "gid @ gl_GlobalInvocationID" not in generated
+
+
 def test_readonly_structured_buffer_uses_readonly_ssbo():
     code = """
     shader StructuredBufferGLSL {
@@ -950,6 +1015,219 @@ def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin():
 
     assert "in vec4 coord;" not in generated_code
     assert "fragColor = gl_FragCoord;" in generated_code
+
+
+def test_glsl_graphics_builtin_parameter_types_are_validated():
+    float_vertex_id_code = """
+    shader BadVertexBuiltinType {
+        vertex {
+            void main(float vertexId @gl_VertexID) {
+                gl_Position = vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*scalar int"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_vertex_id_code), "vertex"
+        )
+
+    vector_primitive_id_code = """
+    shader BadPrimitiveBuiltinType {
+        fragment {
+            vec4 main(ivec2 primitiveId @gl_PrimitiveID) @gl_FragColor {
+                return vec4(float(primitiveId.x));
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_PrimitiveID.*scalar int"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_primitive_id_code), "fragment"
+        )
+
+    int_front_facing_code = """
+    shader BadFrontFacingBuiltinType {
+        fragment {
+            vec4 main(int frontFacing @gl_FrontFacing) @gl_FragColor {
+                return vec4(float(frontFacing));
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FrontFacing.*scalar bool"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(int_front_facing_code), "fragment"
+        )
+
+    scalar_frag_coord_code = """
+    shader BadFragCoordBuiltinType {
+        fragment {
+            vec4 main(float coord @gl_FragCoord) @gl_FragColor {
+                return vec4(coord);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragCoord.*vec4"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(scalar_frag_coord_code), "fragment"
+        )
+
+    vec3_point_coord_code = """
+    shader BadPointCoordBuiltinType {
+        fragment {
+            vec4 main(vec3 coord @gl_PointCoord) @gl_FragColor {
+                return vec4(coord, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_PointCoord.*vec2"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vec3_point_coord_code), "fragment"
+        )
+
+    valid_code = """
+    shader ValidGraphicsBuiltins {
+        vertex {
+            void main(int vertexId @gl_VertexID, int instanceId @gl_InstanceID) {
+                gl_Position = vec4(float(vertexId + instanceId));
+            }
+        }
+
+        fragment {
+            vec4 main(
+                int primitiveId @gl_PrimitiveID,
+                bool frontFacing @gl_FrontFacing,
+                vec4 coord @gl_FragCoord,
+                vec2 point @gl_PointCoord
+            ) @gl_FragColor {
+                return frontFacing
+                    ? (coord + vec4(point, 0.0, float(primitiveId)))
+                    : vec4(0.0);
+            }
+        }
+    }
+    """
+    vertex_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "vertex"
+    )
+    assert "void main()" in vertex_code
+    assert "float((gl_VertexID + gl_InstanceID))" in vertex_code
+    assert "vertexId @gl_VertexID" not in vertex_code
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "fragment"
+    )
+    assert "void main()" in fragment_code
+    assert (
+        "fragColor = (gl_FrontFacing ? (gl_FragCoord + "
+        "vec4(gl_PointCoord, 0.0, float(gl_PrimitiveID))) : vec4(0.0));"
+    ) in fragment_code
+    assert "primitiveId @gl_PrimitiveID" not in fragment_code
+    assert "coord @gl_FragCoord" not in fragment_code
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "value"),
+    [
+        ("vertex", "int", "gl_VertexID", "0"),
+        ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
+        ("fragment", "bool", "gl_FrontFacing", "true"),
+        ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+        ("compute", "uvec3", "gl_GlobalInvocationID", "uvec3(0u)"),
+    ],
+)
+def test_function_return_input_only_builtin_semantics_are_rejected(
+    stage, return_type, semantic, value
+):
+    code = f"""
+    shader BadReturnBuiltin {{
+        {stage} {{
+            {return_type} main() @{semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=f"{semantic}.*return semantic"):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "semantic"),
+    [
+        ("vertex", "gl_Position"),
+        ("fragment", "gl_FragColor"),
+        ("fragment", "TEXCOORD0"),
+    ],
+)
+def test_glsl_void_function_return_semantics_are_rejected(stage, semantic):
+    code = f"""
+    shader BadVoidReturnSemantic {{
+        {stage} {{
+            void main() @{semantic} {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"{stage}.*{semantic}.*void return type"):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_glsl_direct_return_semantic_ignores_stage_control_attributes():
+    code = """
+    shader ReturnSemanticWithStageControls {
+        vertex {
+            vec4 main() @max_vertices(3) @gl_Position {
+                return vec4(0.0);
+            }
+        }
+
+        fragment {
+            vec4 main() @max_vertices(3) @gl_FragColor1 {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+
+    vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
+    assert "gl_Position = vec4(0.0);" in vertex_code
+    assert "vertexOutput = vec4(0.0);" not in vertex_code
+
+    fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
+    assert "layout(location = 1) out vec4 fragColor1;" in fragment_code
+    assert "fragColor1 = vec4(1.0);" in fragment_code
+
+
+@pytest.mark.parametrize(
+    ("stage", "return_type", "semantic", "value", "expected"),
+    [
+        ("vertex", "vec4", "gl_FragColor", "vec4(0.0)", "fragment output"),
+        ("vertex", "float", "gl_FragDepth", "0.5", "fragment output"),
+        ("fragment", "vec4", "gl_Position", "vec4(0.0)", "vertex output"),
+        ("fragment", "float", "gl_PointSize", "1.0", "vertex output"),
+        ("compute", "vec4", "gl_Position", "vec4(0.0)", "graphics output"),
+    ],
+)
+def test_glsl_function_return_output_builtin_stages_are_validated(
+    stage, return_type, semantic, value, expected
+):
+    code = f"""
+    shader BadReturnOutputStage {{
+        {stage} {{
+            {return_type} main() @{semantic} {{
+                return {value};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"{stage}.*{expected}.*{semantic}"):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
 
 
 def test_glsl_vertex_return_semantic_assigns_position_builtin():

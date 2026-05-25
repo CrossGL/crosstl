@@ -45,6 +45,21 @@ def test_struct_codegen():
         pytest.fail("Struct parsing or code generation not implemented.")
 
 
+def test_struct_array_member_codegen():
+    code = """
+    struct Cluster {
+        float weights[4];
+        float4 colors[2][3] : COLOR0;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float weights[4];" in generated_code
+    assert "vec4 colors[2][3]" in generated_code
+
+
 def test_if_codegen():
     code = """
     [shader("vertex")]
@@ -386,6 +401,48 @@ def test_binary_expression_precedence_preserves_grouping_codegen():
     assert "return (a == b && c) == d;" not in generated_code
 
 
+def test_binary_bitwise_and_shift_precedence_codegen():
+    code = """
+    uint combine(uint a, uint b, uint c, uint d) {
+        return a | b ^ c & d << 1;
+    }
+
+    uint grouped(uint a, uint b) {
+        return (a | b) << 1;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return a | b ^ c & d << 1;" in generated_code
+    assert "return (a | b) << 1;" in generated_code
+    assert "return a | b << 1;" not in generated_code
+
+
+def test_compound_bitwise_and_shift_assignment_codegen():
+    code = """
+    void update(uint value, uint mask) {
+        value &= mask;
+        value |= 1;
+        value ^= mask;
+        value <<= 1;
+        value >>= 2;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "value &= mask;" in generated_code
+    assert "value |= 1;" in generated_code
+    assert "value ^= mask;" in generated_code
+    assert "value <<= 1;" in generated_code
+    assert "value >>= 2;" in generated_code
+
+
 def test_ternary_expression_precedence_preserves_grouping_codegen():
     code = """
     float choose(bool flag, float yes, float no) {
@@ -710,6 +767,25 @@ def test_texture_method_call_codegen():
     assert "return albedo.Sample(linearSampler, uv);" not in generated_code
 
 
+def test_texture_sample_cmp_method_call_codegen():
+    code = """
+    Texture2D<float> shadowMap;
+    SamplerComparisonState cmpSampler;
+
+    float main(float2 uv, float depth) {
+        return shadowMap.SampleCmp(cmpSampler, uv, depth);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D shadowMap;" in generated_code
+    assert "sampler cmpSampler;" in generated_code
+    assert "return textureCompare(shadowMap, cmpSampler, uv, depth);" in generated_code
+    assert "shadowMap.SampleCmp" not in generated_code
+
+
 def test_combined_sampler_method_call_codegen():
     code = """
     Sampler2D<float4> colorMap;
@@ -746,6 +822,55 @@ def test_texture_lod_and_grad_method_call_codegen():
     assert "vec4 grad = textureGrad(tex, uv, ddx, ddy);" in generated_code
     assert "tex.SampleLevel" not in generated_code
     assert "tex.SampleGrad" not in generated_code
+
+
+def test_texture_load_method_call_codegen():
+    code = """
+    Texture2D<float4> albedo;
+
+    float4 main(int2 pixel, int mip) {
+        return albedo.Load(int3(pixel, mip));
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D albedo;" in generated_code
+    assert "return texelFetch(albedo, pixel, mip);" in generated_code
+    assert "albedo.Load" not in generated_code
+
+
+def test_texture_load_method_call_splits_scalar_int3_coordinates_codegen():
+    code = """
+    Texture2D<float4> albedo;
+
+    float4 main(int mip) {
+        return albedo.Load(int3(4, 8, mip));
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return texelFetch(albedo, ivec2(4, 8), mip);" in generated_code
+    assert "texelFetch(albedo, int3(4, 8, mip))" not in generated_code
+
+
+def test_texture_load_method_call_splits_scalar_uint3_coordinates_codegen():
+    code = """
+    Texture2D<float4> albedo;
+
+    float4 main(uint mip) {
+        return albedo.Load(uint3(pixel.x, pixel.y, mip));
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return texelFetch(albedo, uvec2(pixel.x, pixel.y), mip);" in generated_code
+    assert "texelFetch(albedo, uint3(pixel.x, pixel.y, mip))" not in generated_code
 
 
 def test_resource_array_sample_method_call_codegen():
@@ -832,6 +957,60 @@ def test_scalar_and_matrix_top_level_declarations_codegen():
     assert "int frameIndex;" in generated_code
 
 
+def test_initialized_top_level_global_codegen():
+    code = """
+    static const float threshold = 0.5;
+    float4 tint = float4(1.0, 0.5, 0.0, 1.0);
+    float gain : register(c0) = 1f;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float threshold = 0.5;" in generated_code
+    assert "vec4 tint = vec4(1.0, 0.5, 0.0, 1.0);" in generated_code
+    assert "float gain = 1.0;" in generated_code
+    assert "gain = 1f" not in generated_code
+
+
+def test_initializer_list_declaration_codegen():
+    code = """
+    float weights[2] = {1.0, 2.0};
+
+    void main() {
+        float local[2] = {.5f, 1f,};
+        float4 colors[1] = {float4(1.0, 0.5, 0.0, 1.0)};
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float weights[2] = {1.0, 2.0};" in generated_code
+    assert "float local[2] = {0.5, 1.0};" in generated_code
+    assert "vec4 colors[1] = {vec4(1.0, 0.5, 0.0, 1.0)};" in generated_code
+    assert "{.5f, 1f" not in generated_code
+
+
+def test_typed_brace_constructor_codegen():
+    code = """
+    float4 tint = float4{1.0, .5f, 0.0, 1.0};
+
+    void main() {
+        float4 local = float4{0.0, 1.0, 0.0, 1.0};
+        float4 colors[1] = {float4{1.0, 0.0, 0.0, 1.0}};
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 tint = vec4(1.0, 0.5, 0.0, 1.0);" in generated_code
+    assert "vec4 local = vec4(0.0, 1.0, 0.0, 1.0);" in generated_code
+    assert "vec4 colors[1] = {vec4(1.0, 0.0, 0.0, 1.0)};" in generated_code
+    assert "float4{" not in generated_code
+
+
 def test_local_matrix_declaration_codegen():
     code = """
     void main() {
@@ -843,6 +1022,19 @@ def test_local_matrix_declaration_codegen():
     generated_code = generate_code(ast)
 
     assert "mat4 transform;" in generated_code
+
+
+def test_local_matrix_constructor_declaration_codegen():
+    code = """
+    void main() {
+        float4x4 model = float4x4(1.0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "mat4 model = mat4(1.0);" in generated_code
 
 
 def test_else_codegen():
@@ -1027,6 +1219,33 @@ def test_standalone_function_call_statement_codegen():
         pytest.fail(
             "Standalone function call parsing or code generation not implemented."
         )
+
+
+def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
+    code = """
+    void main() {
+        float exponent = 1e-3f;
+        float leading = .5f;
+        float trailing = 1.;
+        float whole = 1f;
+        uint mask = 0xffu;
+        uint count = 123u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float exponent = 0.001;" in generated_code
+    assert "float leading = 0.5;" in generated_code
+    assert "float trailing = 1.0;" in generated_code
+    assert "float whole = 1.0;" in generated_code
+    assert "uint mask = 0xffu;" in generated_code
+    assert "uint count = 123u;" in generated_code
+    assert "1e-3f" not in generated_code
+    assert ".5f" not in generated_code
+    assert "1f" not in generated_code
 
 
 if __name__ == "__main__":

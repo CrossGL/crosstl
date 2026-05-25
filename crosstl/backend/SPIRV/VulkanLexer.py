@@ -50,6 +50,7 @@ TOKENS = tuple(
         ("LESS_EQUAL", r"<="),
         ("GREATER_EQUAL", r">="),
         ("NOT_EQUAL", r"!="),
+        ("NOT", r"!"),
         ("LESS_THAN", r"<"),
         ("GREATER_THAN", r">"),
         ("AND", r"&&"),

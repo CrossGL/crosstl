@@ -709,6 +709,21 @@ def test_vulkan_storage_image_layout_and_access_qualifiers_codegen():
     assert "image2D outImage @binding" not in generated_code
 
 
+def test_vulkan_storage_image_symbolic_binding_codegen():
+    code = """
+    layout(set = RESOURCE_SET, binding = OUT_IMAGE_BINDING, rgba32f) writeonly uniform image2D outImage;
+    void main() {}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "RWTexture2D outImage @binding(OUT_IMAGE_BINDING) @rgba32f @writeonly;"
+        in generated_code
+    )
+
+
 def test_vulkan_typed_1d_image_uniforms_emit_crossgl_resources():
     code = """
     layout(set = 0, binding = 0) uniform iimage1D signedLine;
@@ -1701,6 +1716,24 @@ def test_bitwise_not_codegen():
         pytest.fail("Bitwise NOT operator parsing or code generation not implemented.")
 
 
+def test_logical_not_codegen():
+    code = """
+    void main() {
+        bool disabled;
+        if (!disabled) {
+            discard;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "if (!disabled)" in generated_code
+    assert "discard;" in generated_code
+
+
 def test_bitwise_shift_ops_codegen():
     code = """
     void main() {
@@ -1727,6 +1760,65 @@ def test_bitwise_shift_ops_codegen():
         pytest.fail(
             "Bitwise shift operators parsing or code generation not implemented."
         )
+
+
+def test_const_local_declaration_codegen():
+    code = """
+    void main() {
+        const float scale = 1.0;
+        float value = scale;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "const float scale = 1.0;" in generated_code
+    assert "float value = scale;" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_const_vector_declaration_codegen_maps_base_type():
+    code = """
+    void main() {
+        const vec3 tint = vec3(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "const float3 tint = float3(1.0);" in generated_code
+    assert "const vec3 tint" not in generated_code
+
+
+def test_const_matrix_global_declaration_codegen_maps_base_type():
+    code = """
+    const mat4 VIEW = mat4(1.0);
+    void main() {}
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "const float4x4 VIEW = float4x4(1.0);" in generated_code
+    assert "const mat4 VIEW" not in generated_code
+
+
+def test_const_global_declaration_codegen():
+    code = """
+    const int MAX_LIGHTS = 4;
+    void main() {}
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "const int MAX_LIGHTS = 4;" in generated_code
 
 
 def test_double_dtype_codegen():

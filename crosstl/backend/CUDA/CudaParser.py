@@ -2007,9 +2007,9 @@ class CudaParser:
             while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
                 self.eat(self.current_token[0])
 
-            if (
-                self.current_token[0] not in self.TYPE_TOKENS
-                or self.current_token[0] == "IDENTIFIER"
+            if self.current_token[0] not in self.TYPE_TOKENS or (
+                self.current_token[0] == "IDENTIFIER"
+                and self.current_token[1] not in self.type_aliases
             ):
                 return False
 

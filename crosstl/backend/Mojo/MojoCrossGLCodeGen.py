@@ -534,9 +534,21 @@ class MojoToCrossGLConverter:
             iterable = self.generate_expression(node.iterable)
             return f"for {node.name} in {iterable} {{\n"
 
-        comparison = ">" if self.is_negative_range_step(args, step) else "<"
+        condition = self.generate_range_condition(node.name, stop, args, step)
         update = f"{node.name}++" if step == "1" else f"{node.name} += {step}"
-        return f"for (int {node.name} = {start}; {node.name} {comparison} {stop}; {update}) {{\n"
+        return f"for (int {node.name} = {start}; {condition}; {update}) {{\n"
+
+    def generate_range_condition(self, name, stop, args, generated_step):
+        if self.is_negative_range_step(args, generated_step):
+            return f"{name} > {stop}"
+        if self.has_dynamic_range_step(args, generated_step):
+            return (
+                f"(({generated_step} > 0) ? " f"({name} < {stop}) : ({name} > {stop}))"
+            )
+        return f"{name} < {stop}"
+
+    def has_dynamic_range_step(self, args, generated_step):
+        return len(args) == 3 and not self.is_numeric_range_step(args, generated_step)
 
     def is_negative_range_step(self, args, generated_step):
         if len(args) != 3:
@@ -546,6 +558,17 @@ class MojoToCrossGLConverter:
         if isinstance(step, UnaryOpNode) and step.op == "-":
             return self.is_numeric_literal(step.operand)
         return self.is_negative_numeric_literal(generated_step)
+
+    def is_numeric_range_step(self, args, generated_step):
+        if len(args) != 3:
+            return True
+
+        step = args[2]
+        if isinstance(step, UnaryOpNode) and step.op == "-":
+            return self.is_numeric_literal(step.operand)
+        return self.is_numeric_literal(
+            generated_step
+        ) or self.is_negative_numeric_literal(generated_step)
 
     def is_numeric_literal(self, value):
         if isinstance(value, (int, float)):

@@ -16,6 +16,7 @@ systems-language targets.
    ast
    codegen-utilities
    backend-support
+   support-matrix
    backends/index
    examples
    extending
