@@ -1,6 +1,7 @@
 """Helpers for lowering CrossGL match statements to C-style shader languages."""
 
 from ..ast import (
+    ConstructorPatternNode,
     IdentifierPatternNode,
     LiteralPatternNode,
     StructPatternNode,
@@ -269,6 +270,9 @@ def lower_match_pattern(generator, pattern, expression, expression_type, target_
             target_name,
         )
 
+    if isinstance(pattern, ConstructorPatternNode):
+        return lower_constructor_pattern(pattern, target_name)
+
     raise ValueError(
         f"Unsupported match arm for {target_name} codegen; only literal, "
         "wildcard, identifier binding, and plain struct patterns are supported"
@@ -283,10 +287,19 @@ def lower_identifier_pattern(
     target_name,
 ):
     name = getattr(pattern, "name", "")
-    if name == ".." or "::" in name:
+    if "::" in name:
+        enum_value = enum_variant_reference(
+            generator,
+            name,
+            expression_type,
+            target_name,
+        )
+        return f"({expression} == {enum_value})", [], {}
+
+    if name == "..":
         raise ValueError(
-            f"Unsupported match arm for {target_name} codegen; enum path "
-            "patterns are not supported"
+            f"Unsupported match arm for {target_name} codegen; rest patterns "
+            "are not supported"
         )
 
     binding_type = require_pattern_binding_type(
@@ -297,6 +310,44 @@ def lower_identifier_pattern(
     )
     declaration = binding_declaration(generator, binding_type, name, expression)
     return None, [declaration], {name: type_name_string(generator, binding_type)}
+
+
+def enum_variant_reference(generator, path, expression_type, target_name):
+    subject_type = base_type_name(type_name_string(generator, expression_type))
+    enum_name, _variant_name = split_enum_path(path)
+    if subject_type and enum_name != subject_type:
+        raise ValueError(
+            f"Unsupported match arm for {target_name} codegen; enum path "
+            f"{path} cannot match expression type {subject_type}"
+        )
+
+    constants = getattr(generator, "enum_variant_constants", {})
+    if path in constants:
+        return constants[path]
+
+    raise ValueError(
+        f"Unsupported match arm for {target_name} codegen; enum path "
+        "patterns are not supported"
+    )
+
+
+def split_enum_path(path):
+    enum_name, variant_name = str(path).rsplit("::", 1)
+    return enum_name, variant_name
+
+
+def lower_constructor_pattern(pattern, target_name):
+    pattern_type = getattr(pattern, "type_name", "")
+    if "::" in pattern_type:
+        raise ValueError(
+            f"Unsupported match arm for {target_name} codegen; enum constructor "
+            "patterns are not supported"
+        )
+
+    raise ValueError(
+        f"Unsupported match arm for {target_name} codegen; constructor patterns "
+        "are not supported"
+    )
 
 
 def lower_struct_pattern(generator, pattern, expression, expression_type, target_name):

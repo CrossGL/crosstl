@@ -71,6 +71,12 @@ from .stage_utils import (
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .enum_utils import (
+    collect_enum_type_names,
+    collect_enum_variant_constants,
+    collect_plain_enums,
+    generate_enum_constants,
+)
 from .glsl_buffer_layout import (
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
@@ -687,6 +693,9 @@ class MetalCodeGen:
             for node in getattr(ast, "structs", [])
             if isinstance(node, StructNode)
         }
+        self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
+        self.enum_type_names = collect_enum_type_names(self.plain_enums)
+        self.enum_variant_constants = collect_enum_variant_constants(self.plain_enums)
         global_vars = deduplicate_named_declarations(
             list(getattr(ast, "global_variables", []) or [])
             + collect_stage_local_variables(
@@ -765,6 +774,7 @@ class MetalCodeGen:
             code += "#include <metal_stdlib>\n"
         code += "using namespace metal;\n"
         code += "\n"
+        code += generate_enum_constants(self, self.plain_enums)
         code += self.generate_constants(ast)
 
         structs = getattr(ast, "structs", [])
@@ -2748,7 +2758,9 @@ class MetalCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             if hasattr(expr, "name"):
-                return expr.name
+                return getattr(self, "enum_variant_constants", {}).get(
+                    expr.name, expr.name
+                )
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -3039,6 +3051,8 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            if name in getattr(self, "enum_variant_constants", {}):
+                return self.enum_variant_constants[name]
             if (
                 name not in self.local_variable_types
                 and name in self.ambiguous_cbuffer_members
@@ -7660,8 +7674,11 @@ class MetalCodeGen:
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
-            base_mapped = self.type_mapping.get(base_type, base_type)
+            base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        if vtype_str in getattr(self, "enum_type_names", set()):
+            return "int"
 
         return self.type_mapping.get(vtype_str, vtype_str)
 

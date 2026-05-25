@@ -71,6 +71,12 @@ from .stage_utils import (
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .enum_utils import (
+    collect_enum_type_names,
+    collect_enum_variant_constants,
+    collect_plain_enums,
+    generate_enum_constants,
+)
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
     TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
@@ -708,6 +714,9 @@ class GLSLCodeGen:
         self.struct_member_types = collect_struct_member_types(
             getattr(ast, "structs", []), self.type_name_string
         )
+        self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
+        self.enum_type_names = collect_enum_type_names(self.plain_enums)
+        self.enum_variant_constants = collect_enum_variant_constants(self.plain_enums)
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -741,6 +750,7 @@ class GLSLCodeGen:
         code += f"{version_line}\n"
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
+        code += generate_enum_constants(self, self.plain_enums, qualifier="const")
         code += self.generate_constants(ast)
 
         structs = getattr(ast, "structs", [])
@@ -3082,10 +3092,14 @@ class GLSLCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "VariableNode" in str(type(expr)):
             if hasattr(expr, "name"):
+                if expr.name in getattr(self, "enum_variant_constants", {}):
+                    return self.enum_variant_constants[expr.name]
                 return self.current_stage_parameter_aliases.get(expr.name, expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
+            if expr.name in getattr(self, "enum_variant_constants", {}):
+                return self.enum_variant_constants[expr.name]
             return self.current_stage_parameter_aliases.get(expr.name, expr.name)
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
@@ -6353,8 +6367,11 @@ class GLSLCodeGen:
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
-            base_mapped = self.type_mapping.get(base_type, base_type)
+            base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        if vtype_str in getattr(self, "enum_type_names", set()):
+            return "int"
 
         return self.type_mapping.get(vtype_str, vtype_str)
 

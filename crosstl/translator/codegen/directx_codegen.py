@@ -72,6 +72,12 @@ from .stage_utils import (
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .enum_utils import (
+    collect_enum_type_names,
+    collect_enum_variant_constants,
+    collect_plain_enums,
+    generate_enum_constants,
+)
 from .glsl_buffer_layout import (
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
@@ -555,6 +561,9 @@ class HLSLCodeGen:
             for node in getattr(ast, "structs", [])
             if isinstance(node, StructNode)
         }
+        self.plain_enums = collect_plain_enums(getattr(ast, "structs", []))
+        self.enum_type_names = collect_enum_type_names(self.plain_enums)
+        self.enum_variant_constants = collect_enum_variant_constants(self.plain_enums)
         global_vars = self.global_resource_declaration_nodes(ast, target_stage)
         self.current_global_resource_declaration_nodes = global_vars
         functions = self.collect_functions(ast)
@@ -646,6 +655,7 @@ class HLSLCodeGen:
             if line:
                 code += f"{line}\n"
 
+        code += generate_enum_constants(self, self.plain_enums)
         code += self.generate_constants(ast)
 
         structs = getattr(ast, "structs", [])
@@ -2581,12 +2591,13 @@ class HLSLCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
-            return getattr(expr, "name", str(expr))
+            name = getattr(expr, "name", str(expr))
+            return getattr(self, "enum_variant_constants", {}).get(name, name)
         elif isinstance(expr, VariableNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
-            return expr.name
+            return getattr(self, "enum_variant_constants", {}).get(expr.name, expr.name)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             left = self.generate_expression(getattr(expr, "left", ""))
             right = self.generate_expression(getattr(expr, "right", ""))
@@ -9133,6 +9144,9 @@ class HLSLCodeGen:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
             base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        if vtype_str in getattr(self, "enum_type_names", set()):
+            return "int"
 
         if "<" in vtype_str and vtype_str.endswith(">"):
             base_type, generic_args = vtype_str.split("<", 1)

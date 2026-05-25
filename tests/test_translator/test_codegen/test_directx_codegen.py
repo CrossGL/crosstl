@@ -2161,6 +2161,41 @@ def test_match_plain_struct_pattern_binds_fields():
     assert "MatchNode(" not in generated_code
 
 
+def test_match_enum_path_pattern_lowers_to_integer_constants():
+    shader = """
+    shader MatchEnumPathPattern {
+        enum Mode {
+            Add,
+            Multiply = 4,
+            Divide
+        }
+
+        int helper(Mode mode) {
+            int value = Mode::Divide;
+            match mode {
+                Mode::Add => { value = 1; }
+                Mode::Multiply => { value = 2; }
+                _ => { value = 3; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "static const int Mode_Add = 0;" in generated_code
+    assert "static const int Mode_Multiply = 4;" in generated_code
+    assert "static const int Mode_Divide = 5;" in generated_code
+    assert "int helper(int mode)" in generated_code
+    assert "int value = Mode_Divide;" in generated_code
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == Mode_Add))" in generated_code
+    assert "else if ((mode == Mode_Multiply))" in generated_code
+    assert "value = 3;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
 def test_ray_payload_semantics():
     code = """
     shader rt {
