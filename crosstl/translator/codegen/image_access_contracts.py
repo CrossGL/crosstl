@@ -1757,13 +1757,13 @@ def texture_sample_offset_capability_error(backend_name):
     return {
         "GLSL": "offsets require 1D, 2D, 2D-array, 3D, " "or planar shadow samplers",
         "DirectX": "offsets require 1D, 2D, 2D-array, or 3D textures",
-        "Metal": "offsets require 2D or 2D-array textures",
+        "Metal": "offsets require 2D, 2D-array, or 3D textures",
     }[backend_name]
 
 
 def projected_texture_offset_capability_error():
     """Return the diagnostic for unsupported projected texture offsets."""
-    return "offsets require 2D textures"
+    return "offsets require 2D, 2D-array, or 3D textures"
 
 
 def texture_sample_offset_extra_argument_count_error(operation, argument_count):

@@ -9993,8 +9993,8 @@ def test_metal_texture_sampling_capability_descriptors():
         "texture_type": "texture3d<float>",
         "gather": False,
         "gather_offset": False,
-        "sample_offset": False,
-        "projected_offset": False,
+        "sample_offset": True,
+        "projected_offset": True,
         "compare_offset": False,
         "gather_compare_offset": False,
     }
@@ -10053,6 +10053,15 @@ def test_metal_texture_dimension_descriptors():
         query_lod_coordinate_dimension=4,
     )
     expect("texture2d_ms_array<float>", coordinate_dimension=3)
+    expect(
+        "texture3d<float>",
+        coordinate_dimension=3,
+        offset_dimension=3,
+        sample_offset_dimension=3,
+        texel_fetch_offset_dimension=3,
+        gradient_dimension=3,
+        query_lod_coordinate_dimension=3,
+    )
     expect(
         "texture3d<float, access::read_write>",
         coordinate_dimension=3,
@@ -10667,9 +10676,84 @@ def test_metal_texture_sample_offset_variants_use_sample_offsets():
         in generated_code
     )
     assert (
-        "return /* unsupported Metal texture offset: textureOffset offsets require 2D or 2D-array textures */ float4(0.0);"
+        "return /* unsupported Metal texture offset: textureOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0);"
         in generated_code
     )
+    assert "textureOffset(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
+
+
+def test_metal_texture_3d_sample_offsets_use_sample_offsets():
+    shader = """
+    shader Texture3DSampleOffsets {
+        sampler3D volumeMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 uvw @ TEXCOORD0;
+            float lod;
+            vec3 ddx @ TEXCOORD1;
+            vec3 ddy @ TEXCOORD2;
+            ivec3 offset @ TEXCOORD3;
+        };
+
+        vec4 offsetOps(
+            sampler3D volume,
+            sampler s,
+            vec3 uvw,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec3 offset
+        ) {
+            vec4 plain = textureOffset(volume, s, uvw, offset);
+            vec4 biased = textureOffset(volume, s, uvw, offset, 0.5);
+            vec4 lodSample = textureLodOffset(volume, s, uvw, lod, offset);
+            vec4 gradSample = textureGradOffset(volume, s, uvw, ddx, ddy, offset);
+            return plain + biased + lodSample + gradSample;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return offsetOps(
+                    volumeMap,
+                    linearSampler,
+                    input.uvw,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "texture3d<float> volumeMap [[texture(0)]]" in generated_code
+    assert "sampler linearSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float4 offsetOps(texture3d<float> volume, sampler s, float3 uvw, float lod, float3 ddx, float3 ddy, int3 offset)"
+        in generated_code
+    )
+    assert "float4 plain = volume.sample(s, uvw, offset);" in generated_code
+    assert (
+        "float4 biased = volume.sample(s, uvw, bias(0.5), offset);"
+        in generated_code
+    )
+    assert (
+        "float4 lodSample = volume.sample(s, uvw, level(lod), offset);"
+        in generated_code
+    )
+    assert (
+        "float4 gradSample = volume.sample(s, uvw, gradient3d(ddx, ddy), offset);"
+        in generated_code
+    )
+    assert "unsup" + "ported Metal texture offset" not in generated_code
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
@@ -10772,19 +10856,19 @@ def test_metal_cube_texture_sample_offsets_emit_diagnostics():
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
     assert (
         generated_code.count(
-            "/* unsupported Metal texture offset: textureOffset offsets require 2D or 2D-array textures */ float4(0.0)"
+            "/* unsupported Metal texture offset: textureOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
         )
         == 4
     )
     assert (
         generated_code.count(
-            "/* unsupported Metal texture offset: textureLodOffset offsets require 2D or 2D-array textures */ float4(0.0)"
+            "/* unsupported Metal texture offset: textureLodOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
         )
         == 4
     )
     assert (
         generated_code.count(
-            "/* unsupported Metal texture offset: textureGradOffset offsets require 2D or 2D-array textures */ float4(0.0)"
+            "/* unsupported Metal texture offset: textureGradOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
         )
         == 4
     )
@@ -10997,6 +11081,9 @@ def test_metal_projected_texture_variants_use_sample_projection():
             vec2 ddx @ TEXCOORD4;
             vec2 ddy @ TEXCOORD5;
             ivec2 offset @ TEXCOORD6;
+            vec3 ddx3 @ TEXCOORD7;
+            vec3 ddy3 @ TEXCOORD8;
+            ivec3 offset3 @ TEXCOORD9;
         };
 
         vec4 projectedOps(
@@ -11008,11 +11095,17 @@ def test_metal_projected_texture_variants_use_sample_projection():
             vec4 xyzq,
             vec2 ddx,
             vec2 ddy,
-            ivec2 offset
+            ivec2 offset,
+            vec3 ddx3,
+            vec3 ddy3,
+            ivec3 offset3
         ) {
             vec4 projected = textureProj(tex, s, uvq);
             vec4 projectedBias = textureProj(tex, s, uvqw, 0.25);
             vec4 volumeProjected = textureProj(volume, s, xyzq);
+            vec4 volumeProjectedOffset = textureProjOffset(volume, s, xyzq, offset3);
+            vec4 volumeProjectedLodOffset = textureProjLodOffset(volume, s, xyzq, 3.0, offset3);
+            vec4 volumeProjectedGradOffset = textureProjGradOffset(volume, s, xyzq, ddx3, ddy3, offset3);
             vec4 projectedOffset = textureProjOffset(tex, s, uvq, offset);
             vec4 projectedOffsetBias = textureProjOffset(tex, s, uvq, offset, 0.5);
             vec4 projectedLod = textureProjLod(tex, s, uvq, 2.0);
@@ -11022,6 +11115,9 @@ def test_metal_projected_texture_variants_use_sample_projection():
             return projected
                 + projectedBias
                 + volumeProjected
+                + volumeProjectedOffset
+                + volumeProjectedLodOffset
+                + volumeProjectedGradOffset
                 + projectedOffset
                 + projectedOffsetBias
                 + projectedLod
@@ -11045,7 +11141,10 @@ def test_metal_projected_texture_variants_use_sample_projection():
                     input.xyzq,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    input.offset,
+                    input.ddx3,
+                    input.ddy3,
+                    input.offset3
                 ) + unsupportedCubeProjection(
                     cubeMap,
                     linearSampler,
@@ -11065,7 +11164,7 @@ def test_metal_projected_texture_variants_use_sample_projection():
     assert "texturecube<float> cubeMap [[texture(2)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
     assert (
-        "float4 projectedOps(texture2d<float> tex, texture3d<float> volume, sampler s, float3 uvq, float4 uvqw, float4 xyzq, float2 ddx, float2 ddy, int2 offset)"
+        "float4 projectedOps(texture2d<float> tex, texture3d<float> volume, sampler s, float3 uvq, float4 uvqw, float4 xyzq, float2 ddx, float2 ddy, int2 offset, float3 ddx3, float3 ddy3, int3 offset3)"
         in generated_code
     )
     assert "float4 projected = tex.sample(s, uvq.xy / uvq.z);" in generated_code
@@ -11075,6 +11174,18 @@ def test_metal_projected_texture_variants_use_sample_projection():
     )
     assert (
         "float4 volumeProjected = volume.sample(s, xyzq.xyz / xyzq.w);"
+        in generated_code
+    )
+    assert (
+        "float4 volumeProjectedOffset = volume.sample(s, xyzq.xyz / xyzq.w, offset3);"
+        in generated_code
+    )
+    assert (
+        "float4 volumeProjectedLodOffset = volume.sample(s, xyzq.xyz / xyzq.w, level(3.0), offset3);"
+        in generated_code
+    )
+    assert (
+        "float4 volumeProjectedGradOffset = volume.sample(s, xyzq.xyz / xyzq.w, gradient3d(ddx3, ddy3), offset3);"
         in generated_code
     )
     assert (
@@ -12350,11 +12461,11 @@ def test_metal_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
-        "/* unsupported Metal projected texture: textureProjLodOffset offsets require 2D textures */ float4(0.0)"
+        "/* unsupported Metal projected texture: textureProjLodOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
         in generated_code
     )
     assert (
-        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D textures */ float4(0.0)"
+        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
         in generated_code
     )
     coordinate_diagnostic_counts = {
@@ -12548,7 +12659,7 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
         in generated_code
     )
     assert (
-        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D textures */ float4(0.0)"
+        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D, 2D-array, or 3D textures */ float4(0.0)"
         in generated_code
     )
     projected_counts = {

@@ -671,12 +671,15 @@ def test_texture_sample_offset_capability_error_matches_backend_terms():
     )
     assert (
         texture_sample_offset_capability_error("Metal")
-        == "offsets require 2D or 2D-array textures"
+        == "offsets require 2D, 2D-array, or 3D textures"
     )
 
 
 def test_projected_texture_offset_capability_error_matches_shared_reason():
-    assert projected_texture_offset_capability_error() == "offsets require 2D textures"
+    assert (
+        projected_texture_offset_capability_error()
+        == "offsets require 2D, 2D-array, or 3D textures"
+    )
 
 
 def test_texture_sample_offset_extra_argument_count_error_matches_shapes():
@@ -2344,10 +2347,10 @@ def test_unsupported_texture_offset_helpers_build_backend_expressions():
     )
     assert (
         unsupported_texture_offset_call_expression(
-            "Metal", "textureOffset", "offsets require 2D or 2D-array textures"
+            "Metal", "textureOffset", "offsets require 2D, 2D-array, or 3D textures"
         )
         == "/* unsupported Metal texture offset: textureOffset offsets "
-        "require 2D or 2D-array textures */ float4(0.0)"
+        "require 2D, 2D-array, or 3D textures */ float4(0.0)"
     )
     assert (
         unsupported_texel_fetch_offset_expression(

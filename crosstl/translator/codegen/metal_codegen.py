@@ -3503,6 +3503,8 @@ class MetalCodeGen:
             sample_offset_dimension = 2
         elif texture_type.startswith("texture2d<"):
             sample_offset_dimension = 2
+        elif texture_type.startswith("texture3d<"):
+            sample_offset_dimension = 3
         if not sampling["sample_offset"]:
             sample_offset_dimension = None
 
@@ -6102,7 +6104,12 @@ class MetalCodeGen:
 
     def texture_sampling_capabilities(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        color_offset_types = {"texture2d<float>", "texture2d_array<float>"}
+        gather_offset_types = {"texture2d<float>", "texture2d_array<float>"}
+        sample_offset_types = {
+            "texture2d<float>",
+            "texture2d_array<float>",
+            "texture3d<float>",
+        }
         depth_offset_types = {"depth2d<float>", "depth2d_array<float>"}
         return {
             "texture_type": texture_type,
@@ -6115,9 +6122,9 @@ class MetalCodeGen:
                     "texturecube_array<float>",
                 }
             ),
-            "gather_offset": texture_type in color_offset_types,
-            "sample_offset": texture_type in color_offset_types,
-            "projected_offset": texture_type in color_offset_types,
+            "gather_offset": texture_type in gather_offset_types,
+            "sample_offset": texture_type in sample_offset_types,
+            "projected_offset": texture_type in sample_offset_types,
             "compare_offset": texture_type in depth_offset_types,
             "gather_compare_offset": texture_type in depth_offset_types,
         }

@@ -778,6 +778,56 @@ shader TextureSampleOffsetValidation {
 """
 
 
+METAL_TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER = """
+shader MetalTexture3DSampleOffsetValidation {
+    sampler3D volumeMap;
+    sampler linearSampler;
+
+    struct FSInput {
+        vec3 uvw @ TEXCOORD0;
+        float lod;
+        vec3 ddx @ TEXCOORD1;
+        vec3 ddy @ TEXCOORD2;
+    };
+
+    vec4 sampleVolumeOffsets(
+        sampler3D volume,
+        sampler s,
+        vec3 uvw,
+        float lod,
+        vec3 ddx,
+        vec3 ddy
+    ) {
+        vec4 plain = textureOffset(volume, s, uvw, ivec3(1, 0, -1));
+        vec4 biased = textureOffset(volume, s, uvw, ivec3(1, 0, -1), 0.5);
+        vec4 lodSample = textureLodOffset(volume, s, uvw, lod, ivec3(1, 0, -1));
+        vec4 gradSample = textureGradOffset(
+            volume,
+            s,
+            uvw,
+            ddx,
+            ddy,
+            ivec3(1, 0, -1)
+        );
+        return plain + biased + lodSample + gradSample;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleVolumeOffsets(
+                volumeMap,
+                linearSampler,
+                input.uvw,
+                input.lod,
+                input.ddx,
+                input.ddy
+            );
+        }
+    }
+}
+"""
+
+
 TEXTURE_PROJECTED_FRAGMENT_SHADER = """
 shader TextureProjectionValidation {
     sampler2D colorMap;
@@ -930,6 +980,61 @@ shader MetalComputeBuiltinsValidation {
             uint index = gl_LocalInvocationIndex;
             uint size = gl_WorkGroupSize.x;
             uint groups = gl_NumWorkGroups.x;
+        }
+    }
+}
+"""
+
+
+METAL_TEXTURE_3D_PROJECTED_OFFSET_FRAGMENT_SHADER = """
+shader MetalTexture3DProjectedOffsetValidation {
+    sampler3D volumeMap;
+    sampler linearSampler;
+
+    struct FSInput {
+        vec4 xyzq @ TEXCOORD0;
+        float lod;
+        vec3 ddx @ TEXCOORD1;
+        vec3 ddy @ TEXCOORD2;
+    };
+
+    vec4 sampleProjectedVolumeOffsets(
+        sampler3D volume,
+        sampler s,
+        vec4 xyzq,
+        float lod,
+        vec3 ddx,
+        vec3 ddy
+    ) {
+        vec4 projected = textureProjOffset(volume, s, xyzq, ivec3(1, 0, -1));
+        vec4 lodProjected = textureProjLodOffset(
+            volume,
+            s,
+            xyzq,
+            lod,
+            ivec3(1, 0, -1)
+        );
+        vec4 gradProjected = textureProjGradOffset(
+            volume,
+            s,
+            xyzq,
+            ddx,
+            ddy,
+            ivec3(1, 0, -1)
+        );
+        return projected + lodProjected + gradProjected;
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleProjectedVolumeOffsets(
+                volumeMap,
+                linearSampler,
+                input.xyzq,
+                input.lod,
+                input.ddx,
+                input.ddy
+            );
         }
     }
 }
@@ -2109,6 +2214,26 @@ def test_generated_metal_fragment_texture_sample_offset_compiles_with_metal(
     )
 
 
+def test_generated_metal_fragment_texture_3d_sample_offset_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_texture_3d_sample_offset.metal"
+    output = tmp_path / "fragment_texture_3d_sample_offset.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
 def test_generated_metal_fragment_texture_projection_compiles_with_metal(
     tmp_path,
 ):
@@ -2120,6 +2245,26 @@ def test_generated_metal_fragment_texture_projection_compiles_with_metal(
     output = tmp_path / "fragment_texture_projection.air"
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(TEXTURE_PROJECTED_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_texture_3d_projected_offset_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_texture_3d_projected_offset.metal"
+    output = tmp_path / "fragment_texture_3d_projected_offset.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_TEXTURE_3D_PROJECTED_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
     source.write_text(code, encoding="utf-8")
