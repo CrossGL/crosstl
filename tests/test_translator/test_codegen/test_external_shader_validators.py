@@ -8,7 +8,6 @@ from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 
-
 FRAGMENT_SMOKE_SHADER = """
 shader ExternalValidatorSmoke {
     fragment {
