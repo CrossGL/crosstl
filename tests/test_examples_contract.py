@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,90 @@ KNOWN_PRIMARY_GRAPHICS_GAPS = (
     ),
 )
 
+KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = (
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "directx",
+        ValueError,
+        (
+            "Unsupported match arm for HLSL codegen; only unguarded literal and "
+            "wildcard patterns can be lowered to switch"
+        ),
+    ),
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "metal",
+        ValueError,
+        (
+            "Unsupported match arm for Metal codegen; only unguarded literal and "
+            "wildcard patterns can be lowered to switch"
+        ),
+    ),
+    (
+        "advanced/GenericPatternMatching.cgl",
+        "opengl",
+        ValueError,
+        (
+            "Unsupported match arm for GLSL codegen; only unguarded literal and "
+            "wildcard patterns can be lowered to switch"
+        ),
+    ),
+    (
+        "cross_platform/UniversalPBRShader.cgl",
+        "directx",
+        ValueError,
+        (
+            "DirectX texture operation 'texture' requires a declared texture or "
+            "image resource argument: albedo_map"
+        ),
+    ),
+    (
+        "cross_platform/UniversalPBRShader.cgl",
+        "metal",
+        ValueError,
+        (
+            "Metal texture operation 'texture' requires a declared texture or "
+            "image resource argument: albedo_map"
+        ),
+    ),
+    (
+        "cross_platform/UniversalPBRShader.cgl",
+        "opengl",
+        ValueError,
+        (
+            "OpenGL texture operation 'texture' requires a declared texture or "
+            "image resource argument: albedo_map"
+        ),
+    ),
+    (
+        "graphics/ComplexShader.cgl",
+        "directx",
+        ValueError,
+        (
+            "DirectX texture operation 'texture' requires a declared texture or "
+            "image resource argument: shadowMap"
+        ),
+    ),
+    (
+        "graphics/ComplexShader.cgl",
+        "metal",
+        ValueError,
+        (
+            "Metal texture operation 'texture' requires a declared texture or "
+            "image resource argument: shadowMap"
+        ),
+    ),
+    (
+        "graphics/ComplexShader.cgl",
+        "opengl",
+        ValueError,
+        (
+            "Conflicting OpenGL fragment output location for 'normalBuffer': "
+            "location 0 overlaps 'color' location 0"
+        ),
+    ),
+)
+
 
 def _example_path(relative_path):
     return EXAMPLES_ROOT / relative_path
@@ -127,3 +212,15 @@ def test_known_primary_graphics_example_gaps_are_tracked(relative_path, backend)
     )
 
     _assert_generated_output_is_usable(generated)
+
+
+@pytest.mark.parametrize(
+    "relative_path,backend,exc_type,message", KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS
+)
+def test_known_primary_graphics_example_gaps_report_actionable_diagnostics(
+    relative_path, backend, exc_type, message
+):
+    with pytest.raises(exc_type, match=re.escape(message)):
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
