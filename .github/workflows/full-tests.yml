@@ -22,11 +22,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install optional shader validators
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
