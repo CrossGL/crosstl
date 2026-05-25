@@ -490,6 +490,8 @@ class SlangToCrossGLConverter:
         return self.BINARY_PRECEDENCE.get(op, 0)
 
     def binary_child_needs_parentheses(self, parent_op, child, is_right_child=False):
+        if isinstance(child, AssignmentNode):
+            return True
         if not isinstance(child, BinaryOpNode):
             return False
 
@@ -531,7 +533,7 @@ class SlangToCrossGLConverter:
             return f"{left} {expr.operator} {right}"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
-            if isinstance(expr.operand, BinaryOpNode):
+            if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):
                 operand = f"({operand})"
             if expr.op == "POST_INCREMENT":
                 return f"{operand}++"
@@ -584,6 +586,12 @@ class SlangToCrossGLConverter:
             condition = self.generate_expression(expr.condition, is_main)
             true_expr = self.generate_expression(expr.true_expr, is_main)
             false_expr = self.generate_expression(expr.false_expr, is_main)
+            if isinstance(expr.condition, AssignmentNode):
+                condition = f"({condition})"
+            if isinstance(expr.true_expr, AssignmentNode):
+                true_expr = f"({true_expr})"
+            if isinstance(expr.false_expr, AssignmentNode):
+                false_expr = f"({false_expr})"
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(expr, InitializerListNode):
             elements = ", ".join(

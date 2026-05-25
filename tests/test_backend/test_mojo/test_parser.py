@@ -499,6 +499,25 @@ def test_switch_case_parsing():
         pytest.fail("Switch-case parsing not implemented.")
 
 
+def test_switch_rejects_duplicate_default_labels():
+    code = """
+    fn fragment_main(input: PSInput) -> PSOutput:
+        var output: PSOutput
+        switch input.value:
+            default:
+                output.out_color = float4(0.0, 0.0, 1.0, 1.0)
+            case 1:
+                output.out_color = float4(1.0, 0.0, 0.0, 1.0)
+            default:
+                output.out_color = float4(0.0, 1.0, 0.0, 1.0)
+        return output
+    """
+
+    tokens = tokenize_code(code)
+    with pytest.raises(SyntaxError, match="duplicate default"):
+        parse_code(tokens)
+
+
 def test_import_parsing():
     code = """
     import math

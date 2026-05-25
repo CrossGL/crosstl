@@ -424,6 +424,7 @@ def test_binary_bitwise_and_shift_precedence_codegen():
 def test_compound_bitwise_and_shift_assignment_codegen():
     code = """
     void update(uint value, uint mask) {
+        value %= 3;
         value &= mask;
         value |= 1;
         value ^= mask;
@@ -436,11 +437,50 @@ def test_compound_bitwise_and_shift_assignment_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    assert "value %= 3;" in generated_code
     assert "value &= mask;" in generated_code
     assert "value |= 1;" in generated_code
     assert "value ^= mask;" in generated_code
     assert "value <<= 1;" in generated_code
     assert "value >>= 2;" in generated_code
+
+
+def test_assignment_associativity_codegen():
+    code = """
+    void chain(uint a, uint b, uint c, bool flag) {
+        a = b = c;
+        a += b = c;
+        a = flag ? b : c;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "a = b = c;" in generated_code
+    assert "a += b = c;" in generated_code
+    assert "a = (flag ? b : c);" in generated_code
+
+
+def test_assignment_expression_operands_are_parenthesized_codegen():
+    code = """
+    void mixAssignments(uint a, uint b, uint c, bool flag) {
+        uint value = (a = b) + c;
+        uint other = c + (a = b);
+        uint selected = flag ? (a = b) : c;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint value = (a = b) + c;" in generated_code
+    assert "uint other = c + (a = b);" in generated_code
+    assert "uint selected = (flag ? (a = b) : c);" in generated_code
+    assert "uint value = a = b + c;" not in generated_code
+    assert "uint other = c + a = b;" not in generated_code
 
 
 def test_ternary_expression_precedence_preserves_grouping_codegen():

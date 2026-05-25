@@ -4012,11 +4012,21 @@ class MetalCodeGen:
 
         if is_projected_texture_operation(func_name):
             texture_type = self.resource_base_type(texture_type)
+            if (
+                is_projected_texture_basic_offset_operation(func_name)
+                or is_projected_texture_lod_offset_operation(func_name)
+                or is_projected_texture_grad_offset_operation(func_name)
+            ):
+                return (
+                    texture_type.startswith("texture2d<")
+                    or texture_type.startswith("texture2d_array<")
+                )
             return (
                 texture_type.startswith("texture1d<")
                 or texture_type.startswith("texture2d<")
                 or texture_type.startswith("texture2d_array<")
                 or texture_type.startswith("texture3d<")
+                or texture_type.startswith("texturecube<")
             )
 
         return True
@@ -5954,6 +5964,10 @@ class MetalCodeGen:
                 "vec4": ("xyz", "w"),
                 "float4": ("xyz", "w"),
             },
+            "texturecube<float>": {
+                "vec4": ("xyz", "w"),
+                "float4": ("xyz", "w"),
+            },
         }
         texture_specs = specs.get(texture_type)
         if texture_specs is None:
@@ -6361,6 +6375,14 @@ class MetalCodeGen:
                 return None
             return [f"{self.vector_component(coord, 'xy')} / {divisor}"]
 
+        if texture_type == "depthcube<float>":
+            if coord_type not in {"vec4", "float4"}:
+                return None
+            return [
+                f"{self.vector_component(coord, 'xyz')} / "
+                f"{self.vector_component(coord, 'w')}"
+            ]
+
         if texture_type != "depth2d_array<float>" or coord_type not in {
             "vec4",
             "float4",
@@ -6421,6 +6443,10 @@ class MetalCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, texture_compare_offset_capability_error("Metal")
+                    )
                 offset = self.generate_expression(extra_args[1])
                 args = projected_args + [offset]
                 return f"{texture_name}.sample_compare({', '.join(args)})"
@@ -6441,6 +6467,10 @@ class MetalCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, texture_compare_offset_capability_error("Metal")
+                    )
                 lod = self.generate_expression(extra_args[1])
                 offset = self.generate_expression(extra_args[2])
                 args = projected_args + [f"level({lod})", offset]
@@ -6464,6 +6494,10 @@ class MetalCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, texture_compare_offset_capability_error("Metal")
+                    )
                 ddx = self.generate_expression(extra_args[1])
                 ddy = self.generate_expression(extra_args[2])
                 gradient_options = self.texture_gradient_options(texture_type, ddx, ddy)

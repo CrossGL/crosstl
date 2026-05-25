@@ -1380,6 +1380,43 @@ class TestHipParser:
         assert member_loop.update.left.object == "object"
         assert member_loop.update.left.member == "field"
 
+    def test_assignment_expression_is_right_associative(self):
+        """Test assignments parse inside expressions and associate to the right"""
+        code = """
+        void f() {
+            int a = 0;
+            int b = 0;
+            int c = 0;
+            a = b = c;
+            int d = (a = b);
+            sink(a = 1);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        chained = body[3]
+        assert isinstance(chained, AssignmentNode)
+        assert chained.left == "a"
+        assert chained.operator == "="
+        assert isinstance(chained.right, AssignmentNode)
+        assert chained.right.left == "b"
+        assert chained.right.right == "c"
+
+        initializer = body[4].value
+        assert isinstance(initializer, AssignmentNode)
+        assert initializer.left == "a"
+        assert initializer.right == "b"
+
+        call = body[5]
+        assert isinstance(call, FunctionCallNode)
+        assert isinstance(call.args[0], AssignmentNode)
+        assert call.args[0].left == "a"
+        assert call.args[0].right == "1"
+
     def test_local_pointer_declarations_and_unary_pointer_expressions(self):
         """Test local pointer declarations, address-of, and dereference"""
         code = """

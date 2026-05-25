@@ -14,6 +14,19 @@ class SlangParser:
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"IDENTIFIER", "VOID"}
     )
     TOP_LEVEL_DECLARATION_TOKENS = TYPE_NAME_TOKENS | QUALIFIER_TOKENS | {"GENERIC"}
+    ASSIGNMENT_TOKENS = (
+        "EQUALS",
+        "PLUS_EQUALS",
+        "MINUS_EQUALS",
+        "MULTIPLY_EQUALS",
+        "DIVIDE_EQUALS",
+        "ASSIGN_MOD",
+        "ASSIGN_AND",
+        "ASSIGN_OR",
+        "ASSIGN_XOR",
+        "ASSIGN_SHIFT_LEFT",
+        "ASSIGN_SHIFT_RIGHT",
+    )
 
     def __init__(self, tokens):
         """Initialize the parser with a token stream from ``SlangLexer``."""
@@ -503,18 +516,7 @@ class SlangParser:
                 array_sizes=array_sizes,
             )
 
-        if self.current_token[0] in [
-            "EQUALS",
-            "PLUS_EQUALS",
-            "MINUS_EQUALS",
-            "MULTIPLY_EQUALS",
-            "DIVIDE_EQUALS",
-            "ASSIGN_AND",
-            "ASSIGN_OR",
-            "ASSIGN_XOR",
-            "ASSIGN_SHIFT_LEFT",
-            "ASSIGN_SHIFT_RIGHT",
-        ]:
+        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             value = self.parse_expression()
@@ -629,6 +631,7 @@ class SlangParser:
         cases = []
         ordered_cases = []
         default_case = None
+        seen_default = False
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -650,6 +653,9 @@ class SlangParser:
                 continue
 
             if self.current_token[0] == "DEFAULT":
+                if seen_default:
+                    raise SyntaxError("duplicate default label in switch")
+                seen_default = True
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_case = []
@@ -697,37 +703,25 @@ class SlangParser:
         return expr
 
     def parse_expression(self):
-        left = self.parse_logical_or()
-        while self.current_token[0] in [
-            "EQUALS",
-            "PLUS_EQUALS",
-            "MINUS_EQUALS",
-            "MULTIPLY_EQUALS",
-            "DIVIDE_EQUALS",
-            "ASSIGN_AND",
-            "ASSIGN_OR",
-            "ASSIGN_XOR",
-            "ASSIGN_SHIFT_LEFT",
-            "ASSIGN_SHIFT_RIGHT",
-        ]:
+        return self.parse_assignment()
+
+    def parse_assignment(self):
+        left = self.parse_ternary()
+        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_logical_or()
-            left = AssignmentNode(left, right, op)
+            right = self.parse_assignment()
+            return AssignmentNode(left, right, op)
+        return left
+
+    def parse_ternary(self):
+        left = self.parse_logical_or()
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
             true_expr = self.parse_expression()
             self.eat("COLON")
             false_expr = self.parse_expression()
             left = TernaryOpNode(left, true_expr, false_expr)
-        return left
-
-    def parse_assignment(self):
-        left = self.parse_logical_or()
-        if self.current_token[0] == "EQUALS":
-            self.eat("EQUALS")
-            right = self.parse_assignment()
-            return AssignmentNode(left, right)
         return left
 
     def parse_logical_or(self):

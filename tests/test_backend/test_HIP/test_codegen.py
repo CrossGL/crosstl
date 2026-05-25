@@ -1880,6 +1880,31 @@ class TestHipCodeGen:
         assert "for (var j: i32 = 0; (j < n); object.field = value) {" in result
         assert "sink(j);" in result
 
+    def test_assignment_expression_conversion(self):
+        """Test nested HIP assignment expressions convert without stray output"""
+        code = """
+        void f() {
+            int a = 0;
+            int b = 0;
+            int c = 0;
+            a = b = c;
+            int d = (a = b);
+            sink(a = 1);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "a = b = c;" in result
+        assert "var d: i32 = a = b;" in result
+        assert "sink(a = 1);" in result
+        assert "None" not in result
+
     def test_local_pointer_declarations_and_unary_pointer_conversion(self):
         """Test local pointer declarations, address-of, and dereference"""
         code = """

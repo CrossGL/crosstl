@@ -8949,7 +8949,7 @@ def test_opengl_projected_array_shadow_lod_offset_reports_unsupported():
     assert "textureLodOffset(" not in generated_code
 
 
-def test_opengl_projected_cube_shadow_compare_reports_unsupported():
+def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form():
     shader = """
     shader ProjectedCubeShadowDiagnostics {
         samplerCubeShadow cubeMap;
@@ -9041,18 +9041,34 @@ def test_opengl_projected_cube_shadow_compare_reports_unsupported():
         "float cubeArrayProjected(samplerCubeArrayShadow tex, vec4 cubeLayerProj, float depth, float lod, vec3 ddx, vec3 ddy, ivec2 offset)"
         in generated_code
     )
-    reasons = {
-        "textureCompareProj",
-        "textureCompareProjOffset",
-        "textureCompareProjLodOffset",
-        "textureCompareProjGradOffset",
+    assert (
+        "float projected = texture(tex, vec4(cubeProj.xyz / cubeProj.w, depth));"
+        in generated_code
+    )
+    expected_cube_diagnostics = {
+        "textureCompareProjOffset": "offsets require 2D or 2D-array shadow samplers",
+        "textureCompareProjLodOffset": "explicit LOD offsets require 2D shadow samplers",
+        "textureCompareProjGradOffset": "explicit gradient offsets require 2D or 2D-array shadow samplers",
     }
-    for func_name in reasons:
+    for func_name, reason in expected_cube_diagnostics.items():
+        assert (
+            generated_code.count(
+                f"/* unsupported GLSL texture compare: {func_name} {reason} */ 0.0"
+            )
+            == 1
+        )
+    coordinate_diagnostic_counts = {
+        "textureCompareProj": 1,
+        "textureCompareProjOffset": 1,
+        "textureCompareProjLodOffset": 1,
+        "textureCompareProjGradOffset": 1,
+    }
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported GLSL texture compare: {func_name} requires sampler2DShadow vec3/vec4 or sampler2DArrayShadow vec4 projection coordinates */ 0.0"
             )
-            == 2
+            == count
         )
     assert "compareSampler" not in generated_code
     assert "textureCompareProj(" not in generated_code
@@ -9063,7 +9079,7 @@ def test_opengl_projected_cube_shadow_compare_reports_unsupported():
     assert "textureGradOffset(" not in generated_code
 
 
-def test_opengl_direct_projected_cube_texture_reports_unsupported():
+def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
     shader = """
     shader DirectProjectedCubeDiagnostics {
         samplerCube cubeMap;
@@ -9101,13 +9117,29 @@ def test_opengl_direct_projected_cube_texture_reports_unsupported():
 
     assert "layout(binding = 0) uniform samplerCube cubeMap;" in generated_code
     assert "layout(binding = 1) uniform samplerCubeArray cubeArray;" in generated_code
-    expected_counts = {
-        "textureProj": 3,
-        "textureProjLodOffset": 2,
-        "textureProjGradOffset": 2,
+    assert (
+        "vec4 cubeProjected = texture(cubeMap, cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "vec4 implicitCube = texture(cubeMap, cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported GLSL projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
+        in generated_code
+    )
+    assert (
+        "/* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
+        in generated_code
+    )
+    coordinate_diagnostic_counts = {
+        "textureProj": 1,
+        "textureProjLodOffset": 1,
+        "textureProjGradOffset": 1,
         "textureProjLod": 1,
     }
-    for func_name, count in expected_counts.items():
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported GLSL projected texture: {func_name} requires 1D, 2D, 2D-array, or 3D projection coordinates */ vec4(0.0)"
@@ -9119,7 +9151,7 @@ def test_opengl_direct_projected_cube_texture_reports_unsupported():
     assert "textureProj(cubeArray" not in generated_code
 
 
-def test_opengl_projected_cube_texture_resource_arrays_report_unsupported():
+def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_forms():
     shader = """
     shader ProjectedCubeArrayDiagnostics {
         samplerCube cubeMaps[4];
@@ -9282,10 +9314,26 @@ def test_opengl_projected_cube_texture_resource_arrays_report_unsupported():
         "vec4 projectedShadowArray(samplerCubeArrayShadow maps[4], int layer, vec4 cubeArrayProj, float depth, float lod, vec3 ddx, vec3 ddy, ivec2 offset)"
         in generated_code
     )
+    assert (
+        "vec4 fixedProjected = texture(maps[2], cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "vec4 dynamicLodProjected = textureLod(maps[layer], cubeProj.xyz / cubeProj.w, lod);"
+        in generated_code
+    )
+    assert (
+        "vec4 globalProjected = texture(cubeMaps[layer], cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ vec4(0.0)"
+        in generated_code
+    )
     projected_counts = {
-        "textureProj": 3,
-        "textureProjLod": 3,
-        "textureProjGradOffset": 2,
+        "textureProj": 1,
+        "textureProjLod": 2,
+        "textureProjGradOffset": 1,
     }
     for func_name, count in projected_counts.items():
         assert (
@@ -9294,10 +9342,26 @@ def test_opengl_projected_cube_texture_resource_arrays_report_unsupported():
             )
             == count
         )
+    assert (
+        "float fixedProjected = texture(maps[2], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        in generated_code
+    )
+    assert (
+        "float globalShadow = texture(shadowCubes[layer], vec4(cubeProj.xyz / cubeProj.w, depth));"
+        in generated_code
+    )
+    assert (
+        "/* unsupported GLSL texture compare: textureCompareProjLod explicit LOD requires 2D shadow samplers */ 0.0"
+        in generated_code
+    )
+    assert (
+        "/* unsupported GLSL texture compare: textureCompareProjGradOffset explicit gradient offsets require 2D or 2D-array shadow samplers */ 0.0"
+        in generated_code
+    )
     compare_counts = {
-        "textureCompareProj": 3,
-        "textureCompareProjLod": 3,
-        "textureCompareProjGradOffset": 2,
+        "textureCompareProj": 1,
+        "textureCompareProjLod": 2,
+        "textureCompareProjGradOffset": 1,
     }
     for func_name, count in compare_counts.items():
         assert (
@@ -9324,7 +9388,6 @@ def test_opengl_projected_cube_texture_resource_arrays_report_unsupported():
     )
     assert "textureProj(" not in generated_code
     assert "textureCompareProj(" not in generated_code
-    assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
 
 

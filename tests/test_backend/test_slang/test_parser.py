@@ -19,6 +19,7 @@ from crosstl.backend.slang.SlangAst import (
     MethodCallNode,
     ReturnNode,
     SwitchNode,
+    TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
@@ -366,6 +367,26 @@ def test_switch_default_before_case_preserves_order_metadata():
     assert switch.ordered_cases[0].body is switch.default_case
 
 
+def test_switch_rejects_duplicate_default_labels():
+    code = """
+    void main() {
+        int mode = 0;
+        switch (mode) {
+            default:
+                mode = 2;
+            case 0:
+                mode = 1;
+            default:
+                mode = 3;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    with pytest.raises(SyntaxError, match="duplicate default"):
+        parse_code(tokens)
+
+
 def test_lambda_expression_parsing():
     code = """
     void main() {
@@ -531,6 +552,7 @@ def test_binary_bitwise_and_shift_precedence_parsing():
 def test_compound_bitwise_and_shift_assignment_parsing():
     code = """
     void update(uint value, uint mask) {
+        value %= 3;
         value &= mask;
         value |= 1;
         value ^= mask;
@@ -543,8 +565,41 @@ def test_compound_bitwise_and_shift_assignment_parsing():
     ast = parse_code(tokens)
     body = find_function(ast, "update").body
 
-    assert [stmt.operator for stmt in body] == ["&=", "|=", "^=", "<<=", ">>="]
+    assert [stmt.operator for stmt in body] == ["%=", "&=", "|=", "^=", "<<=", ">>="]
     assert all(isinstance(stmt, AssignmentNode) for stmt in body)
+
+
+def test_assignment_parsing_is_right_associative():
+    code = """
+    void chain(uint a, uint b, uint c, bool flag) {
+        a = b = c;
+        a += b = c;
+        a = flag ? b : c;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "chain").body
+    simple = body[0]
+    compound = body[1]
+    ternary_assignment = body[2]
+
+    assert isinstance(simple, AssignmentNode)
+    assert simple.operator == "="
+    assert simple.left.name == "a"
+    assert isinstance(simple.right, AssignmentNode)
+    assert simple.right.operator == "="
+    assert simple.right.left.name == "b"
+    assert simple.right.right.name == "c"
+
+    assert isinstance(compound, AssignmentNode)
+    assert compound.operator == "+="
+    assert isinstance(compound.right, AssignmentNode)
+    assert compound.right.operator == "="
+
+    assert isinstance(ternary_assignment, AssignmentNode)
+    assert isinstance(ternary_assignment.right, TernaryOpNode)
 
 
 def test_while_parsing():

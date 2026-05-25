@@ -473,6 +473,12 @@ class MojoToCrossGLConverter:
         op = node.operator if hasattr(node, "operator") else "="
         return f"{left} {op} {right}"
 
+    def generate_nested_expression(self, expr):
+        rendered = self.generate_expression(expr)
+        if isinstance(expr, AssignmentNode):
+            return f"({rendered})"
+        return rendered
+
     def generate_for_loop(self, node, indent):
         indent_str = "    " * indent
         init = self.generate_for_initializer(node.init) if node.init else ""
@@ -672,12 +678,12 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
-            left = self.generate_expression(expr.left)
-            right = self.generate_expression(expr.right)
+            left = self.generate_nested_expression(expr.left)
+            right = self.generate_nested_expression(expr.right)
             op = expr.op if hasattr(expr, "op") else "+"
             return f"({left} {op} {right})"
         elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.operand)
+            operand = self.generate_nested_expression(expr.operand)
             op = expr.op if hasattr(expr, "op") else "+"
             return f"({op}{operand})"
         elif isinstance(expr, CastNode):
@@ -715,9 +721,9 @@ class MojoToCrossGLConverter:
             obj = self.generate_expression(expr.object)
             return f"{obj}.{expr.member}"
         elif isinstance(expr, TernaryOpNode):
-            condition = self.generate_expression(expr.condition)
-            true_expr = self.generate_expression(expr.true_expr)
-            false_expr = self.generate_expression(expr.false_expr)
+            condition = self.generate_nested_expression(expr.condition)
+            true_expr = self.generate_nested_expression(expr.true_expr)
+            false_expr = self.generate_nested_expression(expr.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(expr, VectorConstructorNode):
             args = []

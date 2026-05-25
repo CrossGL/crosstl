@@ -1147,11 +1147,11 @@ def test_member_access_assignment_lhs_is_structured():
     assert scalar_assignment.left.object.name == "color"
     assert scalar_assignment.left.member == "r"
 
-    assert isinstance(compound_assignment, BinaryOpNode)
+    assert isinstance(compound_assignment, AssignmentNode)
     assert isinstance(compound_assignment.left, MemberAccessNode)
     assert compound_assignment.left.object.name == "color"
     assert compound_assignment.left.member == "g"
-    assert compound_assignment.op == "+="
+    assert compound_assignment.operator == "+="
 
     assert isinstance(array_member_assignment, AssignmentNode)
     assert isinstance(array_member_assignment.left, MemberAccessNode)
@@ -1159,6 +1159,40 @@ def test_member_access_assignment_lhs_is_structured():
     assert array_member_assignment.left.object.array.name == "objects"
     assert array_member_assignment.left.object.index == "0"
     assert array_member_assignment.left.member == "field"
+
+
+def test_assignment_expression_parsing_is_right_associative():
+    code = """
+    void main() {
+        a = b = c;
+        a += b = c;
+        int value = a = b;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    simple = ast.functions[0].body[0]
+    compound = ast.functions[0].body[1]
+    declaration = ast.functions[0].body[2]
+
+    assert isinstance(simple, AssignmentNode)
+    assert simple.left.name == "a"
+    assert isinstance(simple.right, AssignmentNode)
+    assert simple.right.left.name == "b"
+    assert simple.right.right.name == "c"
+
+    assert isinstance(compound, AssignmentNode)
+    assert compound.operator == "+="
+    assert isinstance(compound.right, AssignmentNode)
+    assert compound.right.left.name == "b"
+    assert compound.right.right.name == "c"
+
+    assert isinstance(declaration, AssignmentNode)
+    assert declaration.left.vtype == "int"
+    assert isinstance(declaration.right, AssignmentNode)
+    assert declaration.right.left.name == "a"
+    assert declaration.right.right.name == "b"
 
 
 def test_typed_local_array_declaration_preserves_suffix():
@@ -1255,6 +1289,54 @@ def test_bitwise_and_shift_precedence_parsing():
     assert expression.op == "&"
     assert isinstance(expression.right, BinaryOpNode)
     assert expression.right.op == "<<"
+
+
+def test_bitwise_or_xor_and_precedence_parsing():
+    code = """
+    void main() {
+        int a = 1;
+        int b = 2;
+        int c = 3;
+        int orAnd = a | b & c;
+        int xorAnd = a ^ b & c;
+        int orXor = a | b ^ c;
+        int andEquality = a & b == c;
+        int orRelational = a | b < c;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    or_and = ast.functions[0].body[3].right
+    xor_and = ast.functions[0].body[4].right
+    or_xor = ast.functions[0].body[5].right
+    and_equality = ast.functions[0].body[6].right
+    or_relational = ast.functions[0].body[7].right
+
+    assert isinstance(or_and, BinaryOpNode)
+    assert or_and.op == "|"
+    assert isinstance(or_and.right, BinaryOpNode)
+    assert or_and.right.op == "&"
+
+    assert isinstance(xor_and, BinaryOpNode)
+    assert xor_and.op == "^"
+    assert isinstance(xor_and.right, BinaryOpNode)
+    assert xor_and.right.op == "&"
+
+    assert isinstance(or_xor, BinaryOpNode)
+    assert or_xor.op == "|"
+    assert isinstance(or_xor.right, BinaryOpNode)
+    assert or_xor.right.op == "^"
+
+    assert isinstance(and_equality, BinaryOpNode)
+    assert and_equality.op == "&"
+    assert isinstance(and_equality.right, BinaryOpNode)
+    assert and_equality.right.op == "=="
+
+    assert isinstance(or_relational, BinaryOpNode)
+    assert or_relational.op == "|"
+    assert isinstance(or_relational.right, BinaryOpNode)
+    assert or_relational.right.op == "<"
 
 
 def test_logical_and_keeps_equality_operands_grouped():

@@ -649,7 +649,7 @@ class HipToCrossGLConverter:
             return
 
         right = self.visit(node.right)
-        self.emit(f"{left} {operator} {right};")
+        return f"{left} {operator} {right}"
 
     def visit_BinaryOpNode(self, node):
         left = self.visit(node.left)

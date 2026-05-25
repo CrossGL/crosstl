@@ -588,6 +588,25 @@ def test_assignment_ops_codegen():
         pytest.fail("Assignment ops parsing or code generation not implemented.")
 
 
+def test_assignment_expression_operands_are_parenthesized_codegen():
+    code = """
+    fn main():
+        var value: Int = (a = b) + c
+        var other: Int = c + (a = b)
+        var selected: Int = flag ? (a = b) : c
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int value = ((a = b) + c);" in generated_code
+    assert "int other = (c + (a = b));" in generated_code
+    assert "int selected = (flag ? (a = b) : c);" in generated_code
+    assert "int value = (a = b + c);" not in generated_code
+    assert "int other = (c + a = b);" not in generated_code
+
+
 def test_bitwise_ops_codegen():
     code = """
     fn fragment_main(input: PSInput) -> PSOutput:

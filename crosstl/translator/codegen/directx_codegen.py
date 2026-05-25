@@ -3272,9 +3272,31 @@ class HLSLCodeGen:
         texture_type = self.resource_base_type(
             self.map_resource_type_with_format(texture_type)
         )
-        return texture_type in {"TextureCube", "TextureCubeArray"}
+        if texture_type == "TextureCubeArray":
+            return True
+        return texture_type == "TextureCube" and (
+            is_projected_texture_basic_offset_operation(func_name)
+            or is_projected_texture_lod_offset_operation(func_name)
+            or is_projected_texture_grad_offset_operation(func_name)
+        )
 
     def projected_texture_compare_call_is_diagnostic_only(
+        self, func_name, texture_type
+    ):
+        if not self.is_projected_texture_compare_function(func_name):
+            return False
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        if texture_type == "TextureCubeArray":
+            return True
+        return texture_type == "TextureCube" and (
+            is_texture_compare_offset_operation(func_name)
+            or is_texture_compare_lod_offset_operation(func_name)
+            or is_texture_compare_grad_offset_operation(func_name)
+        )
+
+    def diagnostic_texture_compare_sampler_parameter_is_comparison(
         self, func_name, texture_type
     ):
         if not self.is_projected_texture_compare_function(func_name):
@@ -3707,8 +3729,11 @@ class HLSLCodeGen:
                     texture_type = self.texture_argument_analysis_type(
                         args[0], global_resource_types
                     )
+                texture_func = self.expression_name(func_expr)
                 if self.texture_call_is_diagnostic_only(
-                    self.expression_name(func_expr), texture_type
+                    texture_func, texture_type
+                ) and not self.diagnostic_texture_compare_sampler_parameter_is_comparison(
+                    texture_func, texture_type
                 ):
                     continue
                 sampler_name = self.expression_name(args[1])
@@ -7014,6 +7039,10 @@ class HLSLCodeGen:
                 "vec4": ("xyz", "w"),
                 "float4": ("xyz", "w"),
             },
+            "TextureCube": {
+                "vec4": ("xyz", "w"),
+                "float4": ("xyz", "w"),
+            },
         }
         texture_specs = specs.get(texture_type)
         if texture_specs is None:
@@ -7038,6 +7067,7 @@ class HLSLCodeGen:
             )
 
         texture_name, sampler_name, coord, extra_args = parts
+        texture_type = self.texture_resource_type(args[0])
         coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
         projected_coord = self.projected_texture_coord(
             args[0], args[coord_index], coord
@@ -7068,6 +7098,10 @@ class HLSLCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if not self.texture_sample_offset_supported(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, texture_sample_offset_capability_error("DirectX")
+                )
             if len(extra_args) == 1:
                 offset = self.generate_expression(extra_args[0])
                 return (
@@ -7100,6 +7134,10 @@ class HLSLCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if not self.texture_sample_offset_supported(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, texture_sample_offset_capability_error("DirectX")
+                )
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
             return (
@@ -7126,6 +7164,10 @@ class HLSLCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if not self.texture_sample_offset_supported(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, texture_sample_offset_capability_error("DirectX")
+                )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             offset = self.generate_expression(extra_args[2])
@@ -7228,6 +7270,14 @@ class HLSLCodeGen:
                 return None
             return f"{self.vector_component(coord, 'xy')} / {divisor}"
 
+        if texture_type == "TextureCube":
+            if coord_type not in {"vec4", "float4"}:
+                return None
+            return (
+                f"{self.vector_component(coord, 'xyz')} / "
+                f"{self.vector_component(coord, 'w')}"
+            )
+
         if texture_type != "Texture2DArray" or coord_type not in {"vec4", "float4"}:
             return None
 
@@ -7284,6 +7334,10 @@ class HLSLCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, texture_compare_offset_capability_error("DirectX")
+                    )
                 offset = self.generate_expression(extra_args[1])
                 return (
                     f"{texture_name}.SampleCmp("
@@ -7308,6 +7362,10 @@ class HLSLCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, texture_compare_offset_capability_error("DirectX")
+                    )
                 lod = self.generate_expression(extra_args[1])
                 offset = self.generate_expression(extra_args[2])
                 return (
@@ -7334,6 +7392,10 @@ class HLSLCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, texture_compare_offset_capability_error("DirectX")
+                    )
                 ddx = self.generate_expression(extra_args[1])
                 ddy = self.generate_expression(extra_args[2])
                 offset = self.generate_expression(extra_args[3])

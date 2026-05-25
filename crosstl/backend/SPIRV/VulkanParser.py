@@ -28,6 +28,19 @@ class VulkanParser:
         "volatile",
         "writeonly",
     }
+    ASSIGNMENT_TOKENS = (
+        "EQUALS",
+        "PLUS_EQUALS",
+        "MINUS_EQUALS",
+        "MULTIPLY_EQUALS",
+        "DIVIDE_EQUALS",
+        "ASSIGN_AND",
+        "ASSIGN_OR",
+        "ASSIGN_XOR",
+        "ASSIGN_MOD",
+        "ASSIGN_SHIFT_LEFT",
+        "ASSIGN_SHIFT_RIGHT",
+    )
 
     def __init__(self, tokens):
         """Initialize the parser with a token stream from ``VulkanLexer``."""
@@ -452,19 +465,7 @@ class VulkanParser:
             elif self.current_token[0] == "POST_DECREMENT":
                 self.eat("POST_DECREMENT")
                 return UnaryOpNode("POST_DECREMENT", target)
-            elif self.current_token[0] in [
-                "EQUALS",
-                "PLUS_EQUALS",
-                "MINUS_EQUALS",
-                "MULTIPLY_EQUALS",
-                "DIVIDE_EQUALS",
-                "ASSIGN_AND",
-                "ASSIGN_OR",
-                "ASSIGN_XOR",
-                "ASSIGN_MOD",
-                "ASSIGN_SHIFT_LEFT",
-                "ASSIGN_SHIFT_RIGHT",
-            ]:
+            elif self.current_token[0] in self.ASSIGNMENT_TOKENS:
                 op_name = self.current_token[1]
                 self.eat(self.current_token[0])
                 value = self.parse_expression()
@@ -610,11 +611,12 @@ class VulkanParser:
                 self.eat(self.current_token[0])
             return target
 
-        elif self.current_token[0] == "EQUALS":
-            self.eat("EQUALS")
+        elif self.current_token[0] in self.ASSIGNMENT_TOKENS:
+            op_name = self.current_token[1]
+            self.eat(self.current_token[0])
             value = self.parse_expression()
             self.consume_terminator(terminators, consume_terminator)
-            return AssignmentNode(target, value)
+            return AssignmentNode(target, value, op_name)
 
         elif self.current_token[0] in ("BINARY_AND", "BINARY_OR", "BINARY_XOR"):
             op = self.current_token[0]
@@ -627,25 +629,14 @@ class VulkanParser:
             return BinaryOpNode(target, op_symbol, right)
 
         elif self.current_token[0] in (
-            "EQUALS",
-            "PLUS_EQUALS",
-            "MINUS_EQUALS",
-            "MULTIPLY_EQUALS",
-            "DIVIDE_EQUALS",
             "EQUAL",
             "LESS_THAN",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
-            "ASSIGN_AND",
-            "ASSIGN_OR",
-            "ASSIGN_XOR",
-            "ASSIGN_MOD",
             "BITWISE_SHIFT_RIGHT",
             "BITWISE_SHIFT_LEFT",
             "BITWISE_XOR",
-            "ASSIGN_SHIFT_LEFT",
-            "ASSIGN_SHIFT_RIGHT",
         ):
             op = self.current_token[0]
             op_name = self.current_token[1]
@@ -864,6 +855,18 @@ class VulkanParser:
             )
 
     def parse_expression(self):
+        return self.parse_assignment_expression()
+
+    def parse_assignment_expression(self):
+        left = self.parse_ternary_expression()
+        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+            op_name = self.current_token[1]
+            self.eat(self.current_token[0])
+            right = self.parse_assignment_expression()
+            return AssignmentNode(left, right, op_name)
+        return left
+
+    def parse_ternary_expression(self):
         left = self.parse_logical_or_expression()
 
         if self.current_token[0] == "QUESTION":
@@ -885,10 +888,37 @@ class VulkanParser:
         return left
 
     def parse_logical_and_expression(self):
-        left = self.parse_equality_expression()
+        left = self.parse_bitwise_or_expression()
         while self.current_token[0] == "AND":
             op_symbol = self.current_token[1]
             self.eat("AND")
+            right = self.parse_bitwise_or_expression()
+            left = BinaryOpNode(left, op_symbol, right)
+        return left
+
+    def parse_bitwise_or_expression(self):
+        left = self.parse_bitwise_xor_expression()
+        while self.current_token[0] == "BINARY_OR":
+            op_symbol = self.current_token[1]
+            self.eat("BINARY_OR")
+            right = self.parse_bitwise_xor_expression()
+            left = BinaryOpNode(left, op_symbol, right)
+        return left
+
+    def parse_bitwise_xor_expression(self):
+        left = self.parse_bitwise_and_expression()
+        while self.current_token[0] == "BINARY_XOR":
+            op_symbol = self.current_token[1]
+            self.eat("BINARY_XOR")
+            right = self.parse_bitwise_and_expression()
+            left = BinaryOpNode(left, op_symbol, right)
+        return left
+
+    def parse_bitwise_and_expression(self):
+        left = self.parse_equality_expression()
+        while self.current_token[0] == "BINARY_AND":
+            op_symbol = self.current_token[1]
+            self.eat("BINARY_AND")
             right = self.parse_equality_expression()
             left = BinaryOpNode(left, op_symbol, right)
         return left
@@ -904,7 +934,7 @@ class VulkanParser:
         return left
 
     def parse_relational_expression(self):
-        left = self.parse_bitwise_expression()
+        left = self.parse_shift_expression()
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
@@ -914,7 +944,7 @@ class VulkanParser:
             op = self.current_token[0]
             op_symbol = self.current_token[1]
             self.eat(op)
-            right = self.parse_bitwise_expression()
+            right = self.parse_shift_expression()
             left = BinaryOpNode(left, op_symbol, right)
         return left
 
@@ -932,45 +962,8 @@ class VulkanParser:
 
         return left
 
-    def parse_bitwise_expression(self):
-        left = self.parse_shift_expression()
-        while self.current_token[0] in [
-            "BINARY_AND",
-            "BINARY_OR",
-            "BINARY_XOR",
-        ]:
-            op = self.current_token[0]
-            op_symbol = (
-                "&" if op == "BINARY_AND" else ("|" if op == "BINARY_OR" else "^")
-            )
-            self.eat(op)
-            right = self.parse_shift_expression()
-            left = BinaryOpNode(left, op_symbol, right)
-
-        return left
-
     def parse_expression_statement(self):
         expr = self.parse_expression()
-        if self.current_token[0] in [
-            "EQUALS",
-            "PLUS_EQUALS",
-            "MINUS_EQUALS",
-            "MULTIPLY_EQUALS",
-            "DIVIDE_EQUALS",
-            "ASSIGN_AND",
-            "ASSIGN_OR",
-            "ASSIGN_XOR",
-            "ASSIGN_MOD",
-            "ASSIGN_SHIFT_LEFT",
-            "ASSIGN_SHIFT_RIGHT",
-        ]:
-            op_name = self.current_token[1]
-            self.eat(self.current_token[0])
-            value = self.parse_expression()
-            self.eat("SEMICOLON")
-            if op_name == "=":
-                return AssignmentNode(expr, value)
-            return BinaryOpNode(expr, op_name, value)
         self.eat("SEMICOLON")
         return expr
 

@@ -12157,7 +12157,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
     assert "textureCompareProj" not in generated_code
 
 
-def test_directx_projected_cube_shadow_compare_reports_unsupported():
+def test_directx_projected_cube_shadow_compare_lowers_supported_forms():
     shader = """
     shader ProjectedCubeShadowDiagnostics {
         samplerCubeShadow cubeMap;
@@ -12238,39 +12238,55 @@ def test_directx_projected_cube_shadow_compare_reports_unsupported():
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
-    assert "SamplerState compareSampler : register(s0);" in generated_code
-    assert "SamplerComparisonState compareSampler" not in generated_code
+    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert "SamplerState compareSampler" not in generated_code
     assert (
-        "float cubeProjected(TextureCube tex, SamplerState s, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeProjected(TextureCube tex, SamplerComparisonState s, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float cubeArrayProjected(TextureCubeArray tex, SamplerState s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float cubeArrayProjected(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
-    reasons = {
-        "textureCompareProj",
+    assert (
+        "float projected = tex.SampleCmp(s, cubeProj.xyz / cubeProj.w, depth);"
+        in generated_code
+    )
+    for func_name in {
         "textureCompareProjOffset",
         "textureCompareProjLodOffset",
         "textureCompareProjGradOffset",
+    }:
+        assert (
+            generated_code.count(
+                f"/* unsupported DirectX texture compare: {func_name} offsets require 2D or 2D-array textures */ 0.0"
+            )
+            == 1
+        )
+    coordinate_diagnostic_counts = {
+        "textureCompareProj": 1,
+        "textureCompareProjOffset": 1,
+        "textureCompareProjLodOffset": 1,
+        "textureCompareProjGradOffset": 1,
     }
-    for func_name in reasons:
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported DirectX texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
             )
-            == 2
+            == count
         )
     assert "textureCompareProj(" not in generated_code
     assert "textureCompareProjOffset(" not in generated_code
     assert "textureCompareProjLodOffset(" not in generated_code
     assert "textureCompareProjGradOffset(" not in generated_code
-    assert ".SampleCmp(s, cubeProj" not in generated_code
+    assert ".SampleCmp(s, cubeProj" in generated_code
+    assert ".SampleCmp(s, cubeLayerProj" not in generated_code
     assert ".SampleCmpLevel(s, cubeProj" not in generated_code
     assert ".SampleCmpGrad(s, cubeProj" not in generated_code
 
 
-def test_directx_projected_cube_shadow_compare_implicit_samplers_not_emitted():
+def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supported_forms():
     shader = """
     shader ProjectedCubeShadowImplicitDiagnostics {
         samplerCubeShadow cubeMap;
@@ -12349,21 +12365,38 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_not_emitted():
     )
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
+    assert "SamplerComparisonState cubeMapSampler : register(s0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
     assert (
-        "float4 cubeProjected(TextureCube tex, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 cubeProjected(TextureCube tex, SamplerComparisonState texSampler, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
         "float4 cubeArrayProjected(TextureCubeArray tex, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
-    expected_counts = {
-        "textureCompareProj": 3,
-        "textureCompareProjLod": 3,
-        "textureCompareProjGradOffset": 2,
+    assert (
+        "float projected = tex.SampleCmp(texSampler, cubeProj.xyz / cubeProj.w, depth);"
+        in generated_code
+    )
+    assert (
+        "float lodProjected = tex.SampleCmpLevel(texSampler, cubeProj.xyz / cubeProj.w, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float globalProjected = cubeMap.SampleCmp(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 2D or 2D-array textures */ 0.0"
+        in generated_code
+    )
+    coordinate_diagnostic_counts = {
+        "textureCompareProj": 1,
+        "textureCompareProjLod": 2,
+        "textureCompareProjGradOffset": 1,
     }
-    for func_name, count in expected_counts.items():
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported DirectX texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
@@ -12371,20 +12404,17 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_not_emitted():
             == count
         )
     assert (
-        "cubeProjected(cubeMap, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "cubeProjected(cubeMap, cubeMapSampler, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
         "cubeArrayProjected(cubeArray, input.cubeArrayProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
-    assert "SamplerComparisonState cubeMapSampler" not in generated_code
     assert "SamplerComparisonState cubeArraySampler" not in generated_code
-    assert "SamplerComparisonState texSampler" not in generated_code
-    assert "texSampler" not in generated_code
 
 
-def test_directx_projected_cube_shadow_compare_resource_arrays_skip_implicit_samplers():
+def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_sampler():
     shader = """
     shader ProjectedCubeShadowArrayDiagnostics {
         samplerCubeShadow cubeMaps[4];
@@ -12468,21 +12498,38 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_skip_implicit_sam
     )
 
     assert "TextureCube cubeMaps[4] : register(t0);" in generated_code
+    assert "SamplerComparisonState cubeMapsSampler : register(s0);" in generated_code
     assert "TextureCubeArray cubeArrays[4] : register(t4);" in generated_code
     assert (
-        "float4 cubeProjected(TextureCube maps[4], int layer, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 cubeProjected(TextureCube maps[4], SamplerComparisonState mapsSampler, int layer, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
         "float4 cubeArrayProjected(TextureCubeArray maps[4], int layer, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
-    expected_counts = {
-        "textureCompareProj": 3,
-        "textureCompareProjLod": 3,
-        "textureCompareProjGradOffset": 2,
+    assert (
+        "float fixedProjected = maps[2].SampleCmp(mapsSampler, cubeProj.xyz / cubeProj.w, depth);"
+        in generated_code
+    )
+    assert (
+        "float dynamicLodProjected = maps[layer].SampleCmpLevel(mapsSampler, cubeProj.xyz / cubeProj.w, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "float globalProjected = cubeMaps[input.layer].SampleCmp(cubeMapsSampler, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 2D or 2D-array textures */ 0.0"
+        in generated_code
+    )
+    coordinate_diagnostic_counts = {
+        "textureCompareProj": 1,
+        "textureCompareProjLod": 2,
+        "textureCompareProjGradOffset": 1,
     }
-    for func_name, count in expected_counts.items():
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported DirectX texture compare: {func_name} requires Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
@@ -12490,20 +12537,17 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_skip_implicit_sam
             == count
         )
     assert (
-        "cubeProjected(cubeMaps, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "cubeProjected(cubeMaps, cubeMapsSampler, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
         "cubeArrayProjected(cubeArrays, input.layer, input.cubeArrayProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
-    assert "SamplerComparisonState cubeMapsSampler" not in generated_code
     assert "SamplerComparisonState cubeArraysSampler" not in generated_code
-    assert "SamplerComparisonState mapsSampler" not in generated_code
-    assert "mapsSampler" not in generated_code
 
 
-def test_directx_direct_projected_cube_texture_reports_unsupported():
+def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
     shader = """
     shader DirectProjectedCubeDiagnostics {
         samplerCube cubeMap;
@@ -12541,16 +12585,32 @@ def test_directx_direct_projected_cube_texture_reports_unsupported():
 
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
-    assert "SamplerState linearSampler : register(s0);" in generated_code
-    assert "SamplerState cubeMapSampler" not in generated_code
+    assert "SamplerState cubeMapSampler : register(s0);" in generated_code
+    assert "SamplerState linearSampler : register(s1);" in generated_code
     assert "SamplerState cubeArraySampler" not in generated_code
-    expected_counts = {
-        "textureProj": 3,
-        "textureProjLodOffset": 2,
-        "textureProjGradOffset": 2,
+    assert (
+        "float4 cubeProjected = cubeMap.Sample(linearSampler, input.cubeProj.xyz / input.cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "float4 implicitCube = cubeMap.Sample(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported DirectX projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+        in generated_code
+    )
+    assert (
+        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+        in generated_code
+    )
+    coordinate_diagnostic_counts = {
+        "textureProj": 1,
+        "textureProjLodOffset": 1,
+        "textureProjGradOffset": 1,
         "textureProjLod": 1,
     }
-    for func_name, count in expected_counts.items():
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
@@ -12559,11 +12619,10 @@ def test_directx_direct_projected_cube_texture_reports_unsupported():
         )
     assert "textureProj(cubeMap" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
-    assert ".Sample(linearSampler, input.cubeProj" not in generated_code
     assert ".Sample(linearSampler, input.cubeArrayProj" not in generated_code
 
 
-def test_directx_projected_cube_texture_parameters_do_not_forward_implicit_samplers():
+def test_directx_projected_cube_texture_parameters_forward_supported_implicit_sampler():
     shader = """
     shader ProjectedCubeParameterDiagnostics {
         samplerCube cubeMap;
@@ -12635,19 +12694,32 @@ def test_directx_projected_cube_texture_parameters_do_not_forward_implicit_sampl
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
     assert (
-        "float4 cubeProjected(TextureCube tex, float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 cubeProjected(TextureCube tex, SamplerState texSampler, float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
         "float4 cubeArrayProjected(TextureCubeArray tex, float4 cubeArrayProj, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
-    expected_counts = {
-        "textureProj": 2,
-        "textureProjLod": 2,
-        "textureProjGradOffset": 2,
+    assert "SamplerState cubeMapSampler : register(s0);" in generated_code
+    assert (
+        "float4 projected = tex.Sample(texSampler, cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "float4 lodProjected = tex.SampleLevel(texSampler, cubeProj.xyz / cubeProj.w, lod);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+        in generated_code
+    )
+    coordinate_diagnostic_counts = {
+        "textureProj": 1,
+        "textureProjLod": 1,
+        "textureProjGradOffset": 1,
     }
-    for func_name, count in expected_counts.items():
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
@@ -12655,20 +12727,17 @@ def test_directx_projected_cube_texture_parameters_do_not_forward_implicit_sampl
             == count
         )
     assert (
-        "cubeProjected(cubeMap, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
+        "cubeProjected(cubeMap, cubeMapSampler, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
         "cubeArrayProjected(cubeArray, input.cubeArrayProj, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
-    assert "SamplerState cubeMapSampler" not in generated_code
     assert "SamplerState cubeArraySampler" not in generated_code
-    assert "SamplerState texSampler" not in generated_code
-    assert "texSampler" not in generated_code
 
 
-def test_directx_projected_cube_diagnostics_do_not_create_sampler_role_conflicts():
+def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics():
     regular_diagnostic_shader = """
     shader DiagnosticRegularSamplerRoleConflict {
         samplerCube cubeMap;
@@ -12742,54 +12811,32 @@ def test_directx_projected_cube_diagnostics_do_not_create_sampler_role_conflicts
     }
     """
 
-    regular_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
-    )
-    parameter_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
-    )
-    comparison_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
-    )
+    with pytest.raises(
+        ValueError,
+        match="DirectX sampler\\(s\\) used for both regular sampling and shadow comparison: sharedSampler",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+        )
 
-    projected_diagnostic = (
-        "/* unsupported DirectX projected texture: textureProj "
-        "requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
-    )
-    compare_projected_diagnostic = (
-        "/* unsupported DirectX texture compare: textureCompareProj requires "
-        "Texture2D vec3/vec4 or Texture2DArray vec4 projection coordinates */ 0.0"
-    )
+    with pytest.raises(
+        ValueError,
+        match=r"DirectX sampler\(s\) used for both regular sampling and shadow comparison: (sharedSampler|inspect\.s)",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
+        )
 
-    assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
-    assert "SamplerState sharedSampler" not in regular_code
-    assert projected_diagnostic in regular_code
-    assert (
-        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
-        in regular_code
-    )
-    assert ".Sample(sharedSampler" not in regular_code
-
-    assert "SamplerComparisonState sharedSampler : register(s0);" in parameter_code
-    assert (
-        "float inspect(SamplerComparisonState s, float4 cubeProj, float2 uv, float depth)"
-        in parameter_code
-    )
-    assert projected_diagnostic in parameter_code
-    assert "float ok = shadowMap.SampleCmp(s, uv, depth);" in parameter_code
-    assert (
-        "return inspect(sharedSampler, input.cubeProj, input.uv, input.depth);"
-        in parameter_code
-    )
-
-    assert "SamplerState sharedSampler : register(s0);" in comparison_code
-    assert "SamplerComparisonState sharedSampler" not in comparison_code
-    assert compare_projected_diagnostic in comparison_code
-    assert "float4 ok = colorMap.Sample(sharedSampler, input.uv);" in comparison_code
-    assert "SampleCmp(sharedSampler" not in comparison_code
+    with pytest.raises(
+        ValueError,
+        match="DirectX sampler\\(s\\) used for both regular sampling and shadow comparison: sharedSampler",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+        )
 
 
-def test_directx_projected_cube_diagnostic_struct_sampler_member_keeps_real_role():
+def test_directx_projected_cube_struct_sampler_member_role_conflict_is_reported():
     shader = """
     shader DiagnosticStructSamplerRoleConflict {
         samplerCube cubeMap;
@@ -12826,21 +12873,11 @@ def test_directx_projected_cube_diagnostic_struct_sampler_member_keeps_real_role
     }
     """
 
-    generated_code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(shader), "fragment"
-    )
-
-    assert "SamplerComparisonState samplers[2];" in generated_code
-    assert "SamplerState samplers[2];" not in generated_code
-    assert (
-        "/* unsupported DirectX projected texture: textureProj requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
-        in generated_code
-    )
-    assert (
-        "float ok = shadowMap.SampleCmp(pack.samplers[input.index], input.uv, input.depth);"
-        in generated_code
-    )
-    assert ".Sample(pack.samplers" not in generated_code
+    with pytest.raises(
+        ValueError,
+        match=r"DirectX sampler\(s\) used for both regular sampling and shadow comparison: SamplerPack\.samplers",
+    ):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
 
 
 def test_directx_unsupported_gather_diagnostics_do_not_create_sampler_role_conflicts():

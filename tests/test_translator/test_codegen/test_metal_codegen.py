@@ -10068,7 +10068,7 @@ def test_metal_cube_texture_sample_offsets_emit_diagnostics():
     assert "textureCompareGradOffset(" not in generated_code
 
 
-def test_metal_unsupported_implicit_cube_offsets_do_not_thread_sampler_helpers():
+def test_metal_unsupported_cube_offsets_and_supported_projection_thread_samplers():
     shader = """
     shader UnsupportedImplicitCubeOffsetSamplerHelper {
         samplerCube cubeMap;
@@ -10124,16 +10124,16 @@ def test_metal_unsupported_implicit_cube_offsets_do_not_thread_sampler_helpers()
         in generated_code
     )
     assert (
-        "float4 projectedHelper(float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset, texturecube<float> cubeMap)"
+        "float4 projectedHelper(float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset, texturecube<float> cubeMap, sampler cubeMapSampler)"
         in generated_code
     )
-    assert "sampler cubeMapSampler" not in generated_code
+    assert "sampler cubeMapSampler [[sampler(0)]]" in generated_code
     assert (
         "helper(input.direction, input.lod, input.ddx, input.ddy, input.offset, cubeMap)"
         in generated_code
     )
     assert (
-        "projectedHelper(input.cubeProj, input.lod, input.ddx, input.ddy, input.offset, cubeMap)"
+        "projectedHelper(input.cubeProj, input.lod, input.ddx, input.ddy, input.offset, cubeMap, cubeMapSampler)"
         in generated_code
     )
     assert (
@@ -10141,12 +10141,16 @@ def test_metal_unsupported_implicit_cube_offsets_do_not_thread_sampler_helpers()
         not in generated_code
     )
     assert (
-        "projectedHelper(input.cubeProj, input.lod, input.ddx, input.ddy, input.offset, cubeMap, cubeMapSampler)"
+        "projectedHelper(input.cubeProj, input.lod, input.ddx, input.ddy, input.offset, cubeMap) +"
         not in generated_code
     )
+    assert "cubeMap.sample(cubeMapSampler, cubeProj.xyz / cubeProj.w)" in generated_code
+    assert (
+        "cubeMap.sample(cubeMapSampler, cubeProj.xyz / cubeProj.w, level(lod))"
+        in generated_code
+    )
     assert generated_code.count("unsupported Metal texture offset") == 3
-    assert generated_code.count("unsupported Metal projected texture") == 3
-    assert ".sample(" not in generated_code
+    assert generated_code.count("unsupported Metal projected texture") == 1
 
 
 def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members():
@@ -11424,7 +11428,7 @@ def test_metal_unsized_projected_shadow_compare_arrays_infer_transitive_constant
     assert "textureCompareProj(" not in generated_code
 
 
-def test_metal_projected_cube_shadow_compare_reports_unsupported():
+def test_metal_projected_cube_shadow_compare_lowers_supported_forms():
     shader = """
     shader ProjectedCubeShadowDiagnostics {
         samplerCubeShadow cubeMap;
@@ -11514,28 +11518,43 @@ def test_metal_projected_cube_shadow_compare_reports_unsupported():
         "float cubeArrayProjected(depthcube_array<float> tex, sampler s, float4 cubeLayerProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
-    reasons = {
-        "textureCompareProj",
+    assert (
+        "float projected = tex.sample_compare(s, cubeProj.xyz / cubeProj.w, depth);"
+        in generated_code
+    )
+    for func_name in {
         "textureCompareProjOffset",
         "textureCompareProjLodOffset",
         "textureCompareProjGradOffset",
+    }:
+        assert (
+            generated_code.count(
+                f"/* unsupported Metal texture compare: {func_name} offsets require 2D or 2D-array depth textures */ 0.0"
+            )
+            == 1
+        )
+    coordinate_diagnostic_counts = {
+        "textureCompareProj": 1,
+        "textureCompareProjOffset": 1,
+        "textureCompareProjLodOffset": 1,
+        "textureCompareProjGradOffset": 1,
     }
-    for func_name in reasons:
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported Metal texture compare: {func_name} requires depth2d vec3/vec4 or depth2d_array vec4 projection coordinates */ 0.0"
             )
-            == 2
+            == count
         )
     assert "textureCompareProj(" not in generated_code
     assert "textureCompareProjOffset(" not in generated_code
     assert "textureCompareProjLodOffset(" not in generated_code
     assert "textureCompareProjGradOffset(" not in generated_code
-    assert ".sample_compare(s, cubeProj" not in generated_code
+    assert ".sample_compare(s, cubeProj" in generated_code
     assert ".sample_compare(s, cubeLayerProj" not in generated_code
 
 
-def test_metal_direct_projected_cube_texture_reports_unsupported():
+def test_metal_direct_projected_cube_texture_lowers_supported_color_forms():
     shader = """
     shader DirectProjectedCubeDiagnostics {
         samplerCube cubeMap;
@@ -11574,13 +11593,29 @@ def test_metal_direct_projected_cube_texture_reports_unsupported():
     assert "texturecube<float> cubeMap [[texture(0)]]" in generated_code
     assert "texturecube_array<float> cubeArray [[texture(1)]]" in generated_code
     assert "sampler linearSampler [[sampler(0)]]" in generated_code
-    expected_counts = {
-        "textureProj": 3,
-        "textureProjLodOffset": 2,
-        "textureProjGradOffset": 2,
+    assert (
+        "float4 cubeProjected = cubeMap.sample(linearSampler, input.cubeProj.xyz / input.cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "float4 implicitCube = cubeMap.sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal projected texture: textureProjLodOffset offsets require 2D textures */ float4(0.0)"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D textures */ float4(0.0)"
+        in generated_code
+    )
+    coordinate_diagnostic_counts = {
+        "textureProj": 1,
+        "textureProjLodOffset": 1,
+        "textureProjGradOffset": 1,
         "textureProjLod": 1,
     }
-    for func_name, count in expected_counts.items():
+    for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
                 f"/* unsupported Metal projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
@@ -11589,11 +11624,10 @@ def test_metal_direct_projected_cube_texture_reports_unsupported():
         )
     assert "textureProj(cubeMap" not in generated_code
     assert "textureProj(cubeArray" not in generated_code
-    assert ".sample(linearSampler, input.cubeProj" not in generated_code
     assert ".sample(linearSampler, input.cubeArrayProj" not in generated_code
 
 
-def test_metal_projected_cube_texture_resource_arrays_report_unsupported_without_samplers():
+def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_forms():
     shader = """
     shader ProjectedCubeArrayDiagnostics {
         samplerCube cubeMaps[4];
@@ -11753,10 +11787,26 @@ def test_metal_projected_cube_texture_resource_arrays_report_unsupported_without
         "float4 projectedShadowArray(array<depthcube_array<float>, 4> maps, int layer, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
+    assert (
+        "float4 fixedProjected = maps[2].sample(sampler(mag_filter::linear, min_filter::linear), cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "float4 dynamicLodProjected = maps[layer].sample(sampler(mag_filter::linear, min_filter::linear), cubeProj.xyz / cubeProj.w, level(lod));"
+        in generated_code
+    )
+    assert (
+        "float4 globalProjected = cubeMaps[input.layer].sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal projected texture: textureProjGradOffset offsets require 2D textures */ float4(0.0)"
+        in generated_code
+    )
     projected_counts = {
-        "textureProj": 3,
-        "textureProjLod": 3,
-        "textureProjGradOffset": 2,
+        "textureProj": 1,
+        "textureProjLod": 2,
+        "textureProjGradOffset": 1,
     }
     for func_name, count in projected_counts.items():
         assert (
@@ -11765,10 +11815,27 @@ def test_metal_projected_cube_texture_resource_arrays_report_unsupported_without
             )
             == count
         )
+    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
+    assert (
+        f"float fixedProjected = maps[2].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth);"
+        in generated_code
+    )
+    assert (
+        f"float dynamicLodProjected = maps[layer].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth, level(lod));"
+        in generated_code
+    )
+    assert (
+        f"float globalShadow = shadowCubes[input.layer].sample_compare({default_sampler}, input.cubeProj.xyz / input.cubeProj.w, input.depth);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal texture compare: textureCompareProjGradOffset offsets require 2D or 2D-array depth textures */ 0.0"
+        in generated_code
+    )
     compare_counts = {
-        "textureCompareProj": 3,
-        "textureCompareProjLod": 3,
-        "textureCompareProjGradOffset": 2,
+        "textureCompareProj": 1,
+        "textureCompareProjLod": 2,
+        "textureCompareProjGradOffset": 1,
     }
     for func_name, count in compare_counts.items():
         assert (
@@ -11794,9 +11861,8 @@ def test_metal_projected_cube_texture_resource_arrays_report_unsupported_without
         in generated_code
     )
     assert "[[sampler(" not in generated_code
-    assert "sampler(" not in generated_code
-    assert ".sample(" not in generated_code
-    assert ".sample_compare(" not in generated_code
+    assert "textureProj(" not in generated_code
+    assert "textureCompareProj(" not in generated_code
 
 
 def test_metal_shadow_gather_compare_offsets_use_depth_overloads():

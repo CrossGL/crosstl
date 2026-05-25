@@ -760,17 +760,26 @@ class MojoParser:
         expression = self.parse_expression()
         self.eat("COLON")
         cases = []
+        seen_default = False
         self.skip_newlines()
         if self.current_token[0] == "INDENT":
             self.eat("INDENT")
             self.skip_newlines()
             while self.current_token[0] in ["CASE", "DEFAULT"]:
+                if self.current_token[0] == "DEFAULT":
+                    if seen_default:
+                        raise SyntaxError("duplicate default label in switch")
+                    seen_default = True
                 cases.append(self.parse_switch_case())
                 self.skip_newlines()
             if self.current_token[0] == "DEDENT":
                 self.eat("DEDENT")
         else:
             while self.current_token[0] in ["CASE", "DEFAULT"]:
+                if self.current_token[0] == "DEFAULT":
+                    if seen_default:
+                        raise SyntaxError("duplicate default label in switch")
+                    seen_default = True
                 cases.append(self.parse_switch_case())
                 self.skip_newlines()
         return SwitchNode(expression, cases)

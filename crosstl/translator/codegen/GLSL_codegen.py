@@ -119,7 +119,13 @@ from .image_access_contracts import (
     is_resource_samples_query_operation,
     is_resource_size_query_operation,
     is_resource_access_attribute,
+    is_projected_texture_basic_offset_operation,
+    is_projected_texture_basic_operation,
     is_projected_texture_compare_operation,
+    is_projected_texture_grad_offset_operation,
+    is_projected_texture_grad_operation,
+    is_projected_texture_lod_offset_operation,
+    is_projected_texture_lod_operation,
     is_projected_texture_operation,
     is_scalar_image_format,
     is_storage_image_texture_comparison_operation,
@@ -156,6 +162,7 @@ from .image_access_contracts import (
     operation_argument_type_error,
     operation_dimension_argument_error,
     image_resource_metadata,
+    projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
     should_validate_image_load_result_shape,
     storage_image_format_store_constructor,
@@ -199,6 +206,7 @@ from .image_access_contracts import (
     unsupported_multisample_texture_query_lod_expression,
     unsupported_multisample_texel_fetch_offset_expression,
     unsupported_projected_texture_call_expression,
+    unsupported_projected_texture_operation_error,
     unsupported_cube_texel_fetch_expression,
     unsupported_storage_image_texture_comparison_scalar_expression,
     unsupported_storage_image_texture_operation_vector_expression,
@@ -4192,6 +4200,81 @@ class GLSLCodeGen:
     def unsupported_texture_projected_call(self, func_name, reason):
         return unsupported_projected_texture_call_expression("GLSL", func_name, reason)
 
+    def projected_cube_texture_coordinate(self, texture_type, coord_arg, coord):
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type != "samplerCube":
+            return None
+
+        coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
+        if coord_type not in {"vec4", "float4"}:
+            return None
+        return (
+            f"{self.vector_component(coord, 'xyz')} / "
+            f"{self.vector_component(coord, 'w')}"
+        )
+
+    def generate_projected_cube_texture_call(self, func_name, args):
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return self.unsupported_texture_projected_call(
+                func_name, texture_coordinate_arguments_error()
+            )
+
+        texture_name, coord, extra_args = parts
+        coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
+        texture_type = self.texture_resource_type(args[0])
+        projected_coord = self.projected_cube_texture_coordinate(
+            texture_type, args[coord_index], coord
+        )
+        if projected_coord is None:
+            return self.unsupported_texture_projected_call(
+                func_name,
+                "requires 1D, 2D, 2D-array, 3D, or cube projection coordinates",
+            )
+
+        if is_projected_texture_basic_operation(func_name):
+            count_error = projected_texture_extra_argument_count_error(
+                func_name, len(extra_args)
+            )
+            if count_error:
+                return self.unsupported_texture_projected_call(func_name, count_error)
+            mapped_args = [texture_name, projected_coord]
+            if extra_args:
+                mapped_args.append(self.generate_expression(extra_args[0]))
+            return f"texture({', '.join(mapped_args)})"
+
+        if is_projected_texture_lod_operation(func_name):
+            count_error = projected_texture_extra_argument_count_error(
+                func_name, len(extra_args)
+            )
+            if count_error:
+                return self.unsupported_texture_projected_call(func_name, count_error)
+            lod = self.generate_expression(extra_args[0])
+            return f"textureLod({texture_name}, {projected_coord}, {lod})"
+
+        if is_projected_texture_grad_operation(func_name):
+            count_error = projected_texture_extra_argument_count_error(
+                func_name, len(extra_args)
+            )
+            if count_error:
+                return self.unsupported_texture_projected_call(func_name, count_error)
+            ddx = self.generate_expression(extra_args[0])
+            ddy = self.generate_expression(extra_args[1])
+            return f"textureGrad({texture_name}, {projected_coord}, {ddx}, {ddy})"
+
+        if (
+            is_projected_texture_basic_offset_operation(func_name)
+            or is_projected_texture_lod_offset_operation(func_name)
+            or is_projected_texture_grad_offset_operation(func_name)
+        ):
+            return self.unsupported_texture_projected_call(
+                func_name, texture_sample_offset_capability_error("GLSL")
+            )
+
+        return self.unsupported_texture_projected_call(
+            func_name, unsupported_projected_texture_operation_error()
+        )
+
     def texture_sample_offset_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["sample_offset"]
 
@@ -4505,6 +4588,15 @@ class GLSLCodeGen:
             projected_coord = f"{self.vector_component(coord, 'xy')} / {divisor}"
             return f"vec3({projected_coord}, {compare})"
 
+        if texture_type == "samplerCubeShadow":
+            if coord_type not in {"vec4", "float4"}:
+                return None
+            projected_coord = (
+                f"{self.vector_component(coord, 'xyz')} / "
+                f"{self.vector_component(coord, 'w')}"
+            )
+            return f"vec4({projected_coord}, {compare})"
+
         if texture_type != "sampler2DArrayShadow" or coord_type not in {
             "vec4",
             "float4",
@@ -4565,6 +4657,10 @@ class GLSLCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, texture_compare_offset_capability_error("GLSL")
+                    )
                 offset = self.generate_expression(extra_args[1])
                 return f"textureOffset({texture_name}, {compare_coord}, {offset})"
 
@@ -4577,6 +4673,10 @@ class GLSLCodeGen:
                 if self.resource_base_type(texture_type) == "sampler2DArrayShadow":
                     return self.unsupported_texture_compare_call(
                         func_name, texture_compare_projected_lod_array_error()
+                    )
+                if not self.texture_compare_lod_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, "explicit LOD requires 2D shadow samplers"
                     )
                 lod = self.generate_expression(extra_args[1])
                 return f"textureLod({texture_name}, {compare_coord}, {lod})"
@@ -4591,6 +4691,10 @@ class GLSLCodeGen:
                     return self.unsupported_texture_compare_call(
                         func_name, texture_compare_projected_lod_array_error()
                     )
+                if not self.texture_compare_lod_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name, "explicit LOD offsets require 2D shadow samplers"
+                    )
                 lod = self.generate_expression(extra_args[1])
                 offset = self.generate_expression(extra_args[2])
                 return (
@@ -4604,6 +4708,11 @@ class GLSLCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_grad_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "explicit gradients require 2D, 2D-array, or cube shadow samplers",
+                    )
                 ddx = self.generate_expression(extra_args[1])
                 ddy = self.generate_expression(extra_args[2])
                 return f"textureGrad({texture_name}, {compare_coord}, {ddx}, {ddy})"
@@ -4614,6 +4723,11 @@ class GLSLCodeGen:
                 )
                 if count_error:
                     return self.unsupported_texture_compare_call(func_name, count_error)
+                if not self.texture_compare_grad_offset_supported(texture_type):
+                    return self.unsupported_texture_compare_call(
+                        func_name,
+                        "explicit gradient offsets require 2D or 2D-array shadow samplers",
+                    )
                 ddx = self.generate_expression(extra_args[1])
                 ddy = self.generate_expression(extra_args[2])
                 offset = self.generate_expression(extra_args[3])
@@ -5195,7 +5309,9 @@ class GLSLCodeGen:
 
         if is_projected_texture_operation(func_name) and args:
             texture_type = self.resource_base_type(self.texture_resource_type(args[0]))
-            if texture_type in {"samplerCube", "samplerCubeArray"}:
+            if texture_type == "samplerCube":
+                return self.generate_projected_cube_texture_call(func_name, args)
+            if texture_type == "samplerCubeArray":
                 return self.unsupported_texture_projected_call(
                     func_name,
                     "requires 1D, 2D, 2D-array, or 3D projection coordinates",

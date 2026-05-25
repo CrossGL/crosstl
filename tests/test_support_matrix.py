@@ -58,6 +58,42 @@ def test_graphics_backend_roadmap_is_focused_on_primary_graphics_targets():
         assert item["backend_id"] in {"directx", "opengl", "metal"}
 
 
+def test_graphics_texture_query_row_is_supported_with_evidence():
+    roadmap_path = ROOT / "support" / "generated" / "graphics-backend-roadmap.json"
+    roadmap = json.loads(roadmap_path.read_text(encoding="utf-8"))
+
+    texture_query = next(
+        feature for feature in roadmap["features"] if feature["id"] == "texture.query"
+    )
+
+    for backend_id in ("directx", "opengl", "metal"):
+        support = texture_query["support"][backend_id]
+        assert support["status"] == "supported"
+        assert support["evidence"]
+
+    assert all(item["feature_id"] != "texture.query" for item in roadmap["backlog"])
+
+
+def test_graphics_texel_fetch_row_is_supported_with_evidence():
+    roadmap_path = ROOT / "support" / "generated" / "graphics-backend-roadmap.json"
+    roadmap = json.loads(roadmap_path.read_text(encoding="utf-8"))
+
+    texel_fetch = next(
+        feature
+        for feature in roadmap["features"]
+        if feature["id"] == "texture.texel_fetch"
+    )
+
+    for backend_id in ("directx", "opengl", "metal"):
+        support = texel_fetch["support"][backend_id]
+        assert support["status"] == "supported"
+        assert support["evidence"]
+
+    assert all(
+        item["feature_id"] != "texture.texel_fetch" for item in roadmap["backlog"]
+    )
+
+
 def test_support_matrix_audit_writes_filtered_json(tmp_path):
     output_path = tmp_path / "graphics-partial.json"
     result = subprocess.run(

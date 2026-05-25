@@ -535,8 +535,8 @@ class VulkanToCrossGLConverter:
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
-            left = self.generate_expression(expr.left)
-            right = self.generate_expression(expr.right)
+            left = self.generate_nested_expression(expr.left)
+            right = self.generate_nested_expression(expr.right)
 
             if expr.op in self.bitwise_op_map:
                 op = self.bitwise_op_map[expr.op]
@@ -544,7 +544,7 @@ class VulkanToCrossGLConverter:
 
             return f"({left} {expr.op} {right})"
         elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.operand)
+            operand = self.generate_nested_expression(expr.operand)
             if expr.op == "~":
                 return f"(~{operand})"
             if expr.op == "POST_INCREMENT":
@@ -557,9 +557,9 @@ class VulkanToCrossGLConverter:
                 return f"--{operand}"
             return f"{expr.op}{operand}"
         elif isinstance(expr, TernaryOpNode):
-            condition = self.generate_expression(expr.condition)
-            true_expr = self.generate_expression(expr.true_expr)
-            false_expr = self.generate_expression(expr.false_expr)
+            condition = self.generate_nested_expression(expr.condition)
+            true_expr = self.generate_nested_expression(expr.true_expr)
+            false_expr = self.generate_nested_expression(expr.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
@@ -578,6 +578,12 @@ class VulkanToCrossGLConverter:
             return f"{array}[{index}]"
         else:
             return str(expr)
+
+    def generate_nested_expression(self, expr):
+        rendered = self.generate_expression(expr)
+        if isinstance(expr, AssignmentNode):
+            return f"({rendered})"
+        return rendered
 
     def expression_base_name(self, expr):
         if isinstance(expr, str):

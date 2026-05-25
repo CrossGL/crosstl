@@ -406,9 +406,34 @@
       "name": "Projected texture operations",
       "description": "Lower projection-coordinate texture sampling and shadow comparison variants.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "partial",
+          "notes": "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_direct_projected_cube_texture_lowers_supported_color_forms",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_projected_cube_shadow_compare_lowers_supported_forms",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supported_forms",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_sampler"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "Covers planar projected texture and shadow compare forms plus non-offset cube color projection and target-valid cube-shadow projection forms. Cube-array projection and target-invalid LOD/offset forms remain deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_projected_cube_shadow_compare_lowers_supported_basic_form",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_forms"
+          ]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_direct_projected_cube_texture_lowers_supported_color_forms",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_projected_cube_shadow_compare_lowers_supported_forms",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_forms"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
@@ -455,11 +480,38 @@
       "id": "texture.query",
       "category": "textures",
       "name": "Texture query operations",
-      "description": "Lower size, LOD, levels, and sample-count resource query operations.",
+      "description": "Lower size, LOD, levels, and sample-count resource query operations, with deterministic diagnostics for target-invalid query forms.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers sampler queries, storage-image size queries, multisample level/sample queries, array/cube-array LOD coordinates, and deterministic diagnostics for target-invalid query forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_query_functions",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_levels_and_lod_queries_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_texture_query_lod_emits_diagnostics_without_samplers",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_shadow_texture_query_functions_prune_implicit_samplers"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers sampler queries, storage-image size queries, multisample level/sample queries, array/cube-array LOD coordinates, and deterministic diagnostics for target-invalid query forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_query_functions",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_storage_image_levels_and_lod_queries_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_texture_query_lod_emits_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_shadow_texture_query_functions"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers sampler queries, storage-image size queries, multisample level/sample queries, array/cube-array LOD coordinates, and deterministic diagnostics for target-invalid query forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_query_functions",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_levels_and_lod_queries_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_texture_query_lod_emits_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_shadow_texture_query_functions"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
@@ -472,11 +524,38 @@
       "id": "texture.texel_fetch",
       "category": "textures",
       "name": "Texel fetch operations",
-      "description": "Lower integer-coordinate texel fetch and fetch-offset operations.",
+      "description": "Lower integer-coordinate texel fetch and fetch-offset operations, with deterministic diagnostics for target-invalid fetch forms.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers regular 2D/array fetch and offset lowering plus deterministic diagnostics for storage-image, multisample-offset, and cube/cube-array target-invalid fetch forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_sampling_and_fetch_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_texel_fetch_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_cube_texel_fetches_emit_diagnostics"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers regular 2D/array fetch and offset lowering plus deterministic diagnostics for storage-image, multisample-offset, and cube/cube-array target-invalid fetch forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_storage_image_sampling_and_fetch_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_texel_fetch_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_cube_texel_fetches_emit_diagnostics"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers regular 2D/array fetch and offset lowering plus deterministic diagnostics for storage-image, multisample-offset, and cube/cube-array target-invalid fetch forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_members",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_sampling_and_fetch_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_texel_fetch_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texel_fetches_emit_diagnostics"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},

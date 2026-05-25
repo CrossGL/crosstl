@@ -201,6 +201,30 @@ def test_member_access_assignment_codegen():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_assignment_expression_associativity_codegen():
+    code = """
+    void main() {
+        a = b = c;
+        a += b = c;
+        int value = a = b;
+        int grouped = (a = b) + c;
+        int rightGrouped = a + (b = c);
+        bool condition = (a = b) ? yes : no;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "a = b = c;" in generated_code
+    assert "a += b = c;" in generated_code
+    assert "int value = a = b;" in generated_code
+    assert "int grouped = ((a = b) + c);" in generated_code
+    assert "int rightGrouped = (a + (b = c));" in generated_code
+    assert "bool condition = ((a = b) ? yes : no);" in generated_code
+
+
 def test_typed_local_array_declaration_codegen():
     code = """
     void main() {
@@ -1182,6 +1206,36 @@ def test_vulkan_bitwise_shift_precedence_codegen():
 
     assert "int value = (a & (b << c));" in generated_code
     assert "int value = ((a & b) << c);" not in generated_code
+
+
+def test_vulkan_bitwise_or_xor_and_precedence_codegen():
+    code = """
+    void main() {
+        int a = 1;
+        int b = 2;
+        int c = 3;
+        int orAnd = a | b & c;
+        int xorAnd = a ^ b & c;
+        int orXor = a | b ^ c;
+        int andEquality = a & b == c;
+        int orRelational = a | b < c;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int orAnd = (a | (b & c));" in generated_code
+    assert "int orAnd = ((a | b) & c);" not in generated_code
+    assert "int xorAnd = (a ^ (b & c));" in generated_code
+    assert "int xorAnd = ((a ^ b) & c);" not in generated_code
+    assert "int orXor = (a | (b ^ c));" in generated_code
+    assert "int orXor = ((a | b) ^ c);" not in generated_code
+    assert "int andEquality = (a & (b == c));" in generated_code
+    assert "int andEquality = ((a & b) == c);" not in generated_code
+    assert "int orRelational = (a | (b < c));" in generated_code
+    assert "int orRelational = ((a | b) < c);" not in generated_code
 
 
 def test_struct_codegen():

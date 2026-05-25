@@ -140,8 +140,9 @@ def test_binary_bitwise_and_shift_tokenization():
 
 
 def test_compound_bitwise_and_shift_assignment_tokenization():
-    tokens = tokenize_code("a &= b; a |= c; a ^= d; a <<= 1; a >>= 2;")
+    tokens = tokenize_code("a %= 3; a &= b; a |= c; a ^= d; a <<= 1; a >>= 2;")
 
+    assert ("ASSIGN_MOD", "%=") in tokens
     assert ("ASSIGN_AND", "&=") in tokens
     assert ("ASSIGN_OR", "|=") in tokens
     assert ("ASSIGN_XOR", "^=") in tokens
