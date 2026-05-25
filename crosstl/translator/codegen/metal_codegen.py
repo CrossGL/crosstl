@@ -2449,6 +2449,13 @@ class MetalCodeGen:
                 return numeric_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            if func_name == "dot" and args:
+                return (
+                    self.vector_component_type(self.expression_result_type(args[0]))
+                    or "float"
+                )
+            if func_name == "cross" and args:
+                return self.expression_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[specialized_func_name]

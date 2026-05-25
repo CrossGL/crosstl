@@ -96,6 +96,7 @@ def test_primary_graphics_examples_with_stage_local_resources_translate(
             "safe_divide(",
         ):
             assert marker not in generated
+        assert re.search(r"\bT\b", generated) is None
 
 
 @pytest.mark.parametrize(
