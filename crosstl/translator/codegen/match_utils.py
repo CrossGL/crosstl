@@ -103,7 +103,9 @@ def match_arm_condition_and_bindings(
         target_name,
     )
 
-    guard_condition = generator.generate_expression(guard) if guard is not None else None
+    guard_condition = (
+        generator.generate_expression(guard) if guard is not None else None
+    )
     if pattern_condition and guard_condition:
         return f"({pattern_condition} && ({guard_condition}))", bindings, binding_types
     return pattern_condition or guard_condition, bindings, binding_types
@@ -217,7 +219,9 @@ def lower_struct_field_pattern(
             expression_type,
             target_name,
         )
-    if isinstance(pattern, (LiteralPatternNode, WildcardPatternNode, StructPatternNode)):
+    if isinstance(
+        pattern, (LiteralPatternNode, WildcardPatternNode, StructPatternNode)
+    ):
         return lower_match_pattern(
             generator,
             pattern,
