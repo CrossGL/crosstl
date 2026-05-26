@@ -324,6 +324,7 @@ class MetalCodeGen:
         self.texture_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
+        self.structured_buffer_counter_variables = []
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
         self.cbuffer_parameter_names = {}
@@ -332,6 +333,7 @@ class MetalCodeGen:
         self.cbuffers_by_name = {}
         self.user_function_names = set()
         self.function_parameter_names = {}
+        self.function_parameter_infos = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
@@ -343,6 +345,7 @@ class MetalCodeGen:
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
@@ -368,6 +371,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
         self.current_glsl_buffer_block_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.current_unsupported_glsl_buffer_block_parameters = set()
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
@@ -678,6 +682,7 @@ class MetalCodeGen:
         self.texture_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
+        self.structured_buffer_counter_variables = []
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -696,6 +701,9 @@ class MetalCodeGen:
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
         }
+        self.function_parameter_infos = self.collect_function_parameter_infos(
+            all_functions
+        )
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
             for func in all_functions
@@ -727,6 +735,7 @@ class MetalCodeGen:
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.function_global_resource_dependencies = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
@@ -1097,6 +1106,30 @@ class MetalCodeGen:
                     (node, binding, vtype, array_size)
                 )
                 buffer_register = max(buffer_register, binding + resource_count)
+                if self.structured_buffer_requires_counter(vtype):
+                    counter_binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                    counter_name = self.structured_buffer_counter_resource_name(
+                        var_name
+                    )
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "Metal",
+                        "buffer",
+                        counter_binding,
+                        resource_count,
+                        counter_name,
+                    )
+                    self.structured_buffer_counter_variables.append(
+                        (node, counter_binding, vtype, array_size)
+                    )
+                    buffer_register = max(
+                        buffer_register, counter_binding + resource_count
+                    )
             elif vtype in [
                 "sampler1D",
                 "sampler1DArray",
@@ -1434,6 +1467,9 @@ class MetalCodeGen:
         previous_glsl_buffer_block_parameter_struct_failures = (
             self.current_glsl_buffer_block_parameter_struct_failures
         )
+        previous_structured_buffer_counter_parameters = (
+            self.current_structured_buffer_counter_parameters
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -1456,6 +1492,7 @@ class MetalCodeGen:
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
         self.current_unsupported_glsl_buffer_block_local_variables = set()
+        self.current_structured_buffer_counter_parameters = {}
         self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
@@ -1493,6 +1530,15 @@ class MetalCodeGen:
                 raw_param_type, param_type, p.name, p
             )
             params.append(f"{declaration}{param_attr}")
+            if self.structured_buffer_requires_counter(raw_param_type):
+                counter_name = self.structured_buffer_counter_parameter_name(p.name)
+                self.current_structured_buffer_counter_parameters[p.name] = counter_name
+                array_size = self.structured_buffer_parameter_array_size(
+                    raw_param_type, p
+                )
+                params.append(
+                    self.format_structured_buffer_counter_parameter(p.name, array_size)
+                )
 
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
@@ -1573,6 +1619,9 @@ class MetalCodeGen:
             )
             self.current_glsl_buffer_block_parameter_struct_failures = (
                 previous_glsl_buffer_block_parameter_struct_failures
+            )
+            self.current_structured_buffer_counter_parameters = (
+                previous_structured_buffer_counter_parameters
             )
             return code
 
@@ -1660,6 +1709,9 @@ class MetalCodeGen:
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_format_parameters = previous_image_format_parameters
+        self.current_structured_buffer_counter_parameters = (
+            previous_structured_buffer_counter_parameters
+        )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
@@ -2017,6 +2069,18 @@ class MetalCodeGen:
                     buffer_type, buffer_name, array_size
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.structured_buffer_counter_variables:
+            for (
+                buffer_variable,
+                i,
+                _buffer_type,
+                array_size,
+            ) in self.structured_buffer_counter_variables:
+                buffer_name = getattr(buffer_variable, "name", None)
+                declaration = self.format_structured_buffer_counter_parameter(
+                    buffer_name, array_size
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.glsl_buffer_block_variables:
             for (
                 buffer_variable,
@@ -2052,6 +2116,11 @@ class MetalCodeGen:
         for buffer_variable, _, _, _ in self.structured_buffer_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
+        for buffer_variable, _, _, _ in self.structured_buffer_counter_variables:
+            if getattr(buffer_variable, "name", None):
+                names.add(
+                    self.structured_buffer_counter_parameter_name(buffer_variable.name)
+                )
         for buffer_variable, _, _, _ in self.glsl_buffer_block_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
@@ -2097,6 +2166,12 @@ class MetalCodeGen:
                         buffer_type, buffer_name, array_size
                     )
                 )
+                if self.structured_buffer_requires_counter(buffer_type):
+                    resource_params.append(
+                        self.format_structured_buffer_counter_parameter(
+                            buffer_name, array_size
+                        )
+                    )
         for (
             buffer_variable,
             block,
@@ -3115,6 +3190,7 @@ class MetalCodeGen:
                 func_name,
                 expr.args,
             )
+            argument_func_name = func_name
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
@@ -3295,7 +3371,7 @@ class MetalCodeGen:
                 return f"{metal_type}({args})"
             # Standard function call
             self.validate_function_image_access_arguments(func_name, expr.args)
-            args = [self.generate_expression(arg) for arg in expr.args]
+            args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
                 args.extend(
                     self.cbuffer_parameter_name(cbuffer)
@@ -3386,15 +3462,29 @@ class MetalCodeGen:
             value = self.generate_expression(args[2])
             return f"{buffer}[{index}] = {value}"
         if func_name == "buffer_append" and len(args) >= 2:
-            return (
-                "/* unsupported Metal buffer append: requires explicit "
-                "counter buffer */"
-            )
+            buffer = self.generate_expression(args[0])
+            value = self.generate_expression(args[1])
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "/* unsupported Metal buffer append: requires append/consume "
+                    "counter buffer */"
+                )
+            index = f"atomic_fetch_add_explicit({counter}, 1u, memory_order_relaxed)"
+            return f"{buffer}[{index}] = {value}"
         if func_name == "buffer_consume" and args:
-            return (
-                "0 /* unsupported Metal buffer consume: requires explicit "
-                "counter buffer */"
+            buffer = self.generate_expression(args[0])
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "0 /* unsupported Metal buffer consume: requires append/consume "
+                    "counter buffer */"
+                )
+            index = (
+                f"(atomic_fetch_sub_explicit({counter}, 1u, "
+                "memory_order_relaxed) - 1u)"
             )
+            return f"{buffer}[{index}]"
         if func_name == "buffer_dimensions" and args:
             diagnostic = (
                 "0 /* unsupported Metal buffer dimensions: device buffers do not "
@@ -3404,6 +3494,41 @@ class MetalCodeGen:
                 target = self.generate_expression(args[1])
                 return f"{target} = {diagnostic}"
             return diagnostic
+        return None
+
+    def structured_buffer_counter_reference(self, buffer_arg):
+        counter = self.structured_buffer_counter_data_argument(buffer_arg)
+        if counter is None:
+            return None
+        return counter
+
+    def structured_buffer_counter_data_argument(self, arg):
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_name = self.expression_name(array_expr)
+            counter_parameter = self.current_structured_buffer_counter_parameters.get(
+                array_name
+            )
+            if counter_parameter is not None:
+                index = self.generate_expression(index_expr)
+                return f"{counter_parameter}[{index}]"
+            if self.global_structured_buffer_requires_counter(array_name):
+                index = self.generate_expression(index_expr)
+                counter_name = self.structured_buffer_counter_parameter_name(array_name)
+                return f"{counter_name}[{index}]"
+
+        arg_name = self.expression_name(arg)
+        counter_parameter = self.current_structured_buffer_counter_parameters.get(
+            arg_name
+        )
+        if counter_parameter is not None:
+            return counter_parameter
+
+        if self.global_structured_buffer_requires_counter(arg_name):
+            return self.structured_buffer_counter_parameter_name(arg_name)
         return None
 
     def default_sampler_expression(self):
@@ -3421,6 +3546,12 @@ class MetalCodeGen:
         return self.structured_buffer_type_name(vtype) in {
             "StructuredBuffer",
             "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
+    def structured_buffer_requires_counter(self, vtype):
+        return self.structured_buffer_type_name(vtype) in {
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
         }
@@ -3445,6 +3576,20 @@ class MetalCodeGen:
             array_size = array_size or "1"
             return f"array<{pointer_type}, {array_size}> {name}"
         return f"{pointer_type} {name}"
+
+    def structured_buffer_counter_resource_name(self, name):
+        return f"{name}Counter"
+
+    def structured_buffer_counter_parameter_name(self, name):
+        return f"{name}Counter"
+
+    def format_structured_buffer_counter_parameter(self, name, array_size=None):
+        counter_name = self.structured_buffer_counter_parameter_name(name)
+        pointer_type = "device atomic_uint*"
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{pointer_type}, {array_size}> {counter_name}"
+        return f"{pointer_type} {counter_name}"
 
     def format_glsl_buffer_block_parameter(self, block, name, array_size=None):
         address_space = "const device" if block.get("readonly") else "device"
@@ -3737,6 +3882,17 @@ class MetalCodeGen:
                 binding,
                 self.global_resource_shape(buffer_variable)[1],
                 getattr(buffer_variable, "name", "<anonymous>"),
+            )
+        for buffer_variable, binding, _, _ in self.structured_buffer_counter_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(buffer_variable)[1],
+                self.structured_buffer_counter_resource_name(
+                    getattr(buffer_variable, "name", "<anonymous>")
+                ),
             )
         for buffer_variable, binding, _, _ in self.glsl_buffer_block_variables:
             self.reserve_resource_binding_range(
@@ -4077,6 +4233,21 @@ class MetalCodeGen:
             parameters.extend(getattr(func, "parameters", getattr(func, "params", [])))
         return parameters
 
+    def collect_function_parameter_infos(self, functions):
+        parameter_infos = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            infos = []
+            for param in getattr(func, "parameters", getattr(func, "params", [])):
+                raw_type = getattr(param, "param_type", getattr(param, "vtype", None))
+                infos.append(
+                    (getattr(param, "name", None), self.type_name_string(raw_type))
+                )
+            parameter_infos[func_name] = infos
+        return parameter_infos
+
     def collect_global_resource_names(self, root):
         resource_names = set()
         for node in getattr(root, "global_variables", []) or []:
@@ -4361,6 +4532,14 @@ class MetalCodeGen:
             if getattr(buffer_variable, "name", None)
         }
 
+    def global_structured_buffer_requires_counter(self, name):
+        if not name:
+            return False
+        for buffer_variable, _, buffer_type, _ in self.structured_buffer_variables:
+            if getattr(buffer_variable, "name", None) == name:
+                return self.structured_buffer_requires_counter(buffer_type)
+        return False
+
     def global_glsl_buffer_block_names(self):
         return {
             buffer_variable.name
@@ -4417,29 +4596,49 @@ class MetalCodeGen:
             if getattr(buffer_variable, "name", None) in dependencies
         ]
 
+    def generate_function_call_arguments(self, func_name, call_args):
+        parameter_infos = self.function_parameter_infos.get(func_name, [])
+        args = []
+        for index, arg in enumerate(call_args):
+            param_type = (
+                parameter_infos[index][1] if index < len(parameter_infos) else None
+            )
+            args.append(self.generate_expression(arg))
+            if param_type is not None and self.structured_buffer_requires_counter(
+                param_type
+            ):
+                counter = self.structured_buffer_counter_data_argument(arg)
+                if counter is not None:
+                    args.append(counter)
+        return args
+
     def required_function_resource_argument_names(self, func_name):
-        return (
-            [
-                texture_variable.name
-                for texture_variable, _, _ in self.required_function_textures(func_name)
-            ]
-            + [
-                buffer_variable.name
-                for buffer_variable, _, _ in self.required_function_structured_buffers(
-                    func_name
-                )
-            ]
-            + [
-                buffer_variable.name
-                for buffer_variable, _, _ in self.required_function_glsl_buffer_blocks(
-                    func_name
-                )
-            ]
-            + [
-                sampler_variable.name
-                for sampler_variable, _ in self.required_function_samplers(func_name)
-            ]
+        names = [
+            texture_variable.name
+            for texture_variable, _, _ in self.required_function_textures(func_name)
+        ]
+        for (
+            buffer_variable,
+            buffer_type,
+            _array_size,
+        ) in self.required_function_structured_buffers(func_name):
+            buffer_name = getattr(buffer_variable, "name", None)
+            if not buffer_name:
+                continue
+            names.append(buffer_name)
+            if self.structured_buffer_requires_counter(buffer_type):
+                names.append(self.structured_buffer_counter_parameter_name(buffer_name))
+        names.extend(
+            buffer_variable.name
+            for buffer_variable, _, _ in self.required_function_glsl_buffer_blocks(
+                func_name
+            )
         )
+        names.extend(
+            sampler_variable.name
+            for sampler_variable, _ in self.required_function_samplers(func_name)
+        )
+        return names
 
     def iter_ast_nodes(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):

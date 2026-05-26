@@ -945,7 +945,7 @@ def test_readonly_structured_buffer_uses_const_device_pointer():
     assert "int v = values[tid.x];" in generated
 
 
-def test_append_consume_structured_buffers_emit_diagnostics():
+def test_append_consume_structured_buffers_use_sidecar_counters():
     code = """
     shader StructuredBufferAppendConsumeMetal {
         AppendStructuredBuffer<int> appendValues @ binding(1);
@@ -965,16 +965,66 @@ def test_append_consume_structured_buffers_emit_diagnostics():
 
     assert "device int* appendValues [[buffer(1)]]" in generated
     assert "device int* consumeValues [[buffer(2)]]" in generated
+    assert "device atomic_uint* appendValuesCounter [[buffer(3)]]" in generated
+    assert "device atomic_uint* consumeValuesCounter [[buffer(4)]]" in generated
     assert (
-        "/* unsupported Metal buffer append: requires explicit counter buffer */;"
+        "appendValues[atomic_fetch_add_explicit(appendValuesCounter, 1u, memory_order_relaxed)] = int(value);"
         in generated
     )
     assert (
-        "int consumed = 0 /* unsupported Metal buffer consume: requires explicit counter buffer */;"
+        "int consumed = consumeValues[(atomic_fetch_sub_explicit(consumeValuesCounter, 1u, memory_order_relaxed) - 1u)];"
         in generated
     )
-    assert "appendValues[0]" not in generated
-    assert "consumeValues[0]" not in generated
+    assert "unsupported Metal buffer append" not in generated
+    assert "unsupported Metal buffer consume" not in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_append_consume_structured_buffer_helpers_thread_sidecar_counters():
+    code = """
+    shader StructuredBufferAppendConsumeHelpersMetal {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        void pushValue(AppendStructuredBuffer<int> values, uint value) {
+            buffer_append(values, int(value));
+        }
+
+        int popValue(ConsumeStructuredBuffer<int> values) {
+            return buffer_consume(values);
+        }
+
+        compute {
+            void main(uint value) {
+                pushValue(appendValues, value);
+                int consumed = popValue(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "void pushValue(device int* values, device atomic_uint* valuesCounter, uint value)"
+        in generated
+    )
+    assert (
+        "values[atomic_fetch_add_explicit(valuesCounter, 1u, memory_order_relaxed)] = int(value);"
+        in generated
+    )
+    assert (
+        "int popValue(device int* values, device atomic_uint* valuesCounter)"
+        in generated
+    )
+    assert (
+        "return values[(atomic_fetch_sub_explicit(valuesCounter, 1u, memory_order_relaxed) - 1u)];"
+        in generated
+    )
+    assert "pushValue(appendValues, appendValuesCounter, value);" in generated
+    assert "int consumed = popValue(consumeValues, consumeValuesCounter);" in generated
     assert "buffer_append" not in generated
     assert "buffer_consume" not in generated
 
@@ -1005,6 +1055,47 @@ def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
         in generated
     )
     assert "buffers[index][tid.x] = v + 1;" in generated
+
+
+def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
+    code = """
+    shader StructuredBufferAppendArrayMetal {
+        AppendStructuredBuffer<int> appendValues[2] @ binding(1);
+
+        void pushOne(AppendStructuredBuffer<int> values[2], uint which, uint value) {
+            buffer_append(values[which], int(value));
+        }
+
+        compute {
+            void main(uint index, uint value) {
+                buffer_append(appendValues[index], int(value));
+                pushOne(appendValues, index, value);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "array<device int*, 2> appendValues [[buffer(1)]]" in generated
+    assert (
+        "array<device atomic_uint*, 2> appendValuesCounter [[buffer(3)]]" in generated
+    )
+    assert (
+        "void pushOne(array<device int*, 2> values, array<device atomic_uint*, 2> valuesCounter, uint which, uint value)"
+        in generated
+    )
+    assert (
+        "appendValues[index][atomic_fetch_add_explicit(appendValuesCounter[index], 1u, memory_order_relaxed)] = int(value);"
+        in generated
+    )
+    assert (
+        "values[which][atomic_fetch_add_explicit(valuesCounter[which], 1u, memory_order_relaxed)] = int(value);"
+        in generated
+    )
+    assert "pushOne(appendValues, appendValuesCounter, index, value);" in generated
+    assert "buffer_append" not in generated
 
 
 def test_metal_structured_buffer_array_binding_overlap_raises():
