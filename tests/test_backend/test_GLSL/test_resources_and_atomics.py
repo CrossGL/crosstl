@@ -1587,6 +1587,120 @@ def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets():
     assert "nestedBlock.inner.mask = bvec3(mask.y, mask.x, true);" in glsl
 
 
+def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets():
+    crossgl = """
+    shader main {
+        struct ArrayBlockData {
+            uint id;
+            vec3 normal;
+            bvec2 flags;
+        };
+
+        struct NestedArrayBlock {
+            ArrayBlockData fixedItems[2];
+            uint count;
+            ArrayBlockData items[];
+        };
+
+        NestedArrayBlock nestedArrayBlock @glsl_buffer_block(std430) @binding(57);
+
+        float readNestedArray(NestedArrayBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.items[i].normal.x + float(localBlock.fixedItems[1].id);
+        }
+
+        compute {
+            void main() {
+                uint i = nestedArrayBlock.count;
+                vec3 normal = nestedArrayBlock.fixedItems[1].normal;
+                bvec2 flags = nestedArrayBlock.items[i].flags;
+                nestedArrayBlock.fixedItems[0].id = nestedArrayBlock.items[i].id;
+                nestedArrayBlock.items[i].normal = normal;
+                nestedArrayBlock.items[i].flags = bvec2(flags.y, true);
+                float value = readNestedArray(nestedArrayBlock, i);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer nestedArrayBlock : register(u57);" in hlsl
+    assert "float readNestedArray(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert (
+        "return (asfloat(localBlock.Load3((112 + i * 48 + 16))).x + "
+        "float(localBlock.Load(48)));" in hlsl
+    )
+    assert "uint i = nestedArrayBlock.Load(96);" in hlsl
+    assert "float3 normal = asfloat(nestedArrayBlock.Load3(64));" in hlsl
+    assert (
+        "bool2 flags = bool2((nestedArrayBlock.Load((112 + i * 48 + 32)) != 0u), "
+        "(nestedArrayBlock.Load((112 + i * 48 + 32 + 4)) != 0u));" in hlsl
+    )
+    assert "nestedArrayBlock.Store(0, nestedArrayBlock.Load((112 + i * 48)));" in hlsl
+    assert "nestedArrayBlock.Store3((112 + i * 48 + 16), asuint(normal));" in hlsl
+    assert "bool2 __crossgl_bool_store_0 = bool2(flags.y, true);" in hlsl
+    assert (
+        "nestedArrayBlock.Store2((112 + i * 48 + 32), "
+        "uint2((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u)));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert (
+        "kernel void kernel_main(device uchar* nestedArrayBlock [[buffer(57)]])"
+        in metal
+    )
+    assert "float readNestedArray(device uchar* localBlock, uint i)" in metal
+    assert (
+        "float((*reinterpret_cast<const device uint*>(localBlock + 48)))" in metal
+    )
+    assert (
+        "uint i = (*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + 96));" in metal
+    )
+    assert (
+        "float3 normal = float3((*reinterpret_cast<const device float*>"
+        "(nestedArrayBlock + 64)), "
+        "(*reinterpret_cast<const device float*>(nestedArrayBlock + 68)), "
+        "(*reinterpret_cast<const device float*>(nestedArrayBlock + 72)));" in metal
+    )
+    assert (
+        "bool2 flags = bool2(((*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + (112 + i * 48 + 32))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + (112 + i * 48 + 32 + 4))) != 0u));" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(nestedArrayBlock + 0)) = "
+        "(*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + (112 + i * 48)));" in metal
+    )
+    assert "float3 __crossgl_buffer_store_0 = normal;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>"
+        "(nestedArrayBlock + (112 + i * 48 + 16 + 8))) = "
+        "__crossgl_buffer_store_0.z;" in metal
+    )
+    assert "bool2 __crossgl_buffer_store_1 = bool2(flags.y, true);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>"
+        "(nestedArrayBlock + (112 + i * 48 + 32 + 4))) = "
+        "((__crossgl_buffer_store_1.y) ? 1u : 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 57) buffer NestedArrayBlock" in glsl
+    assert "ArrayBlockData fixedItems[2];" in glsl
+    assert "ArrayBlockData items[];" in glsl
+    assert "nestedArrayBlock.items[i].normal = normal;" in glsl
+    assert "nestedArrayBlock.items[i].flags = bvec2(flags.y, true);" in glsl
+
+
 def test_codegen_mixed_ssbo_metal_store_parenthesizes_binary_ternary_operand():
     crossgl = """
     shader main {

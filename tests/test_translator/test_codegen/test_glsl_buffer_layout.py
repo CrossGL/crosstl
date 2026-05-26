@@ -386,6 +386,53 @@ def test_collect_lowered_glsl_buffer_blocks_lays_out_nested_struct_members():
     assert data["runtime_array"] is True
 
 
+def test_collect_lowered_glsl_buffer_blocks_lays_out_nested_struct_arrays():
+    item = StructNode(
+        "Item",
+        [
+            member("id", primitive("uint")),
+            member("normal", primitive("vec3")),
+            member("flags", primitive("bvec2")),
+        ],
+    )
+    struct = block_struct(
+        member("fixedItems", ArrayType(primitive("Item"), size=2)),
+        member("count", primitive("uint")),
+        member("items", ArrayType(primitive("Item"), size=None)),
+    )
+
+    blocks, var_failures, struct_failures = collect_for(
+        struct,
+        structs_by_name={"Item": item},
+    )
+
+    assert not var_failures
+    assert not struct_failures
+    block = blocks["block"]
+    assert block["runtime_array"] == "items"
+
+    fixed_items = block["members"]["fixedItems"]
+    assert fixed_items["offset"] == 0
+    assert fixed_items["stride"] == 48
+    assert fixed_items["array_count"] == 2
+    assert fixed_items["align"] == 16
+    assert fixed_items["size"] == 48
+    assert fixed_items["members"]["id"]["offset"] == 0
+    assert fixed_items["members"]["normal"]["offset"] == 16
+    assert fixed_items["members"]["flags"]["offset"] == 32
+
+    count = block["members"]["count"]
+    assert count["offset"] == 96
+
+    items = block["members"]["items"]
+    assert items["offset"] == 112
+    assert items["stride"] == 48
+    assert items["runtime_array"] is True
+    assert items["members"]["id"]["offset"] == 0
+    assert items["members"]["normal"]["offset"] == 16
+    assert items["members"]["flags"]["offset"] == 32
+
+
 def test_collect_lowered_glsl_buffer_blocks_tracks_readonly_qualifier():
     struct = block_struct(
         member("count", primitive("uint")),
