@@ -1251,6 +1251,118 @@ def test_global_resource_layout_attributes_are_preserved():
     assert source_sampler.attributes[0].arguments[0].value == 3
 
 
+def test_translation_unit_resource_layout_attributes_are_preserved():
+    code = """
+    layout(set = 1, binding = 4) uniform sampler2D sourceTexture;
+
+    shader TranslationUnitResourceLayout {
+        fragment {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    source_texture = ast.global_variables[0]
+
+    assert ast.name == "TranslationUnitResourceLayout"
+    assert source_texture.name == "sourceTexture"
+    assert source_texture.qualifiers == ["uniform"]
+    assert [attribute.name for attribute in source_texture.attributes] == [
+        "set",
+        "binding",
+    ]
+    assert [
+        attribute.arguments[0].value for attribute in source_texture.attributes
+    ] == [
+        1,
+        4,
+    ]
+
+
+def test_stage_interface_layout_qualifiers_are_preserved_on_variables():
+    code = """
+    shader StageInterfaceLayouts {
+        vertex {
+            layout(location = 0) flat in vec3 position;
+            layout(location = 1) noperspective centroid out vec2 texCoord;
+            threadgroup float scratch[64];
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    vertex_stage = ast.stages[ShaderStage.VERTEX]
+    position, tex_coord, scratch = vertex_stage.local_variables
+
+    assert position.name == "position"
+    assert position.qualifiers == ["flat", "in"]
+    assert [attribute.name for attribute in position.attributes] == ["location"]
+    assert position.attributes[0].arguments[0].value == 0
+
+    assert tex_coord.name == "texCoord"
+    assert tex_coord.qualifiers == ["noperspective", "centroid", "out"]
+    assert [attribute.name for attribute in tex_coord.attributes] == ["location"]
+    assert tex_coord.attributes[0].arguments[0].value == 1
+
+    assert scratch.name == "scratch"
+    assert scratch.qualifiers == ["threadgroup"]
+    assert isinstance(scratch.var_type, ArrayType)
+    assert scratch.var_type.size.value == 64
+
+
+def test_resource_layout_preserves_access_and_memory_qualifiers():
+    code = """
+    shader ResourceQualifierLayouts {
+        layout(binding = 0, r32ui) coherent readonly uniform uimage2D counters;
+        layout(binding = 1, rgba32f) writeonly uniform image2D outImage;
+
+        compute {
+            layout(std430, binding = 2) readonly buffer float values[];
+            device float deviceValue;
+            constant int lookup;
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    counters, out_image = ast.global_variables
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+    values, device_value, lookup = compute_stage.local_variables
+
+    assert counters.name == "counters"
+    assert counters.qualifiers == ["coherent", "readonly", "uniform"]
+    assert [attribute.name for attribute in counters.attributes] == [
+        "binding",
+        "r32ui",
+    ]
+
+    assert out_image.name == "outImage"
+    assert out_image.qualifiers == ["writeonly", "uniform"]
+    assert [attribute.name for attribute in out_image.attributes] == [
+        "binding",
+        "rgba32f",
+    ]
+
+    assert values.name == "values"
+    assert values.qualifiers == ["readonly", "buffer"]
+    assert [attribute.name for attribute in values.attributes] == [
+        "std430",
+        "binding",
+    ]
+    assert isinstance(values.var_type, ArrayType)
+
+    assert device_value.qualifiers == ["device"]
+    assert lookup.qualifiers == ["constant"]
+
+
 def test_stage_layout_qualifiers_preserve_geometry_and_tessellation_metadata():
     code = """
     shader StageLayouts {
@@ -1484,6 +1596,43 @@ def test_hlsl_parameter_qualifiers_parse():
     assert patch_param.param_type.name == "OutputPatch"
     assert patch_param.param_type.generic_args[0].name == "GSOutput"
     assert patch_param.param_type.generic_args[1].value == 3
+
+
+def test_backend_parameter_address_and_access_qualifiers_parse():
+    code = """
+    shader BackendParameterQualifiers {
+        struct Payload {
+            float value;
+        };
+
+        void consume(
+            threadgroup Payload* payload @payload,
+            device float values[],
+            constant int count,
+            readonly image2D source @r32f,
+            writeonly image2D target @rgba32f
+        ) { }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    payload, values, count, source, target = ast.functions[0].parameters
+
+    assert payload.qualifiers == ["threadgroup"]
+    assert payload.name == "payload"
+    assert payload.attributes[0].name == "payload"
+
+    assert values.qualifiers == ["device"]
+    assert isinstance(values.param_type, ArrayType)
+
+    assert count.qualifiers == ["constant"]
+    assert count.param_type.name == "int"
+
+    assert source.qualifiers == ["readonly"]
+    assert source.attributes[0].name == "r32f"
+
+    assert target.qualifiers == ["writeonly"]
+    assert target.attributes[0].name == "rgba32f"
 
 
 def test_shader_generic_struct_wrapper_parses_without_leaking_members(capsys):
@@ -1913,6 +2062,33 @@ def test_global_io_location_attributes_parse():
     assert isinstance(output_value.attributes[1].arguments[0], LiteralNode)
     assert output_value.attributes[1].arguments[0].value == 5
     assert output_value.attributes[2].arguments[0].value == 1
+
+
+def test_struct_member_layout_attributes_parse_with_post_attributes():
+    code = """
+    shader InterfaceStructLayouts {
+        struct VSInput {
+            layout(location = 0) vec3 position @flat;
+            layout(location = 1, component = 2) vec2 uv @centroid;
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    position, uv = ast.structs[0].members
+
+    assert [attribute.name for attribute in position.attributes] == [
+        "location",
+        "flat",
+    ]
+    assert position.attributes[0].arguments[0].value == 0
+
+    assert [attribute.name for attribute in uv.attributes] == [
+        "location",
+        "component",
+        "centroid",
+    ]
+    assert [attribute.arguments[0].value for attribute in uv.attributes[:2]] == [1, 2]
 
 
 def test_precise_variable_attribute_parse():

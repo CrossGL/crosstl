@@ -148,6 +148,8 @@ VARIABLE_QUALIFIER_TOKEN_TYPES = frozenset(
     }
 )
 
+PARAMETER_QUALIFIER_TOKEN_TYPES = VARIABLE_QUALIFIER_TOKEN_TYPES - {"MUT"}
+
 VARIABLE_QUALIFIER_NAMES = frozenset(
     {
         "out",
@@ -185,6 +187,16 @@ VARIABLE_QUALIFIER_NAMES = frozenset(
         "linear_noperspective",
         "linear_noperspective_centroid",
         "linear_sample",
+    }
+)
+
+PARAMETER_PRIMITIVE_QUALIFIER_NAMES = frozenset(
+    {
+        "point",
+        "line",
+        "triangle",
+        "lineadj",
+        "triangleadj",
     }
 )
 
@@ -860,15 +872,19 @@ class Parser:
                 self.skip_unknown_token()
             return None
 
+        leading_attributes = []
+        if self.current_token[0] == "LAYOUT":
+            leading_attributes = self.parse_layout_attributes()
+
         if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "COLON":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("COLON")
             member_type = self.parse_type()
 
-            attributes = []
+            attributes = list(leading_attributes)
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-                attributes = self.parse_attributes()
+                attributes.extend(self.parse_attributes())
 
             if self.current_token[0] not in ["SEMICOLON", "COMMA", "RBRACE"]:
                 while self.current_token[0] not in [
@@ -917,9 +933,9 @@ class Parser:
             self.eat("RBRACKET")
             member_type = ArrayType(member_type, size)
 
-        attributes = []
+        attributes = list(leading_attributes)
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes = self.parse_attributes()
+            attributes.extend(self.parse_attributes())
 
         if self.current_token[0] != "SEMICOLON":
             # Skip malformed member
@@ -1172,31 +1188,21 @@ class Parser:
         )
 
     def parse_parameter_qualifiers(self):
-        """Parse HLSL-style parameter qualifiers when present."""
+        """Parse backend-neutral parameter qualifiers when present."""
         qualifiers = []
-        direction_qualifiers = {"const", "in", "out", "inout"}
-        primitive_qualifiers = {
-            "point",
-            "line",
-            "triangle",
-            "lineadj",
-            "triangleadj",
-        }
 
         while True:
             token_type, token_value = self.current_token
             normalized = str(token_value).lower() if token_value else ""
 
-            if token_type in {"CONST", "IN"} or (
-                token_type == "IDENTIFIER" and normalized in direction_qualifiers
-            ):
+            if self.current_token_is_parameter_qualifier():
                 qualifiers.append(normalized)
                 self.eat(token_type)
                 continue
 
             if (
                 token_type == "IDENTIFIER"
-                and normalized in primitive_qualifiers
+                and normalized in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
                 and self.current_token_starts_qualified_parameter_type()
             ):
                 qualifiers.append(normalized)
@@ -1328,6 +1334,16 @@ class Parser:
             return True
         return (
             token_type == "IDENTIFIER" and str(token_value) in VARIABLE_QUALIFIER_NAMES
+        )
+
+    def current_token_is_parameter_qualifier(self):
+        """Return whether the current token is a parameter qualifier."""
+        token_type, token_value = self.current_token
+        if token_type in PARAMETER_QUALIFIER_TOKEN_TYPES:
+            return True
+        return (
+            token_type == "IDENTIFIER"
+            and str(token_value).lower() in VARIABLE_QUALIFIER_NAMES
         )
 
     def is_variable_declaration(self):
@@ -3317,6 +3333,13 @@ class Parser:
 
         if self.is_cbuffer_declaration():
             return self.parse_cbuffer_as_struct()
+
+        if self.current_token[0] == "LAYOUT":
+            attributes = self.parse_layout_attributes()
+            if self.is_variable_declaration():
+                return self.parse_variable_declaration(attributes)
+            self.skip_unknown_token()
+            return None
 
         if self.current_token[0] in [
             "VERTEX",

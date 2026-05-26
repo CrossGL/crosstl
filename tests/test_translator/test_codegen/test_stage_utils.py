@@ -62,6 +62,20 @@ class DummyLayoutArgument:
         self.name = name
 
 
+class DummyBinaryLayoutArgument:
+    def __init__(self, left, op, right):
+        self.left = left
+        self.op = op
+        self.right = right
+
+
+class DummyUnaryLayoutArgument:
+    def __init__(self, op, operand, is_postfix=False):
+        self.op = op
+        self.operand = operand
+        self.is_postfix = is_postfix
+
+
 class DummyStageNode:
     def __init__(
         self,
@@ -250,6 +264,49 @@ def test_stage_layout_entry_value_handles_identifier_arguments():
     )
 
     assert stage_layout_entry_value(stage, "local_size_x", "in") == "GROUP_SIZE"
+
+
+def test_stage_layout_entry_value_formats_expression_arguments():
+    stage = DummyStageNode(
+        layout_qualifiers=[
+            DummyLayout(
+                "in",
+                [
+                    DummyLayoutEntry(
+                        "local_size_x",
+                        [
+                            DummyBinaryLayoutArgument(
+                                DummyLayoutArgument(name="GROUP_SIZE"),
+                                "*",
+                                DummyUnaryLayoutArgument(
+                                    "-",
+                                    DummyLayoutArgument(value=2),
+                                ),
+                            )
+                        ],
+                    )
+                ],
+            ),
+            DummyLayout(
+                "out",
+                [
+                    DummyLayoutEntry(
+                        "stream",
+                        [
+                            DummyUnaryLayoutArgument(
+                                "++",
+                                DummyLayoutArgument(name="streamIndex"),
+                                is_postfix=True,
+                            )
+                        ],
+                    )
+                ],
+            ),
+        ]
+    )
+
+    assert stage_layout_entry_value(stage, "local_size_x", "in") == "GROUP_SIZE * -2"
+    assert stage_layout_entry_value(stage, "stream", "out") == "streamIndex++"
 
 
 def test_deduplicate_named_declarations_reuses_matching_stage_resources():

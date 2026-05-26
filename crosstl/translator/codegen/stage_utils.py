@@ -206,6 +206,16 @@ def normalize_layout_entry_name(name):
 
 def layout_argument_value(argument):
     """Return a simple value from a layout argument expression."""
+    op = getattr(argument, "op", None)
+    if op is not None and hasattr(argument, "left") and hasattr(argument, "right"):
+        left = layout_argument_value(argument.left)
+        right = layout_argument_value(argument.right)
+        return f"{left} {op} {right}"
+    if op is not None and hasattr(argument, "operand"):
+        operand = layout_argument_value(argument.operand)
+        if getattr(argument, "is_postfix", False):
+            return f"{operand}{op}"
+        return f"{op}{operand}"
     value = getattr(argument, "value", None)
     if value is not None:
         return str(value)
