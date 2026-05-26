@@ -1333,6 +1333,90 @@ shader RGImageValidation {
 """
 
 
+INTEGER_IMAGE_ATOMICS_COMPUTE_SHADER = """
+shader IntegerImageAtomicsValidation {
+    uimage2D counters @r32ui;
+    iimage2D signedCounters @r32i;
+    uimage3D volumeCounters @r32ui;
+    iimage2DArray layerCounters @r32i;
+
+    uint touchUnsigned(
+        uimage2D image @r32ui,
+        ivec2 pixel,
+        uint value,
+        uint replacement
+    ) {
+        uint added = imageAtomicAdd(image, pixel, value);
+        uint minValue = imageAtomicMin(image, pixel, value);
+        uint maxValue = imageAtomicMax(image, pixel, value);
+        uint andValue = imageAtomicAnd(image, pixel, value);
+        uint orValue = imageAtomicOr(image, pixel, value);
+        uint xorValue = imageAtomicXor(image, pixel, value);
+        uint exchanged = imageAtomicExchange(image, pixel, replacement);
+        uint swapped = imageAtomicCompSwap(image, pixel, exchanged, value);
+        return added
+            + minValue
+            + maxValue
+            + andValue
+            + orValue
+            + xorValue
+            + exchanged
+            + swapped;
+    }
+
+    int touchSigned(
+        iimage2D image @r32i,
+        ivec2 pixel,
+        int value,
+        int replacement
+    ) {
+        int added = imageAtomicAdd(image, pixel, value);
+        int minValue = imageAtomicMin(image, pixel, value);
+        int maxValue = imageAtomicMax(image, pixel, value);
+        int exchanged = imageAtomicExchange(image, pixel, replacement);
+        int swapped = imageAtomicCompSwap(image, pixel, exchanged, value);
+        return added + minValue + maxValue + exchanged + swapped;
+    }
+
+    uint touchVolume(
+        uimage3D image @r32ui,
+        ivec3 voxel,
+        uint value,
+        uint replacement
+    ) {
+        uint added = imageAtomicAdd(image, voxel, value);
+        uint swapped = imageAtomicCompSwap(image, voxel, added, replacement);
+        return added + swapped;
+    }
+
+    int touchLayers(
+        iimage2DArray image @r32i,
+        ivec3 pixelLayer,
+        int value,
+        int replacement
+    ) {
+        int minValue = imageAtomicMin(image, pixelLayer, value);
+        int swapped = imageAtomicCompSwap(image, pixelLayer, minValue, replacement);
+        return minValue + swapped;
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(1, 2);
+            ivec3 voxel = ivec3(1, 2, 3);
+            ivec3 pixelLayer = ivec3(4, 5, 0);
+            uint unsignedTotal = touchUnsigned(counters, pixel, 3u, 4u);
+            int signedTotal = touchSigned(signedCounters, pixel, -3, 4);
+            uint volumeTotal = touchVolume(volumeCounters, voxel, 5u, 6u);
+            int layerTotal = touchLayers(layerCounters, pixelLayer, -5, 6);
+            imageStore(counters, pixel, unsignedTotal + volumeTotal);
+            imageStore(signedCounters, pixel, signedTotal + layerTotal);
+        }
+    }
+}
+"""
+
+
 RG_IMAGE_ARRAY_COMPUTE_SHADER = """
 shader RGImageArrayValidation {
     image2D rgFloatImages @rg32f[3];
@@ -2422,6 +2506,23 @@ def test_generated_metal_compute_rg_image_compiles_with_metal(tmp_path):
     )
 
 
+def test_generated_metal_compute_integer_image_atomics_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_integer_image_atomics.metal"
+    output = tmp_path / "compute_integer_image_atomics.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(INTEGER_IMAGE_ATOMICS_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
 def test_generated_metal_compute_rg_image_array_compiles_with_metal(tmp_path):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
@@ -3092,6 +3193,22 @@ def test_generated_glsl_compute_rg_image_validates_with_glslang(tmp_path):
     run_validator([glslang, "-S", "comp", str(source)])
 
 
+def test_generated_glsl_compute_integer_image_atomics_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "compute_integer_image_atomics.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(INTEGER_IMAGE_ATOMICS_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
 def test_generated_glsl_compute_rg_image_array_validates_with_glslang(tmp_path):
     glslang = shutil.which("glslangValidator")
     if glslang is None:
@@ -3744,6 +3861,23 @@ def test_generated_hlsl_compute_rg_image_validates_with_dxc(tmp_path):
     output = tmp_path / "compute_rg_image.dxil"
     code = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(RG_IMAGE_COMPUTE_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_compute_integer_image_atomics_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "compute_integer_image_atomics.hlsl"
+    output = tmp_path / "compute_integer_image_atomics.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(INTEGER_IMAGE_ATOMICS_COMPUTE_SHADER), "compute"
     )
     source.write_text(code, encoding="utf-8")
 
