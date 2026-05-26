@@ -101,6 +101,110 @@ def test_struct():
         pytest.fail("Mojo struct codegen not implemented.")
 
 
+def test_cbuffer_type_nodes_emit_mojo_storage_types():
+    code = """
+    cbuffer Camera {
+        mat4 viewProj;
+        vec4 tint;
+        float weights[4];
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var viewProj: CrossGLMatrixF32C4R4" in generated_code
+    assert "var tint: SIMD[DType.float32, 4]" in generated_code
+    assert "var weights: InlineArray[Float32, 4]" in generated_code
+    assert "MatrixType(" not in generated_code
+    assert "VectorType(" not in generated_code
+    assert "ArrayType(" not in generated_code
+    assert "PrimitiveType(" not in generated_code
+
+
+def test_cbuffer_type_nodes_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    cbuffer Camera {
+        mat4 viewProj;
+        vec4 tint;
+        float weights[4];
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "cbuffer_type_nodes.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_unit_enums_lower_to_mojo_aliases():
+    code = """
+    enum Mode {
+        Add,
+        Multiply = 4,
+        Screen
+    };
+
+    int choose(Mode mode) {
+        if (mode == Mode::Multiply) {
+            return int(Mode::Screen);
+        }
+        return int(Mode::Add);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "alias Mode = Int32" in generated_code
+    assert "alias Mode_Add = 0" in generated_code
+    assert "alias Mode_Multiply = 4" in generated_code
+    assert "alias Mode_Screen = 5" in generated_code
+    assert "fn choose(mode: Mode) -> Int32:" in generated_code
+    assert "if (mode == Mode_Multiply):" in generated_code
+    assert "return int(Mode_Screen)" in generated_code
+    assert "Mode::" not in generated_code
+
+
+def test_unit_enums_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum Mode {
+        Add,
+        Multiply = 4,
+        Screen
+    };
+
+    int choose(Mode mode) {
+        if (mode == Mode::Multiply) {
+            return int(Mode::Screen);
+        }
+        return int(Mode::Add);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    print(choose(Mode_Multiply))\n"
+
+    source_path = tmp_path / "unit_enums.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "5" in result.stdout
+
+
 def test_basic_shader():
     code = """
     shader main {

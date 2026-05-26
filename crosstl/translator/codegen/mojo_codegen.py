@@ -13,6 +13,7 @@ from ..ast import (
     CbufferNode,
     ContinueNode,
     DoWhileNode,
+    EnumNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
@@ -146,6 +147,10 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.variable_types = {}
+        self.enum_types = {}
+        self.enum_variant_aliases = {}
+        self.enum_variant_values = {}
+        self.current_enum_value_aliases = {}
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -254,6 +259,10 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.variable_types = {}
+        self.enum_types = {}
+        self.enum_variant_aliases = {}
+        self.enum_variant_values = {}
+        self.current_enum_value_aliases = {}
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -280,6 +289,9 @@ class MojoCodeGen:
 
         structs = getattr(ast, "structs", [])
         for node in structs:
+            if isinstance(node, EnumNode):
+                code += self.generate_enum(node)
+                continue
             if isinstance(node, StructNode):
                 code += self.generate_struct(node)
 
@@ -440,6 +452,10 @@ class MojoCodeGen:
         if var_type is not None:
             return self.convert_type_node_to_string(var_type)
 
+        member_type = getattr(node, "member_type", None)
+        if member_type is not None:
+            return self.convert_type_node_to_string(member_type)
+
         vtype = getattr(node, "vtype", None)
         if vtype is None or vtype == "":
             return None
@@ -479,6 +495,149 @@ class MojoCodeGen:
             if hasattr(attr, "name") and attr.name in semantic_attrs:
                 return attr.name
         return None
+
+    def generate_enum(self, node):
+        """Lower a unit/numeric CrossGL enum to Mojo type and value aliases."""
+        enum_type = self.map_enum_underlying_type(
+            getattr(node, "underlying_type", None)
+        )
+        self.enum_types[node.name] = enum_type
+
+        code = f"alias {node.name} = {enum_type}\n"
+        next_value = 0
+        local_aliases = {}
+        local_values = {}
+        for variant in getattr(node, "variants", []) or []:
+            payload = getattr(variant, "data", None) or getattr(variant, "fields", None)
+            if payload:
+                continue
+
+            alias_name = self.enum_variant_alias_name(node.name, variant.name)
+            value = getattr(variant, "value", None)
+            if value is None:
+                value_text = str(next_value)
+                resolved_value = next_value
+            else:
+                value_text = self.generate_enum_value_expression(value, local_aliases)
+                resolved_value = self.evaluate_enum_integer_value(value, local_values)
+
+            self.enum_variant_aliases[f"{node.name}::{variant.name}"] = alias_name
+            self.enum_variant_aliases[f"{node.name}.{variant.name}"] = alias_name
+            self.enum_variant_values[f"{node.name}::{variant.name}"] = resolved_value
+            self.enum_variant_values[f"{node.name}.{variant.name}"] = resolved_value
+            local_aliases[variant.name] = alias_name
+            local_values[variant.name] = resolved_value
+            code += f"alias {alias_name} = {value_text}\n"
+
+            literal_value = resolved_value
+            if literal_value is None:
+                literal_value = self.literal_int_value(value_text)
+            next_value = (
+                literal_value + 1 if literal_value is not None else next_value + 1
+            )
+
+        return code + "\n"
+
+    def generate_enum_value_expression(self, value, local_aliases):
+        previous_aliases = self.current_enum_value_aliases
+        self.current_enum_value_aliases = local_aliases
+        try:
+            return self.generate_expression(value)
+        finally:
+            self.current_enum_value_aliases = previous_aliases
+
+    def evaluate_enum_integer_value(self, expr, local_values):
+        if expr is None:
+            return None
+        if isinstance(expr, bool):
+            return int(expr)
+        if isinstance(expr, int):
+            return expr
+        if hasattr(expr, "value"):
+            try:
+                return int(expr.value)
+            except (TypeError, ValueError):
+                return None
+        if hasattr(expr, "name") and not isinstance(expr, VariableNode):
+            return local_values.get(expr.name)
+        if isinstance(expr, MemberAccessNode):
+            reference = self.enum_member_reference_name(expr)
+            if reference is None:
+                return None
+            return self.enum_variant_values.get(reference)
+        if isinstance(expr, UnaryOpNode):
+            operand = self.evaluate_enum_integer_value(expr.operand, local_values)
+            if operand is None:
+                return None
+            op = self.map_operator(expr.op)
+            if op == "+":
+                return operand
+            if op == "-":
+                return -operand
+            if op == "~":
+                return ~operand
+            return None
+        if isinstance(expr, BinaryOpNode):
+            left = self.evaluate_enum_integer_value(expr.left, local_values)
+            right = self.evaluate_enum_integer_value(expr.right, local_values)
+            if left is None or right is None:
+                return None
+            op = self.map_operator(expr.op)
+            try:
+                return self.evaluate_enum_binary_op(left, op, right)
+            except ZeroDivisionError:
+                return None
+        return None
+
+    def evaluate_enum_binary_op(self, left, op, right):
+        if op == "+":
+            return left + right
+        if op == "-":
+            return left - right
+        if op == "*":
+            return left * right
+        if op == "/":
+            return left // right
+        if op == "%":
+            return left % right
+        if op == "<<":
+            return left << right
+        if op == ">>":
+            return left >> right
+        if op == "|":
+            return left | right
+        if op == "&":
+            return left & right
+        if op == "^":
+            return left ^ right
+        return None
+
+    def enum_member_reference_name(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        obj = getattr(expr, "object", None)
+        obj_name = getattr(obj, "name", obj if isinstance(obj, str) else None)
+        if obj_name is None:
+            return None
+        return f"{obj_name}.{expr.member}"
+
+    def map_enum_underlying_type(self, underlying_type):
+        if underlying_type is None:
+            return "Int32"
+        mapped = self.map_type(self.convert_type_node_to_string(underlying_type))
+        if mapped in {"Int", "Int32", "Int64", "UInt32", "UInt64"}:
+            return mapped
+        return "Int32"
+
+    def enum_variant_alias_name(self, enum_name, variant_name):
+        return f"{enum_name}_{variant_name}"
+
+    def map_enum_variant_reference(self, name):
+        if not isinstance(name, str):
+            return name
+        if name in self.current_enum_value_aliases:
+            return self.current_enum_value_aliases[name]
+        return self.enum_variant_aliases.get(name, name)
 
     def generate_struct(self, node):
         code = f"@value\nstruct {node.name}:\n"
@@ -540,14 +699,8 @@ class MojoCodeGen:
                             f"{self.array_storage_type(element_type, size)}\n"
                         )
                     else:
-                        # Handle both old and new AST member structures
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(str(member.member_type))
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        code += f"    var {member.name}: {member_type}\n"
+                        member_type = self.variable_declared_type(member) or "float"
+                        code += f"    var {member.name}: {self.map_type(member_type)}\n"
                 code += "\n"
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
                 code += f"@value\nstruct {node.name}:\n"
@@ -562,14 +715,8 @@ class MojoCodeGen:
                             f"{self.array_storage_type(element_type, size)}\n"
                         )
                     else:
-                        # Handle both old and new AST member structures
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(str(member.member_type))
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        code += f"    var {member.name}: {member_type}\n"
+                        member_type = self.variable_declared_type(member) or "float"
+                        code += f"    var {member.name}: {self.map_type(member_type)}\n"
                 code += "\n"
         return code
 
@@ -1456,7 +1603,7 @@ class MojoCodeGen:
     def generate_expression(self, expr):
         """Render a CrossGL expression as Mojo expression syntax."""
         if isinstance(expr, str):
-            return expr
+            return self.map_enum_variant_reference(expr)
         elif isinstance(expr, (int, float, bool)):
             return self.format_literal(expr)
         elif isinstance(expr, VariableNode):
@@ -1548,6 +1695,9 @@ class MojoCodeGen:
             return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
+            enum_variant = self.map_enum_variant_reference(f"{obj}.{expr.member}")
+            if enum_variant != f"{obj}.{expr.member}":
+                return enum_variant
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
                 obj_type = self.expression_result_type(expr.object)
@@ -1575,7 +1725,7 @@ class MojoCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return getattr(expr, "name", str(expr))
+            return self.map_enum_variant_reference(getattr(expr, "name", str(expr)))
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
         ):
@@ -2808,6 +2958,9 @@ class MojoCodeGen:
             dtype, columns, rows = MOJO_MATRIX_TYPES[vtype_str]
             self.required_matrix_types.add((dtype, columns, rows))
             return self.matrix_type_name(dtype, columns, rows)
+
+        if vtype_str in self.enum_types:
+            return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
 
