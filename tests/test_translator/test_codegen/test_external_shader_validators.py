@@ -723,8 +723,12 @@ def test_mixed_glsl_ssbo_bool_vector_metal_output_compiles_with_xcrun_metal(
     )
     assert "device uchar* boolVectorBlock [[buffer(27)]]" in code
     assert "reinterpret_cast<const device uint*>(boolVectorBlock + 0)" in code
-    assert "reinterpret_cast<const device uint*>(boolVectorBlock + (16 + i * 8))" in code
-    assert "reinterpret_cast<const device uint*>(boolVectorBlock + (32 + i * 16))" in code
+    assert (
+        "reinterpret_cast<const device uint*>(boolVectorBlock + (16 + i * 8))" in code
+    )
+    assert (
+        "reinterpret_cast<const device uint*>(boolVectorBlock + (32 + i * 16))" in code
+    )
     assert "bool3 __crossgl_buffer_store_0" in code
     assert "reinterpret_cast<device uint*>(boolVectorBlock + 8)" in code
     assert "bool2 __crossgl_buffer_store_1" in code

@@ -1439,8 +1439,7 @@ def test_codegen_mixed_ssbo_bool_vector_members_lower_as_uint_components():
         "(__crossgl_bool_store_1.y ? 1u : 0u)));" in hlsl
     )
     assert (
-        "bool4 __crossgl_bool_store_2 = bool4(mask.x, pair.y, dynamic.z, true);"
-        in hlsl
+        "bool4 __crossgl_bool_store_2 = bool4(mask.x, pair.y, dynamic.z, true);" in hlsl
     )
     assert (
         "boolVectorBlock.Store4(48, uint4((__crossgl_bool_store_2.x ? 1u : 0u), "
@@ -1450,9 +1449,13 @@ def test_codegen_mixed_ssbo_bool_vector_members_lower_as_uint_components():
     )
     assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
 
-    assert "kernel void kernel_main(device uchar* boolVectorBlock [[buffer(55)]])" in metal
+    assert (
+        "kernel void kernel_main(device uchar* boolVectorBlock [[buffer(55)]])" in metal
+    )
     assert "bool4 readValue(device uchar* localBlock, uint i)" in metal
-    assert "reinterpret_cast<const device uint*>(localBlock + (32 + i * 16 + 12))" in metal
+    assert (
+        "reinterpret_cast<const device uint*>(localBlock + (32 + i * 16 + 12))" in metal
+    )
     assert (
         "bool3 mask = bool3(((*reinterpret_cast<const device uint*>"
         "(boolVectorBlock + 0)) != 0u), "
@@ -1470,7 +1473,10 @@ def test_codegen_mixed_ssbo_bool_vector_members_lower_as_uint_components():
         "(*reinterpret_cast<device uint*>(boolVectorBlock + 20)) = "
         "((__crossgl_buffer_store_1.y) ? 1u : 0u);" in metal
     )
-    assert "bool4 __crossgl_buffer_store_2 = bool4(mask.x, pair.y, dynamic.z, true);" in metal
+    assert (
+        "bool4 __crossgl_buffer_store_2 = bool4(mask.x, pair.y, dynamic.z, true);"
+        in metal
+    )
     assert (
         "(*reinterpret_cast<device uint*>(boolVectorBlock + 60)) = "
         "((__crossgl_buffer_store_2.w) ? 1u : 0u);" in metal

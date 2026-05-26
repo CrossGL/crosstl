@@ -8897,9 +8897,7 @@ class HLSLCodeGen:
             if access["components"] > 1:
                 value_expr = self.hlsl_indexable_expression(value)
                 fields = "xyzw"[: access["components"]]
-                values = [
-                    f"({value_expr}.{field} ? 1u : 0u)" for field in fields
-                ]
+                values = [f"({value_expr}.{field} ? 1u : 0u)" for field in fields]
                 return f"uint{access['components']}({', '.join(values)})"
             return f"(({value}) ? 1u : 0u)"
         if access.get("layout_type") != access.get("type"):
