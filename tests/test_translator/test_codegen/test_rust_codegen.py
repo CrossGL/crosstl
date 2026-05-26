@@ -400,6 +400,73 @@ mod gpu {
     {
         Vec4::default()
     }
+
+    pub fn texel_fetch<Texture, Coord, Lod>(
+        _texture: Texture,
+        _coord: Coord,
+        _lod: Lod,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+    {
+        Vec4::default()
+    }
+
+    pub fn texel_fetch_offset<Texture, Coord, Lod, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _lod: Lod,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_size<Texture, Result>(_texture: Texture) -> Result
+    where
+        Texture: TextureLike,
+        Result: Default,
+    {
+        Result::default()
+    }
+
+    pub fn texture_size_lod<Texture, Lod, Result>(
+        _texture: Texture,
+        _lod: Lod,
+    ) -> Result
+    where
+        Texture: TextureLike,
+        Result: Default,
+    {
+        Result::default()
+    }
+
+    pub fn texture_query_levels<Texture>(_texture: Texture) -> i32
+    where
+        Texture: TextureLike,
+    {
+        1
+    }
+
+    pub fn texture_query_lod<Texture, Coord>(
+        _texture: Texture,
+        _coord: Coord,
+    ) -> Vec2<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec2::default()
+    }
+
+    pub fn texture_samples<Texture>(_texture: Texture) -> i32
+    where
+        Texture: TextureLike,
+    {
+        1
+    }
 }
 """
 
@@ -1600,6 +1667,56 @@ def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path)
     assert "textureLod" not in generated_code
     assert "textureGrad" not in generated_code
     assert "textureOffset" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
+    tmp_path,
+):
+    code = """
+    shader TextureFetchQueryProbe {
+        sampler2D mainTexture;
+        sampler3D volumeMap;
+
+        fragment {
+            vec4 main(vec2 uv, ivec2 pixel, ivec2 offset) @ gl_FragColor {
+                let size2D = textureSize(mainTexture, 0);
+                let size3D = textureSize(volumeMap, 0);
+                let fetched = texelFetch(mainTexture, pixel, 0);
+                let shifted = texelFetchOffset(mainTexture, pixel, 0, offset);
+                let levels = textureQueryLevels(mainTexture);
+                let lod = textureQueryLod(mainTexture, uv);
+                let samples = textureSamples(mainTexture);
+                return fetched + shifted + vec4(lod.x, lod.y, float(levels + samples), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let size2D: Vec2<i32> = texture_size_lod(*MAIN_TEXTURE, 0);" in generated_code
+    )
+    assert "let size3D: Vec3<i32> = texture_size_lod(*VOLUME_MAP, 0);" in generated_code
+    assert "let fetched: Vec4<f32> = texel_fetch(*MAIN_TEXTURE, pixel, 0);" in (
+        generated_code
+    )
+    assert (
+        "let shifted: Vec4<f32> = texel_fetch_offset(*MAIN_TEXTURE, pixel, 0, offset);"
+        in generated_code
+    )
+    assert "let levels: i32 = texture_query_levels(*MAIN_TEXTURE);" in generated_code
+    assert (
+        "let lod: Vec2<f32> = texture_query_lod(*MAIN_TEXTURE, uv);" in generated_code
+    )
+    assert "let samples: i32 = texture_samples(*MAIN_TEXTURE);" in generated_code
+    assert "textureSize" not in generated_code
+    assert "texelFetch" not in generated_code
+    assert "texelFetchOffset" not in generated_code
+    assert "textureQueryLevels" not in generated_code
+    assert "textureQueryLod" not in generated_code
+    assert "textureSamples" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

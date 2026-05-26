@@ -81,6 +81,23 @@ shader GLSLParameterImageAtomicValidator {
 """
 
 
+GLSL_GEOMETRY_TESSELLATION_LAYOUT_SHADER = """
+shader GLSLGeometryTessellationLayoutValidator {
+    geometry {
+        void main() @points @outputtopology(triangle_strip) @max_vertices(3) { }
+    }
+
+    tessellation_control {
+        void main() @outputcontrolpoints(4) { }
+    }
+
+    tessellation_evaluation {
+        void main() @domain(triangle) @partitioning(fractional_odd) @cw { }
+    }
+}
+"""
+
+
 MIXED_GLSL_PREPROCESSOR_COMPUTE_SHADER = """
 #version 300 es
 #extension GL_ARB_separate_shader_objects : enable
@@ -693,6 +710,32 @@ def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator(
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_geometry_tessellation_layouts_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    ast = crosstl.translator.parse(GLSL_GEOMETRY_TESSELLATION_LAYOUT_SHADER)
+    generator = GLSLCodeGen()
+
+    stage_cases = [
+        ("geometry", "geom", "layout(points) in;"),
+        ("tessellation_control", "tesc", "layout(vertices = 4) out;"),
+        (
+            "tessellation_evaluation",
+            "tese",
+            "layout(triangles, fractional_odd_spacing, cw) in;",
+        ),
+    ]
+
+    for stage_name, validator_stage, expected_layout in stage_cases:
+        shader_path = tmp_path / f"layout_{validator_stage}.glsl"
+        code = generator.generate_stage(ast, stage_name)
+        assert expected_layout in code
+        shader_path.write_text(code, encoding="utf-8")
+
+        _run_validator([glslang, "-S", validator_stage, str(shader_path)])
 
 
 def test_generated_glsl_multisample_storage_validates_with_glslangvalidator(

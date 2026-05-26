@@ -1322,6 +1322,7 @@ class TestCudaCodeGen:
             texture<float4, cudaTextureTypeCubemap> cubeTex;
             surface<void, 2> surface2d;
             surface<void, cudaSurfaceType3D> volumeSurface;
+            surface<void, cudaSurfaceTypeCubemap> cubeSurface;
             cudaArray_t arrayRef;
             cudaArray* rawArray;
         }
@@ -1341,6 +1342,7 @@ class TestCudaCodeGen:
         assert "var cubeTex: samplerCube;" in result
         assert "var surface2d: image2D;" in result
         assert "var volumeSurface: image3D;" in result
+        assert "var cubeSurface: imageCube;" in result
         assert "var arrayRef: cudaArray_t;" in result
         assert "var rawArray: ptr<cudaArray>;" in result
         assert "unsignedint" not in result
