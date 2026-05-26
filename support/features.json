@@ -101,18 +101,7 @@
           ]
         },
         "rust": {"status": "unknown"},
-        "slang": {
-          "status": "partial",
-          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_builtins_lower_to_slang_intrinsics",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results"
-          ]
-        }
+        "slang": {"status": "unknown"}
       }
     },
     {
@@ -303,7 +292,19 @@
           "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
         },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Entry points lower to Slang mesh/amplification shader attributes with deterministic duplicate-entry names, local-size layouts or @numthreads attributes emit numthreads metadata, outputtopology emits quoted Slang attributes, and SetMeshOutputCounts/DispatchMesh lower to native Slang calls with arity and stage validation. Full mesh output signature/payload validation and slangc-backed mesh compilation remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_and_task_stages_emit_execution_layout_numthreads",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_numthreads_attribute_overrides_default_numthreads",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_and_task_intrinsics_lower_to_native_slang_calls",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_intrinsics_reject_invalid_slang_stages"
+          ]
+        }
       }
     },
     {
@@ -379,7 +380,18 @@
           "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
         },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_builtins_lower_to_slang_intrinsics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results"
+          ]
+        }
       }
     },
     {

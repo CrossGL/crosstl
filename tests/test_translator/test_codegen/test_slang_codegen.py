@@ -2559,6 +2559,83 @@ def test_mesh_and_task_stages_emit_execution_layout_numthreads():
     assert '[numthreads(64, 1, 1)]\n[shader("mesh")]' in generated_code
 
 
+def test_mesh_and_task_intrinsics_lower_to_native_slang_calls():
+    code = """
+    shader SlangMeshTaskIntrinsics {
+        task {
+            void main() {
+                DispatchMesh(2, 3, 4);
+            }
+        }
+        mesh {
+            void main() @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("amplification")]' in generated_code
+    assert '[shader("mesh")]' in generated_code
+    assert "void ASMain()" in generated_code
+    assert "void MSMain()" in generated_code
+    assert "DispatchMesh(2, 3, 4);" in generated_code
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "MeshOpNode" not in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+
+def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
+    code = """
+    shader InvalidSlangMeshIntrinsics {
+        mesh {
+            void main() @outputtopology(triangle) {
+                SetMeshOutputCounts(1);
+                DispatchMesh(1, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts "
+        "expects 2 arguments, got 1 */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: DispatchMesh "
+        "expects 3 or 4 arguments, got 2 */ 0;" in generated_code
+    )
+    assert "MeshOpNode" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            "compute { void main() { SetMeshOutputCounts(1, 1); } }",
+            "compute stage cannot call SetMeshOutputCounts",
+        ),
+        (
+            "mesh { void main() @outputtopology(triangle) { DispatchMesh(1, 1, 1); } }",
+            "mesh stage cannot call DispatchMesh",
+        ),
+    ],
+)
+def test_mesh_intrinsics_reject_invalid_slang_stages(stage_source, message):
+    code = f"""
+    shader InvalidSlangMeshIntrinsicStage {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_stage_numthreads_attribute_overrides_default_numthreads():
     code = """
     shader StageNumthreads {

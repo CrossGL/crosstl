@@ -30,7 +30,7 @@ implicitly supported.
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "280", "11", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "274", "22", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "484", "35", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "302", "67", "Slang user guide"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "305", "71", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
@@ -43,7 +43,7 @@ implicitly supported.
    "HIP", "10", "12", "0", "0", "3", "18"
    "Mojo", "10", "27", "0", "0", "5", "1"
    "Rust", "11", "6", "0", "0", "0", "26"
-   "Slang", "14", "12", "0", "0", "0", "17"
+   "Slang", "14", "13", "0", "0", "0", "16"
 
 Graphics Backend Focus
 ----------------------
@@ -96,7 +96,7 @@ Each category below uses the status codes from the legend.
 
    "Native source to CrossGL", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native lexer coverage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Native preprocessor handling", "Y", "Y", "Y", "?", "?", "?", "U", "?", "P"
+   "Native preprocessor handling", "Y", "Y", "Y", "?", "?", "?", "U", "?", "?"
 
 .. csv-table:: stages
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -106,8 +106,8 @@ Each category below uses the status codes from the legend.
    "Compute stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Geometry stage", "Y", "Y", "U", "?", "U", "U", "U", "?", "P"
    "Tessellation stages", "Y", "Y", "U", "?", "U", "U", "U", "?", "P"
-   "Mesh/task/amplification stages", "P", "P", "P", "?", "U", "U", "U", "?", "?"
-   "Ray tracing stages", "P", "P", "P", "?", "?", "?", "U", "?", "?"
+   "Mesh/task/amplification stages", "P", "P", "P", "?", "U", "U", "U", "?", "P"
+   "Ray tracing stages", "P", "P", "P", "?", "?", "?", "U", "?", "P"
 
 .. csv-table:: stage I/O
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -179,7 +179,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "source", "Native preprocessor handling", "unknown", ""
    "Mojo", "source", "Native preprocessor handling", "unsupported", "Mojo source has no C-style preprocessor expansion in this frontend; # lines are treated as comments and native import/from-import declarations are parsed separately."
    "Rust", "source", "Native preprocessor handling", "unknown", ""
-   "Slang", "source", "Native preprocessor handling", "partial", "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete."
+   "Slang", "source", "Native preprocessor handling", "unknown", ""
    "CUDA", "stages", "Vertex stage", "partial", "Graphics examples lower to CUDA-shaped code, not native raster pipeline stages."
    "HIP", "stages", "Vertex stage", "partial", "Graphics examples lower to HIP-shaped code, not native raster pipeline stages."
    "Mojo", "stages", "Vertex stage", "partial", "Vertex entry points lower to Mojo shader decorators and compile-oriented signatures, but Mojo has no complete raster pipeline/resource ABI in this repo."
@@ -210,7 +210,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "stages", "Mesh/task/amplification stages", "unsupported", ""
    "Mojo", "stages", "Mesh/task/amplification stages", "unsupported", "Mojo codegen rejects mesh/task/object stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages."
    "Rust", "stages", "Mesh/task/amplification stages", "unknown", ""
-   "Slang", "stages", "Mesh/task/amplification stages", "unknown", ""
+   "Slang", "stages", "Mesh/task/amplification stages", "partial", "Entry points lower to Slang mesh/amplification shader attributes with deterministic duplicate-entry names, local-size layouts or @numthreads attributes emit numthreads metadata, outputtopology emits quoted Slang attributes, and SetMeshOutputCounts/DispatchMesh lower to native Slang calls with arity and stage validation. Full mesh output signature/payload validation and slangc-backed mesh compilation remain incomplete."
    "DirectX / HLSL", "stages", "Ray tracing stages", "partial", "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete."
    "OpenGL / GLSL", "stages", "Ray tracing stages", "partial", "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete."
    "Metal", "stages", "Ray tracing stages", "partial", "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete."
@@ -219,7 +219,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "stages", "Ray tracing stages", "unknown", ""
    "Mojo", "stages", "Ray tracing stages", "unsupported", "Mojo codegen rejects ray tracing stages explicitly; no Mojo ray pipeline ABI is implemented in this repo."
    "Rust", "stages", "Ray tracing stages", "unknown", ""
-   "Slang", "stages", "Ray tracing stages", "unknown", ""
+   "Slang", "stages", "Ray tracing stages", "partial", "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete."
    "CUDA", "stage I/O", "Stage parameter semantics", "partial", ""
    "HIP", "stage I/O", "Stage parameter semantics", "partial", ""
    "Mojo", "stage I/O", "Stage parameter semantics", "partial", "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output, with duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches rejected deterministically. Target-native builtin ABI mapping remains incomplete."

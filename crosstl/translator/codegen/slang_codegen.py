@@ -21,6 +21,7 @@ from ..ast import (
     LiteralPatternNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     ParameterNode,
     RangeNode,
     ReturnNode,
@@ -88,12 +89,20 @@ class SlangCodeGen:
         "WaveReadLaneFirst": 1,
         "WavePrefixSum": 1,
         "WavePrefixProduct": 1,
+        "QuadReadAcrossX": 1,
+        "QuadReadAcrossY": 1,
+        "QuadReadAcrossDiagonal": 1,
+        "QuadReadLaneAt": 2,
         "WaveMatch": 1,
         "WaveMultiPrefixSum": 2,
         "WaveMultiPrefixProduct": 2,
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
         "WaveMultiPrefixBitXor": 2,
+    }
+    SLANG_MESH_INTRINSIC_ARITIES = {
+        "SetMeshOutputCounts": {2},
+        "DispatchMesh": {3, 4},
     }
 
     def __init__(self):
@@ -106,6 +115,7 @@ class SlangCodeGen:
         self.helper_name_aliases = {}
         self.user_symbol_names = set()
         self.current_function_return_type = None
+        self.current_shader_type = None
         self.current_expression_expected_type = None
         self.user_function_names = set()
         self.user_function_return_types = {}
@@ -174,6 +184,7 @@ class SlangCodeGen:
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
             self.current_function_return_type = None
+            self.current_shader_type = None
             self.current_expression_expected_type = None
             self.user_function_names = self.collect_user_function_names(ast)
             self.user_function_return_types = self.collect_user_function_return_types(
@@ -1989,6 +2000,7 @@ class SlangCodeGen:
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
         saved_function_return_type = self.current_function_return_type
+        saved_shader_type = self.current_shader_type
         saved_identifier_aliases = self.identifier_aliases.copy()
         saved_hull_output_rewrite = self.current_hull_output_rewrite
         if hasattr(node, "return_type"):
@@ -2025,6 +2037,7 @@ class SlangCodeGen:
             semantic = builtin_return_rewrite["semantic"]
 
         self.current_function_return_type = ret_type_name
+        self.current_shader_type = shader_type
         semantic_str = self.semantic_suffix(semantic, shader_type)
 
         effective_param_list = self.slang_filtered_stage_parameters(
@@ -2175,6 +2188,7 @@ class SlangCodeGen:
         self.variable_types = saved_variable_types
         self.image_resource_types = saved_image_resource_types
         self.current_function_return_type = saved_function_return_type
+        self.current_shader_type = saved_shader_type
         self.identifier_aliases = saved_identifier_aliases
         self.current_hull_output_rewrite = saved_hull_output_rewrite
         return result
@@ -3961,6 +3975,8 @@ class SlangCodeGen:
             return self.generate_binary_expression(node)
         elif isinstance(node, WaveOpNode):
             return self.generate_slang_wave_op_expression(node)
+        elif isinstance(node, MeshOpNode):
+            return self.generate_slang_mesh_op_expression(node)
         elif isinstance(node, RayQueryOpNode):
             query = self.generate_expression(node.query_expr)
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
@@ -4064,6 +4080,44 @@ class SlangCodeGen:
         if operation in {"WaveActiveBallot", "WaveMatch"}:
             return "uint4(0)"
         return "0"
+
+    def generate_slang_mesh_op_expression(self, node):
+        expected_arities = self.SLANG_MESH_INTRINSIC_ARITIES.get(node.operation)
+        if expected_arities is None:
+            return self.unsupported_slang_mesh_op_expression(
+                node.operation, "is not recognized by the Slang backend"
+            )
+
+        actual_arity = len(node.arguments)
+        if actual_arity not in expected_arities:
+            expected = " or ".join(str(arity) for arity in sorted(expected_arities))
+            return self.unsupported_slang_mesh_op_expression(
+                node.operation,
+                f"expects {expected} arguments, got {actual_arity}",
+            )
+
+        self.validate_slang_mesh_op_stage(node.operation)
+        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
+        return f"{node.operation}({args})"
+
+    def validate_slang_mesh_op_stage(self, operation):
+        if not self.current_shader_type:
+            return
+
+        shader_stage = self.slang_shader_stage_name(self.current_shader_type)
+        if operation == "SetMeshOutputCounts" and shader_stage != "mesh":
+            raise ValueError(
+                f"Slang {self.current_shader_type} stage cannot call "
+                "SetMeshOutputCounts; SetMeshOutputCounts is only valid in mesh stages"
+            )
+        if operation == "DispatchMesh" and shader_stage != "amplification":
+            raise ValueError(
+                f"Slang {self.current_shader_type} stage cannot call DispatchMesh; "
+                "DispatchMesh is only valid in amplification/task/object stages"
+            )
+
+    def unsupported_slang_mesh_op_expression(self, operation, reason):
+        return f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ 0"
 
     def generate_lambda_expression(self, args):
         """Render supported CrossGL pseudo-lambdas as Slang lambda expressions."""
