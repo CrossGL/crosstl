@@ -382,6 +382,9 @@ class MetalCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.current_metal_mesh_output_config = None
+        self.current_metal_mesh_output_parameter = None
+        self.current_metal_mesh_grid_properties_parameter = None
         self.lowered_glsl_buffer_block_struct_names = set()
         self.glsl_buffer_block_lowering_failures = {}
         self.glsl_buffer_block_struct_lowering_failures = {}
@@ -758,6 +761,7 @@ class MetalCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.current_metal_mesh_output_config = None
         self.current_metal_mesh_output_parameter = None
         self.current_metal_mesh_grid_properties_parameter = None
         self.literal_int_constants = collect_literal_int_constants(
@@ -1523,6 +1527,7 @@ class MetalCodeGen:
         previous_structured_buffer_counter_parameters = (
             self.current_structured_buffer_counter_parameters
         )
+        previous_metal_mesh_output_config = self.current_metal_mesh_output_config
         previous_metal_mesh_output_parameter = self.current_metal_mesh_output_parameter
         previous_metal_mesh_grid_properties_parameter = (
             self.current_metal_mesh_grid_properties_parameter
@@ -1695,6 +1700,7 @@ class MetalCodeGen:
             self.current_structured_buffer_counter_parameters = (
                 previous_structured_buffer_counter_parameters
             )
+            self.current_metal_mesh_output_config = previous_metal_mesh_output_config
             self.current_metal_mesh_output_parameter = (
                 previous_metal_mesh_output_parameter
             )
@@ -1762,6 +1768,7 @@ class MetalCodeGen:
                     self.metal_mesh_stage_output_parameter_declaration(mesh_output),
                 )
                 self.current_metal_mesh_output_parameter = mesh_output["parameter_name"]
+                self.current_metal_mesh_output_config = mesh_output
             code += (
                 f"{stage_attribute} {return_type} {function_name}({params_str}) {{\n"
             )
@@ -1819,6 +1826,7 @@ class MetalCodeGen:
         self.current_structured_buffer_counter_parameters = (
             previous_structured_buffer_counter_parameters
         )
+        self.current_metal_mesh_output_config = previous_metal_mesh_output_config
         self.current_metal_mesh_output_parameter = previous_metal_mesh_output_parameter
         self.current_metal_mesh_grid_properties_parameter = (
             previous_metal_mesh_grid_properties_parameter
@@ -3327,6 +3335,12 @@ class MetalCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
 
+            mesh_output_call = self.generate_metal_mesh_output_call(
+                func_name, expr.args
+            )
+            if mesh_output_call is not None:
+                return mesh_output_call
+
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
                 return texture_call
@@ -3599,6 +3613,36 @@ class MetalCodeGen:
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
         }.get(func_name)
+
+    def generate_metal_mesh_output_call(self, func_name, args):
+        mesh_output = self.current_metal_mesh_output_config
+        output_parameter = self.current_metal_mesh_output_parameter
+        if not mesh_output or not output_parameter:
+            return None
+
+        if func_name == "SetVertex" and len(args) == 2:
+            index = self.generate_expression(args[0])
+            value = self.metal_mesh_vertex_output_value(args[1], mesh_output)
+            return f"{output_parameter}.set_vertex({index}, {value})"
+
+        if func_name in {"SetPrimitive", "SetIndex"} and len(args) == 2:
+            index = self.generate_expression(args[0])
+            value = self.generate_expression(args[1])
+            return f"{output_parameter}.set_index({index}, {value})"
+
+        return None
+
+    def metal_mesh_vertex_output_value(self, expr, mesh_output):
+        value = self.generate_expression(expr)
+        value_type = self.expression_result_type(expr)
+        mapped_type = self.map_type(value_type) if value_type else None
+        vertex_type = mesh_output["vertex_type"]
+
+        if mapped_type == vertex_type:
+            return value
+        if mapped_type == "float3":
+            return f"{vertex_type}{{float4({value}, 1.0)}}"
+        return f"{vertex_type}{{{value}}}"
 
     def generate_mesh_op_expression(self, expr):
         if (

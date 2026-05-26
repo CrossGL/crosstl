@@ -2846,6 +2846,35 @@ def test_metal_mesh_stage_output_signature_and_counts():
     assert "SetMeshOutputCounts" not in generated
 
 
+def test_metal_mesh_stage_vertex_and_index_writes_lower_to_mesh_output_methods():
+    code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(64)
+                @max_primitives(32)
+                @outputtopology(triangle)
+            {
+                vec3 position = vec3(0.0, 0.0, 0.0);
+                SetMeshOutputCounts(3, 1);
+                SetVertex(0, position);
+                SetPrimitive(0, 0);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert (
+        "_crossglMeshOut.set_vertex(0, "
+        "_CrossGLMetalMeshVertex_mesh_main{float4(position, 1.0)});"
+    ) in generated
+    assert "_crossglMeshOut.set_index(0, 0);" in generated
+    assert "SetVertex" not in generated
+    assert "SetPrimitive" not in generated
+
+
 def test_metal_mesh_stage_output_signature_avoids_generated_name_collisions():
     code = """
     shader meshpipe {
