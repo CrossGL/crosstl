@@ -89,14 +89,7 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_preprocessor_metal_output_compiles_with_xcrun_metal"
           ]
         },
-        "vulkan": {
-          "status": "supported",
-          "notes": "Covers integer storage-image atomic add/min/max/bitwise/exchange/compare-exchange through OpImageTexelPointer and OpAtomic instructions, with spirv-as/spirv-val coverage.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_integer_image_atomics_emit_spirv_atomic_operations",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -171,14 +164,7 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "unsupported", "evidence": ["crosstl/translator/codegen/metal_codegen.py::does not support stage type"]},
-        "vulkan": {
-          "status": "supported",
-          "notes": "barrier/workgroupBarrier lower to OpControlBarrier; memoryBarrier lowers to OpMemoryBarrier with device and workgroup memory semantics and spirv-as/spirv-val coverage.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_synchronization_builtins_emit_spirv_barriers",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_synchronization_compute_validates_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
         "mojo": {"status": "unknown"},
@@ -1035,7 +1021,14 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_integer_image_atomics_compiles_with_metal"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers integer storage-image atomic add/min/max/bitwise/exchange/compare-exchange through OpImageTexelPointer and OpAtomic instructions, with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_integer_image_atomics_emit_spirv_atomic_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -1185,7 +1178,14 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "barrier/workgroupBarrier lower to OpControlBarrier; memoryBarrier lowers to OpMemoryBarrier with device and workgroup memory semantics and spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_synchronization_builtins_emit_spirv_barriers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_synchronization_compute_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "supported"},
         "hip": {"status": "partial"},
         "mojo": {"status": "unknown"},

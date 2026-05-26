@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 470
+        "test_count": 473
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 430
+        "test_count": 431
       },
       "translator_codegen": {
         "exists": true,
@@ -623,7 +623,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 228
+        "test_count": 229
       },
       "translator_codegen": {
         "exists": true,
@@ -737,7 +737,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 435
+        "test_count": 436
       },
       "translator_codegen": {
         "exists": true,
@@ -761,8 +761,12 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 42,
+        "unsupported_marker_count": 43,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Slang {stage_name} stage does not support \""
+          },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "\"Unsupported match arm for Slang codegen; only unguarded \""
@@ -838,10 +842,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "def unsupported_texture_projected_call(self, func_name, reason):"
           }
         ]
       },
@@ -851,7 +851,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 219
+        "test_count": 224
       },
       "translator_codegen": {
         "exists": true,
@@ -860,6 +860,15 @@
     }
   ],
   "backlog": [
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "source",
+      "feature": "Native preprocessor handling",
+      "feature_id": "source.preprocessing",
+      "notes": "",
+      "status": "unknown"
+    },
     {
       "backend": "CUDA",
       "backend_id": "cuda",
@@ -985,6 +994,15 @@
       "feature_id": "stage.geometry",
       "notes": "",
       "status": "unsupported"
+    },
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "stages",
+      "feature": "Geometry stage",
+      "feature_id": "stage.geometry",
+      "notes": "",
+      "status": "unknown"
     },
     {
       "backend": "CUDA",
@@ -2409,15 +2427,6 @@
       "status": "unknown"
     },
     {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "images",
-      "feature": "Image atomics",
-      "feature_id": "image.atomics",
-      "notes": "",
-      "status": "unknown"
-    },
-    {
       "backend": "CUDA",
       "backend_id": "cuda",
       "category": "images",
@@ -2551,15 +2560,6 @@
       "feature_id": "language.control_flow",
       "notes": "",
       "status": "partial"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "language",
-      "feature": "Synchronization and memory barriers",
-      "feature_id": "language.synchronization",
-      "notes": "",
-      "status": "unknown"
     },
     {
       "backend": "HIP",
@@ -2978,12 +2978,9 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_integer_image_atomics_emit_spirv_atomic_operations",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools"
-          ],
-          "notes": "Covers integer storage-image atomic add/min/max/bitwise/exchange/compare-exchange through OpImageTexelPointer and OpAtomic instructions, with spirv-as/spirv-val coverage.",
-          "status": "supported"
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
         }
       }
     },
@@ -3198,12 +3195,9 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_synchronization_builtins_emit_spirv_barriers",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_synchronization_compute_validates_with_spirv_tools"
-          ],
-          "notes": "barrier/workgroupBarrier lower to OpControlBarrier; memoryBarrier lowers to OpMemoryBarrier with device and workgroup memory semantics and spirv-as/spirv-val coverage.",
-          "status": "supported"
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
         }
       }
     },
@@ -4738,9 +4732,12 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_integer_image_atomics_emit_spirv_atomic_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools"
+          ],
+          "notes": "Covers integer storage-image atomic add/min/max/bitwise/exchange/compare-exchange through OpImageTexelPointer and OpAtomic instructions, with spirv-as/spirv-val coverage.",
+          "status": "supported"
         }
       }
     },
@@ -5080,9 +5077,12 @@
           "status": "supported"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_synchronization_builtins_emit_spirv_barriers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_synchronization_compute_validates_with_spirv_tools"
+          ],
+          "notes": "barrier/workgroupBarrier lower to OpControlBarrier; memoryBarrier lowers to OpMemoryBarrier with device and workgroup memory semantics and spirv-as/spirv-val coverage.",
+          "status": "supported"
         }
       }
     },
