@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 667
+        "test_count": 668
       },
       "translator_codegen": {
         "exists": true,
@@ -2013,7 +2013,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including vectors, matrices, fixed arrays, uint scalar atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+      "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including vectors, matrices, fixed arrays, int/uint scalar atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
       "status": "partial"
     },
     {
@@ -2022,7 +2022,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including vectors, matrices, fixed arrays, uint scalar atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+      "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including vectors, matrices, fixed arrays, int/uint scalar atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
       "status": "partial"
     },
     {
@@ -4130,13 +4130,14 @@
         "directx": {
           "evidence": [
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_stores_use_column_stores",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic"
           ],
-          "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including vectors, matrices, fixed arrays, uint scalar atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including vectors, matrices, fixed arrays, int/uint scalar atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
           "status": "partial"
         },
         "hip": {
@@ -4147,14 +4148,16 @@
         "metal": {
           "evidence": [
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_metal_runtime_matrix_arrays_use_column_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
-            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal"
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal"
           ],
-          "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including vectors, matrices, fixed arrays, uint scalar atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including vectors, matrices, fixed arrays, int/uint scalar atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
           "status": "partial"
         },
         "mojo": {

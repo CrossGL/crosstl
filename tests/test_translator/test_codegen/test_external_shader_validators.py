@@ -97,6 +97,27 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_INT_ATOMICS_COMPUTE_SHADER = """
+#version 450 core
+layout(std430, binding = 18) buffer SignedAtomicBlock {
+    int counter;
+    int bins[4];
+} signedAtomicBlock;
+
+void main() {
+    int oldCounter = atomicAdd(signedAtomicBlock.counter, -1);
+    int oldBin = atomicExchange(signedAtomicBlock.bins[2], oldCounter);
+    int minBin = atomicMin(signedAtomicBlock.bins[0], -2);
+    int maxBin = atomicMax(signedAtomicBlock.bins[0], minBin);
+    int andBin = atomicAnd(signedAtomicBlock.bins[1], 15);
+    int orBin = atomicOr(signedAtomicBlock.bins[1], andBin);
+    int xorBin = atomicXor(signedAtomicBlock.bins[2], orBin);
+    int casBin = atomicCompSwap(signedAtomicBlock.bins[3], xorBin, -7);
+    atomicAdd(signedAtomicBlock.bins[1], casBin);
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -280,6 +301,37 @@ def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal(
     assert "#version" not in code
     assert "atomic_fetch_add_explicit" in code
     assert "__crossgl_buffer_atomic_compare_exchange_uint" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_int_atomics.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_int_atomics.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_INT_ATOMICS_COMPUTE_SHADER, "compute")
+    )
+    assert "#version" not in code
+    assert "atomic_fetch_add_explicit" in code
+    assert "reinterpret_cast<device atomic_int*>" in code
+    assert "__crossgl_buffer_atomic_compare_exchange_int" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(

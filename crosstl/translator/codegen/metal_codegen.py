@@ -5122,11 +5122,11 @@ class MetalCodeGen:
             )
         if access.get("components") != 1 or access.get("matrix_columns"):
             return self.unsupported_glsl_buffer_block_atomic_call(
-                target, func_name, "requires a scalar uint buffer member"
+                target, func_name, "requires a scalar int or uint buffer member"
             )
-        if access.get("component_type") != "uint":
+        if access.get("component_type") not in {"int", "uint"}:
             return self.unsupported_glsl_buffer_block_atomic_call(
-                target, func_name, "currently supports only uint buffer members"
+                target, func_name, "currently supports only int or uint buffer members"
             )
 
         if operation == "compare_exchange":
@@ -5145,8 +5145,9 @@ class MetalCodeGen:
                 f"{compare_value}, {replacement})"
             )
 
+        atomic_type = f"atomic_{access['component_type']}"
         atomic_target = (
-            "reinterpret_cast<device atomic_uint*>(" f"{access['buffer']} + {offset})"
+            f"reinterpret_cast<device {atomic_type}*>({access['buffer']} + {offset})"
         )
         value = self.generate_expression_with_expected(args[1], access["type"])
         return f"atomic_{operation}_explicit({atomic_target}, {value}, memory_order_relaxed)"

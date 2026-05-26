@@ -8050,6 +8050,16 @@ class HLSLCodeGen:
     def byteaddress_atomic_helper_name(self, operation, component_type):
         return f"__crossgl_byteaddress_atomic_{operation}_{component_type}"
 
+    def byteaddress_atomic_uses_uint_bits(self, operation, component_type):
+        return component_type == "int" and operation in {
+            "add",
+            "and",
+            "or",
+            "xor",
+            "exchange",
+            "compare_exchange",
+        }
+
     def generate_byteaddress_atomic_helpers(self):
         if not self.required_byteaddress_atomic_helpers:
             return ""
@@ -8060,20 +8070,29 @@ class HLSLCodeGen:
         ):
             helper_name = self.byteaddress_atomic_helper_name(operation, component_type)
             value_type = self.map_type(component_type)
+            use_uint_bits = self.byteaddress_atomic_uses_uint_bits(
+                operation, component_type
+            )
+            original_type = "uint" if use_uint_bits else value_type
+            return_value = "asint(original)" if use_uint_bits else "original"
+            value_expr = "asuint(value)" if use_uint_bits else "value"
             if operation == "compare_exchange":
+                compare_value_expr = (
+                    "asuint(compareValue)" if use_uint_bits else "compareValue"
+                )
                 helpers.append(
                     f"{value_type} {helper_name}(RWByteAddressBuffer buffer, uint offset, {value_type} compareValue, {value_type} value) {{\n"
-                    f"    {value_type} original;\n"
-                    f"    buffer.{intrinsic}(offset, compareValue, value, original);\n"
-                    "    return original;\n"
+                    f"    {original_type} original;\n"
+                    f"    buffer.{intrinsic}(offset, {compare_value_expr}, {value_expr}, original);\n"
+                    f"    return {return_value};\n"
                     "}\n\n"
                 )
                 continue
             helpers.append(
                 f"{value_type} {helper_name}(RWByteAddressBuffer buffer, uint offset, {value_type} value) {{\n"
-                f"    {value_type} original;\n"
-                f"    buffer.{intrinsic}(offset, value, original);\n"
-                "    return original;\n"
+                f"    {original_type} original;\n"
+                f"    buffer.{intrinsic}(offset, {value_expr}, original);\n"
+                f"    return {return_value};\n"
                 "}\n\n"
             )
         return "".join(helpers)
@@ -9008,11 +9027,11 @@ class HLSLCodeGen:
             )
         if access.get("components") != 1 or access.get("matrix_columns"):
             return self.unsupported_glsl_buffer_block_atomic_call(
-                target, func_name, "requires a scalar uint buffer member"
+                target, func_name, "requires a scalar int or uint buffer member"
             )
-        if access.get("component_type") != "uint":
+        if access.get("component_type") not in {"int", "uint"}:
             return self.unsupported_glsl_buffer_block_atomic_call(
-                target, func_name, "currently supports only uint buffer members"
+                target, func_name, "currently supports only int or uint buffer members"
             )
 
         component_type = access["component_type"]
