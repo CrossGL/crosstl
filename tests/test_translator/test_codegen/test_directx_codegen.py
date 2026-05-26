@@ -3352,6 +3352,21 @@ def test_directx_set_mesh_output_counts_rejects_non_mesh_stages():
         HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
 
 
+def test_directx_set_mesh_output_counts_requires_mesh_outputs():
+    shader = """
+    shader SetMeshOutputCountsWithoutOutputs {
+        mesh {
+            void main() @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="requires mesh output"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
 def test_directx_mesh_output_signature_validates_struct_semantics():
     missing_position_code = """
     shader MeshMissingPosition {

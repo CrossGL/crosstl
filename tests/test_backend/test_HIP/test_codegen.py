@@ -33,7 +33,10 @@ class TestHipCodeGen:
         code = """
         #include <hip/hip_runtime.h>
         #define HIP_SCALE 2
+        __constant__ int kLimit = 64;
+        __managed__ float managedValue;
         __global__ void simple_kernel() {
+            __shared__ float shared_data[256];
             int idx = HIP_SCALE;
         }
         """
@@ -48,8 +51,15 @@ class TestHipCodeGen:
         assert "// HIP to CrossGL conversion" in result
         assert "// HIP runtime functionality built-in" in result
         assert "// define HIP_SCALE 2" in result
+        assert "@group(0) @binding(0) var<uniform> kLimit: i32 = 64;" in result
+        assert "// HIP managed memory: managedValue" in result
+        assert "var managedValue: f32;" in result
         assert "// Kernel: simple_kernel" in result
+        assert "var<workgroup> shared_data: array<f32, 256>;" in result
         assert "PreprocessorNode" not in result
+        assert "__constant__" not in result
+        assert "__managed__" not in result
+        assert "__shared__" not in result
 
     def test_device_function_conversion(self):
         """Test device function conversion"""
@@ -1922,10 +1932,15 @@ class TestHipCodeGen:
         code = """
         static float cached = 1.0f;
         unsigned int mask = 3u;
+        signed int signedMask = -1;
+        long long wide = 2ll;
+        unsigned long long uwide = 3ull;
 
-        __global__ void kernel(unsigned int* out, const float scale) {
+        __global__ void kernel(unsigned int* out, const float scale, long long x) {
             const int local = 1;
             unsigned int idx = 2u;
+            unsigned long long y = 1ull;
+            long long z = (long long)x;
             static float tmp = 0.0f;
             out[0] = idx;
         }
@@ -1940,10 +1955,16 @@ class TestHipCodeGen:
 
         assert "var cached: f32 = 1.0f;" in result
         assert "var mask: u32 = 3u;" in result
+        assert "var signedMask: i32 = (-1);" in result
+        assert "var wide: i64 = 2ll;" in result
+        assert "var uwide: u64 = 3ull;" in result
         assert "out: array<u32>" in result
         assert "f32 scale" in result
+        assert "i64 x" in result
         assert "var local: i32 = 1;" in result
         assert "var idx: u32 = 2u;" in result
+        assert "var y: u64 = 1ull;" in result
+        assert "var z: i64 = i64(x);" in result
         assert "var tmp: f32 = 0.0f;" in result
 
     def test_qualified_and_pointer_return_function_conversion(self):
@@ -1978,6 +1999,9 @@ class TestHipCodeGen:
                 sink(j);
             }
             __syncthreads();
+            __threadfence();
+            __threadfence_block();
+            __threadfence_system();
             return;
         }
         """
@@ -1994,6 +2018,8 @@ class TestHipCodeGen:
         assert "for (var j: i32 = 0; (j < n); (j++))" in result
         assert "sink(j);" in result
         assert "workgroupBarrier();" in result
+        assert result.count("memoryBarrier();") == 3
+        assert "__threadfence" not in result
         assert "None" not in result
 
     def test_c_style_for_structured_assignment_updates_conversion(self):

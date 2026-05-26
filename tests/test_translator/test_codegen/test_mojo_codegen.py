@@ -862,6 +862,156 @@ def test_resource_arrays_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    sampler2D colorMap;
+    sampler2DShadow shadowMap;
+    sampler linearSampler;
+
+    vec4 sampleAdvanced(
+        sampler2D tex,
+        sampler state,
+        vec2 uv,
+        ivec2 offset,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        return textureOffset(tex, state, uv, offset) +
+            textureLodOffset(tex, state, uv, 1.0, offset) +
+            textureGradOffset(tex, state, uv, ddx, ddy, offset) +
+            textureGather(tex, state, uv, 1) +
+            textureGatherOffset(tex, state, uv, offset, 2) +
+            textureProj(tex, state, vec3(uv, 1.0));
+    }
+
+    vec2 queryLod(sampler2D tex, sampler state, vec2 uv) {
+        return textureQueryLod(tex, state, uv);
+    }
+
+    float compareShadow(
+        sampler2DShadow shadow,
+        sampler state,
+        vec2 uv,
+        float depth,
+        ivec2 offset
+    ) {
+        return textureCompare(shadow, state, uv, depth) +
+            textureCompareOffset(shadow, state, uv, depth, offset) +
+            textureCompareLod(shadow, state, uv, depth, 1.0);
+    }
+
+    vec4 gatherShadow(
+        sampler2DShadow shadow,
+        sampler state,
+        vec2 uv,
+        float depth,
+        ivec2 offset
+    ) {
+        return textureGatherCompare(shadow, state, uv, depth) +
+            textureGatherCompareOffset(shadow, state, uv, depth, offset);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DShadow:" in generated_code
+    assert "_crossgl_sample_offset_Texture2D" in generated_code
+    assert "_crossgl_texture_gather_Texture2D" in generated_code
+    assert "_crossgl_sample_proj_Texture2D" in generated_code
+    assert "_crossgl_texture_query_lod_Texture2D" in generated_code
+    assert "_crossgl_texture_compare_Texture2DShadow" in generated_code
+    assert "_crossgl_texture_gather_compare_Texture2DShadow" in generated_code
+    assert "textureOffset" not in generated_code
+    assert "textureLodOffset" not in generated_code
+    assert "textureGradOffset" not in generated_code
+    assert "textureGather" not in generated_code
+    assert "textureProj" not in generated_code
+    assert "textureQueryLod" not in generated_code
+    assert "textureCompare" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "advanced_texture_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_integer_image_atomic_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    uimage2D counters;
+    iimage2D signedCounters;
+
+    uint updateCounter(uimage2D image, ivec2 pixel, uint value, uint replacement) {
+        uint added = imageAtomicAdd(image, pixel, value);
+        uint minValue = imageAtomicMin(image, pixel, value);
+        uint maxValue = imageAtomicMax(image, pixel, value);
+        uint andValue = imageAtomicAnd(image, pixel, value);
+        uint orValue = imageAtomicOr(image, pixel, value);
+        uint xorValue = imageAtomicXor(image, pixel, value);
+        uint exchanged = imageAtomicExchange(image, pixel, replacement);
+        return imageAtomicCompSwap(image, pixel, exchanged, value) + added +
+            minValue + maxValue + andValue + orValue + xorValue;
+    }
+
+    int updateSigned(iimage2D image, ivec2 pixel, int value, int replacement) {
+        int added = imageAtomicAdd(image, pixel, value);
+        int minValue = imageAtomicMin(image, pixel, value);
+        int maxValue = imageAtomicMax(image, pixel, value);
+        int exchanged = imageAtomicExchange(image, pixel, replacement);
+        return imageAtomicCompSwap(image, pixel, exchanged, value) + added +
+            minValue + maxValue;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_and_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_or_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_xor_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_add_IImage2D" in generated_code
+    assert "imageAtomic" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "integer_image_atomic_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_float_image_atomics_are_rejected_for_mojo_codegen():
+    code = """
+    image2D colorImage;
+
+    int invalidAtomic(image2D image, ivec2 pixel, int value) {
+        return imageAtomicAdd(image, pixel, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="integer image required"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_for_statement():
     code = """
     shader main {

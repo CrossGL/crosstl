@@ -2388,6 +2388,172 @@ def test_gpu_texture_helper_calls_convert_to_crossgl_intrinsics():
     assert "texture_gather_component" not in result
 
 
+def test_gpu_shadow_compare_helper_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn shadow_helpers(
+        shadow: DepthTexture2D<f32>,
+        shadow_array: DepthTexture2DArray<f32>,
+        cube_shadow: DepthTextureCube<f32>,
+        cube_array_shadow: DepthTextureCubeArray<f32>,
+        compare_sampler: Sampler,
+        uv: Vec2<f32>,
+        uv_layer: Vec3<f32>,
+        direction: Vec3<f32>,
+        cube_layer: Vec4<f32>,
+        uvq: Vec3<f32>,
+        uvqw: Vec4<f32>,
+        depth: f32,
+        lod: f32,
+        ddx: Vec2<f32>,
+        ddy: Vec2<f32>,
+        offset: Vec2<i32>,
+    ) -> f32 {
+        let base = texture_compare(shadow, uv, depth);
+        let base_sampler = texture_compare_sampler(shadow, compare_sampler, uv, depth);
+        let array_compare = texture_compare(shadow_array, uv_layer, depth);
+        let cube_compare = texture_compare(cube_shadow, direction, depth);
+        let cube_array_compare = texture_compare(cube_array_shadow, cube_layer, depth);
+        let offset_compare = texture_compare_offset(shadow, uv, depth, offset);
+        let offset_sampler = texture_compare_offset_sampler(shadow, compare_sampler, uv, depth, offset);
+        let lod_compare = texture_compare_lod(shadow, uv, depth, lod);
+        let lod_sampler = texture_compare_lod_sampler(shadow, compare_sampler, uv, depth, lod);
+        let lod_offset = texture_compare_lod_offset(shadow, uv, depth, lod, offset);
+        let lod_offset_sampler = texture_compare_lod_offset_sampler(shadow, compare_sampler, uv, depth, lod, offset);
+        let grad_compare = texture_compare_grad(shadow, uv, depth, ddx, ddy);
+        let grad_sampler = texture_compare_grad_sampler(shadow, compare_sampler, uv, depth, ddx, ddy);
+        let grad_offset = texture_compare_grad_offset(shadow, uv, depth, ddx, ddy, offset);
+        let grad_offset_sampler = texture_compare_grad_offset_sampler(shadow, compare_sampler, uv, depth, ddx, ddy, offset);
+        let projected = texture_compare_projected(shadow, uvq, depth);
+        let projected_sampler = texture_compare_projected_sampler(shadow, compare_sampler, uvq, depth);
+        let projected_w = texture_compare_projected(shadow, uvqw, depth);
+        let projected_offset = texture_compare_projected_offset(shadow, uvq, depth, offset);
+        let projected_offset_sampler = texture_compare_projected_offset_sampler(shadow, compare_sampler, uvq, depth, offset);
+        let projected_lod = texture_compare_projected_lod(shadow, uvq, depth, lod);
+        let projected_lod_sampler = texture_compare_projected_lod_sampler(shadow, compare_sampler, uvq, depth, lod);
+        let projected_lod_offset = texture_compare_projected_lod_offset(shadow, uvq, depth, lod, offset);
+        let projected_lod_offset_sampler = texture_compare_projected_lod_offset_sampler(shadow, compare_sampler, uvq, depth, lod, offset);
+        let projected_grad = texture_compare_projected_grad(shadow, uvq, depth, ddx, ddy);
+        let projected_grad_sampler = texture_compare_projected_grad_sampler(shadow, compare_sampler, uvq, depth, ddx, ddy);
+        let projected_grad_offset = texture_compare_projected_grad_offset(shadow, uvq, depth, ddx, ddy, offset);
+        let projected_grad_offset_sampler = texture_compare_projected_grad_offset_sampler(shadow, compare_sampler, uvq, depth, ddx, ddy, offset);
+        let gathered = texture_gather_compare(shadow, uv, depth);
+        let gathered_sampler = texture_gather_compare_sampler(shadow, compare_sampler, uv, depth);
+        let gathered_offset = texture_gather_compare_offset(shadow, uv, depth, offset);
+        let gathered_offset_sampler = texture_gather_compare_offset_sampler(shadow, compare_sampler, uv, depth, offset);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "float shadow_helpers(sampler2DShadow shadow, sampler2DArrayShadow shadow_array"
+        in result
+    )
+    assert "samplerCubeShadow cube_shadow" in result
+    assert "samplerCubeArrayShadow cube_array_shadow" in result
+    assert "sampler compare_sampler" in result
+    assert "base = textureCompare(shadow, uv, depth);" in result
+    assert (
+        "base_sampler = textureCompare(shadow, compare_sampler, uv, depth);" in result
+    )
+    assert "array_compare = textureCompare(shadow_array, uv_layer, depth);" in result
+    assert "cube_compare = textureCompare(cube_shadow, direction, depth);" in result
+    assert (
+        "cube_array_compare = textureCompare(cube_array_shadow, cube_layer, depth);"
+        in result
+    )
+    assert "offset_compare = textureCompareOffset(shadow, uv, depth, offset);" in result
+    assert (
+        "offset_sampler = textureCompareOffset(shadow, compare_sampler, uv, depth, offset);"
+        in result
+    )
+    assert "lod_compare = textureCompareLod(shadow, uv, depth, lod);" in result
+    assert (
+        "lod_sampler = textureCompareLod(shadow, compare_sampler, uv, depth, lod);"
+        in result
+    )
+    assert (
+        "lod_offset = textureCompareLodOffset(shadow, uv, depth, lod, offset);"
+        in result
+    )
+    assert (
+        "lod_offset_sampler = textureCompareLodOffset(shadow, compare_sampler, uv, depth, lod, offset);"
+        in result
+    )
+    assert "grad_compare = textureCompareGrad(shadow, uv, depth, ddx, ddy);" in result
+    assert (
+        "grad_sampler = textureCompareGrad(shadow, compare_sampler, uv, depth, ddx, ddy);"
+        in result
+    )
+    assert (
+        "grad_offset = textureCompareGradOffset(shadow, uv, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert (
+        "grad_offset_sampler = textureCompareGradOffset(shadow, compare_sampler, uv, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert "projected = textureCompareProj(shadow, uvq, depth);" in result
+    assert (
+        "projected_sampler = textureCompareProj(shadow, compare_sampler, uvq, depth);"
+        in result
+    )
+    assert (
+        "projected_offset = textureCompareProjOffset(shadow, uvq, depth, offset);"
+        in result
+    )
+    assert (
+        "projected_offset_sampler = textureCompareProjOffset(shadow, compare_sampler, uvq, depth, offset);"
+        in result
+    )
+    assert "projected_lod = textureCompareProjLod(shadow, uvq, depth, lod);" in result
+    assert (
+        "projected_lod_sampler = textureCompareProjLod(shadow, compare_sampler, uvq, depth, lod);"
+        in result
+    )
+    assert (
+        "projected_lod_offset = textureCompareProjLodOffset(shadow, uvq, depth, lod, offset);"
+        in result
+    )
+    assert (
+        "projected_lod_offset_sampler = textureCompareProjLodOffset(shadow, compare_sampler, uvq, depth, lod, offset);"
+        in result
+    )
+    assert (
+        "projected_grad = textureCompareProjGrad(shadow, uvq, depth, ddx, ddy);"
+        in result
+    )
+    assert (
+        "projected_grad_sampler = textureCompareProjGrad(shadow, compare_sampler, uvq, depth, ddx, ddy);"
+        in result
+    )
+    assert (
+        "projected_grad_offset = textureCompareProjGradOffset(shadow, uvq, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert (
+        "projected_grad_offset_sampler = textureCompareProjGradOffset(shadow, compare_sampler, uvq, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert "gathered = textureGatherCompare(shadow, uv, depth);" in result
+    assert (
+        "gathered_sampler = textureGatherCompare(shadow, compare_sampler, uv, depth);"
+        in result
+    )
+    assert (
+        "gathered_offset = textureGatherCompareOffset(shadow, uv, depth, offset);"
+        in result
+    )
+    assert (
+        "gathered_offset_sampler = textureGatherCompareOffset(shadow, compare_sampler, uv, depth, offset);"
+        in result
+    )
+    assert "DepthTexture2D" not in result
+    assert "texture_compare" not in result
+    assert "texture_gather_compare" not in result
+
+
 def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
     code = """
     fn resource_helpers(

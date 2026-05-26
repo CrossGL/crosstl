@@ -1331,7 +1331,10 @@ class SlangCodeGen:
         return f"{base_name}_{suffix}"
 
     def slang_builtin_output_field_name(self, target_name):
-        return f"cgl_{target_name.removeprefix('gl_')}"
+        target_suffix = (
+            target_name[3:] if target_name.startswith("gl_") else target_name
+        )
+        return f"cgl_{target_suffix}"
 
     def slang_stage_builtin_return_aliases(self, rewrite):
         if rewrite is None:
@@ -1376,13 +1379,21 @@ class SlangCodeGen:
         if isinstance(target, ArrayAccessNode):
             array_name = self.identifier_name(getattr(target, "array", None))
             index = self.literal_int_value(getattr(target, "index", None))
-            if array_name == "gl_FragData" and index is not None and index >= 0:
+            if array_name == "gl_FragData":
+                if index is None or index < 0:
+                    raise ValueError(
+                        "Slang fragment output gl_FragData requires a "
+                        "non-negative literal render-target index"
+                    )
                 return f"gl_FragColor{index}"
 
         return None
 
     def unique_slang_builtin_output_local_name(self, target_name, body_statements):
-        base_name = f"cgl_{target_name.removeprefix('gl_')}"
+        target_suffix = (
+            target_name[3:] if target_name.startswith("gl_") else target_name
+        )
+        base_name = f"cgl_{target_suffix}"
         used_names = set()
         for node in self.walk_ast(body_statements):
             if hasattr(node, "name") and isinstance(getattr(node, "name"), str):

@@ -287,6 +287,17 @@ MOJO_GENERIC_TEXTURE_BUILTINS = {
     "textureGatherCompareOffset": ("texture_gather_compare_offset", "vec4"),
 }
 
+MOJO_IMAGE_ATOMIC_BUILTINS = {
+    "imageAtomicAdd": "image_atomic_add",
+    "imageAtomicMin": "image_atomic_min",
+    "imageAtomicMax": "image_atomic_max",
+    "imageAtomicAnd": "image_atomic_and",
+    "imageAtomicOr": "image_atomic_or",
+    "imageAtomicXor": "image_atomic_xor",
+    "imageAtomicExchange": "image_atomic_exchange",
+    "imageAtomicCompSwap": "image_atomic_comp_swap",
+}
+
 MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
 
 MOJO_VECTOR_ARITHMETIC_OPS = {
@@ -1911,6 +1922,10 @@ class MojoCodeGen:
                 return self.generate_resource_builtin_call(
                     expr.args, helper_base, return_kind
                 )
+            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS:
+                return self.generate_image_atomic_call(
+                    expr.args, MOJO_IMAGE_ATOMIC_BUILTINS[func_name]
+                )
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -2252,6 +2267,29 @@ class MojoCodeGen:
             "name": helper_name,
             "arg_types": arg_types,
             "return_type": self.resource_builtin_return_type(return_kind),
+        }
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def generate_image_atomic_call(self, args, helper_base):
+        if not args:
+            return f"{helper_base}()"
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        return_type = self.image_value_type(resource_type)
+        if return_type not in {"Int32", "UInt32"}:
+            raise ValueError(
+                "Unsupported image atomic for Mojo codegen; integer image required: "
+                f"{resource_type}"
+            )
+
+        arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
+        helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
+        self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
+            "name": helper_name,
+            "arg_types": arg_types,
+            "return_type": return_type,
         }
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
@@ -3320,6 +3358,12 @@ class MojoCodeGen:
                 if return_kind == "vec2":
                     return "vec2"
                 return "vec4"
+            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                value_type = self.image_value_type(resource_type)
+                if value_type == "UInt32":
+                    return "uint"
+                return "int"
             return self.function_return_types.get(func_name)
         if isinstance(expr, MemberAccessNode):
             swizzle_indices = self.get_swizzle_indices(expr.member)

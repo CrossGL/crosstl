@@ -3960,6 +3960,30 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     assert "rayPayloadEXT RayPayload rayPayload;" not in ray_miss_code
 
 
+def test_glsl_shader_record_buffer_rejects_binding_layout():
+    shader = """
+    shader InvalidShaderRecordBinding {
+        struct ShaderRecordData {
+            uint materialIndex;
+        };
+
+        ShaderRecordData shaderRecord
+            @glsl_buffer_block(shaderRecordEXT)
+            @binding(3);
+
+        ray_generation {
+            void main() { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="shaderRecordEXT buffer blocks cannot declare binding layout qualifiers",
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_glsl_stage_local_helpers_emit_before_entrypoint():
     shader = """
     shader StageLocalHelperOrder {

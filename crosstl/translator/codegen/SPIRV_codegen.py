@@ -1323,6 +1323,7 @@ class VulkanSPIRVCodeGen:
             "textureGatherOffset",
             "textureGatherOffsets",
             "texelFetch",
+            "texelFetchOffset",
             "textureSize",
             "imageSize",
             "textureSamples",
@@ -1964,8 +1965,11 @@ class VulkanSPIRVCodeGen:
                 offset_id,
             )
 
-        if function_name == "texelFetch":
-            sample_args = self.sampled_texture_operands(function_name, args, 1)
+        if function_name in {"texelFetch", "texelFetchOffset"}:
+            required_extra_count = 1 if function_name == "texelFetch" else 2
+            sample_args = self.sampled_texture_operands(
+                function_name, args, required_extra_count
+            )
             if sample_args is None:
                 return self.register_constant(
                     0.0, self.register_primitive_type("float")
@@ -1973,6 +1977,7 @@ class VulkanSPIRVCodeGen:
 
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             operand_id = extra_args[0]
+            offset_id = extra_args[1] if function_name == "texelFetchOffset" else None
 
             image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
             if image_id is None:
@@ -1980,12 +1985,28 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
+            if metadata.get("multisampled") and offset_id is not None:
+                self.emit(
+                    "; WARNING: texelFetchOffset is not valid for multisample images"
+                )
+                result_type = self.resource_access_result_type(metadata)
+                return self.default_value_for_type(result_type)
+
             result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
-            image_operand = "Sample" if metadata.get("multisampled") else "Lod"
+            image_operand = (
+                f"Sample %{operand_id.id}"
+                if metadata.get("multisampled")
+                else f"Lod %{operand_id.id}"
+            )
+            if offset_id is not None:
+                image_operand = self.image_operands(
+                    image_operand,
+                    self.image_offset_operand(offset_id),
+                )
             self.emit(
                 f"%{id_value} = OpImageFetch %{result_type.id} "
-                f"%{image_id.id} %{coord_id.id} {image_operand} %{operand_id.id}"
+                f"%{image_id.id} %{coord_id.id} {image_operand}"
             )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -2184,6 +2205,7 @@ class VulkanSPIRVCodeGen:
             "textureGradOffset": {4, 5},
             "textureGatherOffset": {2, 3},
             "textureGatherOffsets": {2, 3, 4, 5, 6},
+            "texelFetchOffset": {3, 4},
             "textureCompareOffset": {3, 4},
             "textureCompareLodOffset": {4, 5},
             "textureCompareGradOffset": {5, 6},

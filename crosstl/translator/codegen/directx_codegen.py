@@ -5211,6 +5211,9 @@ class HLSLCodeGen:
         self.validate_hlsl_set_mesh_output_count_stage_use(func, shader_type)
         self.validate_hlsl_dispatch_mesh_calls(func, shader_type)
         self.validate_hlsl_dispatch_mesh_payloads(func, shader_type)
+        if shader_type == "mesh":
+            self.validate_hlsl_mesh_payload_parameter(func, parameters)
+            self.validate_hlsl_mesh_output_parameters(func, parameters)
         if not parameters:
             return
 
@@ -5293,10 +5296,6 @@ class HLSLCodeGen:
 
         if shader_type in {"mesh", "task", "amplification", "object"}:
             self.validate_hlsl_thread_system_value_types(parameters, shader_type)
-
-        if shader_type == "mesh":
-            self.validate_hlsl_mesh_payload_parameter(func, parameters)
-            self.validate_hlsl_mesh_output_parameters(func, parameters)
 
     def validate_hlsl_geometry_stream_output_semantics(self, parameters):
         stream_types = {"PointStream", "LineStream", "TriangleStream"}

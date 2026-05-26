@@ -1552,6 +1552,31 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         base_type = ResourceDiagnosticMixin.resource_base_type(self, type_name)
         return self.canonical_sampled_resource_type(base_type) or base_type
 
+    def dimension_query_spec(self, type_name):
+        """Return CUDA resource query metadata for supported image shapes."""
+        spec = ResourceQueryMixin.dimension_query_spec(self, type_name)
+        if spec is not None:
+            return spec
+
+        specs = {
+            "image1D": (("width",), False, False),
+            "iimage1D": (("width",), False, False),
+            "uimage1D": (("width",), False, False),
+            "image1DArray": (("width", "elements"), False, False),
+            "iimage1DArray": (("width", "elements"), False, False),
+            "uimage1DArray": (("width", "elements"), False, False),
+            "iimageCube": (("width", "height"), False, False),
+            "uimageCube": (("width", "height"), False, False),
+            "imageCubeArray": (("width", "height", "elements"), False, False),
+            "iimageCubeArray": (("width", "height", "elements"), False, False),
+            "uimageCubeArray": (("width", "height", "elements"), False, False),
+        }
+        spec = specs.get(type_name)
+        if spec is None:
+            return None
+        dimensions, mip, samples = spec
+        return {"dimensions": dimensions, "mip": mip, "samples": samples}
+
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
         function_mapping = {

@@ -3621,9 +3621,21 @@ class TestVulkanSPIRVCodeGen:
                     vec4 offsetColor = textureOffset(colorMap, uv, offset);
                     vec4 gathered = textureGather(colorMap, uv);
                     vec4 fetched = texelFetch(colorMap, pixel, 2);
+                    vec4 fetchedOffset = texelFetchOffset(
+                        colorMap,
+                        pixel,
+                        2,
+                        offset
+                    );
                     vec4 arrayOffset = textureOffset(textures[layer], uv, offset);
                     vec4 arrayGathered = textureGather(textures[layer], uv, 1);
                     vec4 arrayFetched = texelFetch(textures[layer], pixel, 0);
+                    vec4 arrayFetchedOffset = texelFetchOffset(
+                        textures[layer],
+                        pixel,
+                        0,
+                        offset
+                    );
                 }
             }
         }
@@ -3653,8 +3665,9 @@ class TestVulkanSPIRVCodeGen:
         )
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
         assert spv_code.count("OpImageGather") == 2
-        assert spv_code.count("OpImageFetch") == 2
-        assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 2
+        assert spv_code.count("OpImageFetch") == 4
+        assert len(re.findall(r"\bOpImageFetch\b.*\bOffset\b", spv_code)) == 2
+        assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 4
         assert f"OpImageGather {vec4_type.group(1)}" in spv_code
         assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
         assert f"OpLoad {array_type.group(1)}" not in spv_code
@@ -3662,6 +3675,7 @@ class TestVulkanSPIRVCodeGen:
         assert "textureOffset" not in spv_code
         assert "textureGather" not in spv_code
         assert "texelFetch" not in spv_code
+        assert "texelFetchOffset" not in spv_code
         assert "WARNING" not in spv_code
 
     def test_literal_texture_offsets_emit_spirv_const_offset_operands(self):
@@ -3771,6 +3785,35 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "texelFetch" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_multisample_texel_fetch_offset_emits_diagnostic(self):
+        source_code = """
+        shader Resources {
+            sampler2dms colorMs;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(4, 8);
+                    vec4 invalid = texelFetchOffset(
+                        colorMs,
+                        pixel,
+                        2,
+                        ivec2(1, 0)
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: texelFetchOffset is not valid for multisample images" in spv_code
+        )
+        assert "TextureFetchOffset" not in spv_code
+        assert "OpFunctionCall" not in spv_code
 
     def test_sampled_operations_ignore_explicit_sampler_operands(self):
         source_code = """

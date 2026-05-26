@@ -4160,6 +4160,8 @@ class MetalCodeGen:
             and semantic == "hit_attribute"
         ):
             return ""
+        if shader_type in {"ray_callable", "callable"} and semantic == "callable_data":
+            return ""
         if semantic:
             return self.map_semantic(semantic)
         if shader_type in {"vertex", "fragment", "compute"}:
@@ -4406,7 +4408,10 @@ class MetalCodeGen:
             address_space = "ray_data"
         else:
             return None
-        if self.semantic_from_node(node) != "payload":
+        semantic = self.semantic_from_node(node)
+        if semantic != "payload" and not (
+            shader_type in {"ray_callable", "callable"} and semantic == "callable_data"
+        ):
             return None
 
         return f"{address_space} {mapped_type}& {name}"

@@ -355,6 +355,31 @@ def test_fragment_non_output_array_assignment_does_not_crash_output_scan():
     assert "colors[0] = float4(1.0);" in generated_code
 
 
+@pytest.mark.parametrize(
+    "target_index",
+    [
+        "targetIndex",
+        "-1",
+    ],
+)
+def test_fragment_dynamic_frag_data_output_index_raises_clear_error(target_index):
+    code = f"""
+    shader main {{
+        fragment {{
+            void main() {{
+                int targetIndex = 0;
+                gl_FragData[{target_index}] = vec4(1.0);
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError,
+        match=("gl_FragData requires a non-negative literal " "render-target index"),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_vertex_position_and_point_size_outputs_rewrite_to_slang_output_struct():
     code = """
     shader main {
@@ -375,6 +400,32 @@ def test_vertex_position_and_point_size_outputs_rewrite_to_slang_output_struct()
     assert "cgl_Output.cgl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
     assert "cgl_Output.cgl_PointSize = 4.0;" in generated_code
     assert "return cgl_Output;" in generated_code
+
+
+def test_vertex_layer_and_viewport_outputs_rewrite_to_slang_output_struct():
+    code = """
+    shader main {
+        vertex {
+            void main() {
+                gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                gl_Layer = 1u;
+                gl_ViewportIndex = 2u;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct CGLVSMainOutput" in generated_code
+    assert "float4 cgl_Position : SV_Position;" in generated_code
+    assert "uint cgl_Layer : SV_RenderTargetArrayIndex;" in generated_code
+    assert "uint cgl_ViewportIndex : SV_ViewportArrayIndex;" in generated_code
+    assert "cgl_Output.cgl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "cgl_Output.cgl_Layer = 1u;" in generated_code
+    assert "cgl_Output.cgl_ViewportIndex = 2u;" in generated_code
+    assert "return cgl_Output;" in generated_code
+    assert "\n    gl_Layer =" not in generated_code
+    assert "\n    gl_ViewportIndex =" not in generated_code
 
 
 def test_slangc_smoke_compiles_generated_vertex_output_rewrite(tmp_path):
@@ -500,6 +551,53 @@ def test_fragment_system_value_builtin_combines_with_color_return_rewrite():
     )
     assert "bool front = gl_FrontFacing;" in generated_code
     assert "return (front ? float4(1.0) : float4(0.0));" in generated_code
+
+
+def test_fragment_sample_layer_and_viewport_builtins_emit_implicit_slang_parameters():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                uint sampleId = gl_SampleID;
+                uint layer = gl_Layer;
+                uint viewport = gl_ViewportIndex;
+                gl_FragColor = vec4(float(sampleId + layer + viewport));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 main(uint gl_SampleID : SV_SampleIndex, "
+        "uint gl_Layer : SV_RenderTargetArrayIndex, "
+        "uint gl_ViewportIndex : SV_ViewportArrayIndex) : SV_Target" in generated_code
+    )
+    assert "uint sampleId = gl_SampleID;" in generated_code
+    assert "uint layer = gl_Layer;" in generated_code
+    assert "uint viewport = gl_ViewportIndex;" in generated_code
+    assert "return float4(float(sampleId + layer + viewport));" in generated_code
+
+
+def test_sample_system_value_builtin_uses_existing_semantic_parameter_alias():
+    code = """
+    shader main {
+        fragment {
+            void main(uint sampleIndex @ gl_SampleID) {
+                uint sampleId = gl_SampleID;
+                gl_FragColor = vec4(float(sampleId));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 main(uint sampleIndex : SV_SampleIndex) : SV_Target" in generated_code
+    )
+    assert "uint gl_SampleID : SV_SampleIndex" not in generated_code
+    assert "uint sampleId = sampleIndex;" in generated_code
+    assert "gl_SampleID" not in generated_code
 
 
 def test_mix_builtin_lowers_to_lerp_without_affecting_resources_or_constructors():

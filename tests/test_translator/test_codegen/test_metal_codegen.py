@@ -2831,6 +2831,27 @@ def test_ray_hit_and_callable_stages_lower_to_visible_functions():
     assert "[[hit_attribute]]" not in generated
 
 
+def test_ray_callable_data_semantic_uses_ray_data_address_space():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        ray_callable {
+            void main(Payload data @ callable_data) {
+                data.color = vec3(1.0, 1.0, 1.0);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[[visible]] void callable_main(ray_data Payload& data)" in generated
+    assert "data.color = float3(1.0, 1.0, 1.0);" in generated
+    assert "[[callable_data]]" not in generated
+    assert "Payload data" not in generated
+
+
 def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
     code = """
     shader rt {

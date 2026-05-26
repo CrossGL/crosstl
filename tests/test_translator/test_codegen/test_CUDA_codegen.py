@@ -1,5 +1,8 @@
 """Test CUDA Code Generation from CrossGL"""
 
+import shutil
+import subprocess
+
 import pytest
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -17,6 +20,24 @@ from crosstl.translator.ast import (
     VariableNode,
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
+
+
+def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
+    """Compile generated CUDA when nvcc is available in the local environment."""
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        return
+
+    source_path = tmp_path / "generated.cu"
+    object_path = tmp_path / "generated.o"
+    source_path.write_text(cuda_code, encoding="utf-8")
+
+    result = subprocess.run(
+        [nvcc, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + cuda_code
 
 
 class TestCudaCodeGen:
@@ -500,7 +521,7 @@ class TestCudaCodeGen:
         )
         assert "make_float3(makePayload().colors[0])" not in cuda_code
 
-    def test_direct_builtin_identifier_nodes_emit_cuda_names(self):
+    def test_direct_builtin_identifier_nodes_emit_cuda_names(self, tmp_path):
         """Test CUDA maps direct AST built-in identifiers with component suffixes."""
         ast = ShaderNode(
             name="DirectBuiltins",
@@ -556,6 +577,22 @@ class TestCudaCodeGen:
         assert "gl_WorkGroupID" not in cuda_code
         assert "gl_WorkGroupSize" not in cuda_code
         assert "gl_NumWorkGroups" not in cuda_code
+
+        compile_smoke_ast = ShaderNode(
+            name="CudaCompileSmoke",
+            execution_model=ExecutionModel.GENERAL_PURPOSE,
+            functions=[
+                FunctionNode(
+                    "compileSmoke",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode([]),
+                )
+            ],
+        )
+        compile_cuda_if_nvcc_available(
+            CudaCodeGen().generate(compile_smoke_ast), tmp_path
+        )
 
     def test_struct_generation(self):
         """Test struct generation"""
@@ -5818,11 +5855,17 @@ class TestCudaCodeGen:
             samplercubearray cubeArrayTex;
             sampler2dms msTex;
             sampler2dmsarray msLayers;
+            image1D lineImage;
+            image1DArray lineLayerImage;
             image2D colorImage;
             image3D volumeImage;
+            imageCube cubeImage;
+            imageCubeArray cubeLayerImage;
             image2DArray layerImage;
             image2DMS msImage;
             image2DMSArray msImageLayers;
+            uimage1D counters1d;
+            uimageCubeArray cubeCounters;
             uimage2DMS counters;
 
             void queryParam(sampler2d paramTex) {
@@ -5843,11 +5886,17 @@ class TestCudaCodeGen:
                     int cubeArrayLevels = textureQueryLevels(cubeArrayTex);
                     ivec2 msSize = textureSize(msTex, 0);
                     ivec3 msLayerSize = textureSize(msLayers, 0);
+                    int lineImageSize = imageSize(lineImage);
+                    ivec2 lineLayerImageSize = imageSize(lineLayerImage);
                     ivec2 imageSize2d = imageSize(colorImage);
                     ivec3 imageSize3d = imageSize(volumeImage);
+                    ivec2 cubeImageSize = imageSize(cubeImage);
+                    ivec3 cubeLayerImageSize = imageSize(cubeLayerImage);
                     ivec3 imageSizeLayer = imageSize(layerImage);
                     ivec2 msImageSize = imageSize(msImage);
                     ivec3 msImageLayerSize = imageSize(msImageLayers);
+                    int counters1dSize = imageSize(counters1d);
+                    ivec3 cubeCountersSize = imageSize(cubeCounters);
                     int texSamples = textureSamples(msTex);
                     int texLayerSamples = textureSamples(msLayers);
                     int imageSamplesValue = imageSamples(msImage);
@@ -5873,6 +5922,11 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo cubeArrayTex_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo counters_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo lineImage_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo lineLayerImage_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo cubeLayerImage_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo counters1d_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo cubeCounters_metadata = {};" in cuda_code
         assert (
             "return make_int3(cgl_lod_extent(info.width, mipLevel), "
             "cgl_lod_extent(info.height, mipLevel), info.elements);" in cuda_code
@@ -5928,12 +5982,28 @@ class TestCudaCodeGen:
             "(msLayers_metadata);" in cuda_code
         )
         assert (
+            "int lineImageSize = cgl_imageSize_image1D(lineImage_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int2 lineLayerImageSize = cgl_imageSize_image1DArray"
+            "(lineLayerImage_metadata);" in cuda_code
+        )
+        assert (
             "int2 imageSize2d = cgl_imageSize_image2D(colorImage_metadata);"
             in cuda_code
         )
         assert (
             "int3 imageSize3d = cgl_imageSize_image3D(volumeImage_metadata);"
             in cuda_code
+        )
+        assert (
+            "int2 cubeImageSize = cgl_imageSize_imageCube(cubeImage_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int3 cubeLayerImageSize = cgl_imageSize_imageCubeArray"
+            "(cubeLayerImage_metadata);" in cuda_code
         )
         assert (
             "int3 imageSizeLayer = cgl_imageSize_image2DArray(layerImage_metadata);"
@@ -5945,6 +6015,14 @@ class TestCudaCodeGen:
         assert (
             "int3 msImageLayerSize = cgl_imageSize_image2DMSArray"
             "(msImageLayers_metadata);" in cuda_code
+        )
+        assert (
+            "int counters1dSize = cgl_imageSize_uimage1D(counters1d_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int3 cubeCountersSize = cgl_imageSize_uimageCubeArray"
+            "(cubeCounters_metadata);" in cuda_code
         )
         assert (
             "int texSamples = cgl_textureSamples_sampler2DMS(msTex_metadata);"

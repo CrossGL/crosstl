@@ -22,6 +22,7 @@ from crosstl.translator.ast import (
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
+    ReferenceType,
     ShaderNode,
     ShaderStage,
     StructPatternNode,
@@ -1698,6 +1699,8 @@ def test_backend_parameter_address_and_access_qualifiers_parse():
 
         void consume(
             threadgroup Payload* payload @payload,
+            constant Payload& payloadRef,
+            device Payload& mut mutablePayloadRef,
             device float values[],
             constant int count,
             readonly image2D source @r32f,
@@ -1707,13 +1710,31 @@ def test_backend_parameter_address_and_access_qualifiers_parse():
     """
 
     ast = parse_code(tokenize_code(code))
-    payload, values, count, source, target = ast.functions[0].parameters
+    (
+        payload,
+        payload_ref,
+        mutable_payload_ref,
+        values,
+        count,
+        source,
+        target,
+    ) = ast.functions[0].parameters
 
     assert payload.qualifiers == ["threadgroup"]
     assert payload.name == "payload"
     assert isinstance(payload.param_type, PointerType)
     assert payload.param_type.pointee_type.name == "Payload"
     assert payload.attributes[0].name == "payload"
+
+    assert payload_ref.qualifiers == ["constant"]
+    assert isinstance(payload_ref.param_type, ReferenceType)
+    assert payload_ref.param_type.referenced_type.name == "Payload"
+    assert payload_ref.param_type.is_mutable is False
+
+    assert mutable_payload_ref.qualifiers == ["device"]
+    assert isinstance(mutable_payload_ref.param_type, ReferenceType)
+    assert mutable_payload_ref.param_type.referenced_type.name == "Payload"
+    assert mutable_payload_ref.param_type.is_mutable is True
 
     assert values.qualifiers == ["device"]
     assert isinstance(values.param_type, ArrayType)

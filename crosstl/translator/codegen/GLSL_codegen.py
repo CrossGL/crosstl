@@ -1147,6 +1147,11 @@ class GLSLCodeGen:
 
             if self.is_glsl_buffer_block_variable(node, vtype):
                 if self.is_shader_record_buffer_block(node):
+                    if self.explicit_resource_binding_index(node) is not None:
+                        raise ValueError(
+                            "GLSL shaderRecordEXT buffer blocks cannot declare "
+                            "binding layout qualifiers"
+                        )
                     declaration = self.glsl_buffer_block_declaration(
                         node, vtype, var_name, None, array_suffix
                     )
@@ -3691,7 +3696,7 @@ class GLSLCodeGen:
                 emitted.append(qualifier)
 
         for qualifier in qualifiers:
-            normalized = qualifier.removeprefix("glsl_")
+            normalized = qualifier[5:] if qualifier.startswith("glsl_") else qualifier
             normalized = normalized.replace("-", "_")
             if normalized in {"perprimitive", "perprimitiveext"}:
                 add("perprimitiveEXT")

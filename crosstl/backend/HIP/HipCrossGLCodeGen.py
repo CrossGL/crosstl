@@ -773,9 +773,30 @@ class HipToCrossGLConverter:
         var_type = self.convert_hip_variable_type_to_crossgl(
             getattr(node, "vtype", "int"), node.name
         )
+        qualifiers = set(getattr(node, "qualifiers", []) or [])
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, getattr(node, "vtype", "int"))
+        if "__shared__" in qualifiers:
+            self.emit(f"var<workgroup> {node.name}: {var_type};")
+            return
+
+        if "__constant__" in qualifiers:
+            if hasattr(node, "value") and node.value:
+                value = self.visit(node.value)
+                self.emit(
+                    f"@group(0) @binding(0) var<uniform> {node.name}: "
+                    f"{var_type} = {value};"
+                )
+            else:
+                self.emit(
+                    f"@group(0) @binding(0) var<uniform> {node.name}: {var_type};"
+                )
+            return
+
+        if "__managed__" in qualifiers:
+            self.emit(f"// HIP managed memory: {node.name}")
+
         if hasattr(node, "value") and node.value:
             runtime_status = self.format_hip_runtime_status_expression(node.value)
             if runtime_status is not None:
@@ -1508,9 +1529,14 @@ class HipToCrossGLConverter:
             "short": "i16",
             "unsigned short": "u16",
             "int": "i32",
+            "signed int": "i32",
             "unsigned int": "u32",
             "long": "i64",
+            "signed long": "i64",
             "unsigned long": "u64",
+            "long long": "i64",
+            "signed long long": "i64",
+            "unsigned long long": "u64",
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
@@ -1730,6 +1756,8 @@ class HipToCrossGLConverter:
             # Sync functions
             "__syncthreads": "workgroupBarrier",
             "__threadfence": "memoryBarrier",
+            "__threadfence_block": "memoryBarrier",
+            "__threadfence_system": "memoryBarrier",
             # Atomic functions
             "atomicAdd": "atomicAdd",
             "hipAtomicAdd": "atomicAdd",

@@ -2658,6 +2658,225 @@ def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
+    code = """
+    shader ShadowCompareProbe {
+        sampler2DShadow shadowMap;
+        sampler2DArrayShadow shadowArray;
+        samplerCubeShadow cubeShadow;
+        samplerCubeArrayShadow cubeArrayShadow;
+        sampler compareSampler;
+
+        fragment {
+            float main(
+                vec2 uv,
+                vec3 uvLayer,
+                vec3 direction,
+                vec4 cubeLayer,
+                vec3 uvq,
+                vec4 uvqw,
+                float depth,
+                float lod,
+                vec2 ddx,
+                vec2 ddy,
+                ivec2 offset
+            ) @ gl_FragDepth {
+                let base = textureCompare(shadowMap, uv, depth);
+                let baseSampler = textureCompare(shadowMap, compareSampler, uv, depth);
+                let arrayCompare = textureCompare(shadowArray, uvLayer, depth);
+                let cubeCompare = textureCompare(cubeShadow, direction, depth);
+                let cubeArrayCompare = textureCompare(cubeArrayShadow, cubeLayer, depth);
+                let offsetCompare = textureCompareOffset(shadowMap, uv, depth, offset);
+                let offsetSampler = textureCompareOffset(shadowMap, compareSampler, uv, depth, offset);
+                let lodCompare = textureCompareLod(shadowMap, uv, depth, lod);
+                let lodSampler = textureCompareLod(shadowMap, compareSampler, uv, depth, lod);
+                let lodOffset = textureCompareLodOffset(shadowMap, uv, depth, lod, offset);
+                let lodOffsetSampler = textureCompareLodOffset(shadowMap, compareSampler, uv, depth, lod, offset);
+                let gradCompare = textureCompareGrad(shadowMap, uv, depth, ddx, ddy);
+                let gradSampler = textureCompareGrad(shadowMap, compareSampler, uv, depth, ddx, ddy);
+                let gradOffset = textureCompareGradOffset(shadowMap, uv, depth, ddx, ddy, offset);
+                let gradOffsetSampler = textureCompareGradOffset(shadowMap, compareSampler, uv, depth, ddx, ddy, offset);
+                let projected = textureCompareProj(shadowMap, uvq, depth);
+                let projectedSampler = textureCompareProj(shadowMap, compareSampler, uvq, depth);
+                let projectedW = textureCompareProj(shadowMap, uvqw, depth);
+                let projectedOffset = textureCompareProjOffset(shadowMap, uvq, depth, offset);
+                let projectedOffsetSampler = textureCompareProjOffset(shadowMap, compareSampler, uvq, depth, offset);
+                let projectedLod = textureCompareProjLod(shadowMap, uvq, depth, lod);
+                let projectedLodSampler = textureCompareProjLod(shadowMap, compareSampler, uvq, depth, lod);
+                let projectedLodOffset = textureCompareProjLodOffset(shadowMap, uvq, depth, lod, offset);
+                let projectedLodOffsetSampler = textureCompareProjLodOffset(shadowMap, compareSampler, uvq, depth, lod, offset);
+                let projectedGrad = textureCompareProjGrad(shadowMap, uvq, depth, ddx, ddy);
+                let projectedGradSampler = textureCompareProjGrad(shadowMap, compareSampler, uvq, depth, ddx, ddy);
+                let projectedGradOffset = textureCompareProjGradOffset(shadowMap, uvq, depth, ddx, ddy, offset);
+                let projectedGradOffsetSampler = textureCompareProjGradOffset(shadowMap, compareSampler, uvq, depth, ddx, ddy, offset);
+                let gathered = textureGatherCompare(shadowMap, uv, depth);
+                let gatheredSampler = textureGatherCompare(shadowMap, compareSampler, uv, depth);
+                let gatheredOffset = textureGatherCompareOffset(shadowMap, uv, depth, offset);
+                let gatheredOffsetSampler = textureGatherCompareOffset(shadowMap, compareSampler, uv, depth, offset);
+                let shadowSize = textureSize(shadowArray, 0);
+                return base + baseSampler + arrayCompare + cubeCompare + cubeArrayCompare
+                    + offsetCompare + offsetSampler + lodCompare + lodSampler
+                    + lodOffset + lodOffsetSampler + gradCompare + gradSampler
+                    + gradOffset + gradOffsetSampler + projected + projectedSampler
+                    + projectedW + projectedOffset + projectedOffsetSampler
+                    + projectedLod + projectedLodSampler + projectedLodOffset
+                    + projectedLodOffsetSampler + projectedGrad + projectedGradSampler
+                    + projectedGradOffset + projectedGradOffsetSampler
+                    + gathered.x + gatheredSampler.y + gatheredOffset.z
+                    + gatheredOffsetSampler.w + float(shadowSize.z);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static SHADOW_MAP: std::sync::LazyLock<DepthTexture2D<f32>>" in (
+        generated_code
+    )
+    assert "static SHADOW_ARRAY: std::sync::LazyLock<DepthTexture2DArray<f32>>" in (
+        generated_code
+    )
+    assert "static CUBE_SHADOW: std::sync::LazyLock<DepthTextureCube<f32>>" in (
+        generated_code
+    )
+    assert (
+        "static CUBE_ARRAY_SHADOW: std::sync::LazyLock<DepthTextureCubeArray<f32>>"
+        in generated_code
+    )
+    assert "static COMPARE_SAMPLER: std::sync::LazyLock<Sampler>" in generated_code
+    assert "let base: f32 = texture_compare(*SHADOW_MAP, uv, depth);" in generated_code
+    assert (
+        "let baseSampler: f32 = texture_compare_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth);"
+        in generated_code
+    )
+    assert (
+        "let arrayCompare: f32 = texture_compare(*SHADOW_ARRAY, uvLayer, depth);"
+        in generated_code
+    )
+    assert (
+        "let cubeCompare: f32 = texture_compare(*CUBE_SHADOW, direction, depth);"
+        in generated_code
+    )
+    assert (
+        "let cubeArrayCompare: f32 = texture_compare(*CUBE_ARRAY_SHADOW, cubeLayer, depth);"
+        in generated_code
+    )
+    assert (
+        "let offsetCompare: f32 = texture_compare_offset(*SHADOW_MAP, uv, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "let offsetSampler: f32 = texture_compare_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "let lodCompare: f32 = texture_compare_lod(*SHADOW_MAP, uv, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "let lodSampler: f32 = texture_compare_lod_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "let lodOffset: f32 = texture_compare_lod_offset(*SHADOW_MAP, uv, depth, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "let lodOffsetSampler: f32 = texture_compare_lod_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "let gradCompare: f32 = texture_compare_grad(*SHADOW_MAP, uv, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "let gradSampler: f32 = texture_compare_grad_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "let gradOffset: f32 = texture_compare_grad_offset(*SHADOW_MAP, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "let gradOffsetSampler: f32 = texture_compare_grad_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "let projected: f32 = texture_compare_projected(*SHADOW_MAP, uvq, depth);"
+        in generated_code
+    )
+    assert (
+        "let projectedSampler: f32 = texture_compare_projected_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth);"
+        in generated_code
+    )
+    assert (
+        "let projectedOffset: f32 = texture_compare_projected_offset(*SHADOW_MAP, uvq, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "let projectedOffsetSampler: f32 = texture_compare_projected_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "let projectedLod: f32 = texture_compare_projected_lod(*SHADOW_MAP, uvq, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "let projectedLodSampler: f32 = texture_compare_projected_lod_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, lod);"
+        in generated_code
+    )
+    assert (
+        "let projectedLodOffset: f32 = texture_compare_projected_lod_offset(*SHADOW_MAP, uvq, depth, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "let projectedLodOffsetSampler: f32 = texture_compare_projected_lod_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "let projectedGrad: f32 = texture_compare_projected_grad(*SHADOW_MAP, uvq, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "let projectedGradSampler: f32 = texture_compare_projected_grad_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "let projectedGradOffset: f32 = texture_compare_projected_grad_offset(*SHADOW_MAP, uvq, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "let projectedGradOffsetSampler: f32 = texture_compare_projected_grad_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvq, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "let gathered: Vec4<f32> = texture_gather_compare(*SHADOW_MAP, uv, depth);"
+        in generated_code
+    )
+    assert (
+        "let gatheredSampler: Vec4<f32> = texture_gather_compare_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth);"
+        in generated_code
+    )
+    assert (
+        "let gatheredOffset: Vec4<f32> = texture_gather_compare_offset(*SHADOW_MAP, uv, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "let gatheredOffsetSampler: Vec4<f32> = texture_gather_compare_offset_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth, offset);"
+        in generated_code
+    )
+    assert (
+        "let shadowSize: Vec3<i32> = texture_size_lod(*SHADOW_ARRAY, 0);"
+        in generated_code
+    )
+    assert "textureCompare" not in generated_code
+    assert "textureGatherCompare" not in generated_code
+    assert "sampler2DShadow" not in generated_code
+    assert "sampler2DArrayShadow" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_path):
     code = """
     shader ResourceHelperProbe {
