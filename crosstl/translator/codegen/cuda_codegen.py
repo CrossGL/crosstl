@@ -693,6 +693,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def generate_buffer_call(self, function_expr, func_name, raw_args, args):
         """Lower structured-buffer loads and stores to CUDA pointer indexing."""
+        byte_address_call = self.generate_byte_address_buffer_call(
+            function_expr, func_name, raw_args, args
+        )
+        if byte_address_call is not None:
+            return byte_address_call
+
         member_call = self.structured_buffer_member_call(function_expr)
         if member_call is not None:
             buffer_expr, operation, buffer_type = member_call
@@ -726,6 +732,172 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
 
         return None
+
+    def generate_byte_address_buffer_call(
+        self, function_expr, func_name, raw_args, args
+    ):
+        """Lower byte-address buffer methods to typed CUDA byte-pointer helpers."""
+        member_call = self.byte_address_buffer_member_call(function_expr)
+        if member_call is not None:
+            buffer_expr, operation, buffer_type = member_call
+            component_count = self.byte_address_buffer_component_count(operation)
+            if component_count is None:
+                return None
+
+            buffer_name = self.visit(buffer_expr)
+            if operation.startswith("Load") and len(args) >= 1:
+                helper_name = self.require_byte_address_load_helper(component_count)
+                return f"{helper_name}({buffer_name}, {args[0]})"
+
+            if operation.startswith("Store") and len(args) >= 2:
+                if self.byte_address_buffer_is_writable(buffer_type):
+                    helper_name = self.require_byte_address_store_helper(
+                        component_count
+                    )
+                    return f"{helper_name}({buffer_name}, {args[0]}, {args[1]})"
+                return self.unsupported_byte_address_buffer_call(
+                    operation, buffer_type, "((void)0)"
+                )
+            return None
+
+        if func_name == "buffer_load" and len(args) >= 2:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.byte_address_buffer_base_type(buffer_type) is None:
+                return None
+            helper_name = self.require_byte_address_load_helper(1)
+            return f"{helper_name}({args[0]}, {args[1]})"
+
+        if func_name == "buffer_store" and len(args) >= 3:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.byte_address_buffer_base_type(buffer_type) is None:
+                return None
+            if self.byte_address_buffer_is_writable(buffer_type):
+                helper_name = self.require_byte_address_store_helper(1)
+                return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
+            return self.unsupported_byte_address_buffer_call(
+                "buffer_store", buffer_type, "((void)0)"
+            )
+
+        return None
+
+    def byte_address_buffer_member_call(self, function_expr):
+        """Return byte-address buffer member call pieces, if applicable."""
+        if not isinstance(function_expr, MemberAccessNode):
+            return None
+
+        buffer_expr = getattr(
+            function_expr, "object_expr", getattr(function_expr, "object", None)
+        )
+        buffer_type = self.expression_result_type(buffer_expr)
+        if self.byte_address_buffer_base_type(buffer_type) is None:
+            return None
+
+        return buffer_expr, getattr(function_expr, "member", ""), buffer_type
+
+    def byte_address_buffer_component_count(self, operation):
+        """Return the uint lane count for Load/Store byte-address operations."""
+        operation_counts = {
+            "Load": 1,
+            "Load2": 2,
+            "Load3": 3,
+            "Load4": 4,
+            "Store": 1,
+            "Store2": 2,
+            "Store3": 3,
+            "Store4": 4,
+        }
+        return operation_counts.get(operation)
+
+    def byte_address_buffer_value_type(self, component_count):
+        """Return the CUDA uint vector type for a byte-address operation."""
+        if component_count == 1:
+            return "uint"
+        return f"uint{component_count}"
+
+    def byte_address_helper_suffix(self, component_count):
+        """Return a stable helper-name suffix for byte-address operations."""
+        if component_count == 1:
+            return "uint"
+        return f"uint{component_count}"
+
+    def require_byte_address_load_helper(self, component_count):
+        """Register a CUDA byte-address load helper and return its name."""
+        helper_name = (
+            f"cgl_byte_address_load_{self.byte_address_helper_suffix(component_count)}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        if component_count == 1:
+            helper = (
+                "__device__ inline uint "
+                f"{helper_name}(const unsigned char* buffer, uint offset)\n"
+                "{\n"
+                "    return *reinterpret_cast<const uint*>(buffer + offset);\n"
+                "}"
+            )
+            self.helper_functions[helper_name] = helper
+            return helper_name
+
+        scalar_helper = self.require_byte_address_load_helper(1)
+        components = ("x", "y", "z", "w")[:component_count]
+        args = [
+            f"{scalar_helper}(buffer, offset + {index * 4}u)"
+            for index, _ in enumerate(components)
+        ]
+        value_type = self.byte_address_buffer_value_type(component_count)
+        constructor = self.convert_builtin_function(value_type)
+        helper = (
+            f"__device__ inline {value_type} "
+            f"{helper_name}(const unsigned char* buffer, uint offset)\n"
+            "{\n"
+            f"    return {constructor}({', '.join(args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_byte_address_store_helper(self, component_count):
+        """Register a CUDA byte-address store helper and return its name."""
+        helper_name = (
+            f"cgl_byte_address_store_{self.byte_address_helper_suffix(component_count)}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        value_type = self.byte_address_buffer_value_type(component_count)
+        if component_count == 1:
+            helper = (
+                "__device__ inline void "
+                f"{helper_name}(unsigned char* buffer, uint offset, uint value)\n"
+                "{\n"
+                "    *reinterpret_cast<uint*>(buffer + offset) = value;\n"
+                "}"
+            )
+            self.helper_functions[helper_name] = helper
+            return helper_name
+
+        scalar_helper = self.require_byte_address_store_helper(1)
+        components = ("x", "y", "z", "w")[:component_count]
+        lines = [
+            f"    {scalar_helper}(buffer, offset + {index * 4}u, value.{component});"
+            for index, component in enumerate(components)
+        ]
+        helper = (
+            f"__device__ inline void {helper_name}"
+            f"(unsigned char* buffer, uint offset, {value_type} value)\n"
+            "{\n" + "\n".join(lines) + "\n}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def unsupported_byte_address_buffer_call(self, operation, buffer_type, fallback):
+        """Return diagnostic code for unsupported byte-address buffer operations."""
+        buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
+        return (
+            f"/* unsupported {self.resource_backend_name()} byte-address buffer call: "
+            f"{operation} on {buffer_type} */ {fallback}"
+        )
 
     def structured_buffer_member_call(self, function_expr):
         """Return structured-buffer member call pieces, if applicable."""
@@ -1478,6 +1650,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if structured_buffer_type is not None:
             return structured_buffer_type
 
+        byte_address_buffer_type = self.cuda_byte_address_buffer_type(crossgl_type)
+        if byte_address_buffer_type is not None:
+            return byte_address_buffer_type
+
         type_mapping = {
             # Basic types
             "void": "void",
@@ -1701,6 +1877,29 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"const {cuda_element_type}*"
         return f"{cuda_element_type}*"
 
+    def byte_address_buffer_base_type(self, type_name):
+        """Return the byte-address buffer base type, if applicable."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        base_type = type_name.split("[", 1)[0].strip()
+        if base_type in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            return base_type
+        return None
+
+    def byte_address_buffer_is_writable(self, type_name):
+        """Return whether a byte-address buffer type permits writes."""
+        return self.byte_address_buffer_base_type(type_name) == "RWByteAddressBuffer"
+
+    def cuda_byte_address_buffer_type(self, type_name):
+        """Map ByteAddressBuffer and RWByteAddressBuffer to CUDA byte pointers."""
+        base_type = self.byte_address_buffer_base_type(type_name)
+        if base_type == "ByteAddressBuffer":
+            return "const unsigned char*"
+        if base_type == "RWByteAddressBuffer":
+            return "unsigned char*"
+        return None
+
     def array_access_element_type(self, type_name):
         """Return the element type for CUDA arrays and structured buffers."""
         array_element_type = super().array_access_element_type(type_name)
@@ -1721,9 +1920,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return super().expression_result_type(node)
 
     def buffer_call_result_type(self, node):
-        """Infer result type for structured-buffer read calls."""
+        """Infer result type for structured and byte-address buffer read calls."""
         function_expr = getattr(node, "function", getattr(node, "name", None))
         raw_args = getattr(node, "arguments", getattr(node, "args", []))
+
+        byte_member_call = self.byte_address_buffer_member_call(function_expr)
+        if byte_member_call is not None:
+            _, operation, _ = byte_member_call
+            if operation.startswith("Load") and raw_args:
+                component_count = self.byte_address_buffer_component_count(operation)
+                if component_count is not None:
+                    return self.byte_address_buffer_value_type(component_count)
+            return None
 
         member_call = self.structured_buffer_member_call(function_expr)
         if member_call is not None:
@@ -1735,6 +1943,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         func_name = getattr(function_expr, "name", function_expr)
         if func_name == "buffer_load" and raw_args:
             buffer_type = self.expression_result_type(raw_args[0])
+            if self.byte_address_buffer_base_type(buffer_type) is not None:
+                return "uint"
             parts = self.structured_buffer_type_parts(buffer_type)
             if parts is not None:
                 return parts[1]

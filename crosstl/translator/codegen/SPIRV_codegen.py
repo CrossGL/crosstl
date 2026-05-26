@@ -2021,6 +2021,13 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is not None and metadata.get("writeonly"):
+                self.emit("; WARNING: buffer_load requires a readable buffer")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
             element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
             if element_pointer is None:
                 self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
@@ -4115,6 +4122,107 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[block_type.id] = buffer_metadata
         return var_id
 
+    def is_glsl_buffer_block_node(self, node: VariableNode) -> bool:
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        }
+        return "buffer" in qualifiers
+
+    def process_glsl_buffer_block_declaration(
+        self, node: VariableNode, type_name: str
+    ) -> SpirvId:
+        """Emit a GLSL-style buffer block or buffer-qualified array variable."""
+        base_type_name = self.array_base_type_name(type_name)
+        is_named_block = base_type_name in self.struct_types
+        if is_named_block:
+            value_type = self.map_crossgl_type(type_name)
+            block_type = self.struct_types[base_type_name]
+            block_members = self.current_struct_members.get(base_type_name, [])
+            variable_member_name = None
+            variable_member_type = None
+        else:
+            variable_member_name = node.name
+            variable_member_type = self.map_crossgl_type(
+                getattr(node, "var_type", getattr(node, "vtype", "float"))
+            )
+            block_type = self.register_struct_type(
+                f"{node.name}Buffer",
+                [(variable_member_type, variable_member_name)],
+            )
+            value_type = block_type
+            block_members = [(variable_member_type, variable_member_name)]
+
+        self.decorate_storage_buffer_block_type(block_type)
+
+        var_id = self.create_variable(value_type, "Uniform", node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(node)
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        self.global_variables[node.name] = var_id
+        self.register_single_array_storage_buffer_metadata(
+            node,
+            var_id,
+            block_type,
+            block_members,
+            variable_member_name,
+            variable_member_type,
+        )
+        return var_id
+
+    def register_single_array_storage_buffer_metadata(
+        self,
+        node: VariableNode,
+        var_id: SpirvId,
+        block_type: SpirvId,
+        block_members: List[Tuple[SpirvId, str]],
+        variable_member_name: Optional[str],
+        variable_member_type: Optional[SpirvId],
+    ):
+        if len(block_members) != 1:
+            return
+
+        member_type, member_name = block_members[0]
+        array_info = self.array_type_info_from_type(member_type)
+        if array_info is None:
+            return
+
+        element_type, _ = array_info
+        metadata = {
+            "kind": "structured_buffer",
+            "buffer_kind": (
+                "StructuredBuffer"
+                if self.storage_buffer_is_readonly(node)
+                else "RWStructuredBuffer"
+            ),
+            "element_type_name": element_type.type.base_type,
+            "readonly": self.storage_buffer_is_readonly(node),
+            "writeonly": self.storage_buffer_is_writeonly(node),
+            "element_type": element_type,
+            "runtime_array_type": member_type,
+            "block_type": block_type,
+            "member_index": 0,
+            "member_name": variable_member_name or member_name,
+        }
+        self.structured_buffer_metadata[var_id.id] = metadata
+        self.structured_buffer_metadata[block_type.id] = metadata
+        if variable_member_type is not None:
+            self.structured_buffer_metadata[variable_member_type.id] = metadata
+
+    def storage_buffer_is_readonly(self, node: VariableNode) -> bool:
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        }
+        return "readonly" in qualifiers
+
+    def storage_buffer_is_writeonly(self, node: VariableNode) -> bool:
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        }
+        return "writeonly" in qualifiers
+
     def decorate_cbuffer_type(
         self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
     ):
@@ -4207,6 +4315,24 @@ class VulkanSPIRVCodeGen:
         stride = self.uniform_array_stride(element_type)
         self.decorations.append(f"OpDecorate %{type_id.id} ArrayStride {stride}")
         self.decorate_uniform_array_strides(element_type)
+
+    def decorate_storage_buffer_block_type(self, block_type: SpirvId):
+        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        for member_index, (member_type, _) in enumerate(
+            self.current_struct_members.get(block_type.type.base_type, [])
+        ):
+            offset = self.storage_struct_member_offset(block_type, member_index)
+            self.decorations.append(
+                f"OpMemberDecorate %{block_type.id} {member_index} Offset {offset}"
+            )
+            if self.uniform_layout_contains_matrix(member_type):
+                self.decorations.append(
+                    f"OpMemberDecorate %{block_type.id} {member_index} ColMajor"
+                )
+                self.decorations.append(
+                    f"OpMemberDecorate %{block_type.id} {member_index} MatrixStride 16"
+                )
+            self.decorate_storage_buffer_nested_type(member_type)
 
     def decorate_storage_buffer_nested_type(self, type_id: SpirvId):
         struct_members = self.current_struct_members.get(type_id.type.base_type)
@@ -4484,6 +4610,9 @@ class VulkanSPIRVCodeGen:
         """Process a module-scope CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type_name = self.type_name_from_value(var_type_source)
+        if self.is_glsl_buffer_block_node(node):
+            return self.process_glsl_buffer_block_declaration(node, var_type_name)
+
         if self.is_structured_buffer_type_name(var_type_name):
             return self.process_structured_buffer_declaration(node, var_type_name)
 
@@ -4593,7 +4722,9 @@ class VulkanSPIRVCodeGen:
             seen.add(node_id)
             type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
             type_name = self.type_name_from_value(type_source)
-            if self.is_structured_buffer_type_name(type_name):
+            if self.is_structured_buffer_type_name(
+                type_name
+            ) or self.is_glsl_buffer_block_node(node):
                 yield node
 
     def global_resource_nodes(self, ast: ShaderNode):
@@ -7386,6 +7517,9 @@ class VulkanSPIRVCodeGen:
 
         for struct in ast.structs:
             self.process_crossgl_struct(struct)
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            for struct in getattr(stage, "local_structs", []) or []:
+                self.process_crossgl_struct(struct)
 
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)

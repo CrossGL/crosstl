@@ -5501,10 +5501,10 @@ class RustCodeGen:
             return self.promoted_value_type(arg_types[0], arg_types[1])
 
         if mapped_name == "smoothstep" and len(arg_types) >= 3:
-            return arg_types[2]
+            return self.promoted_argument_type(arg_types[:3])
 
         if mapped_name == "step" and len(arg_types) >= 2:
-            return arg_types[1]
+            return self.promoted_argument_type(arg_types[:2])
 
         return None
 
@@ -5623,6 +5623,17 @@ class RustCodeGen:
         if vector_info is not None:
             return vector_info["component_type"]
         return self.normalize_scalar_type(type_name)
+
+    def promoted_argument_type(self, arg_types):
+        result_type = None
+        for arg_type in arg_types:
+            if arg_type is None:
+                continue
+            if result_type is None:
+                result_type = arg_type
+                continue
+            result_type = self.promoted_value_type(result_type, arg_type)
+        return result_type
 
     def promoted_value_type(self, left_type, right_type):
         for promoted in (

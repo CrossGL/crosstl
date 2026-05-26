@@ -166,6 +166,14 @@ class TestCudaCodeGen:
             codegen.convert_crossgl_type_to_cuda("RWStructuredBuffer<uint>") == "uint*"
         )
         assert (
+            codegen.convert_crossgl_type_to_cuda("ByteAddressBuffer")
+            == "const unsigned char*"
+        )
+        assert (
+            codegen.convert_crossgl_type_to_cuda("RWByteAddressBuffer")
+            == "unsigned char*"
+        )
+        assert (
             codegen.convert_crossgl_type_to_cuda("Texture2D<float4>")
             == "texture<float4, 2>"
         )
@@ -2719,6 +2727,105 @@ class TestCudaCodeGen:
         assert "StructuredBuffer<int> input;" not in cuda_code
         assert "StructuredBuffer<float> inputValues" not in cuda_code
         assert "RWStructuredBuffer<" not in cuda_code
+        assert ".Load(" not in cuda_code
+        assert ".Store(" not in cuda_code
+        assert "buffer_load(" not in cuda_code
+        assert "buffer_store(" not in cuda_code
+
+    def test_byte_address_buffer_resources_emit_cuda_byte_pointer_helpers(self):
+        """Test CUDA lowers byte-address buffers to typed byte-pointer helpers."""
+        source_code = """
+        shader ByteAddressBufferCUDA {
+            ByteAddressBuffer readBytes;
+            RWByteAddressBuffer writeBytes;
+            RWByteAddressBuffer byteBuffers[2];
+
+            void process(
+                ByteAddressBuffer paramRead,
+                RWByteAddressBuffer paramWrite,
+                uint offset,
+                uint index,
+                uint value,
+                uint2 pair,
+                uint3 triple,
+                uint4 quad
+            ) {
+                uint a = readBytes.Load(offset);
+                uint2 b = paramRead.Load2(offset + 4u);
+                uint3 c = byteBuffers[index].Load3(offset);
+                uint4 d = writeBytes.Load4(offset);
+                uint e = buffer_load(paramRead, offset);
+                writeBytes.Store(offset, value);
+                paramWrite.Store2(offset, pair);
+                byteBuffers[index].Store3(offset, triple);
+                writeBytes.Store4(offset, quad);
+                buffer_store(paramWrite, offset, e);
+                readBytes.Store(offset, value);
+                buffer_store(readBytes, offset, value);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "const unsigned char* readBytes;" in cuda_code
+        assert "unsigned char* writeBytes;" in cuda_code
+        assert "unsigned char* byteBuffers[2];" in cuda_code
+        assert (
+            "__device__ void process(const unsigned char* paramRead, "
+            "unsigned char* paramWrite, uint offset, uint index, uint value, "
+            "uint2 pair, uint3 triple, uint4 quad)"
+        ) in cuda_code
+        assert (
+            "__device__ inline uint cgl_byte_address_load_uint"
+            "(const unsigned char* buffer, uint offset)" in cuda_code
+        )
+        assert "return *reinterpret_cast<const uint*>(buffer + offset);" in cuda_code
+        assert (
+            "__device__ inline uint4 cgl_byte_address_load_uint4"
+            "(const unsigned char* buffer, uint offset)" in cuda_code
+        )
+        assert (
+            "__device__ inline void cgl_byte_address_store_uint4"
+            "(unsigned char* buffer, uint offset, uint4 value)" in cuda_code
+        )
+        assert "uint a = cgl_byte_address_load_uint(readBytes, offset);" in cuda_code
+        assert (
+            "uint2 b = cgl_byte_address_load_uint2(paramRead, (offset + 4u));"
+            in cuda_code
+        )
+        assert (
+            "uint3 c = cgl_byte_address_load_uint3(byteBuffers[index], offset);"
+            in cuda_code
+        )
+        assert "uint4 d = cgl_byte_address_load_uint4(writeBytes, offset);" in cuda_code
+        assert "uint e = cgl_byte_address_load_uint(paramRead, offset);" in cuda_code
+        assert "cgl_byte_address_store_uint(writeBytes, offset, value);" in cuda_code
+        assert "cgl_byte_address_store_uint2(paramWrite, offset, pair);" in cuda_code
+        assert (
+            "cgl_byte_address_store_uint3(byteBuffers[index], offset, triple);"
+            in cuda_code
+        )
+        assert "cgl_byte_address_store_uint4(writeBytes, offset, quad);" in cuda_code
+        assert "cgl_byte_address_store_uint(paramWrite, offset, e);" in cuda_code
+        assert (
+            "/* unsupported CUDA byte-address buffer call: "
+            "Store on ByteAddressBuffer */ ((void)0);" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA byte-address buffer call: "
+            "buffer_store on ByteAddressBuffer */ ((void)0);" in cuda_code
+        )
+        assert "ByteAddressBuffer readBytes;" not in cuda_code
+        assert "RWByteAddressBuffer writeBytes;" not in cuda_code
         assert ".Load(" not in cuda_code
         assert ".Store(" not in cuda_code
         assert "buffer_load(" not in cuda_code

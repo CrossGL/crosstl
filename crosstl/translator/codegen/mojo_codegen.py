@@ -36,6 +36,20 @@ from ..ast import (
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
+
+def _matrix_aliases(prefix, dtype, *, rows_first):
+    aliases = {}
+    for first in (2, 3, 4):
+        for second in (2, 3, 4):
+            columns, rows = (second, first) if rows_first else (first, second)
+            aliases[f"{prefix}{first}x{second}"] = (dtype, columns, rows)
+    return aliases
+
+
+def _square_matrix_aliases(prefix, dtype):
+    return {f"{prefix}{size}": (dtype, size, size) for size in (2, 3, 4)}
+
+
 MOJO_VECTOR_TYPES = {
     "vec2": ("DType.float32", 2, 2, None),
     "vec3": ("DType.float32", 3, 4, "0.0"),
@@ -118,6 +132,14 @@ MOJO_MATRIX_TYPES = {
     "dmat4x2": ("DType.float64", 4, 2),
     "dmat4x3": ("DType.float64", 4, 3),
     "dmat4x4": ("DType.float64", 4, 4),
+    **_matrix_aliases("float", "DType.float32", rows_first=True),
+    **_matrix_aliases("simd_float", "DType.float32", rows_first=True),
+    **_matrix_aliases("double", "DType.float64", rows_first=True),
+    **_matrix_aliases("half", "DType.float16", rows_first=True),
+    **_matrix_aliases("min16float", "DType.float16", rows_first=True),
+    **_matrix_aliases("min10float", "DType.float16", rows_first=True),
+    **_square_matrix_aliases("f16mat", "DType.float16"),
+    **_matrix_aliases("f16mat", "DType.float16", rows_first=False),
 }
 
 SWIZZLE_SETS = {

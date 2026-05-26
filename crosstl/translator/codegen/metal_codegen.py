@@ -326,6 +326,7 @@ class MetalCodeGen:
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
         self.intersection_function_table_variables = []
+        self.unsupported_metal_ray_function_table_array_variables = {}
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -705,6 +706,7 @@ class MetalCodeGen:
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
         self.intersection_function_table_variables = []
+        self.unsupported_metal_ray_function_table_array_variables = {}
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -1170,6 +1172,15 @@ class MetalCodeGen:
                     resource_count,
                     var_name,
                 )
+                if array_size is not None:
+                    self.unsupported_metal_ray_function_table_array_variables[
+                        var_name
+                    ] = "visible_function_table"
+                    code += self.unsupported_metal_ray_function_table_array_diagnostic(
+                        "visible_function_table", var_name
+                    )
+                    buffer_register = max(buffer_register, binding + resource_count)
+                    continue
                 mapped_type = self.map_visible_function_table_type(vtype)
                 self.visible_function_table_variables.append(
                     (node, binding, mapped_type, array_size)
@@ -1196,6 +1207,15 @@ class MetalCodeGen:
                     resource_count,
                     var_name,
                 )
+                if array_size is not None:
+                    self.unsupported_metal_ray_function_table_array_variables[
+                        var_name
+                    ] = "intersection_function_table"
+                    code += self.unsupported_metal_ray_function_table_array_diagnostic(
+                        "intersection_function_table", var_name
+                    )
+                    buffer_register = max(buffer_register, binding + resource_count)
+                    continue
                 mapped_type = self.map_intersection_function_table_type(vtype)
                 self.intersection_function_table_variables.append(
                     (node, binding, mapped_type, array_size)

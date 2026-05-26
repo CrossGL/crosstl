@@ -6870,6 +6870,148 @@ def test_wave_and_rayquery_intrinsics_codegen():
     assert "rq.Proceed" in generated
 
 
+def test_directx_ray_query_methods_validate_trace_and_infer_results():
+    code = """
+    shader RayQueryInlineTrace {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(accel, 0, 0xFF, ray);
+                let advanced = rq.Proceed();
+                let candidateType = rq.CandidateType();
+                let origin = rq.CandidateObjectRayOrigin();
+                let barycentrics = rq.CandidateTriangleBarycentrics();
+                let committedT = rq.CommittedRayT();
+                rq.CommitProceduralPrimitiveHit(1.0);
+                rq.CommitNonOpaqueTriangleHit();
+                rq.Abort();
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in generated
+    assert "rq.TraceRayInline(accel, 0, 255, ray);" in generated
+    assert "bool advanced = rq.Proceed();" in generated
+    assert "uint candidateType = rq.CandidateType();" in generated
+    assert "float3 origin = rq.CandidateObjectRayOrigin();" in generated
+    assert "float2 barycentrics = rq.CandidateTriangleBarycentrics();" in generated
+    assert "float committedT = rq.CommittedRayT();" in generated
+    assert "rq.CommitProceduralPrimitiveHit(1.0);" in generated
+    assert "rq.CommitNonOpaqueTriangleHit();" in generated
+    assert "rq.Abort();" in generated
+
+
+def test_directx_ray_query_validates_receiver_and_trace_ray_inline_arguments():
+    bad_receiver_code = """
+    shader BadRayQueryReceiver {
+        compute {
+            void main() {
+                uint rq;
+                rq.Proceed();
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="RayQuery.Proceed receiver.*RayQuery"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_receiver_code), "compute"
+        )
+
+    wrong_arity_code = """
+    shader BadTraceRayInlineArity {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(accel, 0, 0xFF);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRayInline requires 4"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_arity_code), "compute"
+        )
+
+    bad_acceleration_structure_code = """
+    shader BadTraceRayInlineAccelerationStructure {
+        compute {
+            void main() {
+                uint accel;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(accel, 0, 0xFF, ray);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="TraceRayInline acceleration structure.*RaytracingAccelerationStructure",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_acceleration_structure_code), "compute"
+        )
+
+    bad_ray_descriptor_code = """
+    shader BadTraceRayInlineRayDescriptor {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                vec3 ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(accel, 0, 0xFF, ray);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRayInline ray descriptor.*RayDesc"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_ray_descriptor_code), "compute"
+        )
+
+
+def test_directx_ray_query_validates_commit_arguments():
+    bad_hit_distance_code = """
+    shader BadCommitProceduralPrimitiveHitDistance {
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                uint hitDistance;
+                rq.CommitProceduralPrimitiveHit(hitDistance);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="CommitProceduralPrimitiveHit hit distance.*scalar floating",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_hit_distance_code), "compute"
+        )
+
+    wrong_arity_code = """
+    shader BadCommitNonOpaqueTriangleHitArity {
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.CommitNonOpaqueTriangleHit(1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="CommitNonOpaqueTriangleHit requires 0"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_arity_code), "compute"
+        )
+
+
 def test_else_if_statement():
     code = """
     shader main {

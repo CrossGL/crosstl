@@ -332,6 +332,32 @@ shader SpirvStructuredBufferValidation {
 """
 
 
+SPIRV_GLSL_BUFFER_BLOCK_COMPUTE_SHADER = """
+shader SpirvGlslBufferBlockValidation {
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    layout(std430, set = 1, binding = 4) buffer ParticleBlock {
+        Particle particles[];
+    } particleBlock;
+
+    compute {
+        layout(std430, binding = 2) readonly buffer float values[];
+        layout(std430, binding = 3) writeonly buffer float outValues[];
+
+        void main() {
+            float mass = particleBlock.particles[0u].mass;
+            float value = buffer_load(values, 1u);
+            particleBlock.particles[1u].mass = mass + value;
+            buffer_store(outValues, 0u, mass);
+        }
+    }
+}
+"""
+
+
 SPIRV_IMAGE_ATOMIC_FORWARDING_COMPUTE_SHADER = """
 shader SpirvImageAtomicForwardingValidation {
     uimage2D counters @r32ui;
@@ -2452,6 +2478,16 @@ def test_generated_spirv_structured_buffer_compute_validates_with_spirv_tools(
         tmp_path,
         "structured_buffer_compute",
         SPIRV_STRUCTURED_BUFFER_COMPUTE_SHADER,
+    )
+
+
+def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "glsl_buffer_block_compute",
+        SPIRV_GLSL_BUFFER_BLOCK_COMPUTE_SHADER,
     )
 
 

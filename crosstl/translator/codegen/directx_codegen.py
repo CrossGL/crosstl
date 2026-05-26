@@ -2370,7 +2370,14 @@ class HLSLCodeGen:
             ) or infer_struct_constructor_type(self, expr)
         if isinstance(expr, MatchNode):
             return infer_match_expression_result_type(self, expr)
+        if isinstance(expr, RayQueryOpNode):
+            return self.hlsl_ray_query_method_return_type(expr.operation)
         if isinstance(expr, FunctionCallNode):
+            ray_query_call = self.hlsl_ray_query_call_parts(expr)
+            if ray_query_call is not None:
+                operation, _query_expr, _args = ray_query_call
+                return self.hlsl_ray_query_method_return_type(operation)
+
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
@@ -5157,6 +5164,110 @@ class HLSLCodeGen:
                     )
         return calls
 
+    def hlsl_ray_query_method_return_type(self, operation):
+        return {
+            "Proceed": "bool",
+            "Abort": "void",
+            "TraceRayInline": "void",
+            "CommitNonOpaqueTriangleHit": "void",
+            "CommitProceduralPrimitiveHit": "void",
+            "CandidateType": "uint",
+            "CommittedType": "uint",
+            "CommittedStatus": "uint",
+            "CandidatePrimitiveIndex": "uint",
+            "CommittedPrimitiveIndex": "uint",
+            "CandidateInstanceID": "uint",
+            "CommittedInstanceID": "uint",
+            "CandidateInstanceIndex": "uint",
+            "CommittedInstanceIndex": "uint",
+            "CandidateGeometryIndex": "uint",
+            "CommittedGeometryIndex": "uint",
+            "CandidateObjectRayOrigin": "float3",
+            "CandidateObjectRayDirection": "float3",
+            "CommittedObjectRayOrigin": "float3",
+            "CommittedObjectRayDirection": "float3",
+            "CandidateRayT": "float",
+            "CommittedRayT": "float",
+            "CandidateObjectRayTMin": "float",
+            "CandidateTriangleBarycentrics": "float2",
+            "CommittedTriangleBarycentrics": "float2",
+            "CandidateTriangleFrontFace": "bool",
+            "CommittedTriangleFrontFace": "bool",
+            "CandidateObjectToWorld3x4": "float3x4",
+            "CandidateWorldToObject3x4": "float3x4",
+            "CommittedObjectToWorld3x4": "float3x4",
+            "CommittedWorldToObject3x4": "float3x4",
+        }.get(operation)
+
+    def hlsl_ray_query_method_names(self):
+        return {
+            operation
+            for operation in (
+                "Proceed",
+                "Abort",
+                "TraceRayInline",
+                "CommitNonOpaqueTriangleHit",
+                "CommitProceduralPrimitiveHit",
+                "CandidateType",
+                "CommittedType",
+                "CommittedStatus",
+                "CandidatePrimitiveIndex",
+                "CommittedPrimitiveIndex",
+                "CandidateInstanceID",
+                "CommittedInstanceID",
+                "CandidateInstanceIndex",
+                "CommittedInstanceIndex",
+                "CandidateGeometryIndex",
+                "CommittedGeometryIndex",
+                "CandidateObjectRayOrigin",
+                "CandidateObjectRayDirection",
+                "CommittedObjectRayOrigin",
+                "CommittedObjectRayDirection",
+                "CandidateRayT",
+                "CommittedRayT",
+                "CandidateObjectRayTMin",
+                "CandidateTriangleBarycentrics",
+                "CommittedTriangleBarycentrics",
+                "CandidateTriangleFrontFace",
+                "CommittedTriangleFrontFace",
+                "CandidateObjectToWorld3x4",
+                "CandidateWorldToObject3x4",
+                "CommittedObjectToWorld3x4",
+                "CommittedWorldToObject3x4",
+            )
+        }
+
+    def hlsl_ray_query_call_parts(self, node):
+        if isinstance(node, RayQueryOpNode):
+            return (
+                getattr(node, "operation", None),
+                getattr(node, "query_expr", None),
+                getattr(node, "arguments", []),
+            )
+        if not isinstance(node, FunctionCallNode):
+            return None
+
+        func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        operation = str(getattr(func_expr, "member", ""))
+        if operation not in self.hlsl_ray_query_method_names():
+            return None
+        return (
+            operation,
+            getattr(func_expr, "object", getattr(func_expr, "object_expr", None)),
+            getattr(node, "arguments", getattr(node, "args", [])),
+        )
+
+    def hlsl_ray_query_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            call = self.hlsl_ray_query_call_parts(node)
+            if call is not None:
+                calls.append(call)
+        return calls
+
     def validate_hlsl_ray_struct_argument(self, argument, shader_type, operation, role):
         argument_type = self.expression_result_type(argument)
         if argument_type is None:
@@ -5182,8 +5293,8 @@ class HLSLCodeGen:
         mapped_type = self.map_type(expr_type)
         return split_array_type_suffix(mapped_type)
 
-    def validate_hlsl_trace_ray_exact_type_argument(
-        self, argument, shader_type, role, expected_type
+    def validate_hlsl_ray_exact_type_argument(
+        self, argument, shader_type, operation, role, expected_type
     ):
         base_type, array_suffix = self.hlsl_expression_mapped_base_and_array_suffix(
             argument
@@ -5193,8 +5304,31 @@ class HLSLCodeGen:
         if array_suffix or base_type != expected_type:
             actual_type = f"{base_type}{array_suffix}"
             raise ValueError(
-                f"DirectX {shader_type} TraceRay {role} argument must be "
+                f"DirectX {shader_type} {operation} {role} argument must be "
                 f"{expected_type}, got {actual_type}"
+            )
+
+    def validate_hlsl_trace_ray_exact_type_argument(
+        self, argument, shader_type, role, expected_type
+    ):
+        self.validate_hlsl_ray_exact_type_argument(
+            argument, shader_type, "TraceRay", role, expected_type
+        )
+
+    def validate_hlsl_ray_query_receiver(self, query_expr, shader_type, operation):
+        base_type, array_suffix = self.hlsl_expression_mapped_base_and_array_suffix(
+            query_expr
+        )
+        if base_type is None:
+            return
+        if not (
+            not array_suffix
+            and (base_type == "RayQuery" or base_type.startswith("RayQuery<"))
+        ):
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"DirectX {shader_type} RayQuery.{operation} receiver must be "
+                f"RayQuery, got {actual_type}"
             )
 
     def validate_hlsl_ray_scalar_float_argument(
@@ -5267,6 +5401,57 @@ class HLSLCodeGen:
                 args[2], shader_type, "ReportHit", "hit attribute"
             )
 
+    def validate_hlsl_ray_query_call_arguments(
+        self, operation, query_expr, args, shader_type
+    ):
+        self.validate_hlsl_ray_query_receiver(query_expr, shader_type, operation)
+
+        expected_arg_counts = {
+            "TraceRayInline": {4},
+            "CommitProceduralPrimitiveHit": {1},
+        }
+        default_expected_counts = {0}
+        expected_counts = expected_arg_counts.get(operation, default_expected_counts)
+        if len(args) not in expected_counts:
+            expected = " or ".join(str(count) for count in sorted(expected_counts))
+            raise ValueError(
+                f"DirectX {shader_type} RayQuery.{operation} requires {expected} "
+                f"argument(s), got {len(args)}"
+            )
+
+        if operation == "TraceRayInline":
+            self.validate_hlsl_ray_exact_type_argument(
+                args[0],
+                shader_type,
+                "RayQuery.TraceRayInline",
+                "acceleration structure",
+                "RaytracingAccelerationStructure",
+            )
+            self.validate_hlsl_scalar_int_uint_expression(
+                args[1],
+                f"DirectX {shader_type} RayQuery.TraceRayInline ray flags argument",
+            )
+            self.validate_hlsl_scalar_int_uint_expression(
+                args[2],
+                "DirectX "
+                f"{shader_type} RayQuery.TraceRayInline instance inclusion mask "
+                "argument",
+            )
+            self.validate_hlsl_ray_exact_type_argument(
+                args[3],
+                shader_type,
+                "RayQuery.TraceRayInline",
+                "ray descriptor",
+                "RayDesc",
+            )
+        elif operation == "CommitProceduralPrimitiveHit":
+            self.validate_hlsl_ray_scalar_float_argument(
+                args[0],
+                shader_type,
+                "RayQuery.CommitProceduralPrimitiveHit",
+                "hit distance",
+            )
+
     def validate_hlsl_ray_tracing_call_arguments(self, operation, args, shader_type):
         if operation == "TraceRay":
             self.validate_hlsl_trace_ray_arguments(args, shader_type)
@@ -5337,6 +5522,24 @@ class HLSLCodeGen:
                     )
                 self.validate_hlsl_ray_tracing_call_arguments(
                     operation, args, shader_type
+                )
+        finally:
+            self.local_variable_types = previous_local_variable_types
+
+    def validate_hlsl_ray_query_calls(self, func, shader_type):
+        calls = self.hlsl_ray_query_calls(func)
+        if not calls:
+            return
+
+        previous_local_variable_types = self.local_variable_types
+        self.local_variable_types = {
+            **previous_local_variable_types,
+            **self.function_scope_variable_types(func),
+        }
+        try:
+            for operation, query_expr, args in calls:
+                self.validate_hlsl_ray_query_call_arguments(
+                    operation, query_expr, args, shader_type
                 )
         finally:
             self.local_variable_types = previous_local_variable_types
@@ -5518,6 +5721,7 @@ class HLSLCodeGen:
         self.validate_hlsl_dispatch_mesh_calls(func, shader_type)
         self.validate_hlsl_dispatch_mesh_payloads(func, shader_type)
         self.validate_hlsl_ray_tracing_calls(func, shader_type)
+        self.validate_hlsl_ray_query_calls(func, shader_type)
         self.validate_hlsl_ray_stage_parameters(func, shader_type, parameters)
         if shader_type == "mesh":
             self.validate_hlsl_mesh_payload_parameter(func, parameters)

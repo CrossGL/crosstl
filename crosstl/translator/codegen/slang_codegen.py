@@ -739,7 +739,9 @@ class SlangCodeGen:
         self.validate_slang_mesh_output_topology(func, stage_name)
         self.validate_slang_numthreads(func, stage_name)
 
-    def validate_slang_stage_body_builtins(self, body_statements, stage_name, params):
+    def validate_slang_stage_body_builtins(
+        self, body_statements, stage_name, params, stage_role=None
+    ):
         shader_stage = self.slang_shader_stage_name(stage_name)
         if shader_stage not in {"hull", "domain"}:
             return
@@ -756,6 +758,28 @@ class SlangCodeGen:
         for node in self.walk_ast(body_statements):
             if isinstance(node, VariableNode):
                 declared_names.add(node.name)
+
+        if shader_stage == "hull" and stage_role == "patch_constant":
+            invalid_semantics = {"SV_OutputControlPointID"}
+            for param in params or []:
+                semantic = self.semantic_from_node(param)
+                if (
+                    semantic
+                    and self.map_semantic(semantic, stage_name) in invalid_semantics
+                ):
+                    raise ValueError(
+                        "Slang patch constant functions cannot use "
+                        "gl_InvocationID or SV_OutputControlPointID"
+                    )
+
+            for node in self.walk_ast(body_statements):
+                if not isinstance(node, IdentifierNode):
+                    continue
+                if node.name == "gl_InvocationID" and node.name not in declared_names:
+                    raise ValueError(
+                        "Slang patch constant functions cannot use "
+                        "gl_InvocationID or SV_OutputControlPointID"
+                    )
 
         for node in self.walk_ast(body_statements):
             if not isinstance(node, IdentifierNode):
@@ -894,10 +918,24 @@ class SlangCodeGen:
         for local_var in local_variables:
             result += self.generate_global_variable(local_var)
 
-        for func in getattr(stage, "local_functions", []):
-            result += self.generate_function(func) + "\n\n"
-
         entry_point = getattr(stage, "entry_point", None)
+        patch_constant_function_names = self.slang_stage_patch_constant_function_names(
+            entry_point, stage_name
+        )
+        for func in getattr(stage, "local_functions", []):
+            if getattr(func, "name", None) in patch_constant_function_names:
+                result += (
+                    self.generate_function(
+                        func,
+                        shader_type=stage_name,
+                        emit_stage_decorations=False,
+                        stage_role="patch_constant",
+                    )
+                    + "\n\n"
+                )
+            else:
+                result += self.generate_function(func) + "\n\n"
+
         if entry_point is not None:
             result += self.generate_function(
                 entry_point,
@@ -908,6 +946,19 @@ class SlangCodeGen:
             result += "\n\n"
 
         return result
+
+    def slang_stage_patch_constant_function_names(self, entry_point, stage_name):
+        if entry_point is None or self.slang_shader_stage_name(stage_name) != "hull":
+            return set()
+
+        arguments = self.slang_stage_attribute_arguments(
+            entry_point, "patchconstantfunc"
+        )
+        if len(arguments) != 1:
+            return set()
+
+        function_name = self.slang_stage_attribute_value_to_string(arguments[0])
+        return {function_name} if function_name else set()
 
     def convert_type_node_to_string(self, type_node) -> str:
         if isinstance(type_node, LiteralNode):
@@ -1052,7 +1103,13 @@ class SlangCodeGen:
         return result
 
     def generate_function(
-        self, node, shader_type=None, execution_config=None, entry_name=None
+        self,
+        node,
+        shader_type=None,
+        execution_config=None,
+        entry_name=None,
+        emit_stage_decorations=True,
+        stage_role=None,
     ):
         """Render one CrossGL function or shader entry point as Slang code."""
         saved_variable_types = self.variable_types.copy()
@@ -1071,9 +1128,11 @@ class SlangCodeGen:
         body = getattr(node, "body", [])
         body_statements = self.get_statements(body)
         param_list = getattr(node, "parameters", getattr(node, "params", []))
-        hull_output_rewrite = self.slang_stage_hull_output_rewrite(
-            body_statements, shader_type, ret_type_name, semantic, param_list
-        )
+        hull_output_rewrite = None
+        if stage_role != "patch_constant":
+            hull_output_rewrite = self.slang_stage_hull_output_rewrite(
+                body_statements, shader_type, ret_type_name, semantic, param_list
+            )
         if hull_output_rewrite is not None:
             ret_type_name = hull_output_rewrite["return_type_name"]
             ret_type = self.convert_type(ret_type_name)
@@ -1095,7 +1154,10 @@ class SlangCodeGen:
         )
         if shader_type:
             self.validate_slang_stage_body_builtins(
-                body_statements, shader_type, effective_param_list
+                body_statements,
+                shader_type,
+                effective_param_list,
+                stage_role=stage_role,
             )
         params = []
         if effective_param_list:
@@ -1132,15 +1194,22 @@ class SlangCodeGen:
                         f"{self.map_resource_type_with_format(param_type)} {param_name}"
                     )
 
-        for param_type, param_name, semantic in self.slang_implicit_stage_parameters(
-            body_statements, shader_type, effective_param_list
+        for (
+            param_type,
+            param_name,
+            semantic,
+        ) in self.slang_implicit_stage_parameters(
+            body_statements, shader_type, effective_param_list, stage_role=stage_role
         ):
             self.register_variable_type(param_name, param_type)
             params.append(f"{self.convert_type(param_type)} {param_name} : {semantic}")
 
         params_str = ", ".join(params)
         identifier_aliases = self.slang_stage_system_value_aliases(
-            body_statements, shader_type, effective_param_list
+            body_statements,
+            shader_type,
+            effective_param_list,
+            stage_role=stage_role,
         )
         identifier_aliases.update(
             self.slang_stage_patch_input_aliases(
@@ -1160,12 +1229,11 @@ class SlangCodeGen:
         ):
             result += self.generate_slang_builtin_output_struct(builtin_return_rewrite)
             result += "\n\n"
-        if shader_type:
+        if shader_type and emit_stage_decorations:
             self.validate_slang_stage_attributes(node, shader_type)
-        result += self.generate_slang_stage_numthreads(
-            node, shader_type, execution_config
-        )
-        if shader_type:
+            result += self.generate_slang_stage_numthreads(
+                node, shader_type, execution_config
+            )
             result += self.generate_slang_stage_attributes(node, shader_type)
             shader_stage = self.slang_shader_stage_name(shader_type)
             result += f'[shader("{shader_stage}")]\n'
@@ -1426,8 +1494,12 @@ class SlangCodeGen:
                 return args[:index].strip()
         return args.strip()
 
-    def slang_implicit_stage_parameters(self, body_statements, shader_type, param_list):
-        candidates = self.slang_implicit_stage_parameter_candidates(shader_type)
+    def slang_implicit_stage_parameters(
+        self, body_statements, shader_type, param_list, stage_role=None
+    ):
+        candidates = self.slang_implicit_stage_parameter_candidates(
+            shader_type, stage_role=stage_role
+        )
         if not candidates:
             return []
 
@@ -1462,9 +1534,11 @@ class SlangCodeGen:
         return implicit_params
 
     def slang_stage_system_value_aliases(
-        self, body_statements, shader_type, param_list
+        self, body_statements, shader_type, param_list, stage_role=None
     ):
-        candidates = self.slang_implicit_stage_parameter_candidates(shader_type)
+        candidates = self.slang_implicit_stage_parameter_candidates(
+            shader_type, stage_role=stage_role
+        )
         if not candidates:
             return {}
 
@@ -1552,7 +1626,7 @@ class SlangCodeGen:
             return str(param.vtype)
         return ""
 
-    def slang_implicit_stage_parameter_candidates(self, shader_type):
+    def slang_implicit_stage_parameter_candidates(self, shader_type, stage_role=None):
         shader_stage = self.slang_shader_stage_name(shader_type)
         thread_parameters = {
             "gl_WorkGroupID": ("uvec3", "SV_GroupID"),
@@ -1585,6 +1659,10 @@ class SlangCodeGen:
                 "gl_InvocationID": ("uint", "SV_GSInstanceID"),
             }
         if shader_stage == "hull":
+            if stage_role == "patch_constant":
+                return {
+                    "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
+                }
             return {
                 "gl_InvocationID": ("uint", "SV_OutputControlPointID"),
                 "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),

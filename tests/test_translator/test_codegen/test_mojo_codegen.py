@@ -2565,6 +2565,124 @@ def test_double_vector_and_matrix_types_emit_mojo_names():
     assert "MatrixType(" not in generated_code
 
 
+def test_hlsl_style_matrix_aliases_emit_mojo_matrix_names():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float3x2 hlslFloat = float3x2(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+                simd_float4x2 simdFloat;
+                double2x4 precise = double2x4(
+                    1.0, 2.0, 3.0, 4.0,
+                    5.0, 6.0, 7.0, 8.0
+                );
+                half3x2 halfMatrix;
+                min16float2x3 minMatrix;
+                f16mat2x3 f16Matrix = f16mat2x3(
+                    1.0, 2.0, 3.0,
+                    4.0, 5.0, 6.0
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct CrossGLMatrixF32C2R3:" in generated_code
+    assert "struct CrossGLMatrixF32C2R4:" in generated_code
+    assert "struct CrossGLMatrixF64C4R2:" in generated_code
+    assert "struct CrossGLMatrixF16C2R3:" in generated_code
+    assert "struct CrossGLMatrixF16C3R2:" in generated_code
+    assert "var hlslFloat: CrossGLMatrixF32C2R3" in generated_code
+    assert "var simdFloat: CrossGLMatrixF32C2R4" in generated_code
+    assert "var precise: CrossGLMatrixF64C4R2" in generated_code
+    assert "var halfMatrix: CrossGLMatrixF16C2R3" in generated_code
+    assert "var minMatrix: CrossGLMatrixF16C3R2" in generated_code
+    assert "var f16Matrix: CrossGLMatrixF16C2R3" in generated_code
+    assert (
+        "CrossGLMatrixF32C2R3(SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0), "
+        "SIMD[DType.float32, 4](4.0, 5.0, 6.0, 0.0))" in generated_code
+    )
+    assert (
+        "CrossGLMatrixF64C4R2(SIMD[DType.float64, 2](1.0, 2.0), "
+        "SIMD[DType.float64, 2](3.0, 4.0), "
+        "SIMD[DType.float64, 2](5.0, 6.0), "
+        "SIMD[DType.float64, 2](7.0, 8.0))" in generated_code
+    )
+    assert (
+        "CrossGLMatrixF16C2R3(SIMD[DType.float16, 4](1.0, 2.0, 3.0, 0.0), "
+        "SIMD[DType.float16, 4](4.0, 5.0, 6.0, 0.0))" in generated_code
+    )
+    for raw_alias in (
+        "float3x2(",
+        "simd_float4x2(",
+        "double2x4(",
+        "half3x2(",
+        "min16float2x3(",
+        "f16mat2x3(",
+    ):
+        assert raw_alias not in generated_code
+
+
+def test_hlsl_style_matrix_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    float3x2 makeFloat() {
+        return float3x2(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+    }
+
+    double2x4 makeDouble() {
+        return double2x4(
+            1.0, 2.0, 3.0, 4.0,
+            5.0, 6.0, 7.0, 8.0
+        );
+    }
+
+    half2x2 makeHalf() {
+        return half2x2(1.0, 2.0, 3.0, 4.0);
+    }
+
+    min16float2x3 makeMin() {
+        return min16float2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+    }
+
+    f16mat2x3 makeF16Mat() {
+        return f16mat2x3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(makeFloat().c0)
+    print(makeFloat().c1)
+    print(makeDouble().c3)
+    print(makeHalf().c1)
+    print(makeMin().c2)
+    print(makeF16Mat().c1)
+"""
+
+    source_path = tmp_path / "hlsl_style_matrix_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0, 3.0, 0.0]" in result.stdout
+    assert "[4.0, 5.0, 6.0, 0.0]" in result.stdout
+    assert "[7.0, 8.0]" in result.stdout
+
+
 def test_matrix_constructors_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

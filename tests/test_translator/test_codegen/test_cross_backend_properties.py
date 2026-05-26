@@ -104,6 +104,8 @@ def _assert_codegen_output_is_usable(backend, generated):
     interpolation=st.sampled_from(("flat", "smooth", "noperspective")),
     sample_qualifier=st.sampled_from(("centroid", "sample")),
     address_space=st.sampled_from(("device", "constant", "threadgroup")),
+    matrix_layout=st.sampled_from(("row_major", "column_major")),
+    pack_offset=st.integers(min_value=0, max_value=15),
     resource_case=st.sampled_from(FRONTEND_RESOURCE_METADATA_CASES),
 )
 def test_frontend_metadata_ir_preserves_valid_backend_neutral_combinations(
@@ -115,10 +117,17 @@ def test_frontend_metadata_ir_preserves_valid_backend_neutral_combinations(
     interpolation,
     sample_qualifier,
     address_space,
+    matrix_layout,
+    pack_offset,
     resource_case,
 ):
     shader = f"""
     shader FrontendMetadata_{suffix} {{
+        cbuffer Camera_{suffix} : register(b0, space{set_index}) {{
+            {matrix_layout} mat4 viewProj_{suffix} : packoffset(c{pack_offset});
+            layout(offset = {pack_offset * 16}) vec4 tint_{suffix};
+        }}
+
         struct Payload {{
             float value;
         }};
@@ -149,6 +158,22 @@ def test_frontend_metadata_ir_preserves_valid_backend_neutral_combinations(
     """
 
     ast = crosstl.translator.parse(shader)
+
+    cbuffer = ast.cbuffers[0]
+    assert cbuffer.name == f"Camera_{suffix}"
+    assert [attribute.name for attribute in cbuffer.attributes] == ["register"]
+    assert [arg.name for arg in cbuffer.attributes[0].arguments] == [
+        "b0",
+        f"space{set_index}",
+    ]
+    view_proj, tint = cbuffer.members
+    assert [attribute.name for attribute in view_proj.attributes] == [
+        matrix_layout,
+        "packoffset",
+    ]
+    assert view_proj.attributes[1].arguments[0].name == f"c{pack_offset}"
+    assert [attribute.name for attribute in tint.attributes] == ["offset"]
+    assert tint.attributes[0].arguments[0].value == pack_offset * 16
 
     payload_struct, output_struct = ast.structs
     assert payload_struct.name == "Payload"

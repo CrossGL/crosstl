@@ -458,8 +458,106 @@ mod math {
         left % right
     }
 
-    pub fn smoothstep(_edge0: f32, _edge1: f32, value: f32) -> f32 {
-        value
+    pub trait Step<Edge> {
+        type Output;
+
+        fn step_value(edge: Edge, value: Self) -> Self::Output;
+    }
+
+    pub fn step<Edge, Value>(edge: Edge, value: Value) -> <Value as Step<Edge>>::Output
+    where
+        Value: Step<Edge>,
+    {
+        Value::step_value(edge, value)
+    }
+
+    impl Step<f32> for f32 {
+        type Output = f32;
+
+        fn step_value(edge: f32, value: Self) -> Self::Output {
+            if value < edge { 0.0 } else { 1.0 }
+        }
+    }
+
+    impl Step<f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn step_value(_edge: f32, _value: Self) -> Self::Output {
+            Default::default()
+        }
+    }
+
+    impl Step<Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn step_value(_edge: Vec3<f32>, _value: Self) -> Self::Output {
+            Default::default()
+        }
+    }
+
+    impl Step<Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn step_value(_edge: Vec3<f32>, _value: Self) -> Self::Output {
+            Default::default()
+        }
+    }
+
+    pub trait SmoothStep<Edge0, Edge1> {
+        type Output;
+
+        fn smoothstep_value(edge0: Edge0, edge1: Edge1, value: Self) -> Self::Output;
+    }
+
+    pub fn smoothstep<Edge0, Edge1, Value>(
+        edge0: Edge0,
+        edge1: Edge1,
+        value: Value,
+    ) -> <Value as SmoothStep<Edge0, Edge1>>::Output
+    where
+        Value: SmoothStep<Edge0, Edge1>,
+    {
+        Value::smoothstep_value(edge0, edge1, value)
+    }
+
+    impl SmoothStep<f32, f32> for f32 {
+        type Output = f32;
+
+        fn smoothstep_value(_edge0: f32, _edge1: f32, value: Self) -> Self::Output {
+            value
+        }
+    }
+
+    impl SmoothStep<f32, f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn smoothstep_value(_edge0: f32, _edge1: f32, value: Self) -> Self::Output {
+            value
+        }
+    }
+
+    impl SmoothStep<Vec3<f32>, Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn smoothstep_value(
+            _edge0: Vec3<f32>,
+            _edge1: Vec3<f32>,
+            _value: Self,
+        ) -> Self::Output {
+            Default::default()
+        }
+    }
+
+    impl SmoothStep<Vec3<f32>, Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn smoothstep_value(
+            _edge0: Vec3<f32>,
+            _edge1: Vec3<f32>,
+            value: Self,
+        ) -> Self::Output {
+            value
+        }
     }
 
     pub trait Lerp<Rhs = Self, T = f32> {
@@ -4583,6 +4681,39 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
     assert "let rectangular: Mat4x3<f32> = transpose(affine);" in generated_code
     assert "let normal_basis: f32 = transpose" not in generated_code
     assert "let rectangular: Mat3x4<f32> = transpose" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_step_and_smoothstep_promote_vector_scalar_operands_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader ThresholdIntrinsicInference {
+        fragment {
+            vec4 main(vec3 low, vec3 high, vec3 value, float scalar) {
+                let scalar_gate = step(0.25, scalar);
+                let vector_gate = step(0.25, value);
+                let vector_edge_gate = step(low, scalar);
+                let soft_value = smoothstep(0.0, 1.0, value);
+                let soft_edges = smoothstep(low, high, scalar);
+                let combined = vector_gate + vector_edge_gate + soft_value + soft_edges;
+                return vec4(combined, scalar_gate);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let scalar_gate: f32 = step(0.25, scalar);" in generated_code
+    assert "let vector_gate: Vec3<f32> = step(0.25, value);" in generated_code
+    assert "let vector_edge_gate: Vec3<f32> = step(low, scalar);" in generated_code
+    assert "let soft_value: Vec3<f32> = smoothstep(0.0, 1.0, value);" in generated_code
+    assert (
+        "let soft_edges: Vec3<f32> = smoothstep(low, high, scalar);" in generated_code
+    )
+    assert "let vector_edge_gate: f32 = step" not in generated_code
+    assert "let soft_edges: f32 = smoothstep" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

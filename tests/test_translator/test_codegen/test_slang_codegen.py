@@ -1172,6 +1172,96 @@ def test_tessellation_output_patch_generic_literal_return_type_emits():
     assert "None" not in generated_code
 
 
+def test_tessellation_patch_constant_function_uses_hull_context_without_shader_attr():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {
+                PatchConstants patch;
+                VSOut first = gl_in[0];
+                uint primitive = gl_PrimitiveID;
+                patch.outer[0] = first.position.x + float(primitive);
+                return patch;
+            }
+
+            void main()
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_PrimitiveID : SV_PrimitiveID)" in generated_code
+    )
+    assert "VSOut first = inputPatch[0];" in generated_code
+    assert "uint primitive = gl_PrimitiveID;" in generated_code
+    assert "gl_in" not in generated_code
+    assert generated_code.count('[shader("hull")]') == 1
+    assert '[shader("hull")]\nPatchConstants HSConst' not in generated_code
+
+
+def test_tessellation_patch_constant_function_uses_existing_primitive_alias():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(
+                InputPatch<VSOut, 3> inputPatch,
+                uint patchID @ gl_PrimitiveID
+            ) {
+                PatchConstants patch;
+                VSOut first = gl_in[0];
+                uint primitive = gl_PrimitiveID;
+                patch.outer[0] = first.position.x + float(primitive);
+                return patch;
+            }
+
+            void main()
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch, "
+        "uint patchID : SV_PrimitiveID)" in generated_code
+    )
+    assert "uint gl_PrimitiveID : SV_PrimitiveID" not in generated_code
+    assert "VSOut first = inputPatch[0];" in generated_code
+    assert "uint primitive = patchID;" in generated_code
+    assert "gl_in" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("attribute", "message"),
     [
@@ -1201,6 +1291,54 @@ def test_tessellation_patchconstantfunc_references_generated_function(
     }}
     """
     with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    "patch_constant_source",
+    [
+        """
+        PatchConstants HSConst() {
+            PatchConstants patch;
+            uint controlPoint = gl_InvocationID;
+            return patch;
+        }
+        """,
+        """
+        PatchConstants HSConst(uint controlPoint @ gl_InvocationID) {
+            PatchConstants patch;
+            return patch;
+        }
+        """,
+    ],
+)
+def test_tessellation_patch_constant_function_rejects_control_point_id(
+    patch_constant_source,
+):
+    code = f"""
+    shader main {{
+        struct PatchConstants {{
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        }};
+
+        tessellation_control {{
+            {patch_constant_source}
+
+            void main()
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {{
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError,
+        match="patch constant functions cannot use gl_InvocationID",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 

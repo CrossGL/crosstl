@@ -3359,6 +3359,82 @@ class TestVulkanSPIRVCodeGen:
 
         assert "WARNING: buffer_store requires an RWStructuredBuffer" in spv_code
 
+    def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            layout(std430, set = 1, binding = 4) buffer ParticleBlock {
+                Particle particles[];
+            } particleBlock;
+
+            compute {
+                void main() {
+                    float mass = particleBlock.particles[0u].mass;
+                    particleBlock.particles[1u].mass = mass;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        particle_type = spirv_named_id(spv_code, "Particle")
+        block_type = spirv_named_id(spv_code, "ParticleBlock")
+        block_var = spirv_named_variable(
+            spv_code, "particleBlock", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {block_type} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {block_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {particle_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {particle_type} 1 Offset 16" in spv_code
+        assert re.search(r"OpDecorate %\d+ ArrayStride 32", spv_code)
+        assert f"OpDecorate {block_var} DescriptorSet 1" in spv_code
+        assert f"OpDecorate {block_var} Binding 4" in spv_code
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(block_var)} %\d+", spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_array_declarations_lower_to_buffer_blocks(self):
+        source_code = """
+        shader StorageBuffers {
+            compute {
+                layout(std430, binding = 2) readonly buffer float values[];
+                layout(std430, binding = 3) writeonly buffer float outValues[];
+
+                void main() {
+                    float value = buffer_load(values, 0u);
+                    buffer_store(outValues, 1u, value);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        values_block = spirv_named_id(spv_code, "valuesBuffer")
+        out_values_block = spirv_named_id(spv_code, "outValuesBuffer")
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+        out_values_var = spirv_named_variable(
+            spv_code, "outValues", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {values_block} BufferBlock" in spv_code
+        assert f"OpDecorate {out_values_block} BufferBlock" in spv_code
+        assert re.search(r"OpDecorate %\d+ ArrayStride 4", spv_code)
+        assert f"OpDecorate {values_var} Binding 2" in spv_code
+        assert f"OpDecorate {out_values_var} Binding 3" in spv_code
+        assert "buffer_load" not in spv_code
+        assert "buffer_store" not in spv_code
+        assert "WARNING" not in spv_code
+
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
         shader Resources {
