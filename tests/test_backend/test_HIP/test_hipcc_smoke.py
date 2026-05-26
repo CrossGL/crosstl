@@ -554,6 +554,103 @@ def test_native_hip_graph_memory_nodes_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_memcpy_nodes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP graph memcpy node add, query, set, and exec patch APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_memcpy_nodes() {
+        hipGraph_t graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t generic_node;
+        hipGraphNode_t copy_1d_node;
+        hipGraphNode_t error_node;
+        hipMemcpy3DParms copy_params;
+        hipMemcpy3DParms fetched_copy_params;
+        char log[128];
+        void* dst = NULL;
+        void* src = NULL;
+        size_t bytes = 64;
+
+        hipGraphCreate(&graph, 0);
+        hipGraphAddMemcpyNode(&generic_node, graph, NULL, 0, &copy_params);
+        hipGraphMemcpyNodeGetParams(generic_node, &fetched_copy_params);
+        hipGraphMemcpyNodeSetParams(generic_node, &copy_params);
+        hipGraphAddMemcpyNode1D(
+            &copy_1d_node, graph, NULL, 0, dst, src, bytes,
+            hipMemcpyDeviceToDevice
+        );
+        hipGraphMemcpyNodeSetParams1D(
+            copy_1d_node, dst, src, bytes, hipMemcpyDeviceToDevice
+        );
+        hipGraphInstantiate(&exec, graph, &error_node, log, 128);
+        hipGraphExecMemcpyNodeSetParams(exec, generic_node, &copy_params);
+        hipGraphExecMemcpyNodeSetParams1D(
+            exec, copy_1d_node, dst, src, bytes, hipMemcpyDeviceToDevice
+        );
+        hipGraphExecDestroy(exec);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: graph_memcpy_nodes" in crossgl
+    assert "void graph_memcpy_nodes()" in crossgl
+    assert "var graph: hipGraph_t;" in crossgl
+    assert "var exec: hipGraphExec_t;" in crossgl
+    assert "var generic_node: hipGraphNode_t;" in crossgl
+    assert "var copy_1d_node: hipGraphNode_t;" in crossgl
+    assert "var error_node: hipGraphNode_t;" in crossgl
+    assert "var copy_params: hipMemcpy3DParms;" in crossgl
+    assert "var fetched_copy_params: hipMemcpy3DParms;" in crossgl
+    assert "var log: array<i8, 128>;" in crossgl
+    assert "var dst: ptr<void> = NULL;" in crossgl
+    assert "var src: ptr<void> = NULL;" in crossgl
+    assert "var bytes: u32 = 64;" in crossgl
+    assert "// HIP graph create: output: graph, flags: 0" in crossgl
+    assert (
+        "// HIP graph add memcpy node: output: generic_node, graph: graph, "
+        "dependencies: NULL, count: 0, params: (&copy_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph memcpy node get params: node: generic_node, "
+        "params: (&fetched_copy_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph memcpy node set params: node: generic_node, "
+        "params: (&copy_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph add memcpy 1D node: output: copy_1d_node, graph: graph, "
+        "dependencies: NULL, count: 0, destination: dst, source: src, "
+        "bytes: bytes, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP graph memcpy 1D node set params: node: copy_1d_node, "
+        "destination: dst, source: src, bytes: bytes, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP graph instantiate: output: exec, graph: graph, "
+        "error node output: error_node, log buffer: log, log bytes: 128"
+    ) in crossgl
+    assert (
+        "// HIP graph exec set memcpy node params: exec: exec, "
+        "node: generic_node, params: (&copy_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph exec memcpy 1D node set params: exec: exec, "
+        "node: copy_1d_node, destination: dst, source: src, bytes: bytes, "
+        "kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert "// HIP graph exec destroy: exec" in crossgl
+    assert "// HIP graph destroy: graph" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     tmp_path,
 ):

@@ -85,6 +85,7 @@ from .ast import (
     create_legacy_shader_node,
 )
 from .lexer import Lexer
+from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
 import logging
 
@@ -248,34 +249,6 @@ SHADER_STAGE_TOKEN_TYPES = frozenset(
         "RAY_CALLABLE",
     }
 )
-
-SHADER_STAGE_NAME_ALIASES = {
-    "anyhit": "ray_any_hit",
-    "callable": "ray_callable",
-    "closesthit": "ray_closest_hit",
-    "domain": "tessellation_evaluation",
-    "hull": "tessellation_control",
-    "intersection": "ray_intersection",
-    "miss": "ray_miss",
-    "pixel": "fragment",
-    "pixel_shader": "fragment",
-    "raygen": "ray_generation",
-    "raygeneration": "ray_generation",
-    "tesscontrol": "tessellation_control",
-    "tesseval": "tessellation_evaluation",
-}
-
-SHADER_STAGE_NAMES = {stage.value: stage for stage in ShaderStage}
-
-
-def shader_stage_from_name(name):
-    """Return the canonical shader stage enum for a CrossGL or backend alias."""
-    if name is None:
-        return None
-    normalized = str(name).split(".")[-1].strip().lower()
-    normalized = normalized.replace("-", "_").replace(" ", "_")
-    normalized = SHADER_STAGE_NAME_ALIASES.get(normalized, normalized)
-    return SHADER_STAGE_NAMES.get(normalized)
 
 
 class Parser:

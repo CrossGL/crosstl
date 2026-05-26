@@ -3,6 +3,9 @@ import pytest
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser, shader_stage_from_name
+from crosstl.translator.stage_utils import (
+    shader_stage_from_name as shared_shader_stage_from_name,
+)
 
 
 def parse_code(code):
@@ -49,6 +52,10 @@ def test_backend_stage_alias_blocks_parse_to_canonical_stages(
 )
 def test_shader_stage_from_name_canonicalizes_backend_aliases(alias, expected_stage):
     assert shader_stage_from_name(alias) is expected_stage
+
+
+def test_parser_stage_alias_lookup_uses_shared_frontend_helper():
+    assert shader_stage_from_name is shared_shader_stage_from_name
 
 
 def test_shader_stage_attribute_aliases_validate_through_shared_normalizer():
