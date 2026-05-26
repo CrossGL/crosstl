@@ -219,6 +219,8 @@ class RustToCrossGLConverter:
             "sqrt": "sqrt",
             "pow": "pow",
             "modulo": "mod",
+            "step": "step",
+            "smoothstep": "smoothstep",
             "exp": "exp",
             "exp2": "exp2",
             "log": "log",

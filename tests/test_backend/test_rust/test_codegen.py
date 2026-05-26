@@ -928,6 +928,28 @@ def test_matrix_intrinsic_calls_and_types_convert_to_crossgl_intrinsics():
     assert "Mat3x4" not in result
 
 
+def test_step_and_smoothstep_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn thresholds(low: Vec3<f32>, high: Vec3<f32>, value: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let vector_gate = step(0.25, value);
+        let vector_edge_gate = crate::math::step(low, scalar);
+        let soft_value = smoothstep(0.0, 1.0, value);
+        let soft_edges = crate::math::smoothstep(low, high, scalar);
+        return vector_gate + vector_edge_gate + soft_value + soft_edges;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 thresholds(vec3 low, vec3 high, vec3 value, float scalar)" in result
+    assert "vector_gate = step(0.25, value);" in result
+    assert "vector_edge_gate = step(low, scalar);" in result
+    assert "soft_value = smoothstep(0.0, 1.0, value);" in result
+    assert "soft_edges = smoothstep(low, high, scalar);" in result
+    assert "crate::math::step" not in result
+    assert "crate::math::smoothstep" not in result
+
+
 def test_lerp_function_converts_to_crossgl_mix():
     code = """
     fn blend(a: f32, b: f32, t: f32) -> f32 {

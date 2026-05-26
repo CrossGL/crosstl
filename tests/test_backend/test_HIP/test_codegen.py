@@ -1932,6 +1932,316 @@ class TestHipCodeGen:
         assert "hipModuleLaunchCooperativeKernelMultiDevice(" not in result
         assert "hipModuleUnload(" not in result
 
+    def test_hip_runtime_graph_api_conversion(self):
+        """Test HIP graph APIs emit metadata comments."""
+        code = """
+        void build_graph(hipStream_t stream, hipEvent_t event) {
+            hipGraph_t graph;
+            hipGraph_t clone;
+            hipGraph_t child;
+            hipGraphExec_t exec;
+            hipGraphNode_t emptyNode;
+            hipGraphNode_t hostNode;
+            hipGraphNode_t kernelNode;
+            hipGraphNode_t memcpyNode;
+            hipGraphNode_t memsetNode;
+            hipGraphNode_t childNode;
+            hipGraphNode_t recordNode;
+            hipGraphNode_t waitNode;
+            hipGraphNode_t cloneNode;
+            hipGraphNode_t errorNode;
+            hipGraphNode_t* deps;
+            hipGraphNode_t* nodes;
+            hipGraphNode_t* fromNodes;
+            hipGraphNode_t* toNodes;
+            hipKernelNodeParams kernelParams;
+            hipMemcpy3DParms copyParams;
+            hipMemsetParams memsetParams;
+            hipHostNodeParams hostParams;
+            hipGraphExecUpdateResult updateResult;
+            hipGraphNodeType nodeType;
+            size_t numDeps = 0;
+            size_t numNodes = 0;
+            size_t numEdges = 0;
+            unsigned int flags = 0;
+            char log[128];
+
+            hipGraphCreate(&graph, 0);
+            hipGraphCreate(&child, 0);
+            hipGraphClone(&clone, graph);
+            hipGraphAddEmptyNode(&emptyNode, graph, deps, numDeps);
+            hipGraphAddHostNode(&hostNode, graph, deps, numDeps, &hostParams);
+            hipGraphAddKernelNode(&kernelNode, graph, deps, numDeps, &kernelParams);
+            hipGraphAddMemcpyNode(&memcpyNode, graph, deps, numDeps, &copyParams);
+            hipGraphAddMemsetNode(&memsetNode, graph, deps, numDeps, &memsetParams);
+            hipGraphAddChildGraphNode(&childNode, graph, deps, numDeps, child);
+            hipGraphAddEventRecordNode(&recordNode, graph, deps, numDeps, event);
+            hipGraphAddEventWaitNode(&waitNode, graph, deps, numDeps, event);
+            hipGraphAddDependencies(graph, fromNodes, toNodes, numDeps);
+            hipGraphRemoveDependencies(graph, fromNodes, toNodes, numDeps);
+            hipGraphGetNodes(graph, nodes, &numNodes);
+            hipGraphGetRootNodes(graph, nodes, &numNodes);
+            hipGraphGetEdges(graph, fromNodes, toNodes, &numEdges);
+            hipGraphNodeGetDependencies(kernelNode, deps, &numDeps);
+            hipGraphNodeGetDependentNodes(kernelNode, deps, &numDeps);
+            hipGraphNodeFindInClone(&cloneNode, kernelNode, clone);
+            hipGraphNodeGetType(kernelNode, &nodeType);
+            hipGraphKernelNodeGetParams(kernelNode, &kernelParams);
+            hipGraphKernelNodeSetParams(kernelNode, &kernelParams);
+            hipGraphMemcpyNodeGetParams(memcpyNode, &copyParams);
+            hipGraphMemcpyNodeSetParams(memcpyNode, &copyParams);
+            hipGraphMemsetNodeGetParams(memsetNode, &memsetParams);
+            hipGraphMemsetNodeSetParams(memsetNode, &memsetParams);
+            hipGraphHostNodeGetParams(hostNode, &hostParams);
+            hipGraphHostNodeSetParams(hostNode, &hostParams);
+            hipGraphEventRecordNodeGetEvent(recordNode, &event);
+            hipGraphEventRecordNodeSetEvent(recordNode, event);
+            hipGraphEventWaitNodeGetEvent(waitNode, &event);
+            hipGraphEventWaitNodeSetEvent(waitNode, event);
+            hipGraphInstantiate(&exec, graph, &errorNode, log, 128);
+            hipGraphInstantiateWithFlags(&exec, graph, flags);
+            hipGraphLaunch(exec, stream);
+            hipGraphExecUpdate(exec, graph, &errorNode, &updateResult);
+            hipGraphExecKernelNodeSetParams(exec, kernelNode, &kernelParams);
+            hipGraphExecMemcpyNodeSetParams(exec, memcpyNode, &copyParams);
+            hipGraphExecMemsetNodeSetParams(exec, memsetNode, &memsetParams);
+            hipGraphExecHostNodeSetParams(exec, hostNode, &hostParams);
+            hipGraphExecChildGraphNodeSetParams(exec, childNode, child);
+            hipGraphExecEventRecordNodeSetEvent(exec, recordNode, event);
+            hipGraphExecEventWaitNodeSetEvent(exec, waitNode, event);
+            hipError_t err = hipGraphLaunch(exec, stream);
+            err = hipGraphExecDestroy(exec);
+            hipGraphDestroyNode(emptyNode);
+            hipGraphExecDestroy(exec);
+            hipGraphDestroy(clone);
+            hipGraphDestroy(child);
+            hipGraphDestroy(graph);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// HIP graph create: output: graph, flags: 0" in result
+        assert "// HIP graph create: output: child, flags: 0" in result
+        assert "// HIP graph clone: output: clone, source: graph" in result
+        assert (
+            "// HIP graph add empty node: output: emptyNode, graph: graph, "
+            "dependencies: deps, count: numDeps"
+        ) in result
+        assert (
+            "// HIP graph add host node: output: hostNode, graph: graph, "
+            "dependencies: deps, count: numDeps, params: (&hostParams)"
+        ) in result
+        assert (
+            "// HIP graph add kernel node: output: kernelNode, graph: graph, "
+            "dependencies: deps, count: numDeps, params: (&kernelParams)"
+        ) in result
+        assert (
+            "// HIP graph add memcpy node: output: memcpyNode, graph: graph, "
+            "dependencies: deps, count: numDeps, params: (&copyParams)"
+        ) in result
+        assert (
+            "// HIP graph add memset node: output: memsetNode, graph: graph, "
+            "dependencies: deps, count: numDeps, params: (&memsetParams)"
+        ) in result
+        assert (
+            "// HIP graph add child graph node: output: childNode, graph: graph, "
+            "dependencies: deps, count: numDeps, child graph: child"
+        ) in result
+        assert (
+            "// HIP graph add event record node: output: recordNode, graph: graph, "
+            "dependencies: deps, count: numDeps, event: event"
+        ) in result
+        assert (
+            "// HIP graph add event wait node: output: waitNode, graph: graph, "
+            "dependencies: deps, count: numDeps, event: event"
+        ) in result
+        assert (
+            "// HIP graph add dependencies: graph: graph, from: fromNodes, "
+            "to: toNodes, count: numDeps"
+        ) in result
+        assert (
+            "// HIP graph remove dependencies: graph: graph, from: fromNodes, "
+            "to: toNodes, count: numDeps"
+        ) in result
+        assert (
+            "// HIP graph get nodes: graph: graph, nodes output: nodes, "
+            "count output: numNodes"
+        ) in result
+        assert (
+            "// HIP graph get root nodes: graph: graph, nodes output: nodes, "
+            "count output: numNodes"
+        ) in result
+        assert (
+            "// HIP graph get edges: graph: graph, from output: fromNodes, "
+            "to output: toNodes, count output: numEdges"
+        ) in result
+        assert (
+            "// HIP graph node get dependencies: node: kernelNode, "
+            "nodes output: deps, count output: numDeps"
+        ) in result
+        assert (
+            "// HIP graph node get dependent nodes: node: kernelNode, "
+            "nodes output: deps, count output: numDeps"
+        ) in result
+        assert (
+            "// HIP graph node find in clone: output: cloneNode, "
+            "original: kernelNode, clone graph: clone"
+        ) in result
+        assert (
+            "// HIP graph node get type: node: kernelNode, output: nodeType" in result
+        )
+        assert (
+            "// HIP graph kernel node get params: node: kernelNode, "
+            "params: (&kernelParams)"
+        ) in result
+        assert (
+            "// HIP graph kernel node set params: node: kernelNode, "
+            "params: (&kernelParams)"
+        ) in result
+        assert (
+            "// HIP graph memcpy node get params: node: memcpyNode, "
+            "params: (&copyParams)"
+        ) in result
+        assert (
+            "// HIP graph memcpy node set params: node: memcpyNode, "
+            "params: (&copyParams)"
+        ) in result
+        assert (
+            "// HIP graph memset node get params: node: memsetNode, "
+            "params: (&memsetParams)"
+        ) in result
+        assert (
+            "// HIP graph memset node set params: node: memsetNode, "
+            "params: (&memsetParams)"
+        ) in result
+        assert (
+            "// HIP graph host node get params: node: hostNode, params: (&hostParams)"
+            in result
+        )
+        assert (
+            "// HIP graph host node set params: node: hostNode, params: (&hostParams)"
+            in result
+        )
+        assert (
+            "// HIP graph event record node get event: node: recordNode, output: event"
+            in result
+        )
+        assert (
+            "// HIP graph event record node set event: node: recordNode, event: event"
+            in result
+        )
+        assert (
+            "// HIP graph event wait node get event: node: waitNode, output: event"
+            in result
+        )
+        assert (
+            "// HIP graph event wait node set event: node: waitNode, event: event"
+            in result
+        )
+        assert (
+            "// HIP graph instantiate: output: exec, graph: graph, "
+            "error node output: errorNode, log buffer: log, log bytes: 128"
+        ) in result
+        assert (
+            "// HIP graph instantiate with flags: output: exec, graph: graph, "
+            "flags: flags"
+        ) in result
+        assert result.count("// HIP graph launch: exec: exec, stream: stream") == 2
+        assert (
+            "// HIP graph exec update: exec: exec, graph: graph, "
+            "error node output: errorNode, result output: updateResult"
+        ) in result
+        assert (
+            "// HIP graph exec set kernel node params: exec: exec, "
+            "node: kernelNode, params: (&kernelParams)"
+        ) in result
+        assert (
+            "// HIP graph exec set memcpy node params: exec: exec, "
+            "node: memcpyNode, params: (&copyParams)"
+        ) in result
+        assert (
+            "// HIP graph exec set memset node params: exec: exec, "
+            "node: memsetNode, params: (&memsetParams)"
+        ) in result
+        assert (
+            "// HIP graph exec set host node params: exec: exec, "
+            "node: hostNode, params: (&hostParams)"
+        ) in result
+        assert (
+            "// HIP graph exec set child graph node params: exec: exec, "
+            "node: childNode, params: child"
+        ) in result
+        assert (
+            "// HIP graph exec event record node set event: exec: exec, "
+            "node: recordNode, event: event"
+        ) in result
+        assert (
+            "// HIP graph exec event wait node set event: exec: exec, "
+            "node: waitNode, event: event"
+        ) in result
+        assert result.count("// HIP graph exec destroy: exec") == 2
+        assert "// HIP graph destroy node: emptyNode" in result
+        assert "// HIP graph destroy: clone" in result
+        assert "// HIP graph destroy: child" in result
+        assert "// HIP graph destroy: graph" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "err = hipSuccess;" in result
+
+        for function_name in [
+            "hipGraphCreate",
+            "hipGraphDestroy",
+            "hipGraphClone",
+            "hipGraphAddEmptyNode",
+            "hipGraphAddHostNode",
+            "hipGraphAddKernelNode",
+            "hipGraphAddMemcpyNode",
+            "hipGraphAddMemsetNode",
+            "hipGraphAddChildGraphNode",
+            "hipGraphAddEventRecordNode",
+            "hipGraphAddEventWaitNode",
+            "hipGraphAddDependencies",
+            "hipGraphRemoveDependencies",
+            "hipGraphGetNodes",
+            "hipGraphGetRootNodes",
+            "hipGraphGetEdges",
+            "hipGraphNodeGetDependencies",
+            "hipGraphNodeGetDependentNodes",
+            "hipGraphNodeFindInClone",
+            "hipGraphNodeGetType",
+            "hipGraphDestroyNode",
+            "hipGraphInstantiate",
+            "hipGraphInstantiateWithFlags",
+            "hipGraphLaunch",
+            "hipGraphExecUpdate",
+            "hipGraphExecDestroy",
+            "hipGraphKernelNodeGetParams",
+            "hipGraphKernelNodeSetParams",
+            "hipGraphMemcpyNodeGetParams",
+            "hipGraphMemcpyNodeSetParams",
+            "hipGraphMemsetNodeGetParams",
+            "hipGraphMemsetNodeSetParams",
+            "hipGraphHostNodeGetParams",
+            "hipGraphHostNodeSetParams",
+            "hipGraphEventRecordNodeGetEvent",
+            "hipGraphEventRecordNodeSetEvent",
+            "hipGraphEventWaitNodeGetEvent",
+            "hipGraphEventWaitNodeSetEvent",
+            "hipGraphExecKernelNodeSetParams",
+            "hipGraphExecMemcpyNodeSetParams",
+            "hipGraphExecMemsetNodeSetParams",
+            "hipGraphExecHostNodeSetParams",
+            "hipGraphExecChildGraphNodeSetParams",
+            "hipGraphExecEventRecordNodeSetEvent",
+            "hipGraphExecEventWaitNodeSetEvent",
+        ]:
+            assert f"{function_name}(" not in result
+
     def test_hip_runtime_stream_create_with_priority_status_conversion(self):
         """Test hipStreamCreateWithPriority emits priority metadata"""
         code = """

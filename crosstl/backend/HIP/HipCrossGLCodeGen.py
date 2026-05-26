@@ -1058,7 +1058,12 @@ class HipToCrossGLConverter:
                     f"// HIP module cooperative multi-device launch: "
                     f"params: {args[0]}, devices: {args[1]}, flags: {args[2]}"
                 ]
-        elif name == "hipCreateTextureObject":
+
+        graph_comments = self.format_hip_graph_runtime_call(name, node.args, args)
+        if graph_comments is not None:
+            return graph_comments
+
+        if name == "hipCreateTextureObject":
             if len(args) >= 4:
                 output = self.format_runtime_pointer_target(node.args[0])
                 return [
@@ -1077,6 +1082,226 @@ class HipToCrossGLConverter:
                 return [f"// HIP surface object destroy: {args[0]}"]
 
         return None
+
+    def format_hip_graph_runtime_call(self, name, raw_args, args):
+        if name == "hipGraphCreate":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [f"// HIP graph create: output: {output}, flags: {args[1]}"]
+        if name == "hipGraphDestroy":
+            if args:
+                return [f"// HIP graph destroy: {args[0]}"]
+        if name == "hipGraphClone":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [f"// HIP graph clone: output: {output}, source: {args[1]}"]
+        if name in {
+            "hipGraphAddEmptyNode",
+            "hipGraphAddHostNode",
+            "hipGraphAddKernelNode",
+            "hipGraphAddMemcpyNode",
+            "hipGraphAddMemsetNode",
+        }:
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                node_kind = {
+                    "hipGraphAddEmptyNode": "empty",
+                    "hipGraphAddHostNode": "host",
+                    "hipGraphAddKernelNode": "kernel",
+                    "hipGraphAddMemcpyNode": "memcpy",
+                    "hipGraphAddMemsetNode": "memset",
+                }[name]
+                comment = (
+                    f"// HIP graph add {node_kind} node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, count: {args[3]}"
+                )
+                if len(args) >= 5:
+                    comment += f", params: {args[4]}"
+                return [comment]
+        if name == "hipGraphAddChildGraphNode":
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP graph add child graph node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"count: {args[3]}, child graph: {args[4]}"
+                ]
+        if name in {"hipGraphAddEventRecordNode", "hipGraphAddEventWaitNode"}:
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                action = "record" if name == "hipGraphAddEventRecordNode" else "wait"
+                return [
+                    f"// HIP graph add event {action} node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"count: {args[3]}, event: {args[4]}"
+                ]
+        if name in {"hipGraphAddDependencies", "hipGraphRemoveDependencies"}:
+            if len(args) >= 4:
+                action = "add" if name == "hipGraphAddDependencies" else "remove"
+                return [
+                    f"// HIP graph {action} dependencies: graph: {args[0]}, "
+                    f"from: {args[1]}, to: {args[2]}, count: {args[3]}"
+                ]
+        if name in {"hipGraphGetNodes", "hipGraphGetRootNodes"}:
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[2])
+                node_set = "nodes" if name == "hipGraphGetNodes" else "root nodes"
+                return [
+                    f"// HIP graph get {node_set}: graph: {args[0]}, "
+                    f"nodes output: {args[1]}, count output: {output}"
+                ]
+        if name == "hipGraphGetEdges":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(raw_args[3])
+                return [
+                    f"// HIP graph get edges: graph: {args[0]}, "
+                    f"from output: {args[1]}, to output: {args[2]}, "
+                    f"count output: {output}"
+                ]
+        if name in {"hipGraphNodeGetDependencies", "hipGraphNodeGetDependentNodes"}:
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[2])
+                node_set = (
+                    "dependencies"
+                    if name == "hipGraphNodeGetDependencies"
+                    else "dependent nodes"
+                )
+                return [
+                    f"// HIP graph node get {node_set}: node: {args[0]}, "
+                    f"nodes output: {args[1]}, count output: {output}"
+                ]
+        if name == "hipGraphNodeFindInClone":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP graph node find in clone: output: {output}, "
+                    f"original: {args[1]}, clone graph: {args[2]}"
+                ]
+        if name == "hipGraphNodeGetType":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[1])
+                return [
+                    f"// HIP graph node get type: node: {args[0]}, output: {output}"
+                ]
+        if name == "hipGraphDestroyNode":
+            if args:
+                return [f"// HIP graph destroy node: {args[0]}"]
+        if name == "hipGraphInstantiate":
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                error_output = self.format_runtime_pointer_target(raw_args[2])
+                return [
+                    f"// HIP graph instantiate: output: {output}, graph: {args[1]}, "
+                    f"error node output: {error_output}, log buffer: {args[3]}, "
+                    f"log bytes: {args[4]}"
+                ]
+        if name == "hipGraphInstantiateWithFlags":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP graph instantiate with flags: output: {output}, "
+                    f"graph: {args[1]}, flags: {args[2]}"
+                ]
+        if name == "hipGraphLaunch":
+            if len(args) >= 2:
+                return [f"// HIP graph launch: exec: {args[0]}, stream: {args[1]}"]
+        if name == "hipGraphExecDestroy":
+            if args:
+                return [f"// HIP graph exec destroy: {args[0]}"]
+        if name == "hipGraphExecUpdate":
+            if len(args) >= 4:
+                error_output = self.format_runtime_pointer_target(raw_args[2])
+                result_output = self.format_runtime_pointer_target(raw_args[3])
+                return [
+                    f"// HIP graph exec update: exec: {args[0]}, graph: {args[1]}, "
+                    f"error node output: {error_output}, result output: {result_output}"
+                ]
+        if name in {
+            "hipGraphKernelNodeGetParams",
+            "hipGraphKernelNodeSetParams",
+            "hipGraphMemcpyNodeGetParams",
+            "hipGraphMemcpyNodeSetParams",
+            "hipGraphMemsetNodeGetParams",
+            "hipGraphMemsetNodeSetParams",
+            "hipGraphHostNodeGetParams",
+            "hipGraphHostNodeSetParams",
+        }:
+            if len(args) >= 2:
+                return [self.format_hip_graph_node_params_comment(name, args)]
+        if name in {
+            "hipGraphExecKernelNodeSetParams",
+            "hipGraphExecMemcpyNodeSetParams",
+            "hipGraphExecMemsetNodeSetParams",
+            "hipGraphExecHostNodeSetParams",
+            "hipGraphExecChildGraphNodeSetParams",
+        }:
+            if len(args) >= 3:
+                node_kind = self.get_hip_graph_node_kind(name)
+                return [
+                    f"// HIP graph exec set {node_kind} node params: exec: {args[0]}, "
+                    f"node: {args[1]}, params: {args[2]}"
+                ]
+        if name in {
+            "hipGraphEventRecordNodeGetEvent",
+            "hipGraphEventWaitNodeGetEvent",
+        }:
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[1])
+                action = (
+                    "record" if name == "hipGraphEventRecordNodeGetEvent" else "wait"
+                )
+                return [
+                    f"// HIP graph event {action} node get event: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        if name in {
+            "hipGraphEventRecordNodeSetEvent",
+            "hipGraphEventWaitNodeSetEvent",
+        }:
+            if len(args) >= 2:
+                action = (
+                    "record" if name == "hipGraphEventRecordNodeSetEvent" else "wait"
+                )
+                return [
+                    f"// HIP graph event {action} node set event: "
+                    f"node: {args[0]}, event: {args[1]}"
+                ]
+        if name in {
+            "hipGraphExecEventRecordNodeSetEvent",
+            "hipGraphExecEventWaitNodeSetEvent",
+        }:
+            if len(args) >= 3:
+                action = (
+                    "record"
+                    if name == "hipGraphExecEventRecordNodeSetEvent"
+                    else "wait"
+                )
+                return [
+                    f"// HIP graph exec event {action} node set event: "
+                    f"exec: {args[0]}, node: {args[1]}, event: {args[2]}"
+                ]
+        return None
+
+    def format_hip_graph_node_params_comment(self, name, args):
+        node_kind = self.get_hip_graph_node_kind(name)
+        action = "get" if "GetParams" in name else "set"
+        return (
+            f"// HIP graph {node_kind} node {action} params: "
+            f"node: {args[0]}, params: {args[1]}"
+        )
+
+    def get_hip_graph_node_kind(self, name):
+        if "Kernel" in name:
+            return "kernel"
+        if "Memcpy" in name:
+            return "memcpy"
+        if "Memset" in name:
+            return "memset"
+        if "Host" in name:
+            return "host"
+        if "ChildGraph" in name:
+            return "child graph"
+        return "unknown"
 
     def format_hip_runtime_expression_call(self, node, args):
         name = node.name
