@@ -51,6 +51,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         "RWTexture2D": "image2D",
         "RWTexture2DArray": "image2DArray",
         "RWTexture3D": "image3D",
+        "RWTextureCube": "imageCube",
+        "RWTextureCubeArray": "imageCubeArray",
         "RWTexture2DMS": "image2DMS",
         "RWTexture2DMSArray": "image2DMSArray",
     }
@@ -1739,6 +1741,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "short",
             "unsigned short",
             "int",
+            "uint",
             "unsigned int",
             "long long",
             "unsigned long long",
@@ -2670,6 +2673,67 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return buffer_result_type
         return super().expression_result_type(node)
 
+    def resource_call_result_type(self, func_name, raw_args):
+        """Infer CUDA-specific resource diagnostic result types."""
+        result_type = super().resource_call_result_type(func_name, raw_args)
+        if result_type is not None:
+            return result_type
+
+        if func_name in self.cuda_sampled_diagnostic_float4_calls() and raw_args:
+            resource_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if resource_type is None:
+                return None
+            if self.is_shadow_resource_type(resource_type):
+                return "float"
+            return "float4"
+
+        if func_name in self.cuda_image_atomic_calls() and raw_args:
+            resource_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            return self.cuda_image_atomic_result_type(resource_type)
+
+        return None
+
+    def cuda_sampled_diagnostic_float4_calls(self):
+        """Return sampled-resource calls that CUDA lowers to float4 diagnostics."""
+        return {
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "texelFetchOffset",
+        }
+
+    def cuda_image_atomic_calls(self):
+        """Return image atomic calls that CUDA lowers to scalar diagnostics."""
+        return {
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+        }
+
+    def cuda_image_atomic_result_type(self, resource_type):
+        """Return the scalar result type for CUDA image atomic diagnostics."""
+        base_type = self.resource_base_type(resource_type)
+        if not isinstance(base_type, str):
+            return None
+        if base_type.startswith("uimage"):
+            return "uint"
+        return "int"
+
     def buffer_call_result_type(self, node):
         """Infer result type for structured and byte-address buffer read calls."""
         function_expr = getattr(node, "function", getattr(node, "name", None))
@@ -2992,6 +3056,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "textureCompareLod",
                 "textureCompareGrad",
                 "textureCompareOffset",
+                "textureCompareLodOffset",
+                "textureCompareGradOffset",
                 "textureGatherCompare",
                 "textureGatherCompareOffset",
             }
@@ -3107,6 +3173,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                         f"tex1DLayeredGrad<float4>"
                         f"({coord_args}, {args[2]}, {args[3]})"
                     )
+
+            if texture_type == "sampler2D":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}"
+                )
+                if func_name == "texture":
+                    return f"tex2D({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex2DLod({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return f"tex2DGrad({coord_args}, {args[2]}, {args[3]})"
 
             if texture_type == "sampler2DArray":
                 coord_args = (

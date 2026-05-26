@@ -276,6 +276,8 @@ class RustCodeGen:
             "sqrt": "sqrt",
             "inversesqrt": "rsqrt",
             "pow": "pow",
+            "trunc": "trunc",
+            "roundEven": "round_even",
             "fma": "fma",
             "mad": "fma",
             "ldexp": "ldexp",
@@ -5527,6 +5529,8 @@ class RustCodeGen:
                 "floor",
                 "ceil",
                 "round",
+                "trunc",
+                "round_even",
                 "sin",
                 "cos",
                 "tan",
@@ -5622,7 +5626,7 @@ class RustCodeGen:
             return arg_types[0]
 
         if mapped_name == "clamp" and arg_types:
-            return arg_types[0]
+            return self.promoted_argument_type(arg_types[:3])
 
         if mapped_name == "lerp" and len(arg_types) >= 2:
             return self.promoted_value_type(arg_types[0], arg_types[1])

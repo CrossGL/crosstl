@@ -917,6 +917,104 @@ class TestHipCodeGen:
         assert "// Arguments: data, n" in result
         assert "hipLaunchKernel(" not in result
 
+    def test_hip_runtime_launch_support_api_conversion(self):
+        """Test lower-level HIP launch support APIs emit metadata comments."""
+        code = """
+        void host(void* kernel, hipFunction_t function, hipStream_t stream, void** args, const hipLaunchConfig_t* config, const HIP_LAUNCH_CONFIG* driverConfig) {
+            dim3 grid(16);
+            dim3 block(32);
+            dim3 outGrid;
+            dim3 outBlock;
+            size_t sharedMem;
+            hipStream_t outStream;
+            int value = 7;
+            size_t offset = 0;
+
+            hipConfigureCall(grid, block, 0, stream);
+            __hipPushCallConfiguration(grid, block, 0, stream);
+            __hipPopCallConfiguration(&outGrid, &outBlock, &sharedMem, &outStream);
+            hipSetupArgument(&value, sizeof(value), offset);
+            hipLaunchByPtr(kernel);
+            hipLaunchKernelExC(config, kernel, args);
+            hipDrvLaunchKernelEx(driverConfig, function, args, NULL);
+
+            hipError_t err = hipConfigureCall(grid, block, 0, stream);
+            err = __hipPushCallConfiguration(grid, block, 0, stream);
+            err = __hipPopCallConfiguration(
+                &outGrid, &outBlock, &sharedMem, &outStream
+            );
+            err = hipSetupArgument(&value, sizeof(value), offset);
+            err = hipLaunchByPtr(kernel);
+            err = hipLaunchKernelExC(config, kernel, args);
+            err = hipDrvLaunchKernelEx(driverConfig, function, args, NULL);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            result.count(
+                "// HIP configure call: grid: grid, block: block, "
+                "shared memory: 0, stream: stream"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP push call configuration: grid: grid, block: block, "
+                "shared memory: 0, stream: stream"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP pop call configuration: grid output: outGrid, "
+                "block output: outBlock, shared memory output: sharedMem, "
+                "stream output: outStream"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP setup kernel argument: value: (&value), "
+                "bytes: sizeof(value), offset: offset"
+            )
+            == 2
+        )
+        assert result.count("// HIP launch by pointer: function: kernel") == 2
+        assert (
+            result.count(
+                "// HIP launch kernel ex: config: config, function: kernel, "
+                "args: args"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP driver launch kernel ex: config: driverConfig, "
+                "function: function, params: args, extra: NULL"
+            )
+            == 2
+        )
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "err = hipSuccess;" in result
+
+        for function_name in [
+            "hipConfigureCall",
+            "__hipPushCallConfiguration",
+            "__hipPopCallConfiguration",
+            "hipSetupArgument",
+            "hipLaunchByPtr",
+            "hipLaunchKernelExC",
+            "hipDrvLaunchKernelEx",
+        ]:
+            assert f"{function_name}(" not in result
+
     def test_user_defined_hip_launch_kernel_call_is_not_kernel_launch(self):
         """Test user-defined hipLaunchKernel shadows launch lowering."""
         code = """
@@ -1149,13 +1247,26 @@ class TestHipCodeGen:
             void* textureDesc;
             void* viewDesc;
             void* copyParams;
+            void** copyDsts;
+            void** copySrcs;
+            size_t* copySizes;
+            size_t* copyAttrIndices;
+            size_t failIndex;
             unsigned int glBuffer;
             unsigned int glImage;
             unsigned int glTarget;
             hipArray_t array;
+            hipArray_t levelArray;
+            HIP_ARRAY_DESCRIPTOR arrayDesc;
+            HIP_ARRAY3D_DESCRIPTOR array3DDesc;
             hipChannelFormatDesc desc;
             hipPitchedPtr pitched;
             hipExtent extent;
+            hip_Memcpy2D copy2DParams;
+            HIP_MEMCPY3D driverCopyParams;
+            hipMemcpy3DPeerParms peerCopyParams;
+            hipMemcpyAttributes copyAttrs;
+            hipMemcpy3DBatchOp batch3DOp;
             hipMemPool_t pool;
             hipMemPool_t importedPool;
             hipMemPoolProps poolProps;
@@ -1179,11 +1290,16 @@ class TestHipCodeGen:
             hipGraphicsResource_t imageResource;
             hipTextureObject_t texObj;
             hipSurfaceObject_t surfObj;
+            hipResourceDesc outResourceDesc;
+            hipTextureDesc outTextureDesc;
+            hipResourceViewDesc outViewDesc;
+            hipPointer_attribute pointerAttribute;
             hipIpcMemHandle_t ipcMemHandle;
             hipIpcEventHandle_t ipcEventHandle;
             hipEvent_t ipcEvent;
             hipProfilerStart();
             hipMalloc((void**)&d, n * sizeof(float));
+            hipExtMallocWithFlags((void**)&d, n * sizeof(float), hipDeviceMallocDefault);
             hipMallocAsync((void**)&d, n * sizeof(float), stream);
             hipMemPoolCreate(&pool, &poolProps);
             hipDeviceGetDefaultMemPool(&pool, 0);
@@ -1305,7 +1421,23 @@ class TestHipCodeGen:
             hipMallocArray(&array, &desc, n, 4, hipArrayDefault);
             hipMalloc3D(&pitched, extent);
             hipMalloc3DArray(&array, &desc, extent, hipArrayDefault);
+            hipArrayCreate(&array, &arrayDesc);
+            hipArray3DCreate(&array, &array3DDesc);
+            hipArrayGetDescriptor(&arrayDesc, array);
+            hipArray3DGetDescriptor(&array3DDesc, array);
+            hipArrayGetInfo(&desc, &extent, &flags, array);
+            hipMallocMipmappedArray(
+                &mipmappedArray, &desc, extent, 4, hipArrayDefault
+            );
+            hipMipmappedArrayCreate(&mipmappedArray, &array3DDesc, 4);
+            hipGetMipmappedArrayLevel(&levelArray, mipmappedArray, 1);
+            hipMipmappedArrayGetLevel(&levelArray, mipmappedArray, 2);
             hipMemcpy(d, h, n * sizeof(float), hipMemcpyHostToDevice);
+            hipMemcpyWithStream(
+                d, h, n * sizeof(float), hipMemcpyHostToDevice, stream
+            );
+            hipMemcpyPeer(d2, 1, d, 0, n * sizeof(float));
+            hipMemcpyPeerAsync(d2, 1, d, 0, n * sizeof(float), stream);
             hipMemcpy2D(
                 d2, pitch, h, n * sizeof(float), n * sizeof(float), 4,
                 hipMemcpyHostToDevice
@@ -1314,35 +1446,107 @@ class TestHipCodeGen:
                 d2, pitch, h, n * sizeof(float), n * sizeof(float), 4,
                 hipMemcpyHostToDevice, 0
             );
+            hipMemcpyToArray(
+                array, 0, 0, h, n * sizeof(float), hipMemcpyHostToDevice
+            );
+            hipMemcpyToArrayAsync(
+                array, 0, 0, h, n * sizeof(float), hipMemcpyHostToDevice, stream
+            );
+            hipMemcpyFromArray(
+                h, array, 0, 0, n * sizeof(float), hipMemcpyDeviceToHost
+            );
+            hipMemcpyFromArrayAsync(
+                h, array, 0, 0, n * sizeof(float), hipMemcpyDeviceToHost, stream
+            );
+            hipMemcpy2DToArray(
+                array, 0, 0, h, pitch, n * sizeof(float), 4, hipMemcpyHostToDevice
+            );
+            hipMemcpy2DToArrayAsync(
+                array, 0, 0, h, pitch, n * sizeof(float), 4,
+                hipMemcpyHostToDevice, stream
+            );
+            hipMemcpy2DFromArray(
+                h, pitch, array, 0, 0, n * sizeof(float), 4, hipMemcpyDeviceToHost
+            );
+            hipMemcpy2DFromArrayAsync(
+                h, pitch, array, 0, 0, n * sizeof(float), 4,
+                hipMemcpyDeviceToHost, stream
+            );
+            hipMemcpyArrayToArray(
+                array, 0, 0, array, 4, 0, n * sizeof(float),
+                hipMemcpyDeviceToDevice
+            );
+            hipMemcpy2DArrayToArray(
+                array, 0, 0, array, 4, 0, n * sizeof(float), 4,
+                hipMemcpyDeviceToDevice
+            );
             hipMemcpyToSymbol(
                 symbol, h, n * sizeof(float), 0, hipMemcpyHostToDevice
+            );
+            hipMemcpyToSymbolAsync(
+                symbol, h, n * sizeof(float), 0, hipMemcpyHostToDevice, stream
             );
             hipMemcpyFromSymbol(
                 h, symbol, n * sizeof(float), 0, hipMemcpyDeviceToHost
             );
+            hipMemcpyFromSymbolAsync(
+                h, symbol, n * sizeof(float), 0, hipMemcpyDeviceToHost, stream
+            );
+            hipGetSymbolAddress((void**)&d, symbol);
+            hipGetSymbolSize(&ptrSize, symbol);
+            hipMemcpyParam2D(&copy2DParams);
+            hipMemcpyParam2DAsync(&copy2DParams, stream);
             hipMemcpy3D(&copyParams);
             hipMemcpy3DAsync(&copyParams, 0);
+            hipDrvMemcpy3D(&driverCopyParams);
+            hipDrvMemcpy3DAsync(&driverCopyParams, stream);
+            hipMemcpyBatchAsync(
+                copyDsts, copySrcs, copySizes, 1, &copyAttrs, copyAttrIndices, 1,
+                &failIndex, stream
+            );
+            hipMemcpy3DBatchAsync(1, &batch3DOp, &failIndex, 0ull, stream);
+            hipMemcpy3DPeer(&peerCopyParams);
+            hipMemcpy3DPeerAsync(&peerCopyParams, stream);
             hipMemGetInfo(&freeMem, &totalMem);
             hipPointerGetAttributes(&pointerAttrs, d);
+            hipDrvPointerGetAttributes(
+                1, &pointerAttribute, &rangeAttributeData, devicePtr
+            );
             hipPointerGetAttribute(&pointerAttrValue, hipPointerAttributeMemoryType, d);
             hipPointerSetAttribute(&pointerAttrValue, hipPointerAttributeMemoryType, d);
             hipMemPtrGetInfo(d, &ptrSize);
+            hipGetChannelDesc(&desc, array);
             hipCreateTextureObject(
                 &texObj, resourceDesc, textureDesc, viewDesc
             );
+            hipTexObjectCreate(&texObj, resourceDesc, textureDesc, viewDesc);
+            hipGetTextureObjectResourceDesc(&outResourceDesc, texObj);
+            hipGetTextureObjectTextureDesc(&outTextureDesc, texObj);
+            hipGetTextureObjectResourceViewDesc(&outViewDesc, texObj);
+            hipTexObjectGetResourceDesc(&outResourceDesc, texObj);
+            hipTexObjectGetTextureDesc(&outTextureDesc, texObj);
+            hipTexObjectGetResourceViewDesc(&outViewDesc, texObj);
             hipCreateSurfaceObject(&surfObj, resourceDesc);
             hipDestroyTextureObject(texObj);
+            hipTexObjectDestroy(texObj);
             hipDestroySurfaceObject(surfObj);
             hipGraphicsUnregisterResource(imageResource);
             hipGraphicsUnregisterResource(graphicsResource);
             hipDestroyExternalSemaphore(externalSemaphore);
             hipFreeMipmappedArray(mipmappedArray);
+            hipMipmappedArrayDestroy(mipmappedArray);
             hipDestroyExternalMemory(externalMemory);
             hipMemset(d, 0, n * sizeof(float));
             hipMemset2D(d2, pitch, 0, n * sizeof(float), 4);
             hipMemset2DAsync(d2, pitch, 1, n * sizeof(float), 4, 0);
             hipMemset3D(pitched, 0, extent);
             hipMemset3DAsync(pitched, 1, extent, 0);
+            hipMemsetD2D8(devicePtr, pitch, 0, n, 4);
+            hipMemsetD2D8Async(devicePtr, pitch, 1, n, 4, stream);
+            hipMemsetD2D16(devicePtr, pitch, 0, n, 4);
+            hipMemsetD2D16Async(devicePtr, pitch, 1, n, 4, stream);
+            hipMemsetD2D32(devicePtr, pitch, 0, n, 4);
+            hipMemsetD2D32Async(devicePtr, pitch, 1, n, 4, stream);
             hipDeviceSynchronize();
             hipHostUnregister(h);
             hipFree(d);
@@ -1396,6 +1600,14 @@ class TestHipCodeGen:
             err = hipHostRegister(h, n * sizeof(float), hipHostRegisterMapped);
             err = hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
             err = hipMallocArray(&array, &desc, n, 4, hipArrayDefault);
+            err = hipMemcpyPeer(d2, 1, d, 0, n * sizeof(float));
+            err = hipMemcpyToArray(
+                array, 0, 0, h, n * sizeof(float), hipMemcpyHostToDevice
+            );
+            err = hipMemcpy2DFromArray(
+                h, pitch, array, 0, 0, n * sizeof(float), 4,
+                hipMemcpyDeviceToHost
+            );
             err = hipMemcpy3D(&copyParams);
             err = hipMemset3D(pitched, 0, extent);
             err = hipPointerGetAttributes(&pointerAttrs, d);
@@ -1421,6 +1633,10 @@ class TestHipCodeGen:
         assert (
             result.count("// HIP memory allocate: d, bytes: (n * sizeof(float))") == 2
         )
+        assert (
+            "// HIP extended memory allocate: d, bytes: (n * sizeof(float)), "
+            "flags: hipDeviceMallocDefault"
+        ) in result
         assert (
             result.count(
                 "// HIP async memory allocate: d, bytes: (n * sizeof(float)), "
@@ -1811,9 +2027,53 @@ class TestHipCodeGen:
             "// HIP 3D array allocate: array, desc: desc, extent: extent, "
             "flags: hipArrayDefault"
         ) in result
+        assert "// HIP array create: output: array, descriptor: arrayDesc" in result
+        assert (
+            "// HIP 3D array create: output: array, descriptor: array3DDesc" in result
+        )
+        assert "// HIP array get descriptor: output: arrayDesc, array: array" in result
+        assert (
+            "// HIP array get 3D descriptor: output: array3DDesc, array: array"
+            in result
+        )
+        assert (
+            "// HIP array get info: desc output: desc, extent output: extent, "
+            "flags output: flags, array: array"
+        ) in result
+        assert (
+            "// HIP mipmapped array allocate: output: mipmappedArray, desc: desc, "
+            "extent: extent, levels: 4, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP mipmapped array create: output: mipmappedArray, "
+            "descriptor: array3DDesc, levels: 4"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: levelArray, "
+            "mipmapped array: mipmappedArray, level: 1"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: levelArray, "
+            "mipmapped array: mipmappedArray, level: 2"
+        ) in result
         assert (
             "// HIP memory copy: h -> d, bytes: (n * sizeof(float)), "
             "kind: hipMemcpyHostToDevice"
+        ) in result
+        assert (
+            "// HIP memory copy: h -> d, bytes: (n * sizeof(float)), "
+            "kind: hipMemcpyHostToDevice, stream: stream"
+        ) in result
+        assert (
+            result_lines.count(
+                "// HIP peer memory copy: source: d, source device: 0, "
+                "destination: d2, destination device: 1, bytes: (n * sizeof(float))"
+            )
+            == 2
+        )
+        assert (
+            "// HIP peer memory copy: source: d, source device: 0, destination: d2, "
+            "destination device: 1, bytes: (n * sizeof(float)), stream: stream"
         ) in result
         assert (
             "// HIP 2D memory copy: h -> d2, dst pitch: pitch, "
@@ -1826,15 +2086,112 @@ class TestHipCodeGen:
             "height: 4, kind: hipMemcpyHostToDevice, stream: 0"
         ) in result
         assert (
+            result_lines.count(
+                "// HIP memory copy to array: source: h, destination array: array, "
+                "w offset: 0, h offset: 0, bytes: (n * sizeof(float)), "
+                "kind: hipMemcpyHostToDevice"
+            )
+            == 2
+        )
+        assert (
+            "// HIP memory copy to array: source: h, destination array: array, "
+            "w offset: 0, h offset: 0, bytes: (n * sizeof(float)), "
+            "kind: hipMemcpyHostToDevice, stream: stream"
+        ) in result
+        assert (
+            "// HIP memory copy from array: source array: array, w offset: 0, "
+            "h offset: 0, destination: h, bytes: (n * sizeof(float)), "
+            "kind: hipMemcpyDeviceToHost"
+        ) in result
+        assert (
+            "// HIP memory copy from array: source array: array, w offset: 0, "
+            "h offset: 0, destination: h, bytes: (n * sizeof(float)), "
+            "kind: hipMemcpyDeviceToHost, stream: stream"
+        ) in result
+        assert (
+            "// HIP 2D memory copy to array: source: h, source pitch: pitch, "
+            "destination array: array, w offset: 0, h offset: 0, "
+            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyHostToDevice"
+        ) in result
+        assert (
+            "// HIP 2D memory copy to array: source: h, source pitch: pitch, "
+            "destination array: array, w offset: 0, h offset: 0, "
+            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyHostToDevice, "
+            "stream: stream"
+        ) in result
+        assert (
+            result_lines.count(
+                "// HIP 2D memory copy from array: source array: array, "
+                "w offset: 0, h offset: 0, destination: h, "
+                "destination pitch: pitch, width: (n * sizeof(float)), height: 4, "
+                "kind: hipMemcpyDeviceToHost"
+            )
+            == 2
+        )
+        assert (
+            "// HIP 2D memory copy from array: source array: array, "
+            "w offset: 0, h offset: 0, destination: h, destination pitch: pitch, "
+            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyDeviceToHost, "
+            "stream: stream"
+        ) in result
+        assert (
+            "// HIP memory copy array to array: source array: array, "
+            "source w offset: 4, source h offset: 0, destination array: array, "
+            "destination w offset: 0, destination h offset: 0, "
+            "bytes: (n * sizeof(float)), kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP 2D memory copy array to array: source array: array, "
+            "source w offset: 4, source h offset: 0, destination array: array, "
+            "destination w offset: 0, destination h offset: 0, "
+            "width: (n * sizeof(float)), height: 4, kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
             "// HIP symbol copy to: symbol, source: h, bytes: (n * sizeof(float)), "
             "offset: 0, kind: hipMemcpyHostToDevice"
+        ) in result
+        assert (
+            "// HIP symbol copy to: symbol, source: h, bytes: (n * sizeof(float)), "
+            "offset: 0, kind: hipMemcpyHostToDevice, stream: stream"
         ) in result
         assert (
             "// HIP symbol copy from: symbol, destination: h, "
             "bytes: (n * sizeof(float)), offset: 0, kind: hipMemcpyDeviceToHost"
         ) in result
+        assert (
+            "// HIP symbol copy from: symbol, destination: h, "
+            "bytes: (n * sizeof(float)), offset: 0, kind: hipMemcpyDeviceToHost, "
+            "stream: stream"
+        ) in result
+        assert "// HIP get symbol address: output: d, symbol: symbol" in result
+        assert "// HIP get symbol size: output: ptrSize, symbol: symbol" in result
+        assert "// HIP 2D parameterized memory copy: params: copy2DParams" in result
+        assert (
+            "// HIP 2D parameterized memory copy: params: copy2DParams, "
+            "stream: stream"
+        ) in result
         assert result.count("// HIP 3D memory copy: params: copyParams") == 3
         assert "// HIP 3D memory copy: params: copyParams, stream: 0" in result
+        assert "// HIP driver 3D memory copy: params: driverCopyParams" in result
+        assert (
+            "// HIP driver 3D memory copy: params: driverCopyParams, stream: stream"
+            in result
+        )
+        assert (
+            "// HIP batched memory copy: destinations: copyDsts, sources: copySrcs, "
+            "sizes: copySizes, count: 1, attributes: (&copyAttrs), "
+            "attribute indices: copyAttrIndices, attribute count: 1, "
+            "fail index output: failIndex, stream: stream"
+        ) in result
+        assert (
+            "// HIP batched 3D memory copy: count: 1, operations: (&batch3DOp), "
+            "fail index output: failIndex, flags: 0ull, stream: stream"
+        ) in result
+        assert "// HIP 3D peer memory copy: params: peerCopyParams" in result
+        assert (
+            "// HIP 3D peer memory copy: params: peerCopyParams, stream: stream"
+            in result
+        )
         assert (
             "// HIP memory info: free output: freeMem, total output: totalMem" in result
         )
@@ -1842,6 +2199,11 @@ class TestHipCodeGen:
             result.count("// HIP pointer attributes: output: pointerAttrs, pointer: d")
             == 2
         )
+        assert (
+            "// HIP driver pointer attributes: count: 1, "
+            "attributes: (&pointerAttribute), data: (&rangeAttributeData), "
+            "pointer: devicePtr"
+        ) in result
         assert (
             "// HIP pointer attribute: output: pointerAttrValue, "
             "attribute: hipPointerAttributeMemoryType, pointer: d"
@@ -1856,6 +2218,28 @@ class TestHipCodeGen:
                 "// HIP texture object create: texObj, resource: resourceDesc, "
                 "texture desc: textureDesc, resource view: viewDesc"
             )
+            == 3
+        )
+        assert "// HIP get channel desc: output: desc, array: array" in result
+        assert (
+            result.count(
+                "// HIP texture object get resource desc: output: outResourceDesc, "
+                "texture: texObj"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP texture object get texture desc: output: outTextureDesc, "
+                "texture: texObj"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP texture object get resource view desc: output: outViewDesc, "
+                "texture: texObj"
+            )
             == 2
         )
         assert (
@@ -1864,7 +2248,7 @@ class TestHipCodeGen:
             )
             == 2
         )
-        assert result.count("// HIP texture object destroy: texObj") == 2
+        assert result.count("// HIP texture object destroy: texObj") == 3
         assert result.count("// HIP surface object destroy: surfObj") == 2
         assert "// HIP memory set: d, value: 0, bytes: (n * sizeof(float))" in result
         assert (
@@ -1882,6 +2266,30 @@ class TestHipCodeGen:
             "// HIP 3D memory set: pitched, value: 1, extent: extent, stream: 0"
             in result
         )
+        assert (
+            "// HIP driver 2D memory set 8-bit: pointer: devicePtr, pitch: pitch, "
+            "value: 0, width: n, height: 4"
+        ) in result
+        assert (
+            "// HIP driver 2D memory set 8-bit: pointer: devicePtr, pitch: pitch, "
+            "value: 1, width: n, height: 4, stream: stream"
+        ) in result
+        assert (
+            "// HIP driver 2D memory set 16-bit: pointer: devicePtr, pitch: pitch, "
+            "value: 0, width: n, height: 4"
+        ) in result
+        assert (
+            "// HIP driver 2D memory set 16-bit: pointer: devicePtr, pitch: pitch, "
+            "value: 1, width: n, height: 4, stream: stream"
+        ) in result
+        assert (
+            "// HIP driver 2D memory set 32-bit: pointer: devicePtr, pitch: pitch, "
+            "value: 0, width: n, height: 4"
+        ) in result
+        assert (
+            "// HIP driver 2D memory set 32-bit: pointer: devicePtr, pitch: pitch, "
+            "value: 1, width: n, height: 4, stream: stream"
+        ) in result
         assert "// HIP device synchronize" in result
         assert result.count("// HIP memory free: h") == 2
         assert "// HIP host memory unregister: h" in result
@@ -1910,6 +2318,7 @@ class TestHipCodeGen:
         assert "if ((err != hipSuccess))" in result
         assert "err = hipSuccess;" in result
         assert "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
+        assert "hipExtMallocWithFlags(" not in result
         assert "hipMallocAsync(" not in result
         assert "hipMallocFromPoolAsync(" not in result
         assert "hipFreeAsync(" not in result
@@ -1999,10 +2408,41 @@ class TestHipCodeGen:
         assert "hipMallocArray(" not in result
         assert "hipMalloc3D(" not in result
         assert "hipMalloc3DArray(" not in result
+        assert "hipArrayCreate(" not in result
+        assert "hipArray3DCreate(" not in result
+        assert "hipArrayGetDescriptor(" not in result
+        assert "hipArray3DGetDescriptor(" not in result
+        assert "hipArrayGetInfo(" not in result
+        assert "hipMallocMipmappedArray(" not in result
+        assert "hipMipmappedArrayCreate(" not in result
+        assert "hipGetMipmappedArrayLevel(" not in result
+        assert "hipMipmappedArrayGetLevel(" not in result
+        assert "hipMipmappedArrayDestroy(" not in result
+        assert "hipMemcpyWithStream(" not in result
+        assert "hipMemcpyPeer(" not in result
+        assert "hipMemcpyPeerAsync(" not in result
         assert "hipMemcpy2D(" not in result
         assert "hipMemcpy2DAsync(" not in result
+        assert "hipMemcpyToArray(" not in result
+        assert "hipMemcpyToArrayAsync(" not in result
+        assert "hipMemcpyFromArray(" not in result
+        assert "hipMemcpyFromArrayAsync(" not in result
+        assert "hipMemcpy2DToArray(" not in result
+        assert "hipMemcpy2DToArrayAsync(" not in result
+        assert "hipMemcpy2DFromArray(" not in result
+        assert "hipMemcpy2DFromArrayAsync(" not in result
+        assert "hipMemcpyArrayToArray(" not in result
+        assert "hipMemcpy2DArrayToArray(" not in result
         assert "hipMemcpy3D(" not in result
         assert "hipMemcpy3DAsync(" not in result
+        assert "hipDrvMemcpy3D(" not in result
+        assert "hipDrvMemcpy3DAsync(" not in result
+        assert "hipMemcpyParam2D(" not in result
+        assert "hipMemcpyParam2DAsync(" not in result
+        assert "hipMemcpyBatchAsync(" not in result
+        assert "hipMemcpy3DBatchAsync(" not in result
+        assert "hipMemcpy3DPeer(" not in result
+        assert "hipMemcpy3DPeerAsync(" not in result
         assert "hipMemcpyAtoH(" not in result
         assert "hipMemcpyAtoHAsync(" not in result
         assert "hipMemcpyHtoA(" not in result
@@ -2011,19 +2451,39 @@ class TestHipCodeGen:
         assert "hipMemcpyDtoA(" not in result
         assert "hipMemcpyAtoA(" not in result
         assert "hipMemcpyToSymbol(" not in result
+        assert "hipMemcpyToSymbolAsync(" not in result
         assert "hipMemcpyFromSymbol(" not in result
+        assert "hipMemcpyFromSymbolAsync(" not in result
+        assert "hipGetSymbolAddress(" not in result
+        assert "hipGetSymbolSize(" not in result
         assert "hipMemGetInfo(" not in result
         assert "hipPointerGetAttributes(" not in result
+        assert "hipDrvPointerGetAttributes(" not in result
         assert "hipPointerGetAttribute(" not in result
         assert "hipPointerSetAttribute(" not in result
         assert "hipMemPtrGetInfo(" not in result
+        assert "hipMemsetD2D8(" not in result
+        assert "hipMemsetD2D8Async(" not in result
+        assert "hipMemsetD2D16(" not in result
+        assert "hipMemsetD2D16Async(" not in result
+        assert "hipMemsetD2D32(" not in result
+        assert "hipMemsetD2D32Async(" not in result
         assert "hipMemset2D(" not in result
         assert "hipMemset2DAsync(" not in result
         assert "hipMemset3D(" not in result
         assert "hipMemset3DAsync(" not in result
+        assert "hipGetChannelDesc(" not in result
         assert "hipCreateTextureObject(" not in result
+        assert "hipTexObjectCreate(" not in result
+        assert "hipGetTextureObjectResourceDesc(" not in result
+        assert "hipGetTextureObjectTextureDesc(" not in result
+        assert "hipGetTextureObjectResourceViewDesc(" not in result
+        assert "hipTexObjectGetResourceDesc(" not in result
+        assert "hipTexObjectGetTextureDesc(" not in result
+        assert "hipTexObjectGetResourceViewDesc(" not in result
         assert "hipCreateSurfaceObject(" not in result
         assert "hipDestroyTextureObject(" not in result
+        assert "hipTexObjectDestroy(" not in result
         assert "hipDestroySurfaceObject(" not in result
         assert "hipHostUnregister(" not in result
         assert "hipHostFree(" not in result
@@ -2142,6 +2602,7 @@ class TestHipCodeGen:
             char name[64];
             char pciBusId[32];
             hipUUID uuid;
+            hipDriverProcAddressQueryResult queryStatus;
             hipStreamCaptureStatus captureStatus;
             hipGraph_t graph;
             hipGraphNode_t* deps;
@@ -2152,6 +2613,8 @@ class TestHipCodeGen:
             void* callback;
             void* hostFn;
             void* userData;
+            void* proc;
+            unsigned long long procFlags = 0ull;
             hipGetDevice(&device);
             hipGetDeviceCount(&count);
             hipSetDevice(device);
@@ -2176,6 +2639,9 @@ class TestHipCodeGen:
             hipDeviceReset();
             hipGetDeviceFlags(&flags);
             hipSetDeviceFlags(hipDeviceScheduleAuto);
+            hipGetProcAddress(
+                "hipMalloc", &proc, runtimeVersion, procFlags, &queryStatus
+            );
             hipOccupancyMaxPotentialBlockSize(
                 &gridSize, &blockSize, kernel, 0, 0
             );
@@ -2226,6 +2692,9 @@ class TestHipCodeGen:
             err = hipDeviceGetPCIBusId(pciBusId, 32, device);
             err = hipDeviceSetLimit(hipLimitMallocHeapSize, limitValue);
             err = hipDeviceReset();
+            err = hipGetProcAddress(
+                "hipMalloc", &proc, runtimeVersion, procFlags, &queryStatus
+            );
             err = hipOccupancyMaxPotentialBlockSize(
                 &gridSize, &blockSize, kernel, 0, 0
             );
@@ -2352,6 +2821,14 @@ class TestHipCodeGen:
         assert "// HIP set device flags: hipDeviceScheduleAuto" in result
         assert (
             result.count(
+                '// HIP get proc address: symbol: "hipMalloc", output: proc, '
+                "version: runtimeVersion, flags: procFlags, "
+                "status output: queryStatus"
+            )
+            == 2
+        )
+        assert (
+            result.count(
                 "// HIP occupancy max potential block size: grid output: gridSize, "
                 "block output: blockSize, kernel: kernel, "
                 "dynamic shared memory: 0, block size limit: 0"
@@ -2415,6 +2892,7 @@ class TestHipCodeGen:
         assert "hipDeviceReset(" not in result
         assert "hipGetDeviceFlags(" not in result
         assert "hipSetDeviceFlags(" not in result
+        assert "hipGetProcAddress(" not in result
         assert "hipOccupancyMaxPotentialBlockSize(" not in result
         assert "hipOccupancyMaxPotentialBlockSizeVariableSMem(" not in result
         assert "hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(" not in result
@@ -2458,6 +2936,8 @@ class TestHipCodeGen:
             void* image;
             hipJitOption options;
             void* optionValues;
+            hipEvent_t startEvent;
+            hipEvent_t stopEvent;
             hiprtcProgram program;
             hiprtcLinkState linkState;
             hiprtcJIT_option jitOptions;
@@ -2494,6 +2974,14 @@ class TestHipCodeGen:
             hipModuleLaunchKernel(
                 function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
             );
+            hipExtModuleLaunchKernel(
+                function, 512, 1, 1, 64, 1, 1, 0, stream, params, extra,
+                startEvent, stopEvent
+            );
+            hipHccModuleLaunchKernel(
+                function, 512, 1, 1, 64, 1, 1, 0, stream, params, extra,
+                startEvent, stopEvent
+            );
             hipLaunchCooperativeKernel(function, 8, 64, params, 0, stream);
             hipLaunchCooperativeKernelMultiDevice(launchParams, 1, 0);
             hipModuleLaunchCooperativeKernel(
@@ -2528,6 +3016,10 @@ class TestHipCodeGen:
             hipError_t err = hipModuleGetFunction(&function, module, "kernel");
             err = hipModuleLaunchKernel(
                 function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
+            );
+            err = hipExtModuleLaunchKernel(
+                function, 512, 1, 1, 64, 1, 1, 0, stream, params, extra,
+                startEvent, stopEvent
             );
             err = hipLaunchCooperativeKernel(function, 8, 64, params, 0, stream);
             hiprtcResult rtc = hiprtcCreateProgram(
@@ -2594,6 +3086,21 @@ class TestHipCodeGen:
             )
             == 2
         )
+        assert (
+            result.count(
+                "// HIP extended module launch kernel: function: function, "
+                "global work size: (512, 1, 1), local work size: (64, 1, 1), "
+                "shared memory: 0, stream: stream, params: params, extra: extra, "
+                "start event: startEvent, stop event: stopEvent"
+            )
+            == 2
+        )
+        assert (
+            "// HIP HCC module launch kernel: function: function, "
+            "global work size: (512, 1, 1), local work size: (64, 1, 1), "
+            "shared memory: 0, stream: stream, params: params, extra: extra, "
+            "start event: startEvent, stop event: stopEvent"
+        ) in result
         assert (
             result.count(
                 "// HIP cooperative kernel launch: function: function, grid: 8, "
@@ -2691,6 +3198,8 @@ class TestHipCodeGen:
         assert "hipFuncSetSharedMemConfig(" not in result
         assert "hipModuleGetGlobal(" not in result
         assert "hipModuleLaunchKernel(" not in result
+        assert "hipExtModuleLaunchKernel(" not in result
+        assert "hipHccModuleLaunchKernel(" not in result
         assert "hipLaunchCooperativeKernel(" not in result
         assert "hipLaunchCooperativeKernelMultiDevice(" not in result
         assert "hipModuleLaunchCooperativeKernel(" not in result
@@ -2714,6 +3223,44 @@ class TestHipCodeGen:
         assert "hiprtcLinkAddData(" not in result
         assert "hiprtcLinkComplete(" not in result
         assert "hiprtcLinkDestroy(" not in result
+
+    def test_hip_runtime_callback_activity_expression_conversion(self):
+        """Test HIP callback/activity helper expressions lower to stable metadata."""
+        code = """
+        void inspect(hipFunction_t function, hipStream_t stream, void* hostFunction) {
+            const char* apiName = hipApiName(1);
+            const char* kernelName = hipKernelNameRef(function);
+            const char* pointerKernelName =
+                hipKernelNameRefByPtr(hostFunction, stream);
+            int streamDevice = hipGetStreamDeviceId(stream);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert 'var apiName: ptr<i8> = /* HIP API name: 1 */ "";' in result
+        assert (
+            'var kernelName: ptr<i8> = /* HIP kernel name for function: function */ "";'
+            in result
+        )
+        assert (
+            "var pointerKernelName: ptr<i8> = /* HIP kernel name for host function: "
+            'hostFunction, stream: stream */ "";'
+        ) in result
+        assert "var streamDevice: i32 = /* HIP stream device id: stream */ 0;" in result
+
+        for function_name in [
+            "hipApiName",
+            "hipKernelNameRef",
+            "hipKernelNameRefByPtr",
+            "hipGetStreamDeviceId",
+        ]:
+            assert f"{function_name}(" not in result
 
     def test_hip_runtime_driver_context_api_conversion(self):
         """Test HIP initialization, context, and peer APIs emit metadata comments."""

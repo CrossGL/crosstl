@@ -398,20 +398,184 @@ mod math {
         Default::default()
     }
 
-    pub fn max(left: f32, right: f32) -> f32 {
-        left.max(right)
+    pub trait MinValue<Rhs> {
+        type Output;
+
+        fn min_value(self, rhs: Rhs) -> Self::Output;
     }
 
-    pub fn min(left: f32, right: f32) -> f32 {
-        left.min(right)
+    pub fn min<Left, Right>(left: Left, right: Right) -> <Left as MinValue<Right>>::Output
+    where
+        Left: MinValue<Right>,
+    {
+        left.min_value(right)
     }
 
-    pub fn clamp(value: f32, low: f32, high: f32) -> f32 {
-        value.max(low).min(high)
+    impl MinValue<f32> for f32 {
+        type Output = f32;
+
+        fn min_value(self, rhs: f32) -> Self::Output {
+            self.min(rhs)
+        }
     }
 
-    pub fn pow(left: f32, right: f32) -> f32 {
-        left.powf(right)
+    impl MinValue<f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn min_value(self, _rhs: f32) -> Self::Output {
+            self
+        }
+    }
+
+    impl MinValue<Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn min_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self, self, self)
+        }
+    }
+
+    impl MinValue<Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn min_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            self
+        }
+    }
+
+    pub trait MaxValue<Rhs> {
+        type Output;
+
+        fn max_value(self, rhs: Rhs) -> Self::Output;
+    }
+
+    pub fn max<Left, Right>(left: Left, right: Right) -> <Left as MaxValue<Right>>::Output
+    where
+        Left: MaxValue<Right>,
+    {
+        left.max_value(right)
+    }
+
+    impl MaxValue<f32> for f32 {
+        type Output = f32;
+
+        fn max_value(self, rhs: f32) -> Self::Output {
+            self.max(rhs)
+        }
+    }
+
+    impl MaxValue<f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn max_value(self, _rhs: f32) -> Self::Output {
+            self
+        }
+    }
+
+    impl MaxValue<Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn max_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self, self, self)
+        }
+    }
+
+    impl MaxValue<Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn max_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            self
+        }
+    }
+
+    pub trait ClampValue<Low, High> {
+        type Output;
+
+        fn clamp_value(self, low: Low, high: High) -> Self::Output;
+    }
+
+    pub fn clamp<Value, Low, High>(value: Value, low: Low, high: High) -> <Value as ClampValue<Low, High>>::Output
+    where
+        Value: ClampValue<Low, High>,
+    {
+        value.clamp_value(low, high)
+    }
+
+    impl ClampValue<f32, f32> for f32 {
+        type Output = f32;
+
+        fn clamp_value(self, low: f32, high: f32) -> Self::Output {
+            self.max(low).min(high)
+        }
+    }
+
+    impl ClampValue<f32, f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn clamp_value(self, _low: f32, _high: f32) -> Self::Output {
+            self
+        }
+    }
+
+    impl ClampValue<Vec3<f32>, Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn clamp_value(self, _low: Vec3<f32>, _high: Vec3<f32>) -> Self::Output {
+            self
+        }
+    }
+
+    impl ClampValue<Vec3<f32>, Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn clamp_value(self, _low: Vec3<f32>, _high: Vec3<f32>) -> Self::Output {
+            Vec3::new(self, self, self)
+        }
+    }
+
+    pub trait PowValue<Rhs> {
+        type Output;
+
+        fn pow_value(self, rhs: Rhs) -> Self::Output;
+    }
+
+    pub fn pow<Left, Right>(left: Left, right: Right) -> <Left as PowValue<Right>>::Output
+    where
+        Left: PowValue<Right>,
+    {
+        left.pow_value(right)
+    }
+
+    impl PowValue<f32> for f32 {
+        type Output = f32;
+
+        fn pow_value(self, rhs: f32) -> Self::Output {
+            self.powf(rhs)
+        }
+    }
+
+    impl PowValue<f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn pow_value(self, _rhs: f32) -> Self::Output {
+            self
+        }
+    }
+
+    impl PowValue<Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn pow_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self, self, self)
+        }
+    }
+
+    impl PowValue<Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn pow_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            self
+        }
     }
 
     pub fn sqrt(value: f32) -> f32 {
@@ -436,6 +600,58 @@ mod math {
 
     pub fn round(value: f32) -> f32 {
         value.round()
+    }
+
+    pub trait TruncValue {
+        type Output;
+
+        fn trunc_value(self) -> Self::Output;
+    }
+
+    pub fn trunc<T: TruncValue>(value: T) -> T::Output {
+        value.trunc_value()
+    }
+
+    impl TruncValue for f32 {
+        type Output = f32;
+
+        fn trunc_value(self) -> Self::Output {
+            self.trunc()
+        }
+    }
+
+    impl TruncValue for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn trunc_value(self) -> Self::Output {
+            self
+        }
+    }
+
+    pub trait RoundEvenValue {
+        type Output;
+
+        fn round_even_value(self) -> Self::Output;
+    }
+
+    pub fn round_even<T: RoundEvenValue>(value: T) -> T::Output {
+        value.round_even_value()
+    }
+
+    impl RoundEvenValue for f32 {
+        type Output = f32;
+
+        fn round_even_value(self) -> Self::Output {
+            self
+        }
+    }
+
+    impl RoundEvenValue for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn round_even_value(self) -> Self::Output {
+            self
+        }
     }
 
     pub fn fract(value: f32) -> f32 {
@@ -466,8 +682,49 @@ mod math {
         value.atan()
     }
 
-    pub fn atan2(left: f32, right: f32) -> f32 {
-        left.atan2(right)
+    pub trait Atan2Value<Rhs> {
+        type Output;
+
+        fn atan2_value(self, rhs: Rhs) -> Self::Output;
+    }
+
+    pub fn atan2<Left, Right>(left: Left, right: Right) -> <Left as Atan2Value<Right>>::Output
+    where
+        Left: Atan2Value<Right>,
+    {
+        left.atan2_value(right)
+    }
+
+    impl Atan2Value<f32> for f32 {
+        type Output = f32;
+
+        fn atan2_value(self, rhs: f32) -> Self::Output {
+            self.atan2(rhs)
+        }
+    }
+
+    impl Atan2Value<f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn atan2_value(self, _rhs: f32) -> Self::Output {
+            self
+        }
+    }
+
+    impl Atan2Value<Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn atan2_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self, self, self)
+        }
+    }
+
+    impl Atan2Value<Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn atan2_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            self
+        }
     }
 
     pub fn sinh(value: f32) -> f32 {
@@ -506,8 +763,49 @@ mod math {
         value.to_radians()
     }
 
-    pub fn modulo(left: f32, right: f32) -> f32 {
-        left % right
+    pub trait ModuloValue<Rhs> {
+        type Output;
+
+        fn modulo_value(self, rhs: Rhs) -> Self::Output;
+    }
+
+    pub fn modulo<Left, Right>(left: Left, right: Right) -> <Left as ModuloValue<Right>>::Output
+    where
+        Left: ModuloValue<Right>,
+    {
+        left.modulo_value(right)
+    }
+
+    impl ModuloValue<f32> for f32 {
+        type Output = f32;
+
+        fn modulo_value(self, rhs: f32) -> Self::Output {
+            self % rhs
+        }
+    }
+
+    impl ModuloValue<f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn modulo_value(self, _rhs: f32) -> Self::Output {
+            self
+        }
+    }
+
+    impl ModuloValue<Vec3<f32>> for f32 {
+        type Output = Vec3<f32>;
+
+        fn modulo_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self, self, self)
+        }
+    }
+
+    impl ModuloValue<Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn modulo_value(self, _rhs: Vec3<f32>) -> Self::Output {
+            self
+        }
     }
 
     pub trait Sign {
@@ -5547,7 +5845,7 @@ def test_else_if_statement():
                 void main() {
                     float result = add(1.0, 2.0);
                 }
-                
+
                 float add(float a, float b) {
                     return a + b;
                 }
@@ -5683,6 +5981,146 @@ def test_common_math_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_pat
     assert "let hyper: f32 = ((sinh(x) + cosh(x)) + tanh(x));" in generated_code
     assert "let dist: Vec3<f32> = distance" not in generated_code
     assert "let facing: f32 = faceforward" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rounding_intrinsics_preserve_float_input_shape_and_smoke_compile(tmp_path):
+    code = """
+    shader RoundingIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, float scalar) {
+                let truncated = trunc(value);
+                let scalar_truncated = trunc(scalar);
+                let even = roundEven(value);
+                let scalar_even = roundEven(scalar);
+                return vec4(truncated + even, scalar_truncated + scalar_even);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let truncated: Vec3<f32> = trunc(value);" in generated_code
+    assert "let scalar_truncated: f32 = trunc(scalar);" in generated_code
+    assert "let even: Vec3<f32> = round_even(value);" in generated_code
+    assert "let scalar_even: f32 = round_even(scalar);" in generated_code
+    assert "let truncated: f32 = trunc(value)" not in generated_code
+    assert "let even: f32 = round_even(value)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_clamp_promotes_mixed_scalar_vector_operands_and_smoke_compile(tmp_path):
+    code = """
+    shader ClampPromotionInference {
+        fragment {
+            vec4 main(vec3 value, vec3 low, vec3 high, float scalar) {
+                let vector_value = clamp(value, 0.0, 1.0);
+                let vector_bounds = clamp(scalar, low, high);
+                let scalar_value = clamp(scalar, 0.0, 1.0);
+                let vector_all = clamp(value, low, high);
+                return vec4(vector_value + vector_bounds + vector_all, scalar_value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let vector_value: Vec3<f32> = clamp(value, 0.0, 1.0);" in generated_code
+    assert "let vector_bounds: Vec3<f32> = clamp(scalar, low, high);" in generated_code
+    assert "let scalar_value: f32 = clamp(scalar, 0.0, 1.0);" in generated_code
+    assert "let vector_all: Vec3<f32> = clamp(value, low, high);" in generated_code
+    assert "let vector_bounds: f32 = clamp" not in generated_code
+    assert "let vector_value: f32 = clamp" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_min_max_promote_mixed_scalar_vector_operands_and_smoke_compile(tmp_path):
+    code = """
+    shader MinMaxPromotionInference {
+        fragment {
+            vec4 main(vec3 value, vec3 other, float scalar) {
+                let min_vector_scalar = min(value, scalar);
+                let max_vector_scalar = max(value, scalar);
+                let min_scalar_vector = min(scalar, other);
+                let max_scalar_vector = max(scalar, other);
+                let min_vector_vector = min(value, other);
+                let max_vector_vector = max(value, other);
+                let min_scalar_scalar = min(scalar, 1.0);
+                let max_scalar_scalar = max(scalar, 0.0);
+                return vec4(
+                    min_vector_scalar + max_vector_scalar + min_scalar_vector
+                        + max_scalar_vector + min_vector_vector + max_vector_vector,
+                    min_scalar_scalar + max_scalar_scalar
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let min_vector_scalar: Vec3<f32> = min(value, scalar);" in generated_code
+    assert "let max_vector_scalar: Vec3<f32> = max(value, scalar);" in generated_code
+    assert "let min_scalar_vector: Vec3<f32> = min(scalar, other);" in generated_code
+    assert "let max_scalar_vector: Vec3<f32> = max(scalar, other);" in generated_code
+    assert "let min_vector_vector: Vec3<f32> = min(value, other);" in generated_code
+    assert "let max_vector_vector: Vec3<f32> = max(value, other);" in generated_code
+    assert "let min_scalar_scalar: f32 = min(scalar, 1.0);" in generated_code
+    assert "let max_scalar_scalar: f32 = max(scalar, 0.0);" in generated_code
+    assert "let min_scalar_vector: f32 = min" not in generated_code
+    assert "let max_vector_scalar: f32 = max" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_binary_math_intrinsics_promote_mixed_scalar_vector_operands_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader BinaryMathPromotionInference {
+        fragment {
+            vec4 main(vec3 value, vec3 other, float scalar) {
+                let pow_vector_scalar = pow(value, scalar);
+                let pow_scalar_vector = pow(scalar, other);
+                let pow_vector_vector = pow(value, other);
+                let mod_vector_scalar = mod(value, scalar);
+                let mod_scalar_vector = mod(scalar, other);
+                let mod_vector_vector = mod(value, other);
+                let atan_vector_scalar = atan2(value, scalar);
+                let atan_scalar_vector = atan2(scalar, other);
+                let atan_vector_vector = atan2(value, other);
+                let pow_scalar_scalar = pow(scalar, 2.0);
+                let mod_scalar_scalar = mod(scalar, 2.0);
+                let atan_scalar_scalar = atan2(scalar, 1.0);
+                return vec4(
+                    pow_vector_scalar + pow_scalar_vector + pow_vector_vector
+                        + mod_vector_scalar + mod_scalar_vector + mod_vector_vector
+                        + atan_vector_scalar + atan_scalar_vector + atan_vector_vector,
+                    pow_scalar_scalar + mod_scalar_scalar + atan_scalar_scalar
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let pow_vector_scalar: Vec3<f32> = pow(value, scalar);" in generated_code
+    assert "let pow_scalar_vector: Vec3<f32> = pow(scalar, other);" in generated_code
+    assert "let pow_vector_vector: Vec3<f32> = pow(value, other);" in generated_code
+    assert "let mod_vector_scalar: Vec3<f32> = modulo(value, scalar);" in generated_code
+    assert "let mod_scalar_vector: Vec3<f32> = modulo(scalar, other);" in generated_code
+    assert "let mod_vector_vector: Vec3<f32> = modulo(value, other);" in generated_code
+    assert "let atan_vector_scalar: Vec3<f32> = atan2(value, scalar);" in generated_code
+    assert "let atan_scalar_vector: Vec3<f32> = atan2(scalar, other);" in generated_code
+    assert "let atan_vector_vector: Vec3<f32> = atan2(value, other);" in generated_code
+    assert "let pow_scalar_scalar: f32 = pow(scalar, 2.0);" in generated_code
+    assert "let mod_scalar_scalar: f32 = modulo(scalar, 2.0);" in generated_code
+    assert "let atan_scalar_scalar: f32 = atan2(scalar, 1.0);" in generated_code
+    assert "let pow_scalar_vector: f32 = pow" not in generated_code
+    assert "let mod_vector_scalar: f32 = modulo" not in generated_code
+    assert "let atan_scalar_vector: f32 = atan2" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -6633,8 +7071,8 @@ def test_bitwise_and_operator():
         vertex {
             VSOutput main(VSInput input) {
                 VSOutput output;
-                output.color = vec4(f32(i32(input.texCoord.x * 100.0) & 15), 
-                                    f32(i32(input.texCoord.y * 100.0) & 15), 
+                output.color = vec4(f32(i32(input.texCoord.x * 100.0) & 15),
+                                    f32(i32(input.texCoord.y * 100.0) & 15),
                                     0.0, 1.0);
                 return output;
             }
@@ -6727,8 +7165,8 @@ def test_bitwise_or_operator():
         vertex {
             VSOutput main(VSInput input) {
                 VSOutput output;
-                output.color = vec4(f32(i32(input.texCoord.x * 100.0) | 15), 
-                                    f32(i32(input.texCoord.y * 100.0) | 15), 
+                output.color = vec4(f32(i32(input.texCoord.x * 100.0) | 15),
+                                    f32(i32(input.texCoord.y * 100.0) | 15),
                                     0.0, 1.0);
                 return output;
             }

@@ -1973,6 +1973,7 @@ class MetalCodeGen:
                 )
                 self.current_metal_mesh_output_parameter = mesh_output["parameter_name"]
                 self.current_metal_mesh_output_config = mesh_output
+                self.validate_metal_mesh_output_usage(func)
             code += (
                 f"{stage_attribute} {return_type} {function_name}({params_str}) {{\n"
             )
@@ -6003,6 +6004,324 @@ class MetalCodeGen:
                 "Metal mesh indices output for "
                 f"{topology} topology requires {expected_type}, got {actual_type}"
             )
+
+    def validate_metal_mesh_output_usage(self, func):
+        mesh_output = self.current_metal_mesh_output_config
+        if mesh_output is None:
+            return
+
+        body = getattr(func, "body", [])
+        statements = getattr(body, "statements", body if isinstance(body, list) else [])
+        self.validate_metal_mesh_output_statement_sequence(
+            statements,
+            self.metal_mesh_output_flow_state(),
+        )
+
+    def metal_mesh_output_flow_state(
+        self, counts_seen=False, counts=None, falls_through=True, terminator=None
+    ):
+        normalized_counts = None
+        if counts is not None:
+            normalized_counts = {
+                "vertices": counts.get("vertices"),
+                "primitives": counts.get("primitives"),
+            }
+        return {
+            "counts_seen": counts_seen,
+            "counts": normalized_counts,
+            "falls_through": falls_through,
+            "terminator": None if falls_through else terminator,
+        }
+
+    def copy_metal_mesh_output_flow_state(
+        self, state, falls_through=None, terminator=None
+    ):
+        copied_falls_through = (
+            state.get("falls_through", True) if falls_through is None else falls_through
+        )
+        return self.metal_mesh_output_flow_state(
+            counts_seen=state.get("counts_seen", False),
+            counts=state.get("counts"),
+            falls_through=copied_falls_through,
+            terminator=(
+                None
+                if copied_falls_through
+                else (state.get("terminator") if terminator is None else terminator)
+            ),
+        )
+
+    def merge_metal_mesh_output_flow_states(self, states, fallthrough_terminators=()):
+        fallthrough_states = []
+        for state in states or []:
+            if (
+                state.get("falls_through", True)
+                or state.get("terminator") in fallthrough_terminators
+            ):
+                fallthrough_states.append(
+                    self.copy_metal_mesh_output_flow_state(state, falls_through=True)
+                )
+        if not fallthrough_states:
+            return self.metal_mesh_output_flow_state(falls_through=False)
+
+        counts_seen = all(
+            state.get("counts_seen", False) for state in fallthrough_states
+        )
+        counts = None
+        if counts_seen:
+            counts = {}
+            for role in ("vertices", "primitives"):
+                role_values = []
+                role_has_unknown = False
+                for state in fallthrough_states:
+                    state_counts = state.get("counts")
+                    if state_counts is None or state_counts.get(role) is None:
+                        role_has_unknown = True
+                        break
+                    role_values.append(state_counts[role])
+                counts[role] = (
+                    None if role_has_unknown or not role_values else min(role_values)
+                )
+
+        return self.metal_mesh_output_flow_state(
+            counts_seen=counts_seen,
+            counts=counts,
+            falls_through=True,
+        )
+
+    def metal_mesh_statement_list(self, body):
+        if body is None:
+            return []
+        if hasattr(body, "statements"):
+            return body.statements
+        if isinstance(body, list):
+            return body
+        return [body]
+
+    def validate_metal_mesh_output_statement_sequence(self, statements, state):
+        current = self.copy_metal_mesh_output_flow_state(state)
+        for stmt in statements or []:
+            if not current.get("falls_through", True):
+                break
+            current = self.validate_metal_mesh_output_statement_flow(stmt, current)
+        return current
+
+    def validate_metal_mesh_output_statement_flow(self, stmt, state):
+        current = self.copy_metal_mesh_output_flow_state(state)
+        if isinstance(stmt, IfNode):
+            return self.validate_metal_mesh_if_output_flow(stmt, current)
+        if isinstance(stmt, BlockNode):
+            return self.validate_metal_mesh_output_statement_sequence(
+                self.metal_mesh_statement_list(stmt),
+                current,
+            )
+        if isinstance(stmt, SwitchNode):
+            return self.validate_metal_mesh_switch_output_flow(stmt, current)
+        if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
+            return self.validate_metal_mesh_loop_output_flow(stmt, current)
+        if isinstance(stmt, ReturnNode):
+            return self.copy_metal_mesh_output_flow_state(
+                current, falls_through=False, terminator="return"
+            )
+        if isinstance(stmt, BreakNode):
+            return self.copy_metal_mesh_output_flow_state(
+                current, falls_through=False, terminator="break"
+            )
+        if isinstance(stmt, ContinueNode):
+            return self.copy_metal_mesh_output_flow_state(
+                current, falls_through=False, terminator="continue"
+            )
+
+        expr = getattr(stmt, "expression", stmt)
+        if isinstance(expr, IfNode):
+            return self.validate_metal_mesh_if_output_flow(expr, current)
+        if isinstance(expr, SwitchNode):
+            return self.validate_metal_mesh_switch_output_flow(expr, current)
+
+        mesh_counts = self.metal_mesh_set_output_counts(expr)
+        if mesh_counts is not None:
+            return self.metal_mesh_output_flow_state(
+                counts_seen=True,
+                counts=mesh_counts,
+                falls_through=current.get("falls_through", True),
+            )
+
+        if isinstance(expr, AssignmentNode):
+            self.validate_metal_mesh_output_assignment_usage(
+                expr,
+                current.get("counts_seen", False),
+                current.get("counts"),
+            )
+            return current
+
+        nested_statements = self.metal_mesh_nested_statements(stmt)
+        for nested in nested_statements:
+            self.validate_metal_mesh_output_statement_sequence(nested, current)
+
+        return current
+
+    def validate_metal_mesh_if_output_flow(self, stmt, state):
+        then_state = self.validate_metal_mesh_output_statement_sequence(
+            self.metal_mesh_statement_list(getattr(stmt, "then_branch", None)),
+            state,
+        )
+        else_branch = getattr(stmt, "else_branch", None)
+        if else_branch is None:
+            else_state = self.copy_metal_mesh_output_flow_state(state)
+        else:
+            else_state = self.validate_metal_mesh_output_statement_sequence(
+                self.metal_mesh_statement_list(else_branch),
+                state,
+            )
+        return self.merge_metal_mesh_output_flow_states([then_state, else_state])
+
+    def validate_metal_mesh_switch_output_flow(self, stmt, state):
+        branch_states = []
+        has_default = False
+        for case in getattr(stmt, "cases", []) or []:
+            if getattr(case, "value", None) is None:
+                has_default = True
+            branch_states.append(
+                self.validate_metal_mesh_output_statement_sequence(
+                    self.metal_mesh_statement_list(getattr(case, "statements", [])),
+                    state,
+                )
+            )
+
+        default_case = getattr(stmt, "default_case", None)
+        if default_case is not None:
+            has_default = True
+            branch_states.append(
+                self.validate_metal_mesh_output_statement_sequence(
+                    self.metal_mesh_statement_list(default_case),
+                    state,
+                )
+            )
+
+        if not has_default:
+            branch_states.append(self.copy_metal_mesh_output_flow_state(state))
+        return self.merge_metal_mesh_output_flow_states(
+            branch_states,
+            fallthrough_terminators={"break"},
+        )
+
+    def validate_metal_mesh_loop_output_flow(self, stmt, state):
+        self.validate_metal_mesh_output_statement_sequence(
+            self.metal_mesh_statement_list(getattr(stmt, "body", [])),
+            state,
+        )
+        return self.copy_metal_mesh_output_flow_state(state)
+
+    def metal_mesh_set_output_counts(self, expr):
+        if not isinstance(expr, MeshOpNode) or expr.operation != "SetMeshOutputCounts":
+            return None
+        if len(expr.arguments) != 2:
+            raise ValueError(
+                "Metal mesh SetMeshOutputCounts requires exactly 2 arguments"
+            )
+
+        vertex_count = self.literal_int_value(
+            expr.arguments[0], self.literal_int_constants
+        )
+        primitive_count = self.literal_int_value(
+            expr.arguments[1], self.literal_int_constants
+        )
+        self.validate_metal_mesh_output_count_bound(
+            "numVertices",
+            vertex_count,
+            self.current_metal_mesh_output_config["max_vertices"],
+        )
+        self.validate_metal_mesh_output_count_bound(
+            "numPrimitives",
+            primitive_count,
+            self.current_metal_mesh_output_config["max_primitives"],
+        )
+        return {
+            "vertices": vertex_count,
+            "primitives": primitive_count,
+        }
+
+    def validate_metal_mesh_output_count_bound(self, label, value, declared_bound):
+        if value is None:
+            return
+        declared = self.metal_literal_int_text_value(declared_bound)
+        if declared is None:
+            return
+        if value > declared:
+            raise ValueError(
+                f"Metal mesh SetMeshOutputCounts {label} argument "
+                f"({value}) cannot exceed declared output count ({declared})"
+            )
+
+    def validate_metal_mesh_output_assignment_usage(
+        self, assignment, set_counts_seen, set_counts
+    ):
+        target = getattr(assignment, "target", getattr(assignment, "left", None))
+        target_info = self.metal_mesh_output_assignment_target(target)
+        if target_info is None:
+            return
+
+        role = target_info["role"]
+        name = target_info["name"]
+        if not set_counts_seen:
+            raise ValueError(
+                f"Metal mesh output array '{name}' must be written only after "
+                "SetMeshOutputCounts"
+            )
+
+        index_value = self.literal_int_value(
+            target_info.get("index"), self.literal_int_constants
+        )
+        if index_value is None:
+            return
+
+        declared_bound = self.metal_literal_int_text_value(
+            target_info["output"]["count"]
+        )
+        if declared_bound is not None and index_value >= declared_bound:
+            raise ValueError(
+                f"Metal mesh {role} output array '{name}' index ({index_value}) "
+                f"must be less than declared array size ({declared_bound})"
+            )
+
+        active_bound = None
+        if set_counts is not None:
+            active_bound = (
+                set_counts.get("vertices")
+                if role == "vertices"
+                else set_counts.get("primitives")
+            )
+        if active_bound is not None and index_value >= active_bound:
+            raise ValueError(
+                f"Metal mesh {role} output array '{name}' index ({index_value}) "
+                f"must be less than SetMeshOutputCounts "
+                f"{'numVertices' if role == 'vertices' else 'numPrimitives'} "
+                f"({active_bound})"
+            )
+
+    def metal_mesh_nested_statements(self, stmt):
+        nested = []
+        for attribute in (
+            "body",
+            "then_branch",
+            "if_body",
+            "else_branch",
+            "else_body",
+        ):
+            value = getattr(stmt, attribute, None)
+            if value is None:
+                continue
+            nested.append(
+                getattr(value, "statements", value if isinstance(value, list) else [])
+            )
+        return [statements for statements in nested if statements]
+
+    def metal_literal_int_text_value(self, value):
+        if value is None:
+            return None
+        try:
+            return int(str(value), 0)
+        except (TypeError, ValueError):
+            return None
 
     def metal_mesh_payload_type_for_program(self, ast):
         payload_types = set()

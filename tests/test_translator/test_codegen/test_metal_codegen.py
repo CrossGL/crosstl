@@ -4068,6 +4068,7 @@ def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator
             ) @numthreads(32, 1, 1) @outputtopology(triangle) {
                 SetMeshOutputCounts(3, 1);
                 verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[0].uv = vec2(0.5, 1.0);
                 tris[0] = uvec3(0u, 1u, 2u);
             }
         }
@@ -4080,9 +4081,254 @@ def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator
         "_crossglMeshVertices_verts_i_0.position = " "float4(0.0, 0.0, 0.0, 1.0);"
     ) in generated
     assert "_crossglMeshOut.set_vertex(0, _crossglMeshVertices_verts_i_0);" in generated
-    assert "unsupported Metal mesh output assignment" not in generated
+    assert "_crossglMeshVertices_verts_i_0.uv = float2(0.5, 1.0);" in generated
+    assert (
+        "unsupported Metal mesh output assignment: vertices output 'verts'"
+        not in generated
+    )
     assert "verts[0].position" not in generated
+    assert "verts[0].uv" not in generated
     assert "_crossglMeshOut.set_index((0) * 3, uint3(0u, 1u, 2u).x);" in generated
+
+
+def test_metal_mesh_output_writes_validate_order_and_literal_bounds():
+    write_before_count_code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                SetMeshOutputCounts(3, 1);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(write_before_count_code)), "mesh"
+        )
+
+    declared_bound_code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[3].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*declared array size"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(declared_bound_code)), "mesh"
+        )
+
+    active_count_bound_code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(2, 1);
+                verts[2].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*numVertices"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(active_count_bound_code)), "mesh"
+        )
+
+
+def test_metal_mesh_set_output_counts_validates_literal_bounds():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(4, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="numVertices.*declared output count"):
+        MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+
+def test_metal_mesh_set_output_counts_branch_dominance_allows_post_branch_writes():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (true) {
+                    SetMeshOutputCounts(3, 1);
+                } else {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert generated.count("_crossglMeshOut.set_primitive_count(1);") == 2
+    assert (
+        "_crossglMeshOut.set_vertex(0, MeshVertex{float4(0.0, 0.0, 0.0, 1.0)});"
+        in generated
+    )
+    assert "_crossglMeshOut.set_index((0) * 3, uint3(0u, 1u, 2u).x);" in generated
+
+
+def test_metal_mesh_set_output_counts_rejects_non_dominating_branch_counts():
+    missing_else_code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (true) {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(missing_else_code)), "mesh"
+        )
+
+    divergent_counts_code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (true) {
+                    SetMeshOutputCounts(2, 1);
+                } else {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[2].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*numVertices"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(divergent_counts_code)), "mesh"
+        )
+
+
+def test_metal_mesh_set_output_counts_switch_dominance_handles_breaks():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (0) {
+                    case 0:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                    default:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert generated.count("_crossglMeshOut.set_primitive_count(1);") == 2
+    assert (
+        "_crossglMeshOut.set_vertex(0, MeshVertex{float4(0.0, 0.0, 0.0, 1.0)});"
+        in generated
+    )
+
+
+def test_metal_mesh_set_output_counts_rejects_non_exhaustive_switch_counts():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (0) {
+                    case 0:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
 
 
 def test_metal_mesh_stage_output_signature_avoids_generated_name_collisions():

@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 468
+        "test_count": 474
       },
       "translator_codegen": {
         "exists": true,
@@ -547,7 +547,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 247
+        "test_count": 249
       },
       "translator_codegen": {
         "exists": true,
@@ -625,7 +625,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 275
+        "test_count": 277
       },
       "translator_codegen": {
         "exists": true,
@@ -797,7 +797,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 469
+        "test_count": 476
       },
       "translator_codegen": {
         "exists": true,
@@ -1196,7 +1196,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, accumulator-backed multi-member vertex/primitive partial writes, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Richer validation for complex indexed partial-write flows remains incomplete.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, and if/switch branch dominance for post-branch output writes are validated. Remaining gaps are loop-sensitive dominance analysis and multi-payload pipeline shapes.",
       "status": "partial"
     },
     {
@@ -3282,11 +3282,17 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_single_member_writes_lower_to_setters",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_writes_validate_order_and_literal_bounds",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_validates_literal_bounds",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_branch_dominance_allows_post_branch_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_dominating_branch_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_switch_dominance_handles_breaks",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_exhaustive_switch_counts",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, accumulator-backed multi-member vertex/primitive partial writes, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Richer validation for complex indexed partial-write flows remains incomplete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, and if/switch branch dominance for post-branch output writes are validated. Remaining gaps are loop-sensitive dominance analysis and multi-payload pipeline shapes.",
           "status": "partial"
         },
         "mojo": {

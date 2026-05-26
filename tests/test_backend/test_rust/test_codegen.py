@@ -906,6 +906,95 @@ def test_common_math_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "Vec3" not in result
 
 
+def test_rounding_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn rounding_ops(value: Vec3<f32>, scale: f32) -> Vec3<f32> {
+        let truncated = trunc(value);
+        let even = crate::math::round_even(value);
+        let scalar_truncated = scale.trunc();
+        let scalar_even = scale.round_ties_even();
+        return truncated + even + Vec3::<f32>::new(scalar_truncated, scalar_even, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 rounding_ops(vec3 value, float scale)" in result
+    assert "truncated = trunc(value);" in result
+    assert "even = roundEven(value);" in result
+    assert "scalar_truncated = trunc(scale);" in result
+    assert "scalar_even = roundEven(scale);" in result
+    assert "crate::math::round_even" not in result
+    assert ".trunc()" not in result
+    assert ".round_ties_even()" not in result
+
+
+def test_min_max_mixed_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn min_max_ops(value: Vec3<f32>, other: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let min_vector_scalar = min(value, scalar);
+        let max_vector_scalar = crate::math::max(value, scalar);
+        let min_scalar_vector = min(scalar, other);
+        let max_scalar_vector = max(scalar, other);
+        let min_vector_vector = min(value, other);
+        let max_vector_vector = crate::math::max(value, other);
+        let min_scalar_scalar = scalar.min(1.0);
+        let max_scalar_scalar = scalar.max(0.0);
+        return min_vector_scalar + max_vector_scalar + min_scalar_vector
+            + max_scalar_vector + min_vector_vector + max_vector_vector;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 min_max_ops(vec3 value, vec3 other, float scalar)" in result
+    assert "min_vector_scalar = min(value, scalar);" in result
+    assert "max_vector_scalar = max(value, scalar);" in result
+    assert "min_scalar_vector = min(scalar, other);" in result
+    assert "max_scalar_vector = max(scalar, other);" in result
+    assert "min_vector_vector = min(value, other);" in result
+    assert "max_vector_vector = max(value, other);" in result
+    assert "min_scalar_scalar = min(scalar, 1.0);" in result
+    assert "max_scalar_scalar = max(scalar, 0.0);" in result
+    assert "crate::math::max" not in result
+    assert ".min(" not in result
+    assert ".max(" not in result
+
+
+def test_binary_math_mixed_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn binary_math_ops(value: Vec3<f32>, other: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let pow_vector_scalar = pow(value, scalar);
+        let pow_scalar_vector = crate::math::pow(scalar, other);
+        let mod_vector_scalar = modulo(value, scalar);
+        let mod_scalar_vector = crate::math::modulo(scalar, other);
+        let atan_vector_scalar = atan2(value, scalar);
+        let atan_scalar_vector = crate::math::atan2(scalar, other);
+        let pow_scalar_scalar = scalar.powf(2.0);
+        let atan_scalar_scalar = scalar.atan2(1.0);
+        return pow_vector_scalar + pow_scalar_vector + mod_vector_scalar
+            + mod_scalar_vector + atan_vector_scalar + atan_scalar_vector;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 binary_math_ops(vec3 value, vec3 other, float scalar)" in result
+    assert "pow_vector_scalar = pow(value, scalar);" in result
+    assert "pow_scalar_vector = pow(scalar, other);" in result
+    assert "mod_vector_scalar = mod(value, scalar);" in result
+    assert "mod_scalar_vector = mod(scalar, other);" in result
+    assert "atan_vector_scalar = atan2(value, scalar);" in result
+    assert "atan_scalar_vector = atan2(scalar, other);" in result
+    assert "pow_scalar_scalar = pow(scalar, 2.0);" in result
+    assert "atan_scalar_scalar = atan2(scalar, 1.0);" in result
+    assert "crate::math::pow" not in result
+    assert "crate::math::modulo" not in result
+    assert "crate::math::atan2" not in result
+    assert ".powf(" not in result
+    assert ".atan2(" not in result
+
+
 def test_matrix_intrinsic_calls_and_types_convert_to_crossgl_intrinsics():
     code = """
     fn matrix_intrinsics(transform: Mat3<f64>, affine: Mat3x4<f32>) -> f64 {
@@ -5934,32 +6023,32 @@ def test_complex_shader_conversion():
         #[location(2)]
         texcoord: Vec2<f32>,
     }
-    
+
     #[repr(C)]
     pub struct VertexOutput {
         position: Vec4<f32>,
         normal: Vec3<f32>,
         texcoord: Vec2<f32>,
     }
-    
+
     #[vertex_shader]
     pub fn vertex_main(input: VertexInput) -> VertexOutput {
         let world_position = transform * Vec4::new(input.position.x, input.position.y, input.position.z, 1.0);
         let world_normal = normalize((normal_matrix * Vec4::new(input.normal.x, input.normal.y, input.normal.z, 0.0)).xyz());
-        
+
         VertexOutput {
             position: world_position,
             normal: world_normal,
             texcoord: input.texcoord,
         }
     }
-    
+
     #[fragment_shader]
     pub fn fragment_main(input: VertexOutput) -> Vec4<f32> {
         let light_dir = normalize(light_position - input.position.xyz());
         let diffuse = max(dot(input.normal, light_dir), 0.0);
         let color = texture_sample(diffuse_texture, input.texcoord);
-        
+
         Vec4::new(color.xyz() * diffuse, color.w)
     }
     """
