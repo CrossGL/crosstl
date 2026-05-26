@@ -231,6 +231,7 @@ class StageNode(ASTNode):
         local_functions: List["FunctionNode"] = None,
         local_structs: List["StructNode"] = None,
         execution_config: Dict[str, Any] = None,
+        layout_qualifiers: List["LayoutQualifierNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -240,6 +241,7 @@ class StageNode(ASTNode):
         self.local_functions = local_functions or []
         self.local_structs = local_structs or []
         self.execution_config = execution_config or {}
+        self.layout_qualifiers = layout_qualifiers or []
 
     def __repr__(self):
         return f"StageNode(stage={self.stage}, entry_point={self.entry_point.name})"
@@ -511,6 +513,23 @@ class AttributeNode(ASTNode):
 
     def __repr__(self):
         return f"AttributeNode(name={self.name})"
+
+
+class LayoutQualifierNode(ASTNode):
+    """Stage-level ``layout(...) in/out`` qualifier metadata."""
+
+    def __init__(
+        self,
+        entries: List[AttributeNode] = None,
+        direction: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.entries = entries or []
+        self.direction = direction
+
+    def __repr__(self):
+        return f"LayoutQualifierNode(direction={self.direction}, entries={len(self.entries)})"
 
 
 # ============================================================================

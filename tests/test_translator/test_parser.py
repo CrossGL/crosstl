@@ -1141,8 +1141,9 @@ def test_resource_parameter_syntax():
 def test_compute_layout_execution_config_parsing():
     code = """
     shader ComputeLayout {
+        const int GROUP_SIZE = 8;
         compute {
-            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(local_size_x = GROUP_SIZE * 2, local_size_y = 8, local_size_z = 1) in;
             void main() {
             }
         }
@@ -1153,10 +1154,20 @@ def test_compute_layout_execution_config_parsing():
     compute_stage = ast.stages[ShaderStage.COMPUTE]
 
     assert compute_stage.execution_config == {
-        "local_size_x": "8",
+        "local_size_x": "GROUP_SIZE * 2",
         "local_size_y": "8",
         "local_size_z": "1",
     }
+    assert len(compute_stage.layout_qualifiers) == 1
+    layout = compute_stage.layout_qualifiers[0]
+    assert layout.direction == "in"
+    assert [entry.name for entry in layout.entries] == [
+        "local_size_x",
+        "local_size_y",
+        "local_size_z",
+    ]
+    assert layout.entries[0].arguments[0].op == "*"
+    assert [entry.arguments[0].value for entry in layout.entries[1:]] == [8, 1]
 
 
 def test_compute_layout_does_not_consume_resource_layouts():
@@ -1182,11 +1193,53 @@ def test_compute_layout_does_not_consume_resource_layouts():
         "local_size_y": "8",
         "local_size_z": "1",
     }
+    assert len(compute_stage.layout_qualifiers) == 1
     assert [variable.name for variable in compute_stage.local_variables] == [
         "values",
         "sourceTexture",
         "sourceSampler",
     ]
+
+
+def test_stage_layout_qualifiers_preserve_geometry_and_tessellation_metadata():
+    code = """
+    shader StageLayouts {
+        geometry {
+            layout(triangles) in;
+            layout(triangle_strip, max_vertices = 3) out;
+            void main() {
+            }
+        }
+
+        tessellation_control {
+            layout(vertices = 4) out;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    geometry_stage = ast.stages[ShaderStage.GEOMETRY]
+    tessellation_stage = ast.stages[ShaderStage.TESSELLATION_CONTROL]
+
+    assert [layout.direction for layout in geometry_stage.layout_qualifiers] == [
+        "in",
+        "out",
+    ]
+    assert [entry.name for entry in geometry_stage.layout_qualifiers[0].entries] == [
+        "triangles"
+    ]
+    output_layout = geometry_stage.layout_qualifiers[1]
+    assert [entry.name for entry in output_layout.entries] == [
+        "triangle_strip",
+        "max_vertices",
+    ]
+    assert output_layout.entries[1].arguments[0].value == 3
+
+    assert tessellation_stage.layout_qualifiers[0].direction == "out"
+    assert tessellation_stage.layout_qualifiers[0].entries[0].name == "vertices"
+    assert tessellation_stage.layout_qualifiers[0].entries[0].arguments[0].value == 4
 
 
 def test_lambda_call_preserves_typed_parameters_and_block_body_parse():

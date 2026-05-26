@@ -26,6 +26,7 @@ from .ast import (
     ConstantNode,
     GenericParameterNode,
     AttributeNode,
+    LayoutQualifierNode,
     StatementNode,
     BlockNode,
     ExpressionStatementNode,
@@ -506,21 +507,13 @@ class Parser:
         local_structs = []
         main_function = None
         execution_config = {}
+        layout_qualifiers = []
 
         while self.current_token[0] != "RBRACE":
-            if (
-                stage_enum
-                in {
-                    ShaderStage.COMPUTE,
-                    ShaderStage.MESH,
-                    ShaderStage.TASK,
-                    ShaderStage.AMPLIFICATION,
-                    ShaderStage.OBJECT,
-                }
-                and self.current_token[0] == "LAYOUT"
-                and self.is_compute_execution_layout()
-            ):
-                execution_config.update(self.parse_compute_layout())
+            if self.current_token[0] == "LAYOUT" and self.is_stage_layout_qualifier():
+                layout = self.parse_stage_layout_qualifier()
+                layout_qualifiers.append(layout)
+                execution_config.update(self.execution_config_from_layout(layout))
             elif self.current_token[0] == "STRUCT":
                 struct_node = self.parse_struct()
                 if struct_node:
@@ -556,6 +549,7 @@ class Parser:
             local_functions=local_functions,
             local_structs=local_structs,
             execution_config=execution_config,
+            layout_qualifiers=layout_qualifiers,
         )
 
     def parse_import(self):
@@ -582,7 +576,11 @@ class Parser:
 
     def parse_compute_layout(self):
         """Parse compute local-size layout metadata inside a stage block."""
-        execution_config = {}
+        return self.execution_config_from_layout(self.parse_stage_layout_qualifier())
+
+    def parse_stage_layout_qualifier(self):
+        """Parse stage-level ``layout(...) in/out;`` metadata."""
+        entries = []
         self.eat("LAYOUT")
         self.eat("LPAREN")
 
@@ -590,50 +588,87 @@ class Parser:
             key = self.current_token[1]
             self.eat(self.current_token[0])
 
+            arguments = []
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
-                value_parts = []
-                while self.current_token[0] not in ["COMMA", "RPAREN"]:
-                    value_parts.append(str(self.current_token[1]))
-                    self.eat(self.current_token[0])
-                if key in {"local_size_x", "local_size_y", "local_size_z"}:
-                    execution_config[key] = "".join(value_parts).strip()
+                arguments.append(self.parse_expression())
+
+            entries.append(AttributeNode(name=key, arguments=arguments))
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
 
         self.eat("RPAREN")
-        if self.current_token[0] in ["IN", "IDENTIFIER"]:
+
+        direction = None
+        if self.current_token[0] in {"IN", "IDENTIFIER"} and self.current_token[1] in {
+            "in",
+            "out",
+            "patch",
+        }:
+            direction = self.current_token[1]
             self.eat(self.current_token[0])
         self.eat("SEMICOLON")
+        return LayoutQualifierNode(entries=entries, direction=direction)
+
+    def execution_config_from_layout(self, layout):
+        """Return execution metadata implied by a stage layout qualifier."""
+        if getattr(layout, "direction", None) != "in":
+            return {}
+
+        execution_config = {}
+        for entry in getattr(layout, "entries", []) or []:
+            if entry.name not in {"local_size_x", "local_size_y", "local_size_z"}:
+                continue
+            if len(entry.arguments) != 1:
+                continue
+            execution_config[entry.name] = self.layout_argument_to_string(
+                entry.arguments[0]
+            )
         return execution_config
 
-    def is_compute_execution_layout(self):
-        """Return whether the current layout is ``layout(local_size_*) in``."""
+    def layout_argument_to_string(self, argument):
+        """Return the source-like value for simple layout argument expressions."""
+        if isinstance(argument, BinaryOpNode):
+            left = self.layout_argument_to_string(argument.left)
+            right = self.layout_argument_to_string(argument.right)
+            return f"{left} {argument.op} {right}"
+        if isinstance(argument, UnaryOpNode):
+            operand = self.layout_argument_to_string(argument.operand)
+            if argument.is_postfix:
+                return f"{operand}{argument.op}"
+            return f"{argument.op}{operand}"
+        if hasattr(argument, "value"):
+            return str(argument.value)
+        if hasattr(argument, "name"):
+            return str(argument.name)
+        return str(argument)
+
+    def is_stage_layout_qualifier(self):
+        """Return whether the current layout is a standalone stage qualifier."""
         if self.current_token[0] != "LAYOUT" or self.peek(1)[0] != "LPAREN":
             return False
 
-        local_size_keys = {"local_size_x", "local_size_y", "local_size_z"}
-        saw_local_size = False
         depth = 1
         offset = 2
-
         while depth > 0:
-            token_type, token_value = self.peek(offset)
+            token_type, _token_value = self.peek(offset)
             if token_type == "EOF":
                 return False
             if token_type == "LPAREN":
                 depth += 1
             elif token_type == "RPAREN":
                 depth -= 1
-            elif depth == 1 and token_value in local_size_keys:
-                saw_local_size = True
             offset += 1
 
-        next_type, next_value = self.peek(offset)
-        return saw_local_size and (
-            next_type == "IN" or (next_type == "IDENTIFIER" and next_value == "in")
-        )
+        direction_type, direction_value = self.peek(offset)
+        if direction_type == "IN":
+            direction_value = "in"
+        if direction_type != "IDENTIFIER" and direction_type != "IN":
+            return False
+        if direction_value not in {"in", "out", "patch"}:
+            return False
+        return self.peek(offset + 1)[0] == "SEMICOLON"
 
     def parse_preprocessor_directive(self):
         """Parse a preprocessor token into a structured directive node."""
