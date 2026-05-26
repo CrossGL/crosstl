@@ -197,6 +197,24 @@ class MojoCodeGen:
             "samplerCube": "TextureCube",
             "sampler": "Sampler",
         }
+        self.scalar_constructor_map = {
+            name: mapped
+            for name, mapped in self.type_mapping.items()
+            if mapped
+            in {
+                "Bool",
+                "Float16",
+                "Float32",
+                "Float64",
+                "Int16",
+                "Int32",
+                "Int64",
+                "String",
+                "UInt16",
+                "UInt32",
+                "UInt64",
+            }
+        }
 
         self.semantic_map = {
             # Vertex attributes
@@ -510,7 +528,10 @@ class MojoCodeGen:
         for variant in getattr(node, "variants", []) or []:
             payload = getattr(variant, "data", None) or getattr(variant, "fields", None)
             if payload:
-                continue
+                raise ValueError(
+                    "Unsupported enum payload for Mojo codegen; only unit/numeric "
+                    f"enum variants are supported: {node.name}.{variant.name}"
+                )
 
             alias_name = self.enum_variant_alias_name(node.name, variant.name)
             value = getattr(variant, "value", None)
@@ -558,8 +579,9 @@ class MojoCodeGen:
                 return int(expr.value)
             except (TypeError, ValueError):
                 return None
-        if hasattr(expr, "name") and not isinstance(expr, VariableNode):
-            return local_values.get(expr.name)
+        expr_name = getattr(expr, "name", None)
+        if expr_name is not None and not isinstance(expr, VariableNode):
+            return local_values.get(expr_name)
         if isinstance(expr, MemberAccessNode):
             reference = self.enum_member_reference_name(expr)
             if reference is None:
@@ -1681,6 +1703,8 @@ class MojoCodeGen:
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
+            if func_name in self.scalar_constructor_map:
+                func_name = self.scalar_constructor_map[func_name]
 
             # Handle vector constructors
             if func_name in self.vector_constructor_info:

@@ -168,7 +168,7 @@ def test_unit_enums_lower_to_mojo_aliases():
     assert "alias Mode_Screen = 5" in generated_code
     assert "fn choose(mode: Mode) -> Int32:" in generated_code
     assert "if (mode == Mode_Multiply):" in generated_code
-    assert "return int(Mode_Screen)" in generated_code
+    assert "return Int32(Mode_Screen)" in generated_code
     assert "Mode::" not in generated_code
 
 
@@ -203,6 +203,74 @@ def test_unit_enums_compile_with_mojo(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "5" in result.stdout
+
+
+def test_enum_flag_values_reference_previous_aliases_and_auto_increment():
+    code = """
+    enum Flags : uint {
+        Read = 1 << 0,
+        Write = 1 << 1,
+        ReadWrite = Read | Write,
+        Next
+    };
+
+    uint mask() {
+        return uint(Flags::ReadWrite | Flags::Next);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "alias Flags = UInt32" in generated_code
+    assert "alias Flags_Read = (1 << 0)" in generated_code
+    assert "alias Flags_Write = (1 << 1)" in generated_code
+    assert "alias Flags_ReadWrite = (Flags_Read | Flags_Write)" in generated_code
+    assert "alias Flags_Next = 4" in generated_code
+    assert "return UInt32((Flags_ReadWrite | Flags_Next))" in generated_code
+    assert "Read | Write" not in generated_code
+    assert "Flags::" not in generated_code
+
+
+def test_enum_flag_values_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum Flags : uint {
+        Read = 1 << 0,
+        Write = 1 << 1,
+        ReadWrite = Read | Write,
+        Next
+    };
+
+    uint mask() {
+        return uint(Flags::ReadWrite | Flags::Next);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    print(mask())\n"
+
+    source_path = tmp_path / "enum_flag_values.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "7" in result.stdout
+
+
+def test_payload_enums_are_rejected_for_mojo_codegen():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        None
+    };
+    """
+
+    with pytest.raises(ValueError, match="Unsupported enum payload for Mojo"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_basic_shader():
