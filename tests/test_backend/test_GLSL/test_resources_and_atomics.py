@@ -218,7 +218,7 @@ def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract():
     assert "outputBlock[0] = (value * 2.0);" in glsl
 
 
-def test_codegen_ssbo_scalar_blocks_remain_regular_blocks():
+def test_codegen_ssbo_scalar_blocks_preserve_block_attributes():
     code = """
     #version 450 core
     layout(std430, binding = 1) buffer Counter {
@@ -234,7 +234,7 @@ def test_codegen_ssbo_scalar_blocks_remain_regular_blocks():
 
     assert "RWStructuredBuffer" not in crossgl
     assert "struct Counter" in crossgl
-    assert "Counter counter;" in crossgl
+    assert "Counter counter @glsl_buffer_block(std430) @binding(1);" in crossgl
     assert "atomicAdd(counter.value, 1);" in crossgl
 
 
@@ -438,7 +438,7 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     assert "len = buffers[dynamicIndex].data.length();" in glsl
 
 
-def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic():
+def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_attribute():
     code = """
     #version 450 core
     layout(std430, binding = 0) buffer ParticlesBlock {
@@ -455,8 +455,7 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic(
 
     crossgl = generate_crossgl(code, "compute")
 
-    assert "unsupported GLSL SSBO block ParticlesBlock" in crossgl
-    assert "preserved as attributed block struct" in crossgl
+    assert "unsupported GLSL SSBO block ParticlesBlock" not in crossgl
     assert "struct ParticlesBlock" in crossgl
     assert "uint count;" in crossgl
     assert "float data[];" in crossgl
@@ -15477,6 +15476,81 @@ def test_codegen_mixed_ssbo_fixed_block_array_call_propagated_conflict_is_reject
         match="Conflicting fixed resource array sizes for 'fixedBlocks': 2 and 3",
     ):
         MetalCodeGen().generate(shader_ast)
+
+
+def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offsets():
+    code = """
+    #version 450 core
+    layout(std430, binding = 116) buffer FixedPlainBlock {
+        uint count;
+        vec3 axis;
+        mat2 transform;
+    } fixedPlain;
+
+    void main() {
+        uint count = fixedPlain.count;
+        vec3 axis = fixedPlain.axis;
+        mat2 transform = fixedPlain.transform;
+        fixedPlain.count = count + 1u;
+        fixedPlain.axis = axis;
+        fixedPlain.transform = transform;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "unsupported GLSL SSBO block FixedPlainBlock" not in crossgl
+    assert "struct FixedPlainBlock" in crossgl
+    assert (
+        "FixedPlainBlock fixedPlain @glsl_buffer_block(std430) @binding(116);"
+        in crossgl
+    )
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer fixedPlain : register(u116);" in hlsl
+    assert "struct FixedPlainBlock" not in hlsl
+    assert "uint count = fixedPlain.Load(0);" in hlsl
+    assert "float3 axis = asfloat(fixedPlain.Load3(16));" in hlsl
+    assert (
+        "float2x2 transform = float2x2(asfloat(fixedPlain.Load2(32)), "
+        "asfloat(fixedPlain.Load2(40)));" in hlsl
+    )
+    assert "fixedPlain.Store(0, (count + 1u));" in hlsl
+    assert "fixedPlain.Store3(16, asuint(axis));" in hlsl
+    assert "fixedPlain.Store2(32, asuint(transform[0]));" in hlsl
+    assert "fixedPlain.Store2(40, asuint(transform[1]));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "device uchar* fixedPlain [[buffer(116)]]" in metal
+    assert "struct FixedPlainBlock" not in metal
+    assert (
+        "uint count = (*reinterpret_cast<const device uint*>(fixedPlain + 0));" in metal
+    )
+    assert (
+        "float3 axis = float3((*reinterpret_cast<const device float*>"
+        "(fixedPlain + 16)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 20)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 24)));" in metal
+    )
+    assert (
+        "float2x2 transform = float2x2(float2((*reinterpret_cast<const device "
+        "float*>(fixedPlain + 32)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 36))), float2((*reinterpret_cast<const device float*>"
+        "(fixedPlain + 40)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 44))));" in metal
+    )
+    assert "(*reinterpret_cast<device uint*>(fixedPlain + 0)) = count + 1u;" in metal
+    assert "(*reinterpret_cast<device float*>(fixedPlain + 16))" in metal
+    assert "(*reinterpret_cast<device float*>(fixedPlain + 32))" in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 116) buffer FixedPlainBlock" in glsl
+    assert "} fixedPlain;" in glsl
+    assert "fixedPlain.transform = transform;" in glsl
 
 
 def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets():

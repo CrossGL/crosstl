@@ -4,7 +4,6 @@ from .OpenglAst import (
     ShaderNode,
     VariableNode,
     AssignmentNode,
-    FunctionNode,
     BinaryOpNode,
     UnaryOpNode,
     ReturnNode,
@@ -15,14 +14,10 @@ from .OpenglAst import (
     DoWhileNode,
     LayoutNode,
     VectorConstructorNode,
-    ConstantNode,
     MemberAccessNode,
     TernaryOpNode,
     ArrayAccessNode,
-    StructNode,
-    UniformNode,
     SwitchNode,
-    CaseNode,
     BlockNode,
     NumberNode,
     PostfixOpNode,
@@ -370,26 +365,17 @@ class GLSLToCrossGLConverter:
 
         return None
 
-    def unsupported_runtime_array_ssbo_diagnostic(self, var):
+    def ssbo_block_declaration(self, var):
         if not self._is_buffer_qualified(var):
-            return ""
-
+            return None
+        if self.ssbo_element_member(var) is not None:
+            return None
         struct = self.structs_by_name.get(getattr(var, "vtype", None))
         if struct is None:
-            return ""
-
-        members = getattr(struct, "members", None) or getattr(struct, "fields", [])
-        has_runtime_array = any(
-            getattr(member, "is_array", False) for member in members
-        )
-        if not has_runtime_array or self.ssbo_element_member(var) is not None:
-            return ""
-
-        return (
-            f"// unsupported GLSL SSBO block {struct.name}: mixed metadata and "
-            "runtime-array members require explicit layout handling; preserved as "
-            "attributed block struct"
-        )
+            return None
+        return self.generate_variable_declaration(
+            var
+        ) + self.ssbo_block_attribute_suffix(var)
 
     def structured_buffer_type(self, var, member):
         base = (
@@ -674,13 +660,9 @@ class GLSLToCrossGLConverter:
             if structured_buffer_decl is not None:
                 result += self.indent_str + structured_buffer_decl + ";\n"
                 continue
-            diagnostic = self.unsupported_runtime_array_ssbo_diagnostic(global_var)
-            if diagnostic:
-                result += self.indent_str + diagnostic + "\n"
-                declaration = self.generate_variable_declaration(
-                    global_var
-                ) + self.ssbo_block_attribute_suffix(global_var)
-                result += self.indent_str + declaration + ";\n"
+            ssbo_block_decl = self.ssbo_block_declaration(global_var)
+            if ssbo_block_decl is not None:
+                result += self.indent_str + ssbo_block_decl + ";\n"
                 continue
             result += (
                 self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
