@@ -3400,6 +3400,95 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(rf"OpAccessChain %\d+ {re.escape(block_var)} %\d+", spv_code)
         assert "WARNING" not in spv_code
 
+    def test_glsl_buffer_block_std140_layout_emits_spirv_offsets_and_strides(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Std140Block {
+                uint count;
+                mat2 basis;
+                float weights[3];
+                float values[];
+            };
+
+            Std140Block std140Block @glsl_buffer_block(std140) @binding(6);
+
+            compute {
+                void main() {
+                    uint i = std140Block.count;
+                    mat2 basis = std140Block.basis;
+                    float weight = std140Block.weights[2];
+                    float value = std140Block.values[i];
+                    std140Block.basis = basis;
+                    std140Block.weights[1] = weight;
+                    std140Block.values[i] = value;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        block_match = re.search(r'OpName (%\d+) "Std140Block_std140_\d+"', spv_code)
+        assert block_match is not None
+        block_type = block_match.group(1)
+        block_var = spirv_named_variable(
+            spv_code, "std140Block", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {block_type} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {block_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {block_type} 1 Offset 16" in spv_code
+        assert f"OpMemberDecorate {block_type} 1 ColMajor" in spv_code
+        assert f"OpMemberDecorate {block_type} 1 MatrixStride 16" in spv_code
+        assert f"OpMemberDecorate {block_type} 2 Offset 48" in spv_code
+        assert f"OpMemberDecorate {block_type} 3 Offset 96" in spv_code
+        assert spv_code.count("ArrayStride 16") >= 2
+        assert f"OpDecorate {block_var} Binding 6" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_mixed_std430_std140_array_strides_do_not_conflict(
+        self,
+    ):
+        source_code = """
+        shader StorageBuffers {
+            struct LayoutBlock {
+                float values[3];
+                float tail;
+            };
+
+            LayoutBlock block430 @glsl_buffer_block(std430) @binding(7);
+            LayoutBlock block140 @glsl_buffer_block(std140) @binding(8);
+
+            compute {
+                void main() {
+                    float a = block430.values[1];
+                    float b = block140.values[1];
+                    block430.tail = a;
+                    block140.tail = b;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        std430_block = spirv_named_id(spv_code, "LayoutBlock")
+        std140_match = re.search(r'OpName (%\d+) "LayoutBlock_std140_\d+"', spv_code)
+        assert std140_match is not None
+        std140_block = std140_match.group(1)
+
+        assert f"OpDecorate {std430_block} BufferBlock" in spv_code
+        assert f"OpDecorate {std140_block} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {std430_block} 1 Offset 12" in spv_code
+        assert f"OpMemberDecorate {std140_block} 1 Offset 48" in spv_code
+        assert "ArrayStride 4" in spv_code
+        assert "ArrayStride 16" in spv_code
+        assert "WARNING" not in spv_code
+
     def test_glsl_buffer_array_declarations_lower_to_buffer_blocks(self):
         source_code = """
         shader StorageBuffers {
@@ -3553,6 +3642,133 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "WARNING: storage buffer load requires a readable buffer" in spv_code
         assert "WARNING: storage buffer store requires a writable buffer" in spv_code
+
+    def test_glsl_buffer_block_atomics_emit_spirv_atomic_operations(self):
+        source_code = """
+        shader StorageBufferAtomics {
+            struct AtomicBlock {
+                uint counter;
+                uint bins[4];
+            };
+
+            struct SignedAtomicBlock {
+                int counter;
+                int bins[];
+            };
+
+            AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+            SignedAtomicBlock signedAtomicBlock
+                @glsl_buffer_block(std430) @binding(18);
+
+            compute {
+                void main() {
+                    uint oldCounter = atomicAdd(atomicBlock.counter, 1u);
+                    uint oldBin = atomicExchange(
+                        atomicBlock.bins[2],
+                        oldCounter
+                    );
+                    uint minBin = atomicMin(atomicBlock.bins[0], 2u);
+                    uint maxBin = atomicMax(atomicBlock.bins[0], minBin);
+                    uint andBin = atomicAnd(atomicBlock.bins[1], 15u);
+                    uint orBin = atomicOr(atomicBlock.bins[1], andBin);
+                    uint xorBin = atomicXor(atomicBlock.bins[2], orBin);
+                    uint casBin = atomicCompSwap(
+                        atomicBlock.bins[3],
+                        xorBin,
+                        7u
+                    );
+                    int oldSigned = atomicAdd(signedAtomicBlock.counter, -1);
+                    int minSigned = atomicMin(signedAtomicBlock.bins[0], -2);
+                    atomicExchange(
+                        signedAtomicBlock.bins[1],
+                        oldSigned + minSigned
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        atomic_block = spirv_named_id(spv_code, "AtomicBlock")
+        signed_block = spirv_named_id(spv_code, "SignedAtomicBlock")
+        atomic_var = spirv_named_variable(
+            spv_code, "atomicBlock", storage_class="Uniform"
+        )
+        signed_var = spirv_named_variable(
+            spv_code, "signedAtomicBlock", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {atomic_block} BufferBlock" in spv_code
+        assert f"OpDecorate {signed_block} BufferBlock" in spv_code
+        assert f"OpDecorate {atomic_var} Binding 17" in spv_code
+        assert f"OpDecorate {signed_var} Binding 18" in spv_code
+        for operation in (
+            "OpAtomicIAdd",
+            "OpAtomicExchange",
+            "OpAtomicUMin",
+            "OpAtomicUMax",
+            "OpAtomicAnd",
+            "OpAtomicOr",
+            "OpAtomicXor",
+            "OpAtomicCompareExchange",
+            "OpAtomicSMin",
+        ):
+            assert operation in spv_code
+        assert "atomicAdd" not in spv_code
+        assert "atomicCompSwap" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets(self):
+        source_code = """
+        shader StorageBufferAtomics {
+            struct ReadBlock {
+                uint value;
+            };
+
+            struct WriteBlock {
+                uint value;
+            };
+
+            struct FloatBlock {
+                float value;
+            };
+
+            struct VectorBlock {
+                uvec2 value;
+            };
+
+            ReadBlock readBlock @glsl_buffer_block(std430) @readonly;
+            WriteBlock writeBlock @glsl_buffer_block(std430) @writeonly;
+            FloatBlock floatBlock @glsl_buffer_block(std430);
+            VectorBlock vectorBlock @glsl_buffer_block(std430);
+
+            compute {
+                void main() {
+                    uint readonlyOld = atomicAdd(readBlock.value, 1u);
+                    uint writeonlyOld = atomicAdd(writeBlock.value, 1u);
+                    float floatOld = atomicAdd(floatBlock.value, 1.0);
+                    uint vectorOld = atomicAdd(vectorBlock.value, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: atomicAdd requires a read-write storage buffer" in spv_code
+        assert (
+            "WARNING: atomicAdd currently supports only int or uint buffer members"
+            in spv_code
+        )
+        assert (
+            "WARNING: atomicAdd requires a scalar int or uint buffer member" in spv_code
+        )
+        assert "OpAtomic" not in spv_code
 
     def test_storage_buffer_memory_qualifiers_emit_member_decorations(self):
         source_code = """

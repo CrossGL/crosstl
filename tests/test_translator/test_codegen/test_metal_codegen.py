@@ -3724,6 +3724,124 @@ def test_metal_mesh_object_payload_parameters_use_object_data_address_space():
     assert "Payload payload [[payload]]" not in generated
 
 
+def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared MeshPayload payload;
+                payload.meshlet = 7u;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                SetMeshOutputCounts(1, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                points[0] = 0u;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "object_data MeshPayload& _crossglMeshPayload [[payload]], "
+        "mesh_grid_properties _crossglMeshGrid"
+    ) in generated
+    assert "const object_data MeshPayload& payload [[payload]]" in generated
+    assert "threadgroup MeshPayload payload;" in generated
+    assert "_crossglMeshPayload = payload;" in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in generated
+    assert "MeshPayload payload [[mesh_payload]]" not in generated
+    assert "DispatchMesh" not in generated
+
+
+def test_metal_mesh_payload_dispatch_generated_name_avoids_local_collision():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared MeshPayload _crossglMeshPayload;
+                _crossglMeshPayload.meshlet = 7u;
+                DispatchMesh(1, 1, 1, _crossglMeshPayload);
+            }
+        }
+
+        mesh {
+            void main(MeshPayload payload @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "object_data MeshPayload& _crossglMeshPayload_1 [[payload]]" in generated
+    assert "_crossglMeshPayload_1 = _crossglMeshPayload;" in generated
+    assert "const object_data MeshPayload& payload [[payload]]" in generated
+
+
+def test_metal_mesh_payload_dispatch_type_mismatch_is_rejected():
+    code = """
+    shader meshpipe {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared TaskPayload payload;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="DispatchMesh payload type.*MeshPayload"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_metal_mesh_object_stage_attributes_and_threadgroup_limits():
     code = """
     shader meshpipe {
@@ -3935,7 +4053,7 @@ def test_metal_mesh_output_signature_single_member_writes_lower_to_setters():
     assert "tris[0]" not in generated
 
 
-def test_metal_mesh_output_signature_multi_member_partial_write_is_diagnostic():
+def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator():
     code = """
     shader meshpipe {
         struct MeshVertex {
@@ -3957,10 +4075,12 @@ def test_metal_mesh_output_signature_multi_member_partial_write_is_diagnostic():
     """
     generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
 
+    assert "MeshVertex _crossglMeshVertices_verts_i_0 = {};" in generated
     assert (
-        "unsupported Metal mesh output assignment: vertices output 'verts' - "
-        "partial member writes require a single-member output struct"
+        "_crossglMeshVertices_verts_i_0.position = " "float4(0.0, 0.0, 0.0, 1.0);"
     ) in generated
+    assert "_crossglMeshOut.set_vertex(0, _crossglMeshVertices_verts_i_0);" in generated
+    assert "unsupported Metal mesh output assignment" not in generated
     assert "verts[0].position" not in generated
     assert "_crossglMeshOut.set_index((0) * 3, uint3(0u, 1u, 2u).x);" in generated
 

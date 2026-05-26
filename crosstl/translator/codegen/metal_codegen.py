@@ -389,7 +389,11 @@ class MetalCodeGen:
         self.current_metal_mesh_output_config = None
         self.current_metal_mesh_output_parameter = None
         self.current_metal_mesh_grid_properties_parameter = None
+        self.current_metal_mesh_payload_parameter = None
+        self.current_metal_mesh_payload_type = None
+        self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.metal_program_mesh_payload_type = None
         self.lowered_glsl_buffer_block_struct_names = set()
         self.glsl_buffer_block_lowering_failures = {}
         self.glsl_buffer_block_struct_lowering_failures = {}
@@ -685,6 +689,10 @@ class MetalCodeGen:
             "gl_NumWorkGroups": "threadgroups_per_grid",
             # Ray tracing / payload semantics
             "payload": "payload",
+            "mesh_payload": "payload",
+            "hlsl_mesh_payload": "payload",
+            "task_payload": "payload",
+            "taskPayloadSharedEXT": "payload",
             "hit_attribute": "hit_attribute",
             "callable_data": "callable_data",
             "shader_record": "shader_record",
@@ -783,7 +791,13 @@ class MetalCodeGen:
         self.current_metal_mesh_output_config = None
         self.current_metal_mesh_output_parameter = None
         self.current_metal_mesh_grid_properties_parameter = None
+        self.current_metal_mesh_payload_parameter = None
+        self.current_metal_mesh_payload_type = None
+        self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.metal_program_mesh_payload_type = self.metal_mesh_payload_type_for_program(
+            ast
+        )
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
@@ -1653,6 +1667,13 @@ class MetalCodeGen:
         previous_metal_mesh_grid_properties_parameter = (
             self.current_metal_mesh_grid_properties_parameter
         )
+        previous_metal_mesh_payload_parameter = (
+            self.current_metal_mesh_payload_parameter
+        )
+        previous_metal_mesh_payload_type = self.current_metal_mesh_payload_type
+        previous_metal_mesh_output_accumulators = (
+            self.current_metal_mesh_output_accumulators
+        )
         previous_metal_non_thread_payload_parameters = (
             self.current_metal_non_thread_payload_parameters
         )
@@ -1681,6 +1702,9 @@ class MetalCodeGen:
         unsupported_metal_ray_function_table_parameter_diagnostics = []
         self.current_structured_buffer_length_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.current_metal_mesh_payload_parameter = None
+        self.current_metal_mesh_payload_type = None
+        self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
         self.local_variable_types = {}
         for p in param_list:
@@ -1728,6 +1752,9 @@ class MetalCodeGen:
             param_type = self.map_resource_type_with_format(raw_param_type, p)
 
             semantic = self.semantic_from_node(p)
+            if self.is_metal_mesh_payload_parameter(shader_type, p):
+                self.current_metal_mesh_payload_parameter = p.name
+                self.current_metal_mesh_payload_type = self.map_type(raw_param_type)
             if (
                 self.metal_ray_payload_parameter_declaration(
                     param_type, p.name, p, shader_type
@@ -1860,6 +1887,13 @@ class MetalCodeGen:
             self.current_metal_mesh_grid_properties_parameter = (
                 previous_metal_mesh_grid_properties_parameter
             )
+            self.current_metal_mesh_payload_parameter = (
+                previous_metal_mesh_payload_parameter
+            )
+            self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
+            self.current_metal_mesh_output_accumulators = (
+                previous_metal_mesh_output_accumulators
+            )
             self.current_metal_non_thread_payload_parameters = (
                 previous_metal_non_thread_payload_parameters
             )
@@ -1903,6 +1937,19 @@ class MetalCodeGen:
             stage_attribute = self.metal_mesh_stage_attribute(
                 shader_type, func, execution_config
             )
+            generated_mesh_payload_parameter = (
+                self.generated_metal_mesh_payload_parameter(
+                    shader_type, func, reserved_parameter_names
+                )
+            )
+            if generated_mesh_payload_parameter is not None:
+                payload_type, payload_name = generated_mesh_payload_parameter
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    f"object_data {payload_type}& {payload_name} [[payload]]",
+                )
+                self.current_metal_mesh_payload_parameter = payload_name
+                self.current_metal_mesh_payload_type = payload_type
             mesh_grid_properties_parameter = self.metal_mesh_grid_properties_parameter(
                 shader_type, func, reserved_parameter_names
             )
@@ -1972,6 +2019,13 @@ class MetalCodeGen:
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = texture_parameters
         self.current_image_format_parameters = image_format_parameters
+        if shader_type == "mesh" and self.current_metal_mesh_output_config is not None:
+            self.current_metal_mesh_output_accumulators = (
+                self.collect_metal_mesh_output_accumulators(
+                    func, reserved_parameter_names
+                )
+            )
+            code += self.generate_metal_mesh_output_accumulator_declarations()
         for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
             code += f"    {diagnostic}\n"
         body = getattr(func, "body", [])
@@ -1994,6 +2048,13 @@ class MetalCodeGen:
         self.current_metal_mesh_output_parameter = previous_metal_mesh_output_parameter
         self.current_metal_mesh_grid_properties_parameter = (
             previous_metal_mesh_grid_properties_parameter
+        )
+        self.current_metal_mesh_payload_parameter = (
+            previous_metal_mesh_payload_parameter
+        )
+        self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
+        self.current_metal_mesh_output_accumulators = (
+            previous_metal_mesh_output_accumulators
         )
         self.current_metal_non_thread_payload_parameters = (
             previous_metal_non_thread_payload_parameters
@@ -4329,9 +4390,18 @@ class MetalCodeGen:
         element_type = output_info["element_type"]
         member_types = self.struct_member_types.get(element_type, {})
         if list(member_types) != [member_name]:
-            return self.unsupported_metal_mesh_output_assignment_diagnostic(
-                target_info,
-                "partial member writes require a single-member output struct",
+            accumulator = self.metal_mesh_output_accumulator(target_info)
+            if accumulator is None:
+                return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                    target_info,
+                    "partial member writes require an output accumulator",
+                )
+            index = self.generate_expression(target_info["index"])
+            temp_name = accumulator["name"]
+            return (
+                f"{temp_name}.{member_name} = {rendered_value}\n"
+                f"{self.current_metal_mesh_output_parameter}"
+                f".{setter}({index}, {temp_name})"
             )
 
         index = self.generate_expression(target_info["index"])
@@ -4339,6 +4409,73 @@ class MetalCodeGen:
         return (
             f"{self.current_metal_mesh_output_parameter}" f".{setter}({index}, {value})"
         )
+
+    def collect_metal_mesh_output_accumulators(self, func, reserved_parameter_names):
+        if not self.current_metal_mesh_output_config:
+            return {}
+
+        accumulators = {}
+        reserved_names = set(reserved_parameter_names or ())
+        reserved_names.add(self.current_metal_mesh_output_parameter)
+        reserved_names.update(self.metal_function_local_variable_names(func))
+
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, AssignmentNode):
+                continue
+            target = getattr(node, "target", getattr(node, "left", None))
+            target_info = self.metal_mesh_output_assignment_target(target)
+            if target_info is None or target_info["member"] is None:
+                continue
+            if target_info["role"] not in {"vertices", "primitives"}:
+                continue
+
+            element_type = target_info["output"]["element_type"]
+            member_types = self.struct_member_types.get(element_type, {})
+            if list(member_types) == [target_info["member"]]:
+                continue
+
+            key = self.metal_mesh_output_accumulator_key(target_info)
+            if key in accumulators:
+                continue
+
+            temp_base = (
+                f"_crossglMesh{target_info['role'].title()}"
+                f"_{target_info['name']}"
+                f"_{self.metal_identifier_suffix(key[2])}"
+            )
+            temp_name = self.unique_metal_generated_name(temp_base, reserved_names)
+            reserved_names.add(temp_name)
+            accumulators[key] = {
+                "name": temp_name,
+                "type": element_type,
+            }
+        return accumulators
+
+    def generate_metal_mesh_output_accumulator_declarations(self):
+        lines = []
+        for accumulator in self.current_metal_mesh_output_accumulators.values():
+            lines.append(f"    {accumulator['type']} {accumulator['name']} = {{}};\n")
+        return "".join(lines)
+
+    def metal_mesh_output_accumulator(self, target_info):
+        return self.current_metal_mesh_output_accumulators.get(
+            self.metal_mesh_output_accumulator_key(target_info)
+        )
+
+    def metal_mesh_output_accumulator_key(self, target_info):
+        index_expr = target_info.get("index")
+        index_text = self.safe_expression_to_string(index_expr) if index_expr else "0"
+        return (target_info["role"], target_info["name"], index_text)
+
+    def metal_identifier_suffix(self, value):
+        suffix = "".join(
+            ch if (ch.isalnum() or ch == "_") else "_" for ch in str(value)
+        ).strip("_")
+        if not suffix:
+            suffix = "value"
+        if suffix[0].isdigit():
+            suffix = f"i_{suffix}"
+        return suffix
 
     def metal_mesh_output_assignment_target(self, target):
         mesh_output = self.current_metal_mesh_output_config
@@ -4454,6 +4591,22 @@ class MetalCodeGen:
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
+            and len(expr.arguments) == 4
+        ):
+            payload_assignment = self.metal_dispatch_mesh_payload_assignment(
+                expr.arguments[3]
+            )
+            grid = ", ".join(
+                self.generate_expression(argument) for argument in expr.arguments[:3]
+            )
+            grid_assignment = (
+                f"{self.current_metal_mesh_grid_properties_parameter}"
+                f".set_threadgroups_per_grid(uint3({grid}))"
+            )
+            return "\n".join([payload_assignment, grid_assignment])
+        if (
+            expr.operation == "DispatchMesh"
+            and self.current_metal_mesh_grid_properties_parameter
             and len(expr.arguments) == 3
         ):
             grid = ", ".join(
@@ -4474,6 +4627,30 @@ class MetalCodeGen:
                 f".set_threadgroups_per_grid({grid})"
             )
         return None
+
+    def metal_dispatch_mesh_payload_assignment(self, payload_expr):
+        if self.current_metal_mesh_payload_parameter is None:
+            return (
+                "/* unsupported Metal mesh payload dispatch: "
+                "DispatchMesh payload argument requires an object_data payload "
+                "parameter */"
+            )
+
+        payload_value = self.generate_expression(payload_expr)
+        payload_type = self.expression_result_type(payload_expr)
+        if payload_type is not None:
+            mapped_payload_type = self.map_type(payload_type)
+            if (
+                self.current_metal_mesh_payload_type is not None
+                and mapped_payload_type != self.current_metal_mesh_payload_type
+            ):
+                return (
+                    "/* unsupported Metal mesh payload dispatch: "
+                    f"payload argument type {mapped_payload_type} does not match "
+                    f"{self.current_metal_mesh_payload_type} */"
+                )
+
+        return f"{self.current_metal_mesh_payload_parameter} = {payload_value}"
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
@@ -5235,13 +5412,30 @@ class MetalCodeGen:
     def metal_mesh_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None
     ):
-        if shader_type not in {"object", "task", "amplification", "mesh"}:
-            return None
-        if self.semantic_from_node(node) != "payload":
+        if not self.is_metal_mesh_payload_parameter(shader_type, node):
             return None
 
         address_space = "const object_data" if shader_type == "mesh" else "object_data"
         return f"{address_space} {mapped_type}& {name}"
+
+    def is_metal_mesh_payload_parameter(self, shader_type, node):
+        if shader_type not in {"object", "task", "amplification", "mesh"}:
+            return False
+        return self.is_metal_mesh_payload_semantic(self.semantic_from_node(node))
+
+    def is_metal_mesh_payload_semantic(self, semantic):
+        if semantic is None:
+            return False
+        normalized = str(semantic).strip().lower().replace("-", "_")
+        if normalized.startswith("metal_") or normalized.startswith("msl_"):
+            normalized = normalized.split("_", 1)[1]
+        return normalized in {
+            "payload",
+            "mesh_payload",
+            "hlsl_mesh_payload",
+            "task_payload",
+            "taskpayloadsharedext",
+        }
 
     def metal_ray_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None
@@ -5810,13 +6004,131 @@ class MetalCodeGen:
                 f"{topology} topology requires {expected_type}, got {actual_type}"
             )
 
+    def metal_mesh_payload_type_for_program(self, ast):
+        payload_types = set()
+        for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
+            if normalize_stage_name(stage_type) != "mesh":
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is None:
+                continue
+            for parameter in getattr(entry_point, "parameters", []) or []:
+                if not self.is_metal_mesh_payload_parameter("mesh", parameter):
+                    continue
+                payload_types.add(self.metal_parameter_mapped_type(parameter))
+
+        if len(payload_types) > 1:
+            expected = ", ".join(sorted(payload_types))
+            raise ValueError(
+                "Metal mesh stages in one pipeline must use one mesh payload type; "
+                f"got {expected}"
+            )
+        return next(iter(payload_types), None)
+
+    def generated_metal_mesh_payload_parameter(
+        self, shader_type, func, reserved_parameter_names
+    ):
+        if shader_type not in {"object", "task", "amplification"}:
+            return None
+        if self.current_metal_mesh_payload_parameter is not None:
+            return None
+        if not self.function_contains_mesh_op(
+            func, "DispatchMesh", argument_counts={4}
+        ):
+            return None
+
+        dispatch_payload_type = self.metal_dispatch_mesh_payload_argument_type(func)
+        expected_payload_type = self.metal_program_mesh_payload_type
+        if (
+            dispatch_payload_type is not None
+            and expected_payload_type is not None
+            and dispatch_payload_type != expected_payload_type
+        ):
+            raise ValueError(
+                "Metal DispatchMesh payload type "
+                f"'{dispatch_payload_type}' must match mesh payload type "
+                f"'{expected_payload_type}'"
+            )
+
+        payload_type = expected_payload_type or dispatch_payload_type
+        if payload_type is None:
+            raise ValueError("Metal DispatchMesh payload argument type is unknown")
+
+        reserved_names = set(reserved_parameter_names or ())
+        reserved_names.update(self.metal_function_local_variable_names(func))
+        payload_name = self.unique_metal_generated_name(
+            "_crossglMeshPayload", reserved_names
+        )
+        return payload_type, payload_name
+
+    def metal_dispatch_mesh_payload_argument_type(self, func):
+        declared_types = self.metal_function_declared_value_types(func)
+        payload_types = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, MeshOpNode):
+                continue
+            if node.operation != "DispatchMesh" or len(node.arguments) != 4:
+                continue
+            payload_type = self.metal_dispatch_mesh_payload_type(
+                node.arguments[3], declared_types
+            )
+            if payload_type is not None:
+                payload_types.add(payload_type)
+
+        if len(payload_types) > 1:
+            expected = ", ".join(sorted(payload_types))
+            raise ValueError(
+                "Metal DispatchMesh payload arguments must use one type; "
+                f"got {expected}"
+            )
+        return next(iter(payload_types), None)
+
+    def metal_dispatch_mesh_payload_type(self, expr, declared_types):
+        expr_name = self.expression_name(expr)
+        if expr_name in declared_types:
+            return self.map_type(declared_types[expr_name])
+        payload_type = self.expression_result_type(expr)
+        return self.map_type(payload_type) if payload_type else None
+
+    def metal_function_declared_value_types(self, func):
+        declared_types = {}
+        for parameter in getattr(func, "parameters", []) or []:
+            declared_types[parameter.name] = self.metal_parameter_raw_type(parameter)
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            if raw_type is not None:
+                declared_types[name] = self.type_name_string(raw_type)
+        return declared_types
+
+    def metal_function_local_variable_names(self, func):
+        names = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                names.add(node.name)
+        return names
+
+    def metal_parameter_mapped_type(self, parameter):
+        return self.map_type(self.metal_parameter_raw_type(parameter))
+
+    def metal_parameter_raw_type(self, parameter):
+        if hasattr(parameter, "param_type"):
+            return self.type_name_string(parameter.param_type)
+        if hasattr(parameter, "vtype"):
+            return self.type_name_string(parameter.vtype)
+        return "float"
+
     def metal_mesh_grid_properties_parameter(
         self, shader_type, func, reserved_parameter_names
     ):
         if shader_type not in {"object", "task", "amplification"}:
             return None
         if not self.function_contains_mesh_op(
-            func, "DispatchMesh", argument_counts={1, 3}
+            func, "DispatchMesh", argument_counts={1, 3, 4}
         ):
             return None
         return self.unique_metal_generated_name(

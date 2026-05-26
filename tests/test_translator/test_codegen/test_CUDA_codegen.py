@@ -2912,7 +2912,130 @@ class TestCudaCodeGen:
         assert "buffer_append(" not in cuda_code
         assert "buffer_consume(" not in cuda_code
 
-    def test_byte_address_buffer_resources_emit_cuda_byte_pointer_helpers(self):
+    def test_structured_buffer_element_atomics_emit_cuda_pointer_atomics(
+        self, tmp_path
+    ):
+        """Test CUDA atomics on RWStructuredBuffer scalar element lvalues."""
+        source_code = """
+        shader StructuredBufferAtomicsCUDA {
+            struct Particle {
+                uint counter;
+                float weight;
+            };
+
+            StructuredBuffer<uint> readonlyCounts;
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<int> signedCounters;
+            RWStructuredBuffer<uint2> vectorCounters;
+            RWStructuredBuffer<Particle> particles;
+            RWStructuredBuffer<uint> counterArrays[2];
+
+            void process(uint index, uint which, uint value, int signedValue) {
+                uint oldAdd = atomicAdd(counters[index], value);
+                uint oldSub = atomicSub(counters[index], value);
+                uint oldMin = atomicMin(counters[index], value);
+                uint oldMax = atomicMax(counters[index], value);
+                uint oldAnd = atomicAnd(counters[index], value);
+                uint oldOr = atomicOr(counters[index], value);
+                uint oldXor = atomicXor(counters[index], value);
+                uint oldExchange = atomicExchange(counters[index], value);
+                uint oldCas = atomicCompareExchange(counters[index], oldAdd, value);
+                uint oldComp = atomicCompSwap(
+                    counterArrays[which][index],
+                    oldMin,
+                    value
+                );
+                uint oldMember = atomicAdd(particles[index].counter, value);
+                int oldSigned = atomicAdd(signedCounters[index], signedValue);
+                int oldSignedSub = atomicSub(signedCounters[index], signedValue);
+                int oldSignedAnd = atomicAnd(signedCounters[index], signedValue);
+                int oldSignedOr = atomicOr(signedCounters[index], signedValue);
+                int oldSignedXor = atomicXor(signedCounters[index], signedValue);
+                int oldSignedCas = atomicCompareExchange(
+                    signedCounters[index],
+                    oldSigned,
+                    signedValue
+                );
+                uint readOnlyOld = atomicAdd(readonlyCounts[index], value);
+                uint2 vectorOld = atomicAdd(vectorCounters[index], uint2(1u, 2u));
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "const uint* readonlyCounts;" in cuda_code
+        assert "uint* counters;" in cuda_code
+        assert "int* signedCounters;" in cuda_code
+        assert "uint2* vectorCounters;" in cuda_code
+        assert "Particle* particles;" in cuda_code
+        assert "uint* counterArrays[2];" in cuda_code
+        assert "uint oldAdd = atomicAdd(&counters[index], value);" in cuda_code
+        assert "uint oldSub = atomicSub(&counters[index], value);" in cuda_code
+        assert "uint oldMin = atomicMin(&counters[index], value);" in cuda_code
+        assert "uint oldMax = atomicMax(&counters[index], value);" in cuda_code
+        assert "uint oldAnd = atomicAnd(&counters[index], value);" in cuda_code
+        assert "uint oldOr = atomicOr(&counters[index], value);" in cuda_code
+        assert "uint oldXor = atomicXor(&counters[index], value);" in cuda_code
+        assert "uint oldExchange = atomicExch(&counters[index], value);" in cuda_code
+        assert "uint oldCas = atomicCAS(&counters[index], oldAdd, value);" in cuda_code
+        assert (
+            "uint oldComp = atomicCAS(&counterArrays[which][index], oldMin, value);"
+            in cuda_code
+        )
+        assert (
+            "uint oldMember = atomicAdd(&particles[index].counter, value);" in cuda_code
+        )
+        assert (
+            "int oldSigned = atomicAdd(&signedCounters[index], signedValue);"
+            in cuda_code
+        )
+        assert (
+            "int oldSignedSub = atomicSub(&signedCounters[index], signedValue);"
+            in cuda_code
+        )
+        assert (
+            "int oldSignedAnd = atomicAnd(&signedCounters[index], signedValue);"
+            in cuda_code
+        )
+        assert (
+            "int oldSignedOr = atomicOr(&signedCounters[index], signedValue);"
+            in cuda_code
+        )
+        assert (
+            "int oldSignedXor = atomicXor(&signedCounters[index], signedValue);"
+            in cuda_code
+        )
+        assert (
+            "int oldSignedCas = atomicCAS(&signedCounters[index], oldSigned, "
+            "signedValue);" in cuda_code
+        )
+        assert (
+            "uint readOnlyOld = /* unsupported CUDA structured buffer atomic: "
+            "atomicAdd on StructuredBuffer<uint> requires RWStructuredBuffer target "
+            "*/ 0u;" in cuda_code
+        )
+        assert (
+            "uint2 vectorOld = /* unsupported CUDA structured buffer atomic: "
+            "atomicAdd on RWStructuredBuffer<uint2> requires supported scalar "
+            "int/uint target */ make_uint2(0u, 0u);" in cuda_code
+        )
+        assert "atomicExchange(" not in cuda_code
+        assert "atomicCompareExchange(" not in cuda_code
+        assert "atomicCompSwap(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_byte_address_buffer_resources_emit_cuda_byte_pointer_helpers(
+        self, tmp_path
+    ):
         """Test CUDA lowers byte-address buffers to typed byte-pointer helpers."""
         source_code = """
         shader ByteAddressBufferCUDA {
@@ -3012,8 +3135,9 @@ class TestCudaCodeGen:
         assert ".Store(" not in cuda_code
         assert "buffer_load(" not in cuda_code
         assert "buffer_store(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
-    def test_byte_address_buffer_dimensions_emit_cuda_length_sidecars(self):
+    def test_byte_address_buffer_dimensions_emit_cuda_length_sidecars(self, tmp_path):
         """Test CUDA lowers byte-address dimensions through byte-length sidecars."""
         source_code = """
         shader ByteAddressBufferDimensionsCUDA {
@@ -3081,6 +3205,142 @@ class TestCudaCodeGen:
         ) in cuda_code
         assert "buffer_dimensions(" not in cuda_code
         assert ".GetDimensions(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_byte_address_buffer_atomics_emit_cuda_atomic_helpers(self, tmp_path):
+        """Test CUDA lowers RWByteAddressBuffer interlocked operations."""
+        source_code = """
+        shader ByteAddressBufferAtomicsCUDA {
+            ByteAddressBuffer readBytes;
+            RWByteAddressBuffer writeBytes;
+            RWByteAddressBuffer byteBuffers[2];
+
+            uint helper(RWByteAddressBuffer output, uint offset, uint value) {
+                uint oldValue = output.InterlockedAdd(offset, value);
+                uint original;
+                output.InterlockedExchange(offset, oldValue, original);
+                return original;
+            }
+
+            void process(uint offset, uint which, uint value, uint compare) {
+                uint oldAdd;
+                writeBytes.InterlockedAdd(offset, value, oldAdd);
+                uint oldMin = writeBytes.InterlockedMin(offset, value);
+                uint oldMax = writeBytes.InterlockedMax(offset, value);
+                uint oldAnd = writeBytes.InterlockedAnd(offset, value);
+                uint oldOr = writeBytes.InterlockedOr(offset, value);
+                uint oldXor = writeBytes.InterlockedXor(offset, value);
+                uint oldExchange = writeBytes.InterlockedExchange(offset, value);
+                uint oldCas;
+                writeBytes.InterlockedCompareExchange(
+                    offset,
+                    compare,
+                    value,
+                    oldCas
+                );
+                uint oldCasExpr = byteBuffers[which].InterlockedCompareExchange(
+                    offset,
+                    oldCas,
+                    value
+                );
+                uint helperOld = helper(byteBuffers[which], offset, value);
+                readBytes.InterlockedAdd(offset, value, oldAdd);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "const unsigned char* readBytes;" in cuda_code
+        assert "unsigned char* writeBytes;" in cuda_code
+        assert "unsigned char* byteBuffers[2];" in cuda_code
+        assert (
+            "__device__ uint helper(unsigned char* output, " "uint offset, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ inline uint cgl_byte_address_atomic_add_uint"
+            "(unsigned char* buffer, uint offset, uint value)"
+        ) in cuda_code
+        assert (
+            "return atomicAdd(reinterpret_cast<unsigned int*>(buffer + offset), "
+            "value);" in cuda_code
+        )
+        assert "return atomicMin(reinterpret_cast<unsigned int*>(" in cuda_code
+        assert "return atomicMax(reinterpret_cast<unsigned int*>(" in cuda_code
+        assert "return atomicAnd(reinterpret_cast<unsigned int*>(" in cuda_code
+        assert "return atomicOr(reinterpret_cast<unsigned int*>(" in cuda_code
+        assert "return atomicXor(reinterpret_cast<unsigned int*>(" in cuda_code
+        assert "return atomicExch(reinterpret_cast<unsigned int*>(" in cuda_code
+        assert (
+            "__device__ inline uint cgl_byte_address_atomic_compare_exchange_uint"
+            "(unsigned char* buffer, uint offset, uint compare_value, uint value)"
+            in cuda_code
+        )
+        assert (
+            "return atomicCAS(reinterpret_cast<unsigned int*>(buffer + offset), "
+            "compare_value, value);" in cuda_code
+        )
+        assert (
+            "uint oldValue = cgl_byte_address_atomic_add_uint("
+            "output, offset, value);"
+        ) in cuda_code
+        assert (
+            "original = cgl_byte_address_atomic_exchange_uint("
+            "output, offset, oldValue);"
+        ) in cuda_code
+        assert (
+            "oldAdd = cgl_byte_address_atomic_add_uint(" "writeBytes, offset, value);"
+        ) in cuda_code
+        assert (
+            "uint oldMin = cgl_byte_address_atomic_min_uint("
+            "writeBytes, offset, value);"
+        ) in cuda_code
+        assert (
+            "uint oldMax = cgl_byte_address_atomic_max_uint("
+            "writeBytes, offset, value);"
+        ) in cuda_code
+        assert (
+            "uint oldAnd = cgl_byte_address_atomic_and_uint("
+            "writeBytes, offset, value);"
+        ) in cuda_code
+        assert (
+            "uint oldOr = cgl_byte_address_atomic_or_uint("
+            "writeBytes, offset, value);"
+        ) in cuda_code
+        assert (
+            "uint oldXor = cgl_byte_address_atomic_xor_uint("
+            "writeBytes, offset, value);"
+        ) in cuda_code
+        assert (
+            "uint oldExchange = cgl_byte_address_atomic_exchange_uint("
+            "writeBytes, offset, value);"
+        ) in cuda_code
+        assert (
+            "oldCas = cgl_byte_address_atomic_compare_exchange_uint("
+            "writeBytes, offset, compare, value);"
+        ) in cuda_code
+        assert (
+            "uint oldCasExpr = cgl_byte_address_atomic_compare_exchange_uint("
+            "byteBuffers[which], offset, oldCas, value);"
+        ) in cuda_code
+        assert (
+            "uint helperOld = helper(byteBuffers[which], offset, value);" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA byte-address buffer call: "
+            "InterlockedAdd on ByteAddressBuffer */ ((void)0);" in cuda_code
+        )
+        assert "InterlockedAdd(" not in cuda_code
+        assert "InterlockedCompareExchange(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
         """Test CUDA maps array and 3D sampled texture calls by resource type."""

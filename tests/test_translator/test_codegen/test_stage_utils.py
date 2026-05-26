@@ -4,6 +4,7 @@ from crosstl.translator.codegen.stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_cbuffers,
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
@@ -82,11 +83,13 @@ class DummyStageNode:
         entry_point=None,
         local_functions=None,
         local_variables=None,
+        local_cbuffers=None,
         layout_qualifiers=None,
     ):
         self.entry_point = entry_point
         self.local_functions = local_functions or []
         self.local_variables = local_variables or []
+        self.local_cbuffers = local_cbuffers or []
         self.layout_qualifiers = layout_qualifiers or []
 
 
@@ -215,6 +218,20 @@ def test_collect_stage_local_variables_filters_by_stage_and_predicate():
     )
 
     assert variables == [fragment_tex]
+
+
+def test_collect_stage_local_cbuffers_filters_by_stage():
+    vertex_camera = DummyVariable("VertexCamera", "cbuffer")
+    fragment_camera = DummyVariable("FragmentCamera", "cbuffer")
+    ast = DummyAst(
+        stages={
+            "vertex": DummyStageNode(local_cbuffers=[vertex_camera]),
+            "fragment": DummyStageNode(local_cbuffers=[fragment_camera]),
+        }
+    )
+
+    assert collect_stage_local_cbuffers(ast, "fragment") == [fragment_camera]
+    assert collect_stage_local_cbuffers(ast, None) == [vertex_camera, fragment_camera]
 
 
 def test_stage_layout_helpers_filter_entries_and_values():

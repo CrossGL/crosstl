@@ -256,9 +256,11 @@ class RustCodeGen:
             "reflect": "reflect",
             "refract": "refract",
             "faceforward": "faceforward",
+            "outerProduct": "outer_product",
             "transpose": "transpose",
             "determinant": "determinant",
             "inverse": "inverse",
+            "matrixCompMult": "matrix_comp_mult",
             "sin": "sin",
             "cos": "cos",
             "tan": "tan",
@@ -276,6 +278,7 @@ class RustCodeGen:
             "pow": "pow",
             "fma": "fma",
             "mad": "fma",
+            "ldexp": "ldexp",
             "exp": "exp",
             "exp2": "exp2",
             "log": "log",
@@ -5490,6 +5493,12 @@ class RustCodeGen:
         if mapped_name in {"dot", "length", "distance"} and arg_types:
             return self.vector_or_scalar_component_type(arg_types[0])
 
+        if mapped_name == "outer_product" and len(arg_types) >= 2:
+            return self.outer_product_result_type(arg_types[0], arg_types[1])
+
+        if mapped_name == "matrix_comp_mult" and len(arg_types) >= 2:
+            return self.promoted_matrix_type(arg_types[0], arg_types[1])
+
         if mapped_name == "transpose" and arg_types:
             matrix_info = self.matrix_type_info(arg_types[0])
             if matrix_info is not None:
@@ -5608,6 +5617,9 @@ class RustCodeGen:
 
         if mapped_name == "fma" and len(arg_types) >= 3:
             return self.promoted_argument_type(arg_types[:3])
+
+        if mapped_name == "ldexp" and arg_types:
+            return arg_types[0]
 
         if mapped_name == "clamp" and arg_types:
             return arg_types[0]
@@ -5763,6 +5775,22 @@ class RustCodeGen:
         if self.normalize_scalar_type(type_name) is not None:
             return "bool"
         return None
+
+    def outer_product_result_type(self, column_type, row_type):
+        column_info = self.vector_type_info(column_type)
+        row_info = self.vector_type_info(row_type)
+        if column_info is None or row_info is None:
+            return None
+
+        component_type = self.promoted_scalar_type(
+            column_info["component_type"], row_info["component_type"]
+        )
+        if component_type is None:
+            return None
+
+        return self.matrix_type_for_dimensions(
+            component_type, row_info["size"], column_info["size"]
+        )
 
     def relational_function_result_type(self, left_type, right_type, operator):
         vector_plan = self.vector_comparison_plan(left_type, right_type, operator)

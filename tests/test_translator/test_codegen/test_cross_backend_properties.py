@@ -148,6 +148,12 @@ def test_frontend_metadata_ir_preserves_valid_backend_neutral_combinations(
         }}
 
         vertex {{
+            layout(std140, binding = {binding})
+            [[buffer({binding})]]
+            uniform StageCamera_{suffix} {{
+                vec4 stageTint_{suffix};
+            }};
+
             layout(location = {location}, component = {component})
             {interpolation} {sample_qualifier} out vec4 color_{suffix};
 
@@ -211,6 +217,16 @@ def test_frontend_metadata_ir_preserves_valid_backend_neutral_combinations(
     ]
 
     vertex_stage = ast.stages[ShaderStage.VERTEX]
+    stage_cbuffer = vertex_stage.local_cbuffers[0]
+    assert stage_cbuffer.name == f"StageCamera_{suffix}"
+    assert [attribute.name for attribute in stage_cbuffer.attributes] == [
+        "std140",
+        "binding",
+        "buffer",
+    ]
+    assert stage_cbuffer.attributes[1].arguments[0].value == binding
+    assert stage_cbuffer.attributes[2].arguments[0].value == binding
+
     color = vertex_stage.local_variables[0]
     assert color.name == f"color_{suffix}"
     assert color.qualifiers == [interpolation, sample_qualifier, "out"]

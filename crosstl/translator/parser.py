@@ -390,6 +390,8 @@ class Parser:
                     )
                     structs.append(struct_node)
                     global_variables.append(variable_node)
+                elif self.current_token_starts_attributed_cbuffer_declaration():
+                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
                 elif self.is_cbuffer_declaration():
                     cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
@@ -526,6 +528,8 @@ class Parser:
                     )
                     structs.append(struct_node)
                     global_variables.append(variable_node)
+                elif self.current_token_starts_attributed_cbuffer_declaration():
+                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
                 elif self.is_cbuffer_declaration():
                     cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
@@ -625,6 +629,7 @@ class Parser:
         local_variables = []
         local_functions = []
         local_structs = []
+        local_cbuffers = []
         main_function = None
         execution_config = {}
         layout_qualifiers = []
@@ -642,10 +647,18 @@ class Parser:
                     )
                     local_structs.append(struct_node)
                     local_variables.append(variable_node)
+                elif self.current_token_starts_attributed_cbuffer_declaration():
+                    local_cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                elif self.is_cbuffer_declaration():
+                    local_cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
                     local_variables.append(self.parse_variable_declaration(attributes))
                 else:
                     self.skip_unknown_token()
+            elif self.current_token_starts_attributed_cbuffer_declaration():
+                cbuffer = self.parse_attributed_cbuffer()
+                if cbuffer:
+                    local_cbuffers.append(cbuffer)
             elif self.current_token_starts_attributed_struct_declaration():
                 struct_node = self.parse_attributed_struct()
                 if struct_node:
@@ -654,6 +667,10 @@ class Parser:
                 struct_node = self.parse_struct()
                 if struct_node:
                     local_structs.append(struct_node)
+            elif self.is_cbuffer_declaration():
+                cbuffer = self.parse_cbuffer_as_struct()
+                if cbuffer:
+                    local_cbuffers.append(cbuffer)
             elif self.is_function_declaration():
                 func = self.parse_function()
                 if func.name == "main":
@@ -688,6 +705,7 @@ class Parser:
             local_variables=local_variables,
             local_functions=local_functions,
             local_structs=local_structs,
+            local_cbuffers=local_cbuffers,
             execution_config=execution_config,
             layout_qualifiers=layout_qualifiers,
         )
@@ -1080,9 +1098,10 @@ class Parser:
         content = " ".join(parts).strip()
         return PreprocessorNode("precision", content)
 
-    def parse_attributed_cbuffer(self):
+    def parse_attributed_cbuffer(self, leading_attributes=None):
         """Parse attributes that appear before a cbuffer declaration."""
-        attributes = self.parse_attribute_annotations()
+        attributes = list(leading_attributes or [])
+        attributes.extend(self.parse_attribute_annotations())
         return self.parse_cbuffer_as_struct(attributes)
 
     def current_token_starts_attributed_cbuffer_declaration(self):
@@ -3790,6 +3809,8 @@ class Parser:
             attributes = self.parse_layout_attributes()
             if self.is_layout_buffer_block_declaration():
                 return list(self.parse_layout_buffer_block(attributes))
+            if self.current_token_starts_attributed_cbuffer_declaration():
+                return self.parse_attributed_cbuffer(attributes)
             if self.is_cbuffer_declaration():
                 return self.parse_cbuffer_as_struct(attributes)
             if self.is_variable_declaration():

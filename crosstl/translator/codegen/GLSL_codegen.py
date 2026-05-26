@@ -3814,9 +3814,7 @@ class GLSLCodeGen:
                 return ""
             var_type = self.local_variable_declared_type(stmt)
             local_name = self.local_identifier_name(stmt.name)
-            self.local_variable_types[stmt.name] = var_type
-            if local_name != stmt.name:
-                self.local_variable_types[local_name] = var_type
+            self.local_variable_types[local_name] = var_type
 
             declaration = format_c_style_array_declaration(
                 self.map_type(var_type), local_name
@@ -8550,6 +8548,7 @@ class GLSLCodeGen:
             "invocations",
             "isolines",
             "layout",
+            "local_size",
             "line_strip",
             "lines",
             "lines_adjacency",
@@ -8560,6 +8559,7 @@ class GLSLCodeGen:
             "max_primitives",
             "maxprimitivecount",
             "maxvertexcount",
+            "numthreads",
             "outputcontrolpoints",
             "outputtopology",
             "partitioning",
@@ -8571,6 +8571,7 @@ class GLSLCodeGen:
             "triangles_adjacency",
             "triangle_strip",
             "vertices",
+            "workgroup_size",
         }
         if normalized in valid_names:
             return normalized

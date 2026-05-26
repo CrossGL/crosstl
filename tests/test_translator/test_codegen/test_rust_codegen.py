@@ -193,6 +193,44 @@ mod math {
     matrix_type!(Mat4x2);
     matrix_type!(Mat4x3);
 
+    macro_rules! matrix_constructor {
+        ($name:ident, $($arg:ident),+) => {
+            impl<T> $name<T> {
+                pub fn new($($arg: T),+) -> Self {
+                    Self(PhantomData)
+                }
+            }
+        };
+    }
+
+    matrix_constructor!(Mat2, _m00, _m01, _m10, _m11);
+    matrix_constructor!(Mat3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22);
+    matrix_constructor!(
+        Mat4,
+        _m00,
+        _m01,
+        _m02,
+        _m03,
+        _m10,
+        _m11,
+        _m12,
+        _m13,
+        _m20,
+        _m21,
+        _m22,
+        _m23,
+        _m30,
+        _m31,
+        _m32,
+        _m33
+    );
+    matrix_constructor!(Mat2x3, _m00, _m01, _m02, _m10, _m11, _m12);
+    matrix_constructor!(Mat2x4, _m00, _m01, _m02, _m03, _m10, _m11, _m12, _m13);
+    matrix_constructor!(Mat3x2, _m00, _m01, _m10, _m11, _m20, _m21);
+    matrix_constructor!(Mat3x4, _m00, _m01, _m02, _m03, _m10, _m11, _m12, _m13, _m20, _m21, _m22, _m23);
+    matrix_constructor!(Mat4x2, _m00, _m01, _m10, _m11, _m20, _m21, _m30, _m31);
+    matrix_constructor!(Mat4x3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22, _m30, _m31, _m32);
+
     pub trait Transpose {
         type Output;
 
@@ -344,6 +382,20 @@ mod math {
         } else {
             -normal
         }
+    }
+
+    pub fn outer_product<Column, Row, Output>(_column: Column, _row: Row) -> Output
+    where
+        Output: Default,
+    {
+        Default::default()
+    }
+
+    pub fn matrix_comp_mult<Left, Right, Output>(_left: Left, _right: Right) -> Output
+    where
+        Output: Default,
+    {
+        Default::default()
     }
 
     pub fn max(left: f32, right: f32) -> f32 {
@@ -1367,6 +1419,51 @@ mod math {
 
         fn fma_value(self, multiplier: Vec3<f32>, addend: Vec3<f32>) -> Self::Output {
             self * multiplier + addend
+        }
+    }
+
+    pub trait LdExp<Exponent> {
+        type Output;
+
+        fn ldexp_value(self, exponent: Exponent) -> Self::Output;
+    }
+
+    pub fn ldexp<Value, Exponent>(value: Value, exponent: Exponent) -> <Value as LdExp<Exponent>>::Output
+    where
+        Value: LdExp<Exponent>,
+    {
+        value.ldexp_value(exponent)
+    }
+
+    impl LdExp<i32> for f32 {
+        type Output = f32;
+
+        fn ldexp_value(self, exponent: i32) -> Self::Output {
+            self * 2.0_f32.powi(exponent)
+        }
+    }
+
+    impl LdExp<i32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn ldexp_value(self, exponent: i32) -> Self::Output {
+            Vec3::new(
+                ldexp(self.x, exponent),
+                ldexp(self.y, exponent),
+                ldexp(self.z, exponent),
+            )
+        }
+    }
+
+    impl LdExp<Vec3<i32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn ldexp_value(self, exponent: Vec3<i32>) -> Self::Output {
+            Vec3::new(
+                ldexp(self.x, exponent.x),
+                ldexp(self.y, exponent.y),
+                ldexp(self.z, exponent.z),
+            )
         }
     }
 
@@ -5632,6 +5729,54 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_matrix_product_intrinsics_infer_rust_value_types_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader MatrixProductIntrinsicInference {
+        fragment {
+            vec4 main(
+                vec3 column,
+                vec2 row,
+                dvec2 precise_column,
+                dvec3 precise_row,
+                mat2 regular,
+                dmat2 precise
+            ) {
+                let basis = outerProduct(column, row);
+                let precise_basis = outerProduct(precise_column, precise_row);
+                let componentwise = matrixCompMult(regular, precise);
+                let same_componentwise = matrixCompMult(regular, mat2(1.0, 0.0, 0.0, 1.0));
+                return vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let basis: Mat2x3<f32> = outer_product(column, row);" in generated_code
+    assert (
+        "let precise_basis: Mat3x2<f64> = "
+        "outer_product(precise_column, precise_row);" in generated_code
+    )
+    assert (
+        "let componentwise: Mat2<f64> = matrix_comp_mult(regular, precise);"
+        in generated_code
+    )
+    assert (
+        "let same_componentwise: Mat2<f32> = "
+        "matrix_comp_mult(regular, Mat2::<f32>::new(1.0, 0.0, 0.0, 1.0));"
+        in generated_code
+    )
+    assert "let basis: Mat3x2<f32> = outer_product" not in generated_code
+    assert (
+        "let componentwise: Mat2<f32> = matrix_comp_mult(regular, precise)"
+        not in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_step_and_smoothstep_promote_vector_scalar_operands_and_smoke_compile(
     tmp_path,
 ):
@@ -5707,6 +5852,33 @@ def test_derivative_and_fused_math_intrinsics_infer_types_and_smoke_compile(
     assert "let scalar_dy: f32 = dfdy(scale);" in generated_code
     assert "let fused: f32 = fma" not in generated_code
     assert "let dx: f32 = dfdx" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_ldexp_intrinsic_preserves_float_input_shape_and_smoke_compile(tmp_path):
+    code = """
+    shader LdexpIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, ivec3 exponents, float scale, int scalarExponent) {
+                let shifted = ldexp(value, exponents);
+                let scalar_shifted = ldexp(scale, scalarExponent);
+                let uniform_shifted = ldexp(value, scalarExponent);
+                return vec4(shifted + uniform_shifted, scalar_shifted);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let shifted: Vec3<f32> = ldexp(value, exponents);" in generated_code
+    assert "let scalar_shifted: f32 = ldexp(scale, scalarExponent);" in generated_code
+    assert (
+        "let uniform_shifted: Vec3<f32> = ldexp(value, scalarExponent);"
+        in generated_code
+    )
+    assert "let shifted: Vec3<i32> = ldexp" not in generated_code
+    assert "let scalar_shifted: i32 = ldexp" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

@@ -1003,7 +1003,8 @@ def test_directx_glsl_buffer_block_atomics_lower_to_byteaddress_helpers():
         uint update(uint value) {
             uint oldCounter = atomicAdd(atomicBlock.counter, value);
             uint swapped = atomicCompSwap(atomicBlock.bins[1], oldCounter, 7u);
-            return oldCounter + swapped;
+            uint exchanged = atomicCompareExchange(atomicBlock.bins[2], oldCounter, swapped);
+            return oldCounter + swapped + exchanged;
         }
 
         int updateSigned(int value) {
@@ -1036,11 +1037,16 @@ def test_directx_glsl_buffer_block_atomics_lower_to_byteaddress_helpers():
         "atomicBlock, 8, oldCounter, 7u);"
     ) in generated_code
     assert (
+        "uint exchanged = __crossgl_byteaddress_atomic_compare_exchange_uint("
+        "atomicBlock, 12, oldCounter, swapped);"
+    ) in generated_code
+    assert (
         "return __crossgl_byteaddress_atomic_min_int(atomicBlock, 20, value);"
         in generated_code
     )
     assert "atomicAdd(atomicBlock" not in generated_code
     assert "atomicCompSwap(atomicBlock" not in generated_code
+    assert "atomicCompareExchange(atomicBlock" not in generated_code
 
 
 @pytest.mark.parametrize(
@@ -1053,6 +1059,10 @@ def test_directx_glsl_buffer_block_atomics_lower_to_byteaddress_helpers():
         (
             "atomicCompSwap(atomicBlock.counter, 1u)",
             "atomic 'atomicCompSwap' requires 3 argument\\(s\\), got 2",
+        ),
+        (
+            "atomicCompareExchange(atomicBlock.counter, 1u)",
+            "atomic 'atomicCompareExchange' requires 3 argument\\(s\\), got 2",
         ),
         (
             "atomicAdd(atomicBlock.counter, 1.0)",
@@ -1080,6 +1090,97 @@ def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
     """
 
     with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_typed_buffer_atomics_lower_to_interlocked_statements():
+    shader = """
+    shader TypedBufferAtomicsHLSL {
+        struct Counter {
+            uint value;
+            int signedValue;
+        };
+
+        RWBuffer<uint> counters @register(u1);
+        RWStructuredBuffer<Counter> structuredCounters @register(u2);
+
+        uint fetchAndAdd(uint index) {
+            return atomicAdd(counters[index], 1u);
+        }
+
+        uint compareAndSwap(uint index) {
+            return atomicCompareExchange(counters[index], 2u, 3u);
+        }
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint original = atomicAdd(counters[tid.x], 1u);
+                original = atomicCompareExchange(counters[tid.x], 2u, 3u);
+                atomicXor(counters[tid.x], 4u, original);
+                atomicMin(structuredCounters[tid.x].signedValue, -1);
+                original = fetchAndAdd(tid.x) + compareAndSwap(tid.x);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWBuffer<uint> counters : register(u1);" in generated_code
+    assert (
+        "RWStructuredBuffer<Counter> structuredCounters : register(u2);"
+        in generated_code
+    )
+    assert "uint original;" in generated_code
+    assert "InterlockedAdd(counters[tid.x], 1u, original);" in generated_code
+    assert (
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, original);"
+        in generated_code
+    )
+    assert "uint __crossgl_atomic_return_0;" in generated_code
+    assert (
+        "InterlockedAdd(counters[index], 1u, __crossgl_atomic_return_0);"
+        in generated_code
+    )
+    assert "return __crossgl_atomic_return_0;" in generated_code
+    assert "uint __crossgl_atomic_return_1;" in generated_code
+    assert (
+        "InterlockedCompareExchange(counters[index], 2u, 3u, __crossgl_atomic_return_1);"
+        in generated_code
+    )
+    assert "return __crossgl_atomic_return_1;" in generated_code
+    assert "InterlockedXor(counters[tid.x], 4u, original);" in generated_code
+    assert (
+        "InterlockedMin(structuredCounters[tid.x].signedValue, -1);" in generated_code
+    )
+    assert "atomicAdd(counters" not in generated_code
+    assert "atomicCompareExchange(counters" not in generated_code
+    assert "atomicXor(counters" not in generated_code
+    assert "atomicMin(structuredCounters" not in generated_code
+
+
+def test_directx_typed_buffer_atomics_reject_non_integer_targets():
+    shader = """
+    shader BadTypedBufferAtomicHLSL {
+        RWBuffer<float> values @register(u1);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                float original = atomicAdd(values[tid.x], 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX typed buffer atomic 'atomicAdd' requires a scalar "
+            "int or uint target, got float"
+        ),
+    ):
         generate_code(parse_code(tokenize_code(shader)))
 
 

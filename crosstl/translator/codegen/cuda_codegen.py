@@ -644,6 +644,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if buffer_call is not None:
                 return buffer_call
 
+            structured_atomic_call = self.generate_structured_buffer_atomic_call(
+                func_name, raw_args, args
+            )
+            if structured_atomic_call is not None:
+                return structured_atomic_call
+
             resource_call = self.generate_resource_call(func_name, raw_args, args)
             if resource_call is not None:
                 return resource_call
@@ -903,6 +909,127 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.helper_functions[helper_name] = helper
         return helper_name
 
+    def structured_buffer_atomic_operations(self):
+        """Return generic atomic mappings for RWStructuredBuffer element targets."""
+        integer_kinds = {"int", "uint"}
+        return {
+            "atomicAdd": ("atomicAdd", 2, integer_kinds),
+            "atomicSub": ("atomicSub", 2, integer_kinds),
+            "atomicMin": ("atomicMin", 2, integer_kinds),
+            "atomicMax": ("atomicMax", 2, integer_kinds),
+            "atomicAnd": ("atomicAnd", 2, integer_kinds),
+            "atomicOr": ("atomicOr", 2, integer_kinds),
+            "atomicXor": ("atomicXor", 2, integer_kinds),
+            "atomicExchange": ("atomicExch", 2, integer_kinds),
+            "atomicCompareExchange": ("atomicCAS", 3, integer_kinds),
+            "atomicCompSwap": ("atomicCAS", 3, integer_kinds),
+        }
+
+    def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
+        """Lower atomics on RWStructuredBuffer element lvalues to CUDA atomics."""
+        operation = self.structured_buffer_atomic_operations().get(func_name)
+        if operation is None or not raw_args:
+            return None
+
+        target = self.structured_buffer_atomic_target(raw_args[0])
+        if target is None:
+            return None
+
+        intrinsic, required_arg_count, supported_kinds = operation
+        target_type = target["target_type"]
+        fallback = self.diagnostic_zero_value_for_type(target_type)
+
+        if len(args) != required_arg_count:
+            return self.unsupported_structured_buffer_atomic_call(
+                func_name,
+                target["buffer_type"],
+                f"requires {required_arg_count} argument(s)",
+                fallback,
+            )
+
+        buffer_base_type, _ = self.structured_buffer_type_parts(target["buffer_type"])
+        if buffer_base_type != "RWStructuredBuffer":
+            return self.unsupported_structured_buffer_atomic_call(
+                func_name,
+                target["buffer_type"],
+                "requires RWStructuredBuffer target",
+                fallback,
+            )
+
+        scalar_kind = self.cuda_atomic_scalar_kind(target_type)
+        if scalar_kind not in supported_kinds:
+            return self.unsupported_structured_buffer_atomic_call(
+                func_name,
+                target["buffer_type"],
+                "requires supported scalar int/uint target",
+                fallback,
+            )
+
+        target_expr = args[0]
+        value_args = ", ".join(args[1:])
+        return f"{intrinsic}(&{target_expr}, {value_args})"
+
+    def structured_buffer_atomic_target(self, target_expr):
+        """Return RWStructuredBuffer target metadata for an atomic lvalue."""
+        element_access = self.structured_buffer_element_access(target_expr)
+        if element_access is None:
+            return None
+
+        array_expr = getattr(
+            element_access, "array_expr", getattr(element_access, "array", None)
+        )
+        buffer_type = self.expression_result_type(array_expr)
+        parts = self.structured_buffer_type_parts(buffer_type)
+        if parts is None:
+            return None
+
+        target_type = self.expression_result_type(target_expr) or parts[1]
+        return {
+            "buffer_type": buffer_type,
+            "target_type": target_type,
+        }
+
+    def structured_buffer_element_access(self, target_expr):
+        """Return the structured-buffer element access inside an atomic lvalue."""
+        if isinstance(target_expr, ArrayAccessNode):
+            array_expr = getattr(
+                target_expr, "array_expr", getattr(target_expr, "array", None)
+            )
+            buffer_type = self.expression_result_type(array_expr)
+            if self.structured_buffer_type_parts(buffer_type) is not None:
+                return target_expr
+
+        if isinstance(target_expr, MemberAccessNode):
+            object_expr = getattr(
+                target_expr, "object_expr", getattr(target_expr, "object", None)
+            )
+            return self.structured_buffer_element_access(object_expr)
+
+        return None
+
+    def cuda_atomic_scalar_kind(self, type_name):
+        """Return the CUDA atomic scalar kind supported for structured buffers."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        mapped_type = self.convert_crossgl_type_to_cuda(type_name)
+        if type_name in {"uint", "u32"} or mapped_type in {"uint", "unsigned int"}:
+            return "uint"
+        if type_name in {"int", "i32"} or mapped_type == "int":
+            return "int"
+        return None
+
+    def unsupported_structured_buffer_atomic_call(
+        self, operation, buffer_type, reason, fallback
+    ):
+        """Return diagnostic code for unsupported structured-buffer atomics."""
+        buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
+        return (
+            f"/* unsupported {self.resource_backend_name()} structured buffer atomic: "
+            f"{operation} on {buffer_type} {reason} */ {fallback}"
+        )
+
     def generate_byte_address_buffer_call(
         self, function_expr, func_name, raw_args, args
     ):
@@ -913,6 +1040,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if operation == "GetDimensions":
                 return self.generate_byte_address_buffer_dimensions(
                     buffer_expr, buffer_type, raw_args, args, operation
+                )
+
+            if operation in self.byte_address_buffer_atomic_operations():
+                return self.generate_byte_address_buffer_atomic(
+                    buffer_expr, buffer_type, operation, args
                 )
 
             component_count = self.byte_address_buffer_component_count(operation)
@@ -980,6 +1112,80 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if dimension_args:
             return f"{dimension_args[0]} = {length_expr}"
         return length_expr
+
+    def byte_address_buffer_atomic_operations(self):
+        """Return supported RWByteAddressBuffer atomic method mappings."""
+        return {
+            "InterlockedAdd": ("add", "atomicAdd", 2),
+            "InterlockedMin": ("min", "atomicMin", 2),
+            "InterlockedMax": ("max", "atomicMax", 2),
+            "InterlockedAnd": ("and", "atomicAnd", 2),
+            "InterlockedOr": ("or", "atomicOr", 2),
+            "InterlockedXor": ("xor", "atomicXor", 2),
+            "InterlockedExchange": ("exchange", "atomicExch", 2),
+            "InterlockedCompareExchange": ("compare_exchange", "atomicCAS", 3),
+        }
+
+    def generate_byte_address_buffer_atomic(
+        self, buffer_expr, buffer_type, operation, args
+    ):
+        """Lower RWByteAddressBuffer Interlocked* methods to CUDA atomics."""
+        operation_info = self.byte_address_buffer_atomic_operations().get(operation)
+        if operation_info is None:
+            return None
+
+        operation_name, intrinsic, required_args = operation_info
+        has_out_arg = len(args) == required_args + 1
+        fallback = "((void)0)" if has_out_arg else "0u"
+        if len(args) < required_args or len(args) > required_args + 1:
+            return self.unsupported_byte_address_buffer_call(
+                operation, buffer_type, fallback
+            )
+        if not self.byte_address_buffer_is_writable(buffer_type):
+            return self.unsupported_byte_address_buffer_call(
+                operation, buffer_type, fallback
+            )
+
+        helper_name = self.require_byte_address_atomic_helper(operation_name, intrinsic)
+        buffer_name = self.visit(buffer_expr)
+        helper_args = [buffer_name, *args[:required_args]]
+        call = f"{helper_name}({', '.join(helper_args)})"
+        if has_out_arg:
+            return f"{args[required_args]} = {call}"
+        return call
+
+    def byte_address_atomic_helper_name(self, operation):
+        """Return a stable CUDA helper name for a byte-address atomic operation."""
+        return f"cgl_byte_address_atomic_{operation}_uint"
+
+    def require_byte_address_atomic_helper(self, operation, intrinsic):
+        """Register a CUDA byte-address atomic helper and return its name."""
+        helper_name = self.byte_address_atomic_helper_name(operation)
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        pointer_expr = "reinterpret_cast<unsigned int*>(buffer + offset)"
+        if operation == "compare_exchange":
+            helper = (
+                "__device__ inline uint "
+                f"{helper_name}(unsigned char* buffer, uint offset, "
+                "uint compare_value, uint value)\n"
+                "{\n"
+                f"    return {intrinsic}({pointer_expr}, compare_value, value);\n"
+                "}"
+            )
+            self.helper_functions[helper_name] = helper
+            return helper_name
+
+        helper = (
+            "__device__ inline uint "
+            f"{helper_name}(unsigned char* buffer, uint offset, uint value)\n"
+            "{\n"
+            f"    return {intrinsic}({pointer_expr}, value);\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
 
     def byte_address_buffer_member_call(self, function_expr):
         """Return byte-address buffer member call pieces, if applicable."""
@@ -2474,6 +2680,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             _, operation, _ = byte_member_call
             if operation == "GetDimensions":
                 return "uint"
+            if operation in self.byte_address_buffer_atomic_operations():
+                return "uint"
             if operation.startswith("Load") and raw_args:
                 component_count = self.byte_address_buffer_component_count(operation)
                 if component_count is not None:
@@ -2508,6 +2716,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             buffer_type = self.expression_result_type(raw_args[0])
             if self.buffer_type_supports_length(buffer_type):
                 return "uint"
+        if func_name in self.structured_buffer_atomic_operations() and raw_args:
+            target = self.structured_buffer_atomic_target(raw_args[0])
+            if target is not None:
+                return target["target_type"]
         return None
 
     def canonical_sampled_resource_type(self, type_name):
@@ -2684,6 +2896,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicMin": "atomicMin",
             "atomicExchange": "atomicExch",
             "atomicCompareExchange": "atomicCAS",
+            "atomicCompSwap": "atomicCAS",
             # Synchronization
             "barrier": "__syncthreads",
             "memoryBarrier": "__threadfence",

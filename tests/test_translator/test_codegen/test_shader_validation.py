@@ -343,6 +343,15 @@ shader SpirvGlslBufferBlockValidation {
         Particle particles[];
     } particleBlock;
 
+    struct Std140Block {
+        uint count;
+        mat2 basis;
+        float weights[3];
+        float values[];
+    };
+
+    Std140Block std140Block @glsl_buffer_block(std140) @binding(6);
+
     float readMass(ParticleBlock block @glsl_buffer_block(std430), uint index) {
         return block.particles[index].mass;
     }
@@ -364,7 +373,51 @@ shader SpirvGlslBufferBlockValidation {
             float value = buffer_load(values, 1u);
             float helperMass = readMass(particleBlock, 0u);
             writeMass(particleBlock, 1u, mass + value + helperMass);
+            uint index = std140Block.count;
+            mat2 basis = std140Block.basis;
+            float weight = std140Block.weights[2];
+            float dynamicValue = std140Block.values[index];
+            std140Block.basis = basis;
+            std140Block.weights[1] = weight + dynamicValue;
+            std140Block.values[index] = weight + dynamicValue;
             buffer_store(outValues, 0u, mass);
+        }
+    }
+}
+"""
+
+
+SPIRV_STORAGE_BUFFER_ATOMICS_COMPUTE_SHADER = """
+shader SpirvStorageBufferAtomicsValidation {
+    struct AtomicBlock {
+        uint counter;
+        uint bins[];
+    };
+
+    struct SignedAtomicBlock {
+        int counter;
+        int bins[];
+    };
+
+    AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+    SignedAtomicBlock signedAtomicBlock @glsl_buffer_block(std430) @binding(18);
+
+    uint bump(AtomicBlock block @glsl_buffer_block(std430), uint index) {
+        return atomicAdd(block.bins[index], 1u);
+    }
+
+    compute {
+        void main() {
+            uint index = atomicBlock.counter;
+            uint oldValue = bump(atomicBlock, index);
+            uint minValue = atomicMin(atomicBlock.bins[0], oldValue);
+            uint swapped = atomicCompSwap(atomicBlock.bins[1], minValue, 7u);
+            int oldSigned = atomicMin(signedAtomicBlock.bins[0], -2);
+            int exchanged = atomicExchange(
+                signedAtomicBlock.bins[1],
+                oldSigned
+            );
+            atomicAdd(signedAtomicBlock.counter, exchanged);
         }
     }
 }
@@ -1483,6 +1536,39 @@ shader MetalMeshOutputSignatureValidation {
             verts[0] = outVertex;
             tris[0] = uvec3(0u, 1u, 2u);
             prims[0] = outPrimitive;
+        }
+    }
+}
+"""
+
+
+METAL_MESH_PAYLOAD_DISPATCH_SHADER = """
+shader MetalMeshPayloadDispatchValidation {
+    struct MeshPayload {
+        uint meshlet;
+    };
+
+    struct MeshVertex {
+        vec4 position @ gl_Position;
+    };
+
+    task {
+        void main() @numthreads(1, 1, 1) {
+            groupshared MeshPayload payload;
+            payload.meshlet = 7u;
+            DispatchMesh(1, 1, 1, payload);
+        }
+    }
+
+    mesh {
+        void main(
+            @mesh_payload in MeshPayload payload,
+            @vertices out MeshVertex verts[1],
+            @indices out uint points[1]
+        ) @numthreads(1, 1, 1) @outputtopology(point) {
+            SetMeshOutputCounts(1, 1);
+            verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+            points[0] = 0u;
         }
     }
 }
@@ -2760,6 +2846,16 @@ def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools(
     )
 
 
+def test_generated_spirv_storage_buffer_atomics_validate_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "storage_buffer_atomics_compute",
+        SPIRV_STORAGE_BUFFER_ATOMICS_COMPUTE_SHADER,
+    )
+
+
 def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools(
     tmp_path,
 ):
@@ -3452,6 +3548,48 @@ def test_generated_metal_mesh_output_signature_compiles_with_metal3(tmp_path):
     assert "MeshVertex verts[3]" not in code
     assert "uint3 tris[1]" not in code
     assert "MeshPrimitive prims[1]" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_dispatch.metal"
+    output = tmp_path / "mesh_payload_dispatch.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_DISPATCH_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "object_data MeshPayload& _crossglMeshPayload [[payload]]" in code
+    assert "const object_data MeshPayload& payload [[payload]]" in code
+    assert "_crossglMeshPayload = payload;" in code
+    assert "[[mesh_payload]]" not in code
+    assert "DispatchMesh" not in code
 
     run_validator(
         [

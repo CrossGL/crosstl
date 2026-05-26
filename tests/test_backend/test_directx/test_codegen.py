@@ -1153,7 +1153,15 @@ def test_codegen_interlocked_compare_exchange_mapping():
 
     output = generate_crossgl(code)
     assert "original = imageAtomicCompSwap(tex, dtid.xy, 1u, 0u);" in output
-    assert "atomicCompareExchange(buf[dtid.x], 2, 1, original);" in output
+    assert "RWBuffer<uint> buf;" in output
+    assert "original = atomicCompareExchange(buf[dtid.x], 2u, 1u);" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+    assert "RWBuffer<uint> buf : register(u1);" in regenerated_hlsl
+    assert (
+        "InterlockedCompareExchange(buf[dtid.x], 2u, 1u, original);" in regenerated_hlsl
+    )
+    assert "atomicCompareExchange(buf" not in regenerated_hlsl
 
 
 def test_codegen_invalid_hlsl_raises():

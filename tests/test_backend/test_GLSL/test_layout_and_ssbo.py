@@ -534,6 +534,77 @@ def test_parse_mesh_stage_interface_qualifiers_roundtrip():
 
 
 @pytest.mark.parametrize(
+    (
+        "layout_topology",
+        "expected_layout",
+        "index_assignment",
+        "crossgl_call",
+        "regenerated_call",
+    ),
+    [
+        (
+            "points",
+            "layout(points, max_vertices = 1, max_primitives = 1) out;",
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+            "SetMeshOutputCounts(1, 1);",
+            "SetMeshOutputsEXT(1, 1);",
+        ),
+        (
+            "lines",
+            "layout(lines, max_vertices = 2, max_primitives = 1) out;",
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+            "SetMeshOutputCounts(2, 1);",
+            "SetMeshOutputsEXT(2, 1);",
+        ),
+        (
+            "triangles",
+            "layout(triangles, max_vertices = 3, max_primitives = 1) out;",
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+            "SetMeshOutputCounts(3, 1);",
+            "SetMeshOutputsEXT(3, 1);",
+        ),
+    ],
+)
+def test_parse_mesh_topology_builtin_index_arrays_roundtrip(
+    layout_topology,
+    expected_layout,
+    index_assignment,
+    crossgl_call,
+    regenerated_call,
+):
+    max_vertices = {"points": 1, "lines": 2, "triangles": 3}[layout_topology]
+    code = f"""
+    #version 450 core
+    #extension GL_EXT_mesh_shader : require
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout({layout_topology}, max_vertices = {max_vertices}, max_primitives = 1) out;
+
+    void main() {{
+        SetMeshOutputsEXT({max_vertices}, 1);
+        gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+        {index_assignment}
+    }}
+    """
+
+    crossgl = generate_crossgl(code, "mesh")
+
+    assert expected_layout in crossgl
+    assert crossgl_call in crossgl
+    assert "SetMeshOutputsEXT" not in crossgl
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);" in crossgl
+    assert index_assignment in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_EXT_mesh_shader : require" in glsl
+    assert "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in glsl
+    assert expected_layout in glsl
+    assert regenerated_call in glsl
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);" in glsl
+    assert index_assignment in glsl
+
+
+@pytest.mark.parametrize(
     ("glsl_statement", "crossgl_call", "regenerated_statement"),
     [
         ("ignoreIntersectionEXT;", "IgnoreHit();", "ignoreIntersectionEXT;"),
@@ -568,6 +639,34 @@ def test_parse_bare_ray_control_statements_roundtrip_canonically(
     assert "#extension GL_EXT_ray_tracing : require" in glsl
     assert regenerated_statement in glsl
     assert crossgl_call not in glsl
+
+
+def test_parse_ray_hit_position_fetch_builtin_roundtrip():
+    code = """
+    #version 460 core
+    #extension GL_EXT_ray_tracing : require
+    #extension GL_EXT_ray_tracing_position_fetch : require
+
+    void main() {
+        vec3 p0 = gl_HitTriangleVertexPositionsEXT[0];
+        vec3 p2 = gl_HitTriangleVertexPositionsEXT[2];
+        vec3 edge = p2 - p0;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "ray_closest_hit")
+
+    assert "vec3 p0 = gl_HitTriangleVertexPositionsEXT[0];" in crossgl
+    assert "vec3 p2 = gl_HitTriangleVertexPositionsEXT[2];" in crossgl
+    assert "vec3 edge = (p2 - p0);" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_EXT_ray_tracing : require" in glsl
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" in glsl
+    assert "vec3 p0 = gl_HitTriangleVertexPositionsEXT[0];" in glsl
+    assert "vec3 p2 = gl_HitTriangleVertexPositionsEXT[2];" in glsl
+    assert "vec3 edge = (p2 - p0);" in glsl
 
 
 if __name__ == "__main__":

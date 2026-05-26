@@ -24,6 +24,8 @@ from ..ast import (
     ParameterNode,
     RangeNode,
     ReturnNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ShaderNode,
     StructNode,
     SwitchNode,
@@ -1499,6 +1501,10 @@ class SlangCodeGen:
             self.validate_slang_ray_stage_parameters(
                 node, shader_type, effective_param_list
             )
+            self.validate_slang_ray_tracing_calls(
+                node, shader_type, effective_param_list
+            )
+            self.validate_slang_ray_query_calls(node, shader_type, effective_param_list)
             self.validate_slang_stage_body_builtins(
                 body_statements,
                 shader_type,
@@ -2175,6 +2181,421 @@ class SlangCodeGen:
                     )
             self.validate_slang_ray_parameter_type(role_params[0], role)
 
+    def slang_function_scope_variable_types(self, func):
+        variables = {}
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            type_name = self.get_variable_type(node)
+            if type_name is not None:
+                variables[node.name] = type_name
+        return variables
+
+    def slang_ray_tracing_calls(self, func):
+        calls = []
+        ray_intrinsics = {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "AcceptHitAndEndSearch",
+            "IgnoreHit",
+        }
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, RayTracingOpNode):
+                calls.append(
+                    (getattr(node, "operation", None), getattr(node, "arguments", []))
+                )
+                continue
+
+            if not isinstance(node, FunctionCallNode):
+                continue
+            func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+            func_name = getattr(func_expr, "name", func_expr)
+            if func_name in ray_intrinsics:
+                calls.append(
+                    (func_name, getattr(node, "arguments", getattr(node, "args", [])))
+                )
+        return calls
+
+    def slang_expression_mapped_base_and_array_suffix(self, expr):
+        expr_type = self.expression_result_type(expr)
+        if expr_type is None:
+            return None, ""
+        mapped_type = self.convert_type(expr_type)
+        return split_array_type_suffix(mapped_type)
+
+    def validate_slang_ray_exact_type_argument(
+        self, argument, shader_type, operation, role, expected_type
+    ):
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None:
+            return
+        if array_suffix or base_type != expected_type:
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} {operation} {role} argument must be "
+                f"{expected_type}, got {actual_type}"
+            )
+
+    def validate_slang_ray_scalar_int_uint_argument(
+        self, argument, shader_type, operation, role
+    ):
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None:
+            return
+        if array_suffix or base_type not in {"int", "uint"}:
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} {operation} {role} argument must be "
+                f"scalar int or uint, got {actual_type}"
+            )
+
+    def validate_slang_ray_scalar_float_argument(
+        self, argument, shader_type, operation, role
+    ):
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None:
+            return
+        if array_suffix or base_type not in {"float", "double"}:
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} {operation} {role} argument must be "
+                f"scalar floating, got {actual_type}"
+            )
+
+    def validate_slang_ray_struct_argument(
+        self, argument, shader_type, operation, role
+    ):
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None:
+            return
+        allowed_builtin_types = {"BuiltInTriangleIntersectionAttributes"}
+        if array_suffix or (
+            base_type not in self.user_struct_names
+            and base_type not in allowed_builtin_types
+        ):
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} {operation} {role} argument must use a "
+                f"user-defined struct type, got {actual_type}"
+            )
+
+    def validate_slang_trace_ray_arguments(self, args, shader_type):
+        self.validate_slang_ray_exact_type_argument(
+            args[0],
+            shader_type,
+            "TraceRay",
+            "acceleration structure",
+            "RaytracingAccelerationStructure",
+        )
+        for index, role in (
+            (1, "ray flags"),
+            (2, "instance inclusion mask"),
+            (3, "ray contribution to hit group index"),
+            (4, "geometry contribution multiplier"),
+            (5, "miss shader index"),
+        ):
+            self.validate_slang_ray_scalar_int_uint_argument(
+                args[index], shader_type, "TraceRay", role
+            )
+        if len(args) == 8:
+            self.validate_slang_ray_exact_type_argument(
+                args[6], shader_type, "TraceRay", "ray descriptor", "RayDesc"
+            )
+        else:
+            self.validate_slang_ray_exact_type_argument(
+                args[6], shader_type, "TraceRay", "origin", "float3"
+            )
+            self.validate_slang_ray_scalar_float_argument(
+                args[7], shader_type, "TraceRay", "minimum distance"
+            )
+            self.validate_slang_ray_exact_type_argument(
+                args[8], shader_type, "TraceRay", "direction", "float3"
+            )
+            self.validate_slang_ray_scalar_float_argument(
+                args[9], shader_type, "TraceRay", "maximum distance"
+            )
+        self.validate_slang_ray_struct_argument(
+            args[-1], shader_type, "TraceRay", "payload"
+        )
+
+    def validate_slang_ray_tracing_call_arguments(self, operation, args, shader_type):
+        if operation == "TraceRay":
+            self.validate_slang_trace_ray_arguments(args, shader_type)
+        elif operation == "CallShader":
+            self.validate_slang_ray_scalar_int_uint_argument(
+                args[0], shader_type, "CallShader", "shader index"
+            )
+            self.validate_slang_ray_struct_argument(
+                args[1], shader_type, "CallShader", "callable data"
+            )
+        elif operation == "ReportHit":
+            self.validate_slang_ray_scalar_float_argument(
+                args[0], shader_type, "ReportHit", "hit distance"
+            )
+            self.validate_slang_ray_scalar_int_uint_argument(
+                args[1], shader_type, "ReportHit", "hit kind"
+            )
+            if len(args) == 3:
+                self.validate_slang_ray_struct_argument(
+                    args[2], shader_type, "ReportHit", "hit attribute"
+                )
+
+    def validate_slang_ray_tracing_calls(self, func, shader_type, parameters):
+        calls = self.slang_ray_tracing_calls(func)
+        if not calls:
+            return
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        allowed_stages = {
+            "TraceRay": {"raygeneration", "closesthit", "miss"},
+            "CallShader": {"raygeneration", "closesthit", "miss", "callable"},
+            "ReportHit": {"intersection"},
+            "AcceptHitAndEndSearch": {"anyhit"},
+            "IgnoreHit": {"anyhit"},
+        }
+        expected_arg_counts = {
+            "TraceRay": {8, 11},
+            "CallShader": {2},
+            "ReportHit": {3},
+            "AcceptHitAndEndSearch": {0},
+            "IgnoreHit": {0},
+        }
+        saved_variable_types = self.variable_types.copy()
+        try:
+            for parameter in parameters or []:
+                type_name = self.slang_parameter_type_name(parameter)
+                if type_name:
+                    self.register_variable_type(parameter.name, type_name, parameter)
+            for name, type_name in self.slang_function_scope_variable_types(
+                func
+            ).items():
+                self.register_variable_type(name, type_name)
+
+            for operation, args in calls:
+                if operation not in allowed_stages:
+                    continue
+                if shader_stage not in allowed_stages[operation]:
+                    valid_stages = ", ".join(sorted(allowed_stages[operation]))
+                    raise ValueError(
+                        f"Slang {shader_type} stage cannot call {operation}; "
+                        f"{operation} is only valid in: {valid_stages}"
+                    )
+                expected_counts = expected_arg_counts[operation]
+                if len(args) not in expected_counts:
+                    expected = " or ".join(
+                        str(count) for count in sorted(expected_counts)
+                    )
+                    raise ValueError(
+                        f"Slang {shader_type} {operation} requires {expected} "
+                        f"argument(s), got {len(args)}"
+                    )
+                self.validate_slang_ray_tracing_call_arguments(
+                    operation, args, shader_type
+                )
+        finally:
+            self.variable_types = saved_variable_types
+
+    def slang_ray_query_method_return_type(self, operation):
+        return {
+            "Proceed": "bool",
+            "Abort": "void",
+            "TraceRayInline": "void",
+            "CommitNonOpaqueTriangleHit": "void",
+            "CommitProceduralPrimitiveHit": "void",
+            "CandidateType": "uint",
+            "CommittedType": "uint",
+            "CommittedStatus": "uint",
+            "CandidatePrimitiveIndex": "uint",
+            "CommittedPrimitiveIndex": "uint",
+            "CandidateInstanceID": "uint",
+            "CommittedInstanceID": "uint",
+            "CandidateInstanceIndex": "uint",
+            "CommittedInstanceIndex": "uint",
+            "CandidateGeometryIndex": "uint",
+            "CommittedGeometryIndex": "uint",
+            "CandidateObjectRayOrigin": "float3",
+            "CandidateObjectRayDirection": "float3",
+            "CommittedObjectRayOrigin": "float3",
+            "CommittedObjectRayDirection": "float3",
+            "CandidateRayT": "float",
+            "CommittedRayT": "float",
+            "CandidateObjectRayTMin": "float",
+            "CandidateTriangleBarycentrics": "float2",
+            "CommittedTriangleBarycentrics": "float2",
+            "CandidateTriangleFrontFace": "bool",
+            "CommittedTriangleFrontFace": "bool",
+            "CandidateObjectToWorld3x4": "float3x4",
+            "CandidateWorldToObject3x4": "float3x4",
+            "CommittedObjectToWorld3x4": "float3x4",
+            "CommittedWorldToObject3x4": "float3x4",
+        }.get(operation)
+
+    def slang_ray_query_method_names(self):
+        return {
+            "Proceed",
+            "Abort",
+            "TraceRayInline",
+            "CommitNonOpaqueTriangleHit",
+            "CommitProceduralPrimitiveHit",
+            "CandidateType",
+            "CommittedType",
+            "CommittedStatus",
+            "CandidatePrimitiveIndex",
+            "CommittedPrimitiveIndex",
+            "CandidateInstanceID",
+            "CommittedInstanceID",
+            "CandidateInstanceIndex",
+            "CommittedInstanceIndex",
+            "CandidateGeometryIndex",
+            "CommittedGeometryIndex",
+            "CandidateObjectRayOrigin",
+            "CandidateObjectRayDirection",
+            "CommittedObjectRayOrigin",
+            "CommittedObjectRayDirection",
+            "CandidateRayT",
+            "CommittedRayT",
+            "CandidateObjectRayTMin",
+            "CandidateTriangleBarycentrics",
+            "CommittedTriangleBarycentrics",
+            "CandidateTriangleFrontFace",
+            "CommittedTriangleFrontFace",
+            "CandidateObjectToWorld3x4",
+            "CandidateWorldToObject3x4",
+            "CommittedObjectToWorld3x4",
+            "CommittedWorldToObject3x4",
+        }
+
+    def slang_ray_query_call_parts(self, node):
+        if isinstance(node, RayQueryOpNode):
+            return (
+                getattr(node, "operation", None),
+                getattr(node, "query_expr", None),
+                getattr(node, "arguments", []),
+            )
+
+        if not isinstance(node, FunctionCallNode):
+            return None
+
+        func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        operation = str(getattr(func_expr, "member", ""))
+        if operation not in self.slang_ray_query_method_names():
+            return None
+        return (
+            operation,
+            getattr(func_expr, "object", getattr(func_expr, "object_expr", None)),
+            getattr(node, "arguments", getattr(node, "args", [])),
+        )
+
+    def slang_ray_query_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            call = self.slang_ray_query_call_parts(node)
+            if call is not None:
+                calls.append(call)
+        return calls
+
+    def validate_slang_ray_query_receiver(self, query_expr, shader_type, operation):
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            query_expr
+        )
+        if base_type is None:
+            return
+        if not (
+            not array_suffix
+            and (base_type == "RayQuery" or base_type.startswith("RayQuery<"))
+        ):
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} RayQuery.{operation} receiver must be "
+                f"RayQuery, got {actual_type}"
+            )
+
+    def validate_slang_ray_query_call_arguments(
+        self, operation, query_expr, args, shader_type
+    ):
+        self.validate_slang_ray_query_receiver(query_expr, shader_type, operation)
+
+        expected_arg_counts = {
+            "TraceRayInline": {4},
+            "CommitProceduralPrimitiveHit": {1},
+        }
+        expected_counts = expected_arg_counts.get(operation, {0})
+        if len(args) not in expected_counts:
+            expected = " or ".join(str(count) for count in sorted(expected_counts))
+            raise ValueError(
+                f"Slang {shader_type} RayQuery.{operation} requires {expected} "
+                f"argument(s), got {len(args)}"
+            )
+
+        if operation == "TraceRayInline":
+            self.validate_slang_ray_exact_type_argument(
+                args[0],
+                shader_type,
+                "RayQuery.TraceRayInline",
+                "acceleration structure",
+                "RaytracingAccelerationStructure",
+            )
+            self.validate_slang_ray_scalar_int_uint_argument(
+                args[1], shader_type, "RayQuery.TraceRayInline", "ray flags"
+            )
+            self.validate_slang_ray_scalar_int_uint_argument(
+                args[2],
+                shader_type,
+                "RayQuery.TraceRayInline",
+                "instance inclusion mask",
+            )
+            self.validate_slang_ray_exact_type_argument(
+                args[3],
+                shader_type,
+                "RayQuery.TraceRayInline",
+                "ray descriptor",
+                "RayDesc",
+            )
+        elif operation == "CommitProceduralPrimitiveHit":
+            self.validate_slang_ray_scalar_float_argument(
+                args[0],
+                shader_type,
+                "RayQuery.CommitProceduralPrimitiveHit",
+                "hit distance",
+            )
+
+    def validate_slang_ray_query_calls(self, func, shader_type, parameters):
+        calls = self.slang_ray_query_calls(func)
+        if not calls:
+            return
+
+        saved_variable_types = self.variable_types.copy()
+        try:
+            for parameter in parameters or []:
+                type_name = self.slang_parameter_type_name(parameter)
+                if type_name:
+                    self.register_variable_type(parameter.name, type_name, parameter)
+            for name, type_name in self.slang_function_scope_variable_types(
+                func
+            ).items():
+                self.register_variable_type(name, type_name)
+
+            for operation, query_expr, args in calls:
+                if operation not in self.slang_ray_query_method_names():
+                    continue
+                self.validate_slang_ray_query_call_arguments(
+                    operation, query_expr, args, shader_type
+                )
+        finally:
+            self.variable_types = saved_variable_types
+
     def slang_ray_stage_parameter_declaration(
         self, declaration, parameter, shader_type
     ):
@@ -2832,7 +3253,13 @@ class SlangCodeGen:
                 if component_type:
                     return f"{component_type}{len(member)}"
             return None
+        if isinstance(expr, RayQueryOpNode):
+            return self.slang_ray_query_method_return_type(expr.operation)
         if isinstance(expr, FunctionCallNode):
+            ray_query_call = self.slang_ray_query_call_parts(expr)
+            if ray_query_call is not None:
+                operation, _query_expr, _args = ray_query_call
+                return self.slang_ray_query_method_return_type(operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             if func_name == "imageLoad" and getattr(expr, "args", None):
@@ -2979,7 +3406,17 @@ class SlangCodeGen:
             return f"{obj}.{node.member}"
         elif isinstance(node, BinaryOpNode):
             return self.generate_binary_expression(node)
+        elif isinstance(node, RayQueryOpNode):
+            query = self.generate_expression(node.query_expr)
+            args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
+            return f"{query}.{node.operation}({args})"
         elif isinstance(node, FunctionCallNode):
+            ray_query_call = self.slang_ray_query_call_parts(node)
+            if ray_query_call is not None:
+                operation, query_expr, args = ray_query_call
+                query = self.generate_expression(query_expr)
+                rendered_args = ", ".join(self.generate_expression(arg) for arg in args)
+                return f"{query}.{operation}({rendered_args})"
             func_expr = getattr(node, "function", None)
             if func_expr is None:
                 func_expr = node.name
@@ -3012,6 +3449,8 @@ class SlangCodeGen:
             if callee not in self.user_function_names:
                 callee = self.function_map.get(callee, callee)
             return f"{callee}({args})"
+        elif isinstance(node, RayTracingOpNode):
+            return self.generate_slang_ray_tracing_op_expression(node)
         elif isinstance(node, UnaryOpNode):
             operand = self.generate_expression(node.operand)
             if isinstance(node.operand, BinaryOpNode):
@@ -3033,6 +3472,13 @@ class SlangCodeGen:
             return node
         else:
             return str(node)
+
+    def generate_slang_ray_tracing_op_expression(self, node):
+        args = [self.generate_expression(arg) for arg in node.arguments]
+        if node.operation == "TraceRay" and len(args) == 11:
+            ray_desc = f"RayDesc({args[6]}, {args[7]}, {args[8]}, {args[9]})"
+            args = args[:6] + [ray_desc, args[10]]
+        return f"{node.operation}({', '.join(args)})"
 
     def generate_lambda_expression(self, args):
         """Render supported CrossGL pseudo-lambdas as Slang lambda expressions."""
@@ -3409,6 +3855,12 @@ class SlangCodeGen:
             "image2DArray": "RWTexture2DArray<float4>",
             "image2DMS": "RWTexture2DMS<float4>",
             "image2DMSArray": "RWTexture2DMSArray<float4>",
+            "accelerationStructureEXT": "RaytracingAccelerationStructure",
+            "AccelerationStructure": "RaytracingAccelerationStructure",
+            "acceleration_structure": "RaytracingAccelerationStructure",
+            "RaytracingAccelerationStructure": "RaytracingAccelerationStructure",
+            "RayDesc": "RayDesc",
+            "RayQuery": "RayQuery",
         }
 
         return type_map.get(type_name, type_name)

@@ -3166,7 +3166,7 @@ def test_cbuffer_declaration_preserves_leading_and_layout_metadata():
             vec4 tint;
         };
 
-        layout(std140, binding = 3) uniform Globals {
+        layout(std140, binding = 3) [[buffer(4)]] uniform Globals {
             vec4 color;
         };
     }
@@ -3187,9 +3187,53 @@ def test_cbuffer_declaration_preserves_leading_and_layout_metadata():
     assert [attr.name for attr in material.attributes] == ["buffer"]
     assert material.attributes[0].arguments[0].value == 2
 
-    assert [attr.name for attr in globals_block.attributes] == ["std140", "binding"]
+    assert [attr.name for attr in globals_block.attributes] == [
+        "std140",
+        "binding",
+        "buffer",
+    ]
     assert globals_block.attributes[0].arguments == []
     assert globals_block.attributes[1].arguments[0].value == 3
+    assert globals_block.attributes[2].arguments[0].value == 4
+
+
+def test_stage_local_cbuffers_preserve_declaration_metadata():
+    code = """
+    shader StageLocalCBufferMetadata {
+        compute {
+            @binding(0)
+            cbuffer Camera @binding(0) {
+                mat4 viewProj;
+            };
+
+            layout(std140, binding = 1) [[buffer(2)]] uniform Globals {
+                vec4 color;
+            };
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+    camera, globals_block = compute_stage.local_cbuffers
+
+    assert [cbuffer.name for cbuffer in compute_stage.local_cbuffers] == [
+        "Camera",
+        "Globals",
+    ]
+    assert [attr.name for attr in camera.attributes] == ["binding", "binding"]
+    assert [attr.arguments[0].value for attr in camera.attributes] == [0, 0]
+
+    assert [attr.name for attr in globals_block.attributes] == [
+        "std140",
+        "binding",
+        "buffer",
+    ]
+    assert globals_block.attributes[1].arguments[0].value == 1
+    assert globals_block.attributes[2].arguments[0].value == 2
 
 
 @pytest.mark.parametrize(
@@ -3213,6 +3257,14 @@ def test_cbuffer_declaration_preserves_leading_and_layout_metadata():
             """,
             "Conflicting register metadata",
         ),
+        (
+            """
+            layout(binding = 0) @binding(1) uniform Globals {
+                vec4 color;
+            };
+            """,
+            "Conflicting binding metadata",
+        ),
     ],
 )
 def test_conflicting_cbuffer_declaration_metadata_fails_validation(
@@ -3221,6 +3273,74 @@ def test_conflicting_cbuffer_declaration_metadata_fails_validation(
     code = f"""
     shader ConflictingCBufferDeclarationMetadata {{
         {cbuffer_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    "layout_source",
+    [
+        """
+        layout(std140, std430) uniform Globals {
+            vec4 color;
+        };
+        """,
+        """
+        layout(std430, scalar) buffer Globals {
+            vec4 color;
+        } globals;
+        """,
+    ],
+)
+def test_conflicting_declaration_memory_layout_metadata_fails_validation(
+    layout_source,
+):
+    code = f"""
+    shader ConflictingMemoryLayoutMetadata {{
+        {layout_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match="Conflicting memory layout metadata"):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_cbuffer_source", "message"),
+    [
+        (
+            """
+            @binding(0)
+            cbuffer Camera @binding(1) {
+                mat4 viewProj;
+            };
+            """,
+            "Conflicting binding metadata",
+        ),
+        (
+            """
+            layout(std140, std430) uniform Globals {
+                vec4 color;
+            };
+            """,
+            "Conflicting memory layout metadata",
+        ),
+    ],
+)
+def test_conflicting_stage_local_cbuffer_metadata_fails_validation(
+    stage_cbuffer_source, message
+):
+    code = f"""
+    shader ConflictingStageLocalCBufferMetadata {{
+        compute {{
+            {stage_cbuffer_source}
+
+            void main() {{
+            }}
+        }}
     }}
     """
 

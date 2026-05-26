@@ -3809,6 +3809,76 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
     )
 
 
+@pytest.mark.parametrize(
+    (
+        "topology",
+        "expected_layout",
+        "index_assignment",
+        "expected_index_assignment",
+    ),
+    [
+        (
+            "point",
+            "layout(points, max_vertices = 1, max_primitives = 1) out;",
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+        ),
+        (
+            "line",
+            "layout(lines, max_vertices = 2, max_primitives = 1) out;",
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+        ),
+        (
+            "triangle",
+            "layout(triangles, max_vertices = 3, max_primitives = 1) out;",
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+        ),
+    ],
+)
+def test_glsl_mesh_topology_builtin_index_arrays(
+    topology,
+    expected_layout,
+    index_assignment,
+    expected_index_assignment,
+):
+    max_vertices = {"point": 1, "line": 2, "triangle": 3}[topology]
+    shader = f"""
+    shader MeshTopologyBuiltins {{
+        mesh {{
+            void main()
+                @outputtopology({topology})
+                @max_vertices({max_vertices})
+                @max_primitives(1)
+                @numthreads(1, 1, 1)
+            {{
+                SetMeshOutputCounts({max_vertices}, 1);
+                gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                {index_assignment}
+            }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert "#extension GL_EXT_mesh_shader : require" in generated_code
+    assert "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in (
+        generated_code
+    )
+    assert expected_layout in generated_code
+    assert f"SetMeshOutputsEXT({max_vertices}, 1);" in generated_code
+    assert (
+        "gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert expected_index_assignment in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
 def test_glsl_ray_stage_entries_use_distinct_names():
     shader = """
     shader CombinedRayStages {
@@ -3960,6 +4030,48 @@ def test_glsl_ray_stage_entries_use_distinct_names():
         "layout(location = 0) rayPayloadInEXT RayPayload missPayload;" in ray_miss_code
     )
     assert "rayPayloadEXT RayPayload rayPayload;" not in ray_miss_code
+
+
+def test_glsl_ray_hit_position_fetch_builtin_emits_extension_only_for_users():
+    shader = """
+    shader RayHitPositionFetch {
+        ray_closest_hit {
+            void main() {
+                vec3 p0 = gl_HitTriangleVertexPositionsEXT[0];
+                vec3 p1 = gl_HitTriangleVertexPositionsEXT[1];
+                vec3 edge = p1 - p0;
+            }
+        }
+
+        ray_miss {
+            void main() { }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    closest_hit_code = GLSLCodeGen().generate_stage(ast, "ray_closest_hit")
+    miss_code = GLSLCodeGen().generate_stage(ast, "ray_miss")
+    combined_code = GLSLCodeGen().generate(ast)
+
+    assert closest_hit_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in closest_hit_code
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" in closest_hit_code
+    assert "vec3 p0 = gl_HitTriangleVertexPositionsEXT[0];" in closest_hit_code
+    assert "vec3 p1 = gl_HitTriangleVertexPositionsEXT[1];" in closest_hit_code
+    assert "vec3 edge = (p1 - p0);" in closest_hit_code
+
+    assert miss_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in miss_code
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" not in miss_code
+    assert "gl_HitTriangleVertexPositionsEXT" not in miss_code
+
+    assert (
+        combined_code.count("#extension GL_EXT_ray_tracing_position_fetch : require")
+        == 1
+    )
+    assert "void ray_closest_hit_main()" in combined_code
+    assert "void ray_miss_main()" in combined_code
 
 
 def test_glsl_ray_query_methods_lower_to_ext_functions():
@@ -4384,6 +4496,30 @@ def test_compute_stage_uses_execution_config_local_size():
         "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;"
         in compute_code
     )
+
+
+@pytest.mark.parametrize("attribute", ["numthreads", "local_size", "workgroup_size"])
+def test_compute_stage_uses_function_execution_config_attribute(attribute):
+    shader = f"""
+    shader ComputeFunctionAttributeLayoutSmoke {{
+        compute {{
+            void main() @{attribute}(8, 4, 2) {{
+                int value = 1;
+            }}
+        }}
+    }}
+    """
+
+    compute_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;"
+        in compute_code
+    )
+    assert f"@{attribute}" not in compute_code
+    assert "void main() @" not in compute_code
 
 
 def test_while_switch_and_void_return_emit_c_style_syntax():

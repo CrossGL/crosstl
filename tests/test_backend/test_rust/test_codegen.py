@@ -928,6 +928,27 @@ def test_matrix_intrinsic_calls_and_types_convert_to_crossgl_intrinsics():
     assert "Mat3x4" not in result
 
 
+def test_matrix_product_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn matrix_product_intrinsics(column: Vec3<f32>, row: Vec2<f32>, transform: Mat2<f32>, precise: Mat2<f64>) -> Mat2x3<f32> {
+        let basis = outer_product(column, row);
+        let componentwise = crate::math::matrix_comp_mult(transform, precise);
+        return basis;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "mat2x3 matrix_product_intrinsics(vec3 column, vec2 row, mat2 transform, dmat2 precise)"
+        in result
+    )
+    assert "basis = outerProduct(column, row);" in result
+    assert "componentwise = matrixCompMult(transform, precise);" in result
+    assert "crate::math::matrix_comp_mult" not in result
+    assert "Mat2x3" not in result
+
+
 def test_step_and_smoothstep_calls_convert_to_crossgl_intrinsics():
     code = """
     fn thresholds(low: Vec3<f32>, high: Vec3<f32>, value: Vec3<f32>, scalar: f32) -> Vec3<f32> {
@@ -981,6 +1002,26 @@ def test_derivative_and_fused_math_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::dfdy" not in result
     assert "crate::math::fwidth_coarse" not in result
     assert ".mul_add(" not in result
+
+
+def test_ldexp_intrinsic_calls_convert_to_crossgl_intrinsic():
+    code = """
+    fn exponent_ops(value: Vec3<f32>, exponents: Vec3<i32>, scale: f32, scalar_exponent: i32) -> Vec3<f32> {
+        let shifted = ldexp(value, exponents);
+        let scalar_shifted = crate::math::ldexp(scale, scalar_exponent);
+        return shifted + Vec3::<f32>::new(scalar_shifted, scalar_shifted, scalar_shifted);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec3 exponent_ops(vec3 value, ivec3 exponents, float scale, int scalar_exponent)"
+        in result
+    )
+    assert "shifted = ldexp(value, exponents);" in result
+    assert "scalar_shifted = ldexp(scale, scalar_exponent);" in result
+    assert "crate::math::ldexp" not in result
 
 
 def test_sign_and_classification_calls_convert_to_crossgl_intrinsics():

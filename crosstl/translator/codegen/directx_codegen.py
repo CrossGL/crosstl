@@ -2068,6 +2068,14 @@ class HLSLCodeGen:
                 )
                 return code
             if initial_value is not None:
+                atomic_init = self.generate_hlsl_typed_buffer_atomic_statement(
+                    initial_value, stmt.name
+                )
+                if atomic_init is not None:
+                    return (
+                        f"{indent_str}{declaration};\n"
+                        f"{self.generate_statement_code(atomic_init, indent)}"
+                    )
                 init_expr = self.generate_expression_with_expected(initial_value, vtype)
                 return f"{indent_str}{declaration} = {init_expr};\n"
             else:
@@ -2134,6 +2142,11 @@ class HLSLCodeGen:
                     return f"{indent_str}return {code};\n"
                 else:
                     # Single return value
+                    atomic_return = self.generate_hlsl_typed_buffer_atomic_return(
+                        stmt.value, indent
+                    )
+                    if atomic_return is not None:
+                        return atomic_return
                     return (
                         f"{indent_str}return "
                         f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
@@ -2150,6 +2163,11 @@ class HLSLCodeGen:
                 tail_return = self.generate_tail_expression_statement(stmt, indent)
                 if tail_return is not None:
                     return tail_return
+                atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
+                    stmt.expression
+                )
+                if atomic_statement is not None:
+                    return self.generate_statement_code(atomic_statement, indent)
                 expression = self.generate_expression(stmt.expression)
                 if isinstance(getattr(stmt, "expression", None), AssignmentNode):
                     return self.generate_statement_code(expression, indent)
@@ -2159,6 +2177,9 @@ class HLSLCodeGen:
 
         else:
             # Try to generate as expression
+            atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(stmt)
+            if atomic_statement is not None:
+                return self.generate_statement_code(atomic_statement, indent)
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
     def generate_tail_expression_statement(self, stmt, indent=0):
@@ -2348,6 +2369,9 @@ class HLSLCodeGen:
             if array_type and "[" in array_type and "]" in array_type:
                 base_type, _ = split_array_type_suffix(array_type)
                 return base_type
+            buffer_element_type = self.hlsl_typed_buffer_element_type(array_type)
+            if buffer_element_type is not None:
+                return buffer_element_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -2601,6 +2625,12 @@ class HLSLCodeGen:
         )
         if unsupported_store is not None:
             return unsupported_store
+
+        atomic_assignment = self.generate_hlsl_typed_buffer_atomic_statement(
+            value, target
+        )
+        if atomic_assignment is not None and op == "=":
+            return atomic_assignment
 
         lhs = self.generate_expression(target)
         rhs = self.generate_expression_with_expected(
@@ -3005,6 +3035,12 @@ class HLSLCodeGen:
             )
             if glsl_block_atomic_call is not None:
                 return glsl_block_atomic_call
+
+            typed_buffer_atomic_call = (
+                self.generate_hlsl_typed_buffer_atomic_expression(func_name, args)
+            )
+            if typed_buffer_atomic_call is not None:
+                return typed_buffer_atomic_call
 
             buffer_call = self.generate_buffer_call(func_name, args)
             if buffer_call is not None:
@@ -9837,6 +9873,202 @@ class HLSLCodeGen:
 
         return "".join(helpers)
 
+    def hlsl_typed_buffer_element_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        base_type = self.resource_base_type(type_name)
+        if "<" not in base_type or not base_type.endswith(">"):
+            return None
+        resource_type, generic_args = base_type.split("<", 1)
+        if resource_type not in {"RWBuffer", "RWStructuredBuffer"}:
+            return None
+        generic_args = generic_args[:-1].strip()
+        if not generic_args or "," in generic_args:
+            return None
+        return generic_args
+
+    def hlsl_typed_buffer_atomic_operations(self):
+        return {
+            "atomicAdd": ("InterlockedAdd", 1),
+            "atomicMin": ("InterlockedMin", 1),
+            "atomicMax": ("InterlockedMax", 1),
+            "atomicAnd": ("InterlockedAnd", 1),
+            "atomicOr": ("InterlockedOr", 1),
+            "atomicXor": ("InterlockedXor", 1),
+            "atomicExchange": ("InterlockedExchange", 1),
+            "atomicCompSwap": ("InterlockedCompareExchange", 2),
+            "atomicCompareExchange": ("InterlockedCompareExchange", 2),
+        }
+
+    def hlsl_typed_buffer_atomic_target_resource_type(self, target):
+        if isinstance(target, ArrayAccessNode) or (
+            hasattr(target, "__class__") and "ArrayAccess" in str(target.__class__)
+        ):
+            array_expr = getattr(target, "array", getattr(target, "array_expr", None))
+            array_type = self.expression_result_type(array_expr)
+            if self.hlsl_typed_buffer_element_type(array_type) is not None:
+                return array_type
+            return self.hlsl_typed_buffer_atomic_target_resource_type(array_expr)
+        if isinstance(target, MemberAccessNode) or (
+            hasattr(target, "__class__") and "MemberAccess" in str(target.__class__)
+        ):
+            object_expr = getattr(
+                target, "object", getattr(target, "object_expr", None)
+            )
+            return self.hlsl_typed_buffer_atomic_target_resource_type(object_expr)
+        return None
+
+    def hlsl_typed_buffer_atomic_parts(self, func_name, args):
+        operation_info = self.hlsl_typed_buffer_atomic_operations().get(func_name)
+        if (
+            operation_info is None
+            or func_name in getattr(self, "function_return_types", {})
+            or not args
+        ):
+            return None
+
+        target = args[0]
+        resource_type = self.hlsl_typed_buffer_atomic_target_resource_type(target)
+        if resource_type is None:
+            return None
+
+        intrinsic, value_arg_count = operation_info
+        min_args = 1 + value_arg_count
+        max_args = min_args + 1
+        if not min_args <= len(args) <= max_args:
+            raise ValueError(
+                f"DirectX typed buffer atomic '{func_name}' requires "
+                f"{min_args} or {max_args} argument(s), got {len(args)}"
+            )
+
+        target_type = self.expression_result_type(target)
+        target_kind = self.scalar_expression_kind(target)
+        if target_kind not in {"int", "uint"}:
+            target_label = self.type_name_string(target_type) or str(resource_type)
+            raise ValueError(
+                f"DirectX typed buffer atomic '{func_name}' requires a scalar "
+                f"int or uint target, got {target_label}"
+            )
+
+        value_args = args[1 : 1 + value_arg_count]
+        for index, value_arg in enumerate(value_args, start=1):
+            value_kind = self.scalar_expression_kind(value_arg)
+            if value_kind is None or value_kind == target_kind:
+                continue
+            role = "compare value" if value_arg_count == 2 and index == 1 else "value"
+            if value_arg_count == 2 and index == 2:
+                role = "replacement"
+            raise ValueError(
+                f"DirectX typed buffer atomic '{func_name}' {role} argument "
+                f"must be scalar {target_kind}, got {value_kind}"
+            )
+
+        rendered_target = self.generate_expression(target)
+        rendered_values = [
+            self.generate_expression_with_expected(value_arg, target_type)
+            for value_arg in value_args
+        ]
+        original_arg = args[max_args - 1] if len(args) == max_args else None
+        return {
+            "func_name": func_name,
+            "intrinsic": intrinsic,
+            "target": rendered_target,
+            "values": rendered_values,
+            "target_type": target_type,
+            "target_kind": target_kind,
+            "original_arg": original_arg,
+        }
+
+    def generate_hlsl_typed_buffer_atomic_statement(self, expr, result_target=None):
+        if not (
+            isinstance(expr, FunctionCallNode)
+            or (hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__))
+        ):
+            return None
+
+        func_expr = getattr(expr, "function", getattr(expr, "name", None))
+        func_name = getattr(func_expr, "name", func_expr)
+        if not isinstance(func_name, str):
+            return None
+
+        args = getattr(expr, "arguments", getattr(expr, "args", []))
+        parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
+        if parts is None:
+            return None
+
+        original_arg = parts["original_arg"]
+        if original_arg is not None:
+            original = self.generate_expression(original_arg)
+        elif result_target is not None:
+            original = (
+                result_target
+                if isinstance(result_target, str)
+                else self.generate_expression(result_target)
+            )
+        else:
+            original = None
+
+        call_args = [parts["target"], *parts["values"]]
+        if original is not None:
+            call_args.append(original)
+            return f"{parts['intrinsic']}({', '.join(call_args)})"
+
+        if parts["intrinsic"] == "InterlockedCompareExchange":
+            temp_type = self.map_type(parts["target_type"])
+            temp_name = self.next_hlsl_temp_variable("atomic_original")
+            call_args.append(temp_name)
+            return (
+                f"{temp_type} {temp_name}\n"
+                f"{parts['intrinsic']}({', '.join(call_args)})"
+            )
+        return f"{parts['intrinsic']}({', '.join(call_args)})"
+
+    def generate_hlsl_typed_buffer_atomic_return(self, expr, indent=0):
+        if not (
+            isinstance(expr, FunctionCallNode)
+            or (hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__))
+        ):
+            return None
+
+        func_expr = getattr(expr, "function", getattr(expr, "name", None))
+        func_name = getattr(func_expr, "name", func_expr)
+        if not isinstance(func_name, str):
+            return None
+
+        args = getattr(expr, "arguments", getattr(expr, "args", []))
+        parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
+        if parts is None:
+            return None
+
+        original_arg = parts["original_arg"]
+        if original_arg is not None:
+            original = self.generate_expression(original_arg)
+            declaration = ""
+        else:
+            temp_type = self.map_type(parts["target_type"])
+            original = self.next_hlsl_temp_variable("atomic_return")
+            declaration = f"{temp_type} {original};\n"
+
+        call_args = [parts["target"], *parts["values"], original]
+        indent_str = "    " * indent
+        code = ""
+        if declaration:
+            code += f"{indent_str}{declaration}"
+        code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
+        code += f"{indent_str}return {original};\n"
+        return code
+
+    def generate_hlsl_typed_buffer_atomic_expression(self, func_name, args):
+        parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
+        if parts is None:
+            return None
+        zero_value = "0u" if parts["target_kind"] == "uint" else "0"
+        return (
+            "/* unsupported HLSL typed buffer atomic expression: "
+            f"{func_name} requires statement lowering */ {zero_value}"
+        )
+
     def byteaddress_atomic_operations(self):
         return {
             "atomicAdd": ("add", "InterlockedAdd", 2),
@@ -9847,6 +10079,11 @@ class HLSLCodeGen:
             "atomicXor": ("xor", "InterlockedXor", 2),
             "atomicExchange": ("exchange", "InterlockedExchange", 2),
             "atomicCompSwap": ("compare_exchange", "InterlockedCompareExchange", 3),
+            "atomicCompareExchange": (
+                "compare_exchange",
+                "InterlockedCompareExchange",
+                3,
+            ),
         }
 
     def byteaddress_atomic_helper_name(self, operation, component_type):

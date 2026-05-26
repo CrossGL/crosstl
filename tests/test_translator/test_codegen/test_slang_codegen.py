@@ -2783,6 +2783,116 @@ def test_ray_stage_builtin_triangle_hit_attributes_emit_slang_input_parameter():
     assert " : hit_attribute" not in generated_code
 
 
+def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
+    code = """
+    shader SlangRayIntrinsics {
+        accelerationStructureEXT scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                CallableData callableData;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                TraceRay(
+                    scene,
+                    0,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0, 0.0, 0.0),
+                    0.0,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0,
+                    payload
+                );
+                CallShader(1, callableData);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool accepted = ReportHit(1.0, 0, attributes);
+            }
+        }
+
+        ray_any_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) {
+                IgnoreHit();
+                AcceptHitAndEndSearch();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RaytracingAccelerationStructure scene;" in generated_code
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated_code
+    assert (
+        "TraceRay(scene, 0, 255, 0, 1, 0, "
+        "RayDesc(float3(0.0, 0.0, 0.0), 0.0, "
+        "float3(0.0, 0.0, 1.0), 100.0), payload);"
+    ) in generated_code
+    assert "CallShader(1, callableData);" in generated_code
+    assert "bool accepted = ReportHit(1.0, 0, attributes);" in generated_code
+    assert "IgnoreHit();" in generated_code
+    assert "AcceptHitAndEndSearch();" in generated_code
+    assert "RayTracingOpNode" not in generated_code
+    assert "accelerationStructureEXT" not in generated_code
+
+
+def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
+    code = """
+    shader SlangRayQuery {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                let advanced = rq.Proceed();
+                let candidateType = rq.CandidateType();
+                let origin = rq.CandidateObjectRayOrigin();
+                let barycentrics = rq.CandidateTriangleBarycentrics();
+                let committedT = rq.CommittedRayT();
+                rq.CommitProceduralPrimitiveHit(1.0);
+                rq.CommitNonOpaqueTriangleHit();
+                rq.Abort();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RaytracingAccelerationStructure scene;" in generated_code
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in generated_code
+    assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "bool advanced = rq.Proceed();" in generated_code
+    assert "uint candidateType = rq.CandidateType();" in generated_code
+    assert "float3 origin = rq.CandidateObjectRayOrigin();" in generated_code
+    assert "float2 barycentrics = rq.CandidateTriangleBarycentrics();" in generated_code
+    assert "float committedT = rq.CommittedRayT();" in generated_code
+    assert "rq.CommitProceduralPrimitiveHit(1.0);" in generated_code
+    assert "rq.CommitNonOpaqueTriangleHit();" in generated_code
+    assert "rq.Abort();" in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("stage_source", "message"),
     [
@@ -2844,6 +2954,290 @@ def test_invalid_slang_ray_stage_semantic_parameters_raise(stage_source, message
             vec2 barycentrics;
         }};
 
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                void main() {
+                    TraceRay(1, 2, 3, 4, 5, 6, 7, 8);
+                }
+            }
+            """,
+            "compute stage cannot call TraceRay",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    TraceRay(1, 2, 3);
+                }
+            }
+            """,
+            "TraceRay requires 8 or 11 argument",
+        ),
+        (
+            """
+            ray_any_hit {
+                void main() {
+                    ReportHit(1.0, 0, attributes);
+                }
+            }
+            """,
+            "ray_any_hit stage cannot call ReportHit",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    IgnoreHit();
+                }
+            }
+            """,
+            "ray_intersection stage cannot call IgnoreHit",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    ReportHit(1.0, 0);
+                }
+            }
+            """,
+            "ReportHit requires 3 argument",
+        ),
+    ],
+)
+def test_invalid_slang_ray_tracing_intrinsic_stage_and_arity_raise(
+    stage_source, message
+):
+    code = f"""
+    shader InvalidSlangRayIntrinsicStage {{
+        struct HitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            ray_generation {
+                void main() {
+                    uint scene;
+                    RayDesc ray;
+                    RayPayload payload;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                }
+            }
+            """,
+            "TraceRay acceleration structure.*RaytracingAccelerationStructure",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    vec3 ray;
+                    RayPayload payload;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                }
+            }
+            """,
+            "TraceRay ray descriptor.*RayDesc",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    uint payload;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                }
+            }
+            """,
+            "TraceRay payload.*user-defined struct",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayPayload payload;
+                    TraceRay(
+                        scene,
+                        0,
+                        0xFF,
+                        0,
+                        1,
+                        0,
+                        vec2(0.0, 0.0),
+                        0.0,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0,
+                        payload
+                    );
+                }
+            }
+            """,
+            "TraceRay origin.*float3",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    CallableData data;
+                    CallShader(0.5, data);
+                }
+            }
+            """,
+            "CallShader shader index.*scalar int or uint",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    HitAttributes attributes;
+                    uint distance;
+                    ReportHit(distance, 0, attributes);
+                }
+            }
+            """,
+            "ReportHit hit distance.*scalar floating",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    uint attributes;
+                    ReportHit(1.0, 0, attributes);
+                }
+            }
+            """,
+            "ReportHit hit attribute.*user-defined struct",
+        ),
+    ],
+)
+def test_invalid_slang_ray_tracing_intrinsic_argument_types_raise(
+    stage_source, message
+):
+    code = f"""
+    shader InvalidSlangRayIntrinsicArguments {{
+        struct RayPayload {{
+            vec3 color;
+        }};
+
+        struct CallableData {{
+            uint value;
+        }};
+
+        struct HitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                void main() {
+                    uint rq;
+                    rq.Proceed();
+                }
+            }
+            """,
+            "RayQuery.Proceed receiver.*RayQuery",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.TraceRayInline(scene, 0, 0xFF);
+                }
+            }
+            """,
+            "TraceRayInline requires 4 argument",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    uint scene;
+                    RayDesc ray;
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.TraceRayInline(scene, 0, 0xFF, ray);
+                }
+            }
+            """,
+            "TraceRayInline acceleration structure.*RaytracingAccelerationStructure",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    vec3 ray;
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.TraceRayInline(scene, 0, 0xFF, ray);
+                }
+            }
+            """,
+            "TraceRayInline ray descriptor.*RayDesc",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    uint hitDistance;
+                    rq.CommitProceduralPrimitiveHit(hitDistance);
+                }
+            }
+            """,
+            "CommitProceduralPrimitiveHit hit distance.*scalar floating",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.CommitNonOpaqueTriangleHit(1.0);
+                }
+            }
+            """,
+            "CommitNonOpaqueTriangleHit requires 0 argument",
+        ),
+    ],
+)
+def test_invalid_slang_ray_query_method_arguments_raise(stage_source, message):
+    code = f"""
+    shader InvalidSlangRayQuery {{
         {stage_source}
     }}
     """

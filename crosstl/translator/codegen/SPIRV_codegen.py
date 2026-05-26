@@ -97,6 +97,8 @@ class VulkanSPIRVCodeGen:
         self.pointer_types = {}
         self.function_types = {}
         self.array_types = {}
+        self.layout_array_types = {}
+        self.layout_struct_types = {}
         self.resource_types = {}
         self.resource_image_types = {}
 
@@ -406,6 +408,31 @@ class VulkanSPIRVCodeGen:
 
         return spirv_id
 
+    def register_layout_struct_type(
+        self,
+        source_type: SpirvId,
+        layout: str,
+        members: List[Tuple[SpirvId, str]],
+    ) -> SpirvId:
+        """Create a layout-specific struct clone for block-layout decorations."""
+        key = (source_type.id, layout)
+        if key in self.layout_struct_types:
+            return self.layout_struct_types[key]
+
+        id_value = self.get_id()
+        member_types = " ".join([f"%{member[0].id}" for member in members])
+        self.emit(f"%{id_value} = OpTypeStruct {member_types}")
+
+        type_name = f"{source_type.type.base_type}_{layout}_{source_type.id}"
+        self.emit(f'OpName %{id_value} "{type_name}"')
+        for i, (_, member_name) in enumerate(members):
+            self.emit(f'OpMemberName %{id_value} {i} "{member_name}"')
+
+        spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
+        self.layout_struct_types[key] = spirv_id
+        self.current_struct_members[type_name] = members
+        return spirv_id
+
     def register_function_type(
         self, return_type: SpirvId, param_types: List[SpirvId]
     ) -> SpirvId:
@@ -528,7 +555,6 @@ class VulkanSPIRVCodeGen:
             parsed_operands.append((parts[0], parts[1:]))
         if not parsed_operands:
             return ""
-
         parsed_operands.sort(
             key=lambda item: operand_order.get(item[0], len(operand_order))
         )
@@ -1359,6 +1385,14 @@ class VulkanSPIRVCodeGen:
             "imageAtomicXor",
             "imageAtomicExchange",
             "imageAtomicCompSwap",
+            "atomicAdd",
+            "atomicMin",
+            "atomicMax",
+            "atomicAnd",
+            "atomicOr",
+            "atomicXor",
+            "atomicExchange",
+            "atomicCompSwap",
             "buffer_load",
             "buffer_store",
             "texture",
@@ -1412,6 +1446,18 @@ class VulkanSPIRVCodeGen:
             "imageAtomicXor",
             "imageAtomicExchange",
             "imageAtomicCompSwap",
+        }
+
+    def buffer_atomic_function_names(self):
+        return {
+            "atomicAdd",
+            "atomicMin",
+            "atomicMax",
+            "atomicAnd",
+            "atomicOr",
+            "atomicXor",
+            "atomicExchange",
+            "atomicCompSwap",
         }
 
     def buffer_function_names(self):
@@ -1851,6 +1897,126 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return SpirvId(id_value, result_type.type)
 
+    def default_value_for_buffer_atomic_failure(
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        target_type: Optional[SpirvId] = None,
+    ) -> SpirvId:
+        value_index = 2 if function_name == "atomicCompSwap" and len(args) > 2 else 1
+        if len(args) > value_index:
+            value_type = self.value_types.get(args[value_index].id)
+            if value_type is None:
+                value_type = self.find_registered_type_by_base(
+                    args[value_index].type.base_type
+                )
+            if value_type is not None:
+                return self.default_value_for_type(value_type)
+
+        if target_type is not None:
+            return self.default_value_for_type(target_type)
+
+        return self.register_constant(0, self.register_primitive_type("uint"))
+
+    def call_buffer_atomic_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if len(args) < 2:
+            self.emit(f"; WARNING: {function_name} requires target and value operands")
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        target_pointer = args[0]
+        target_type = self.variable_value_types.get(target_pointer.id)
+        if target_type is None and target_pointer.type.storage_class:
+            target_type = self.find_registered_type_by_base(
+                target_pointer.type.base_type.replace("ptr_", "", 1)
+            )
+        if target_type is None:
+            self.emit(f"; WARNING: {function_name} requires an addressable target")
+            return self.default_value_for_buffer_atomic_failure(function_name, args)
+
+        metadata = self.storage_buffer_access_metadata_for_pointer(target_pointer)
+        if metadata is None:
+            self.emit(f"; WARNING: {function_name} requires a storage buffer target")
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(
+                f"; WARNING: {function_name} requires a read-write storage buffer"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+
+        type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if self.vector_type_info_from_type(target_type) is not None:
+            self.emit(
+                f"; WARNING: {function_name} requires a scalar int or uint buffer member"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+        if self.matrix_type_info_from_type(target_type) is not None:
+            self.emit(
+                f"; WARNING: {function_name} requires a scalar int or uint buffer member"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+        if type_name not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: {function_name} currently supports only int or uint "
+                "buffer members"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+
+        if function_name == "atomicCompSwap":
+            if len(args) < 3:
+                self.emit(
+                    f"; WARNING: {function_name} requires compare and value operands"
+                )
+                return self.default_value_for_buffer_atomic_failure(
+                    function_name, args, target_type
+                )
+            comparator_id = self.convert_value_to_type(args[1], target_type)
+            value_id = self.convert_value_to_type(args[2], target_type)
+        else:
+            comparator_id = None
+            value_id = self.convert_value_to_type(args[1], target_type)
+
+        atomic_operation = {
+            "atomicAdd": "OpAtomicIAdd",
+            "atomicAnd": "OpAtomicAnd",
+            "atomicOr": "OpAtomicOr",
+            "atomicXor": "OpAtomicXor",
+            "atomicExchange": "OpAtomicExchange",
+        }.get(function_name)
+        if atomic_operation is None and function_name == "atomicMin":
+            atomic_operation = "OpAtomicSMin" if type_name == "int" else "OpAtomicUMin"
+        if atomic_operation is None and function_name == "atomicMax":
+            atomic_operation = "OpAtomicSMax" if type_name == "int" else "OpAtomicUMax"
+
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+        if function_name == "atomicCompSwap":
+            self.emit(
+                f"%{id_value} = OpAtomicCompareExchange %{target_type.id} "
+                f"%{target_pointer.id} %{scope.id} %{semantics.id} %{semantics.id} "
+                f"%{value_id.id} %{comparator_id.id}"
+            )
+        else:
+            self.emit(
+                f"%{id_value} = {atomic_operation} %{target_type.id} "
+                f"%{target_pointer.id} %{scope.id} %{semantics.id} %{value_id.id}"
+            )
+
+        self.value_types[id_value] = target_type
+        return SpirvId(id_value, target_type.type)
+
     def projected_texture_function_names(self):
         return {
             "textureProj",
@@ -2041,6 +2207,8 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         if function_name in self.image_atomic_function_names():
             return self.call_image_atomic_function(function_name, args)
+        if function_name in self.buffer_atomic_function_names():
+            return self.call_buffer_atomic_function(function_name, args)
         if function_name in self.projected_texture_function_names():
             return self.call_projected_texture_function(function_name, args)
         if function_name in self.projected_shadow_function_names():
@@ -2716,6 +2884,11 @@ class VulkanSPIRVCodeGen:
                 return offset_constant
 
         if function_name in self.image_atomic_function_names() and arg_index == 0:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
+
+        if function_name in self.buffer_atomic_function_names() and arg_index == 0:
             pointer_arg = self.variable_pointer_from_expression(arg)
             if pointer_arg is not None:
                 return pointer_arg
@@ -3952,6 +4125,8 @@ class VulkanSPIRVCodeGen:
             self.matrix_types,
             self.struct_types,
             self.array_types,
+            self.layout_struct_types,
+            self.layout_array_types,
             self.resource_types,
             self.resource_image_types,
         ]:
@@ -3967,6 +4142,8 @@ class VulkanSPIRVCodeGen:
             self.matrix_types,
             self.struct_types,
             self.array_types,
+            self.layout_struct_types,
+            self.layout_array_types,
             self.resource_types,
             self.resource_image_types,
         ]:
@@ -4204,16 +4381,37 @@ class VulkanSPIRVCodeGen:
         }
         return "buffer" in qualifiers or self.has_attribute(node, "glsl_buffer_block")
 
+    def glsl_buffer_block_layout(self, node: VariableNode) -> str:
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "glsl_buffer_block":
+                continue
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if not arguments:
+                continue
+            layout = self.attribute_value_to_string(arguments[0])
+            if layout is not None:
+                return str(layout).lower()
+        return "std430"
+
     def process_glsl_buffer_block_declaration(
         self, node: VariableNode, type_name: str
     ) -> SpirvId:
         """Emit a GLSL-style buffer block or buffer-qualified array variable."""
+        layout = self.glsl_buffer_block_layout(node)
         base_type_name = self.array_base_type_name(type_name)
         is_named_block = base_type_name in self.struct_types
         if is_named_block:
             value_type = self.map_crossgl_type(type_name)
             block_type = self.struct_types[base_type_name]
+            if layout != "std430":
+                value_type = self.storage_layout_type(value_type, layout)
+                block_type = self.storage_layout_type(block_type, layout)
             block_members = self.current_struct_members.get(base_type_name, [])
+            block_members = self.current_struct_members.get(
+                block_type.type.base_type, block_members
+            )
             variable_member_name = None
             variable_member_type = None
         else:
@@ -4221,14 +4419,22 @@ class VulkanSPIRVCodeGen:
             variable_member_type = self.map_crossgl_type(
                 getattr(node, "var_type", getattr(node, "vtype", "float"))
             )
+            if layout != "std430":
+                variable_member_type = self.storage_layout_type(
+                    variable_member_type, layout
+                )
             block_type = self.register_struct_type(
-                f"{node.name}Buffer",
+                (
+                    f"{node.name}Buffer"
+                    if layout == "std430"
+                    else f"{node.name}Buffer_{layout}"
+                ),
                 [(variable_member_type, variable_member_name)],
             )
             value_type = block_type
             block_members = [(variable_member_type, variable_member_name)]
 
-        self.decorate_storage_buffer_block_type(block_type)
+        self.decorate_storage_buffer_block_type(block_type, layout)
         memory_flags = self.storage_buffer_memory_flags(node)
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
@@ -4500,6 +4706,19 @@ class VulkanSPIRVCodeGen:
             element_type, _ = array_info
             return max(16, self.uniform_layout_alignment(element_type))
 
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return max(
+                16,
+                max(
+                    (
+                        self.uniform_layout_alignment(member_type)
+                        for member_type, _ in struct_members
+                    ),
+                    default=1,
+                ),
+            )
+
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
             _, component_count = vector_info
@@ -4518,6 +4737,15 @@ class VulkanSPIRVCodeGen:
             element_type, size = array_info
             stride = self.uniform_array_stride(element_type)
             return stride * int(size or 1)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            offset = 0
+            for member_type, _ in struct_members:
+                alignment = self.uniform_layout_alignment(member_type)
+                offset = self.align_to(offset, alignment)
+                offset += self.uniform_layout_size(member_type)
+            return self.align_to(offset, self.uniform_layout_alignment(type_id))
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
@@ -4546,6 +4774,13 @@ class VulkanSPIRVCodeGen:
             element_type, _ = array_info
             return self.uniform_layout_contains_matrix(element_type)
 
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return any(
+                self.uniform_layout_contains_matrix(member_type)
+                for member_type, _ in struct_members
+            )
+
         return False
 
     def decorate_uniform_array_strides(self, type_id: SpirvId):
@@ -4558,12 +4793,35 @@ class VulkanSPIRVCodeGen:
         self.decorations.append(f"OpDecorate %{type_id.id} ArrayStride {stride}")
         self.decorate_uniform_array_strides(element_type)
 
-    def decorate_storage_buffer_block_type(self, block_type: SpirvId):
+    def storage_layout_type(self, type_id: SpirvId, layout: str) -> SpirvId:
+        if layout == "std430":
+            return type_id
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return self.register_layout_array_type(
+                self.storage_layout_type(element_type, layout), size, layout
+            )
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            cloned_members = [
+                (self.storage_layout_type(member_type, layout), member_name)
+                for member_type, member_name in struct_members
+            ]
+            return self.register_layout_struct_type(type_id, layout, cloned_members)
+
+        return type_id
+
+    def decorate_storage_buffer_block_type(
+        self, block_type: SpirvId, layout: str = "std430"
+    ):
         self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
         for member_index, (member_type, _) in enumerate(
             self.current_struct_members.get(block_type.type.base_type, [])
         ):
-            offset = self.storage_struct_member_offset(block_type, member_index)
+            offset = self.storage_struct_member_offset(block_type, member_index, layout)
             self.decorations.append(
                 f"OpMemberDecorate %{block_type.id} {member_index} Offset {offset}"
             )
@@ -4574,13 +4832,17 @@ class VulkanSPIRVCodeGen:
                 self.decorations.append(
                     f"OpMemberDecorate %{block_type.id} {member_index} MatrixStride 16"
                 )
-            self.decorate_storage_buffer_nested_type(member_type)
+            self.decorate_storage_buffer_nested_type(member_type, layout)
 
-    def decorate_storage_buffer_nested_type(self, type_id: SpirvId):
+    def decorate_storage_buffer_nested_type(
+        self, type_id: SpirvId, layout: str = "std430"
+    ):
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
             for member_index, (member_type, _) in enumerate(struct_members):
-                offset = self.storage_struct_member_offset(type_id, member_index)
+                offset = self.storage_struct_member_offset(
+                    type_id, member_index, layout
+                )
                 self.decorations.append(
                     f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
                 )
@@ -4591,7 +4853,7 @@ class VulkanSPIRVCodeGen:
                     self.decorations.append(
                         f"OpMemberDecorate %{type_id.id} {member_index} MatrixStride 16"
                     )
-                self.decorate_storage_buffer_nested_type(member_type)
+                self.decorate_storage_buffer_nested_type(member_type, layout)
             return
 
         array_info = self.array_type_info_from_type(type_id)
@@ -4599,24 +4861,32 @@ class VulkanSPIRVCodeGen:
             element_type, _ = array_info
             self.decorations.append(
                 f"OpDecorate %{type_id.id} "
-                f"ArrayStride {self.storage_array_stride(element_type)}"
+                f"ArrayStride {self.storage_array_stride(element_type, layout)}"
             )
-            self.decorate_storage_buffer_nested_type(element_type)
+            self.decorate_storage_buffer_nested_type(element_type, layout)
 
     def storage_struct_member_offset(
-        self, struct_type: SpirvId, target_member_index: int
+        self,
+        struct_type: SpirvId,
+        target_member_index: int,
+        layout: str = "std430",
     ) -> int:
         offset = 0
         for member_index, (member_type, _) in enumerate(
             self.current_struct_members.get(struct_type.type.base_type, [])
         ):
-            offset = self.align_to(offset, self.storage_layout_alignment(member_type))
+            offset = self.align_to(
+                offset, self.storage_layout_alignment(member_type, layout)
+            )
             if member_index == target_member_index:
                 return offset
-            offset += self.storage_layout_size(member_type)
+            offset += self.storage_layout_size(member_type, layout)
         return offset
 
-    def storage_layout_alignment(self, type_id: SpirvId) -> int:
+    def storage_layout_alignment(self, type_id: SpirvId, layout: str = "std430") -> int:
+        if layout == "std140":
+            return self.uniform_layout_alignment(type_id)
+
         matrix_info = self.matrix_type_info_from_type(type_id)
         if matrix_info is not None:
             return 16
@@ -4624,13 +4894,13 @@ class VulkanSPIRVCodeGen:
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, _ = array_info
-            return self.storage_layout_alignment(element_type)
+            return self.storage_layout_alignment(element_type, layout)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
             return max(
                 (
-                    self.storage_layout_alignment(member_type)
+                    self.storage_layout_alignment(member_type, layout)
                     for member_type, _ in struct_members
                 ),
                 default=1,
@@ -4646,7 +4916,10 @@ class VulkanSPIRVCodeGen:
 
         return self.uniform_scalar_size(type_id)
 
-    def storage_layout_size(self, type_id: SpirvId) -> int:
+    def storage_layout_size(self, type_id: SpirvId, layout: str = "std430") -> int:
+        if layout == "std140":
+            return self.uniform_layout_size(type_id)
+
         matrix_info = self.matrix_type_info_from_type(type_id)
         if matrix_info is not None:
             _, column_count = matrix_info
@@ -4655,17 +4928,17 @@ class VulkanSPIRVCodeGen:
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, size = array_info
-            return self.storage_array_stride(element_type) * int(size or 1)
+            return self.storage_array_stride(element_type, layout) * int(size or 1)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
             offset = 0
             max_alignment = 1
             for member_type, _ in struct_members:
-                alignment = self.storage_layout_alignment(member_type)
+                alignment = self.storage_layout_alignment(member_type, layout)
                 max_alignment = max(max_alignment, alignment)
                 offset = self.align_to(offset, alignment)
-                offset += self.storage_layout_size(member_type)
+                offset += self.storage_layout_size(member_type, layout)
             return self.align_to(offset, max_alignment)
 
         vector_info = self.vector_type_info_from_type(type_id)
@@ -4675,10 +4948,15 @@ class VulkanSPIRVCodeGen:
 
         return self.uniform_scalar_size(type_id)
 
-    def storage_array_stride(self, element_type: SpirvId) -> int:
+    def storage_array_stride(
+        self, element_type: SpirvId, layout: str = "std430"
+    ) -> int:
+        if layout == "std140":
+            return self.uniform_array_stride(element_type)
+
         return self.align_to(
-            self.storage_layout_size(element_type),
-            self.storage_layout_alignment(element_type),
+            self.storage_layout_size(element_type, layout),
+            self.storage_layout_alignment(element_type, layout),
         )
 
     def process_function_node(self, function_node, stage=None):
@@ -6029,9 +6307,9 @@ class VulkanSPIRVCodeGen:
         if array_type is None:
             return None
 
-        for (element_type_id, _), arr_type_id in self.array_types.items():
-            if arr_type_id.id == array_type.id:
-                return self.find_registered_type_by_id(element_type_id)
+        array_info = self.array_type_info_from_type(array_type)
+        if array_info is not None:
+            return array_info[0]
 
         return None
 
@@ -6040,6 +6318,9 @@ class VulkanSPIRVCodeGen:
             return None
 
         for (element_type_id, size), arr_type_id in self.array_types.items():
+            if arr_type_id.id == array_type.id:
+                return self.find_registered_type_by_id(element_type_id), size
+        for (element_type_id, size, _), arr_type_id in self.layout_array_types.items():
             if arr_type_id.id == array_type.id:
                 return self.find_registered_type_by_id(element_type_id), size
 
@@ -7826,6 +8107,30 @@ class VulkanSPIRVCodeGen:
         spirv_type = SpirvType(type_name)
         spirv_id = SpirvId(id_value, spirv_type, type_name)
         self.array_types[key] = spirv_id
+        return spirv_id
+
+    def register_layout_array_type(
+        self, element_type: SpirvId, size: Optional[int], layout: str
+    ) -> SpirvId:
+        """Create a layout-specific array clone for distinct ArrayStride values."""
+        key = (element_type.id, size, layout)
+        if key in self.layout_array_types:
+            return self.layout_array_types[key]
+
+        id_value = self.get_id()
+        if size is not None:
+            size_const = self.register_constant(
+                size, self.register_primitive_type("int")
+            )
+            self.emit(f"%{id_value} = OpTypeArray %{element_type.id} %{size_const.id}")
+        else:
+            self.emit(f"%{id_value} = OpTypeRuntimeArray %{element_type.id}")
+
+        type_name = (
+            f"array_{element_type.type.base_type}_{size if size else 'rt'}_{layout}"
+        )
+        spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
+        self.layout_array_types[key] = spirv_id
         return spirv_id
 
     def determine_array_element_type(self, array_id: "SpirvId") -> Optional["SpirvId"]:

@@ -145,6 +145,17 @@ def collect_stage_local_structs(ast, target_stage=None):
     return structs
 
 
+def collect_stage_local_cbuffers(ast, target_stage=None):
+    """Return stage-local cbuffer declarations for matching stages."""
+    cbuffers = []
+    for stage_type, stage in getattr(ast, "stages", {}).items():
+        stage_name = normalize_stage_name(stage_type)
+        if not stage_matches(target_stage, stage_name):
+            continue
+        cbuffers.extend(getattr(stage, "local_cbuffers", []) or [])
+    return cbuffers
+
+
 def stage_layout_qualifiers(stage, direction=None):
     """Return stage-level layout qualifiers, optionally filtered by direction."""
     layouts = list(getattr(stage, "layout_qualifiers", []) or [])

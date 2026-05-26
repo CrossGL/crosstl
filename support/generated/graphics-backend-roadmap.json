@@ -42,7 +42,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, and single-member output member writes. Multi-member partial output member writes emit compile-safe diagnostics because Metal mesh outputs require whole element setters. Full mesh payload validation and richer partial-write accumulation remain incomplete.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, accumulator-backed multi-member vertex/primitive partial writes, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Richer validation for complex indexed partial-write flows remains incomplete.",
       "status": "partial"
     },
     {
@@ -404,15 +404,20 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_payload_parameters_use_object_data_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_generated_name_avoids_local_collision",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_type_mismatch_is_rejected",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_output_signature_and_counts",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_vertex_and_index_writes_lower_to_mesh_output_methods",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_single_member_writes_lower_to_setters",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_write_is_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, and single-member output member writes. Multi-member partial output member writes emit compile-safe diagnostics because Metal mesh outputs require whole element setters. Full mesh payload validation and richer partial-write accumulation remain incomplete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, accumulator-backed multi-member vertex/primitive partial writes, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Richer validation for complex indexed partial-write flows remains incomplete.",
           "status": "partial"
         },
         "opengl": {

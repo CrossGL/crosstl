@@ -36,6 +36,38 @@ shader ExternalValidatorSynchronization {
 """
 
 
+CROSSGL_TYPED_BUFFER_ATOMICS_COMPUTE_SHADER = """
+shader ExternalValidatorTypedBufferAtomics {
+    struct Counter {
+        uint value;
+        int signedValue;
+    };
+
+    RWBuffer<uint> counters @register(u1);
+    RWStructuredBuffer<Counter> structuredCounters @register(u2);
+
+    uint fetchAndAdd(uint index) {
+        return atomicAdd(counters[index], 1u);
+    }
+
+    uint compareAndSwap(uint index) {
+        return atomicCompareExchange(counters[index], 2u, 3u);
+    }
+
+    compute {
+        @numthreads(1, 1, 1)
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint original = atomicAdd(counters[tid.x], 1u);
+            original = atomicCompareExchange(counters[tid.x], 2u, 3u);
+            atomicXor(counters[tid.x], 4u, original);
+            atomicMin(structuredCounters[tid.x].signedValue, -1);
+            original = fetchAndAdd(tid.x) + compareAndSwap(tid.x);
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -93,22 +125,6 @@ shader GLSLGeometryTessellationLayoutValidator {
 
     tessellation_evaluation {
         void main() @domain(triangle) @partitioning(fractional_odd) @cw { }
-    }
-}
-"""
-
-
-GLSL_MESH_VALIDATOR_SHADER = """
-shader GLSLMeshValidator {
-    mesh {
-        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-        layout(points, max_vertices = 1, max_primitives = 1) out;
-
-        void main() {
-            SetMeshOutputCounts(1, 1);
-            gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-            gl_PrimitivePointIndicesEXT[0] = 0u;
-        }
     }
 }
 """
@@ -692,6 +708,39 @@ def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
     assert output_path.exists()
 
 
+def test_generated_hlsl_typed_buffer_atomics_compile_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "typed_buffer_atomics.hlsl"
+    output_path = tmp_path / "typed_buffer_atomics.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_TYPED_BUFFER_ATOMICS_COMPUTE_SHADER)
+    )
+    assert "InterlockedAdd(counters[tid.x], 1u, original);" in code
+    assert "InterlockedCompareExchange(counters[tid.x], 2u, 3u, original);" in code
+    assert "InterlockedAdd(counters[index], 1u, __crossgl_atomic_return_0);" in code
+    assert (
+        "InterlockedCompareExchange(counters[index], 2u, 3u, __crossgl_atomic_return_1);"
+        in code
+    )
+    assert "atomicCompareExchange(counters" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 @pytest.mark.parametrize(
     ("case_name", "source", "expected_snippets", "forbidden_snippets"),
     [
@@ -988,18 +1037,60 @@ def test_mixed_glsl_geometry_tessellation_interfaces_validate_with_glslangvalida
     _run_validator([glslang, "-S", validator_stage, str(shader_path)])
 
 
-def test_generated_glsl_mesh_shader_validates_with_glslangvalidator(tmp_path):
+@pytest.mark.parametrize(
+    ("topology", "max_vertices", "index_assignment", "expected_layout"),
+    [
+        (
+            "points",
+            1,
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+            "layout(points, max_vertices = 1, max_primitives = 1) out;",
+        ),
+        (
+            "lines",
+            2,
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+            "layout(lines, max_vertices = 2, max_primitives = 1) out;",
+        ),
+        (
+            "triangles",
+            3,
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+            "layout(triangles, max_vertices = 3, max_primitives = 1) out;",
+        ),
+    ],
+)
+def test_generated_glsl_mesh_shader_validates_with_glslangvalidator(
+    tmp_path,
+    topology,
+    max_vertices,
+    index_assignment,
+    expected_layout,
+):
     glslang = _require_tool("glslangValidator")
     _require_glslang_stage(glslang, "mesh")
-    shader_path = tmp_path / "mesh_shader.mesh"
+    shader_path = tmp_path / f"mesh_shader_{topology}.mesh"
+    shader = f"""
+    shader GLSLMeshValidator {{
+        mesh {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout({topology}, max_vertices = {max_vertices}, max_primitives = 1) out;
 
-    code = GLSLCodeGen().generate_stage(
-        crosstl.translator.parse(GLSL_MESH_VALIDATOR_SHADER), "mesh"
-    )
+            void main() {{
+                SetMeshOutputCounts({max_vertices}, 1);
+                gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                {index_assignment}
+            }}
+        }}
+    }}
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
     assert "#extension GL_EXT_mesh_shader : require" in code
-    assert "layout(points, max_vertices = 1, max_primitives = 1) out;" in code
-    assert "SetMeshOutputsEXT(1, 1);" in code
+    assert expected_layout in code
+    assert f"SetMeshOutputsEXT({max_vertices}, 1);" in code
     assert "SetMeshOutputCounts" not in code
+    assert index_assignment in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "mesh", str(shader_path)])
@@ -1039,10 +1130,9 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     assert "#extension GL_EXT_ray_query : require" in code
     assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in code
     assert "rayQueryEXT rayQuery;" in code
-    assert "rayQueryProceedEXT(rayQuery)" in code
-    assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
     assert "bool active_ = rayQueryProceedEXT(rayQuery);" in code
     assert "bool active =" not in code
+    assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
     assert ".Proceed(" not in code
     assert ".CommittedType(" not in code
     shader_path.write_text(code, encoding="utf-8")

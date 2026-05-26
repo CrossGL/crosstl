@@ -235,6 +235,12 @@ ADDRESS_SPACE_METADATA_NAMES = {
     "storage": "storage",
 }
 
+MEMORY_LAYOUT_METADATA_NAMES = {
+    "std140": "std140",
+    "std430": "std430",
+    "scalar": "scalar",
+}
+
 DECLARATION_ROLE_METADATA_NAMES = {
     "payload": "payload",
     "ray_payload": "payload",
@@ -907,6 +913,13 @@ def validate_node_metadata(node, context):
             f"{_metadata_name_phrase(address_spaces)}"
         )
 
+    memory_layouts = _node_memory_layout_names(node)
+    if len(set(memory_layouts.values())) > 1:
+        raise ValueError(
+            f"Conflicting memory layout metadata on {context}: "
+            f"{_metadata_name_phrase(memory_layouts)}"
+        )
+
     declaration_roles = _normalized_metadata_names(
         names, DECLARATION_ROLE_METADATA_NAMES
     )
@@ -1055,6 +1068,22 @@ def _node_resource_access_names(node):
             access_names.add(access_name)
 
     return access_names
+
+
+def _node_memory_layout_names(node):
+    memory_layouts = _normalized_metadata_names(
+        _node_metadata_names(node), MEMORY_LAYOUT_METADATA_NAMES
+    )
+    for attr in getattr(node, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if attr_name != "glsl_buffer_block":
+            continue
+        block_layout = _normalized_metadata_name(_attribute_metadata_value(attr))
+        if block_layout in MEMORY_LAYOUT_METADATA_NAMES:
+            memory_layouts[f"glsl_buffer_block({block_layout})"] = (
+                MEMORY_LAYOUT_METADATA_NAMES[block_layout]
+            )
+    return memory_layouts
 
 
 def validate_hlsl_semantic_metadata(node, context):
@@ -1328,6 +1357,9 @@ def _shader_metadata_nodes(shader):
         for struct in getattr(stage, "local_structs", []) or []:
             yield struct, _node_context("stage struct", struct)
             yield from _struct_member_metadata_nodes(struct, "stage struct")
+        for cbuffer in getattr(stage, "local_cbuffers", []) or []:
+            yield cbuffer, _node_context("stage cbuffer", cbuffer)
+            yield from _struct_member_metadata_nodes(cbuffer, "stage cbuffer")
         entry_point = getattr(stage, "entry_point", None)
         if entry_point is not None:
             yield from _function_metadata_nodes(entry_point)

@@ -232,6 +232,7 @@ class StageNode(ASTNode):
         local_structs: List["StructNode"] = None,
         execution_config: Dict[str, Any] = None,
         layout_qualifiers: List["LayoutQualifierNode"] = None,
+        local_cbuffers: List["StructNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -240,6 +241,7 @@ class StageNode(ASTNode):
         self.local_variables = local_variables or []
         self.local_functions = local_functions or []
         self.local_structs = local_structs or []
+        self.local_cbuffers = local_cbuffers or []
         self.execution_config = execution_config or {}
         self.layout_qualifiers = layout_qualifiers or []
 

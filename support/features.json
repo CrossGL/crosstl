@@ -96,12 +96,13 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, and payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, and native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_builtins_lower_to_slang_intrinsics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes"
           ]
         }
       }
@@ -118,7 +119,11 @@
         "vulkan": {"status": "supported"},
         "cuda": {"status": "partial", "notes": "Graphics examples lower to CUDA-shaped code, not native raster pipeline stages."},
         "hip": {"status": "partial", "notes": "Graphics examples lower to HIP-shaped code, not native raster pipeline stages."},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Vertex entry points lower to Mojo shader decorators and compile-oriented signatures, but Mojo has no complete raster pipeline/resource ABI in this repo.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "supported"}
       }
@@ -135,7 +140,11 @@
         "vulkan": {"status": "supported"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Fragment entry points lower to Mojo shader decorators and compile-oriented signatures, but direct render-target ABI semantics are not complete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "supported"}
       }
@@ -222,16 +231,21 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, and single-member output member writes. Multi-member partial output member writes emit compile-safe diagnostics because Metal mesh outputs require whole element setters. Full mesh payload validation and richer partial-write accumulation remain incomplete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, accumulator-backed multi-member vertex/primitive partial writes, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Richer validation for complex indexed partial-write flows remains incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_payload_parameters_use_object_data_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_generated_name_avoids_local_collision",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_type_mismatch_is_rejected",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_output_signature_and_counts",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_vertex_and_index_writes_lower_to_mesh_output_methods",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_single_member_writes_lower_to_setters",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_write_is_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ]
         },
@@ -335,7 +349,11 @@
         },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output; target-native builtin ABI mapping remains incomplete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }
@@ -352,7 +370,11 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Return values lower for staged functions, but return semantic wrapper/validation behavior is not complete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -369,7 +391,11 @@
         "vulkan": {"status": "partial"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Struct member semantics are preserved as Mojo field comments while builtin type validation remains incomplete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }
@@ -418,7 +444,14 @@
         },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "CrossGL cbuffers lower to Mojo value structs with scalar/vector/matrix member storage and compile-smoke coverage; target-native uniform binding ABI is not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_type_nodes_emit_mojo_storage_types",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_type_nodes_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }
@@ -474,7 +507,16 @@
         },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers; real GPU memory binding semantics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_structured_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_typed_buffer_vector_alias_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -520,7 +562,15 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Fixed resource arrays lower to InlineArray placeholders for textures, images, and buffers; unsized/resource-binding semantics are not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_arrays_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_structured_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -564,7 +614,14 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Separate sampler parameters are accepted and texture calls lower to Mojo placeholder helpers; sampler-state behavior is compile-smoke only.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "partial"}
       }
@@ -647,12 +704,16 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430-style member offsets, runtime-array strides, direct block member access, inlined helper parameters, buffer_load/buffer_store helper lowering, and spirv-as/spirv-val coverage. Full std140/scalar layout parity, broader block-array coverage, atomics, and complete memory-qualifier decorations remain incomplete.",
+          "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430 and std140 member offsets/array strides for scalar/vector/matrix/fixed-array/runtime-array members, direct block member access, inlined helper parameters, buffer_load/buffer_store helper lowering, scalar int/uint member and runtime-array atomics, and spirv-as/spirv-val coverage. Scalar layout, broader block-array coverage, aggregate std140/std430 value conversion, and complete memory-qualifier decorations remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_std140_layout_emits_spirv_offsets_and_strides",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_mixed_std430_std140_array_strides_do_not_conflict",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_array_declarations_lower_to_buffer_blocks",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameters_inline_with_accesses",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools"
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_spirv_atomic_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_storage_buffer_atomics_validate_with_spirv_tools"
           ]
         },
         "cuda": {"status": "unknown"},
@@ -697,7 +758,7 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper access diagnostics. Remaining gaps are std140/scalar layout parity and broader block-array/atomic coverage.",
+          "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics. Remaining gaps are std140/scalar layout parity and broader block-array coverage.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_image_memory_qualifiers_emit_decorations_and_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_image_helper_access_contracts_emit_diagnostics",
@@ -705,6 +766,7 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameters_inline_with_accesses",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameter_access_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools"
           ]
         },
@@ -727,7 +789,14 @@
         "vulkan": {"status": "partial"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Basic sampled texture and shadow-sampler calls lower to compile-smoke Mojo placeholder helpers across common dimensions; real sampler filtering and texture memory semantics are not implemented.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "partial"}
       }
@@ -782,7 +851,14 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "LOD, gradient, and offset forms lower to compile-smoke Mojo placeholder helpers; target-valid coordinate and sampler-state semantics are not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -834,7 +910,11 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Projected texture forms lower to compile-smoke Mojo placeholder helpers; complete target projection semantics are not implemented.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -884,7 +964,11 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Gather and gather-offset forms lower to compile-smoke Mojo placeholder helpers; component selection and target texture semantics are placeholder-only.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -933,7 +1017,14 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Shadow compare texture calls lower to Float32-returning Mojo placeholder helpers including LOD/offset/gather-compare variants; native depth-compare semantics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -986,7 +1077,15 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Texture size, level, LOD-query, and multisample sample-count-style forms lower to compile-smoke Mojo placeholder helpers; target-invalid query validation is incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -1040,7 +1139,14 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Texel fetch forms lower to compile-smoke Mojo placeholder helpers for regular and multisample resources; detailed target-invalid fetch diagnostics are incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -1092,7 +1198,11 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Multisample texture fetch and query forms lower to compile-smoke Mojo placeholder helpers; compare/gather validation and real multisample memory semantics remain incomplete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -1119,7 +1229,11 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Advanced texture operations lower to compile-smoke Mojo placeholder helpers across LOD, gradients, offsets, projection, gather, compare, and query families; real target texture semantics are still placeholders.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -1168,7 +1282,14 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; access qualifiers and native image memory semantics are incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -1216,7 +1337,14 @@
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers and float-image atomics are rejected; native atomic memory semantics are not implemented.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_integer_image_atomic_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -1257,7 +1385,11 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Multisample image load/store placeholders, arrays, and size/sample coordinates compile in Mojo; native multisample storage image semantics and validation are incomplete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -1414,7 +1546,14 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Unguarded literal/wildcard match arms lower to condition chains; guarded arms and richer pattern payloads are rejected.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_statement_lowers_to_mojo_condition_chain",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "supported"},
         "slang": {"status": "partial"}
       }
@@ -1465,7 +1604,16 @@
         "vulkan": {"status": "partial"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Mojo codegen validates several unsupported enum, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enums_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }

@@ -224,6 +224,7 @@ class RustToCrossGLConverter:
             "sqrt": "sqrt",
             "pow": "pow",
             "fma": "fma",
+            "ldexp": "ldexp",
             "modulo": "mod",
             "step": "step",
             "smoothstep": "smoothstep",
@@ -297,10 +298,12 @@ class RustToCrossGLConverter:
             "reflect": "reflect",
             "refract": "refract",
             "faceforward": "faceforward",
+            "outer_product": "outerProduct",
             # Matrix operations
             "transpose": "transpose",
             "determinant": "determinant",
             "inverse": "inverse",
+            "matrix_comp_mult": "matrixCompMult",
             # Texture sampling
             "sample": "texture",
             "sample_bias": "texture",

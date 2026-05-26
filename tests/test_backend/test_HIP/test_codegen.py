@@ -1133,6 +1133,9 @@ class TestHipCodeGen:
             unsigned int flags;
             unsigned long long accessFlags;
             int pointerAttrValue;
+            void* rangeAttributeData;
+            size_t rangeAttributeSizes;
+            hipMemRangeAttribute rangeAttribute;
             hipPointerAttribute_t pointerAttrs;
             hipDeviceptr_t devicePtr;
             hipDeviceptr_t devicePtr2;
@@ -1154,7 +1157,9 @@ class TestHipCodeGen:
             hipPitchedPtr pitched;
             hipExtent extent;
             hipMemPool_t pool;
+            hipMemPool_t importedPool;
             hipMemPoolProps poolProps;
+            hipMemPoolPtrExportData poolExportData;
             hipMemAccessDesc accessDesc;
             hipMemLocation location;
             hipMemGenericAllocationHandle_t allocationHandle;
@@ -1183,12 +1188,36 @@ class TestHipCodeGen:
             hipMemPoolCreate(&pool, &poolProps);
             hipDeviceGetDefaultMemPool(&pool, 0);
             hipDeviceSetMemPool(0, pool);
+            hipDeviceGetMemPool(&pool, 0);
             hipMallocFromPoolAsync((void**)&d2, n * sizeof(float), pool, stream);
             hipMemPoolTrimTo(pool, n * sizeof(float));
             hipMemPoolSetAttribute(pool, hipMemPoolAttrReleaseThreshold, &ptrSize);
             hipMemPoolGetAttribute(pool, hipMemPoolAttrReleaseThreshold, &ptrSize);
             hipMemPoolSetAccess(pool, &accessDesc, 1);
             hipMemPoolGetAccess(&flags, pool, &location);
+            hipMemPoolExportToShareableHandle(
+                shareableHandle, pool, handleType, 0
+            );
+            hipMemPoolImportFromShareableHandle(
+                &importedPool, shareableHandle, handleType, 0
+            );
+            hipMemPoolExportPointer(&poolExportData, d);
+            hipMemPoolImportPointer(&mappedPointer, importedPool, &poolExportData);
+            hipMemPrefetchAsync(d, n * sizeof(float), 0, stream);
+            hipMemPrefetchAsync_v2(d, n * sizeof(float), location, 0, stream);
+            hipMemAdvise(d, n * sizeof(float), hipMemAdviseSetReadMostly, 0);
+            hipMemAdvise_v2(
+                d, n * sizeof(float), hipMemAdviseSetPreferredLocation, location
+            );
+            hipMemRangeGetAttribute(
+                &accessFlags, sizeof(accessFlags), hipMemRangeAttributeAccessedBy,
+                d, n * sizeof(float)
+            );
+            hipMemRangeGetAttributes(
+                &rangeAttributeData, &rangeAttributeSizes, &rangeAttribute, 1,
+                d, n * sizeof(float)
+            );
+            hipStreamAttachMemAsync(stream, d, n * sizeof(float), hipMemAttachSingle);
             hipMemAlloc(&devicePtr, n * sizeof(float));
             hipMemAllocPitch(&devicePtr2, &pitch, n * sizeof(float), 4, 4);
             hipMemAllocHost(&driverHost, n * sizeof(float));
@@ -1334,6 +1363,22 @@ class TestHipCodeGen:
             hipError_t err = hipMalloc((void**)&d, n * sizeof(float));
             err = hipMallocAsync((void**)&d, n * sizeof(float), stream);
             err = hipMemPoolCreate(&pool, &poolProps);
+            err = hipDeviceGetMemPool(&pool, 0);
+            err = hipMemPoolExportToShareableHandle(
+                shareableHandle, pool, handleType, 0
+            );
+            err = hipMemPoolImportPointer(
+                &mappedPointer, importedPool, &poolExportData
+            );
+            err = hipMemPrefetchAsync(d, n * sizeof(float), 0, stream);
+            err = hipMemAdvise(d, n * sizeof(float), hipMemAdviseSetReadMostly, 0);
+            err = hipMemRangeGetAttribute(
+                &accessFlags, sizeof(accessFlags), hipMemRangeAttributeAccessedBy,
+                d, n * sizeof(float)
+            );
+            err = hipStreamAttachMemAsync(
+                stream, d, n * sizeof(float), hipMemAttachSingle
+            );
             err = hipProfilerStart();
             err = hipMemAlloc(&devicePtr, n * sizeof(float));
             err = hipMemcpyHtoD(devicePtr, h, n * sizeof(float));
@@ -1392,6 +1437,9 @@ class TestHipCodeGen:
         assert "// HIP get default memory pool: output: pool, device: 0" in result
         assert "// HIP set device memory pool: device: 0, pool: pool" in result
         assert (
+            result.count("// HIP get device memory pool: output: pool, device: 0") == 2
+        )
+        assert (
             "// HIP async memory allocate from pool: d2, bytes: (n * sizeof(float)), "
             "pool: pool, stream: stream"
         ) in result
@@ -1415,6 +1463,71 @@ class TestHipCodeGen:
             "// HIP memory pool get access: output: flags, pool: pool, "
             "location: (&location)"
         ) in result
+        assert (
+            result.count(
+                "// HIP memory pool export to shareable handle: "
+                "output: shareableHandle, pool: pool, handle type: handleType, flags: 0"
+            )
+            == 2
+        )
+        assert (
+            "// HIP memory pool import from shareable handle: output: importedPool, "
+            "handle: shareableHandle, handle type: handleType, flags: 0"
+        ) in result
+        assert (
+            "// HIP memory pool export pointer: output: poolExportData, pointer: d"
+            in result
+        )
+        assert (
+            result.count(
+                "// HIP memory pool import pointer: output: mappedPointer, "
+                "pool: importedPool, export data: (&poolExportData)"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP memory prefetch: pointer: d, bytes: (n * sizeof(float)), "
+                "device: 0, stream: stream"
+            )
+            == 2
+        )
+        assert (
+            "// HIP memory prefetch v2: pointer: d, bytes: (n * sizeof(float)), "
+            "location: location, flags: 0, stream: stream"
+        ) in result
+        assert (
+            result.count(
+                "// HIP memory advise: pointer: d, bytes: (n * sizeof(float)), "
+                "advice: hipMemAdviseSetReadMostly, device: 0"
+            )
+            == 2
+        )
+        assert (
+            "// HIP memory advise v2: pointer: d, bytes: (n * sizeof(float)), "
+            "advice: hipMemAdviseSetPreferredLocation, location: location"
+        ) in result
+        assert (
+            result.count(
+                "// HIP memory range get attribute: output: accessFlags, "
+                "output bytes: sizeof(accessFlags), "
+                "attribute: hipMemRangeAttributeAccessedBy, pointer: d, "
+                "range bytes: (n * sizeof(float))"
+            )
+            == 2
+        )
+        assert (
+            "// HIP memory range get attributes: outputs: (&rangeAttributeData), "
+            "output sizes: (&rangeAttributeSizes), attributes: (&rangeAttribute), "
+            "attribute count: 1, pointer: d, range bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            result.count(
+                "// HIP stream attach memory: stream: stream, pointer: d, "
+                "bytes: (n * sizeof(float)), flags: hipMemAttachSingle"
+            )
+            == 2
+        )
         assert (
             result.count(
                 "// HIP driver memory allocate: output: devicePtr, "
@@ -1807,8 +1920,20 @@ class TestHipCodeGen:
         assert "hipMemPoolGetAttribute(" not in result
         assert "hipMemPoolSetAccess(" not in result
         assert "hipMemPoolGetAccess(" not in result
+        assert "hipMemPoolExportToShareableHandle(" not in result
+        assert "hipMemPoolImportFromShareableHandle(" not in result
+        assert "hipMemPoolExportPointer(" not in result
+        assert "hipMemPoolImportPointer(" not in result
         assert "hipDeviceGetDefaultMemPool(" not in result
         assert "hipDeviceSetMemPool(" not in result
+        assert "hipDeviceGetMemPool(" not in result
+        assert "hipMemPrefetchAsync(" not in result
+        assert "hipMemPrefetchAsync_v2(" not in result
+        assert "hipMemAdvise(" not in result
+        assert "hipMemAdvise_v2(" not in result
+        assert "hipMemRangeGetAttribute(" not in result
+        assert "hipMemRangeGetAttributes(" not in result
+        assert "hipStreamAttachMemAsync(" not in result
         assert "hipMemAlloc(" not in result
         assert "hipMemAllocPitch(" not in result
         assert "hipMemFree(" not in result
@@ -2013,8 +2138,10 @@ class TestHipCodeGen:
             size_t limitValue = 0;
             size_t numDeps = 0;
             unsigned long long captureId = 0;
+            int validDevices[2];
             char name[64];
             char pciBusId[32];
+            hipUUID uuid;
             hipStreamCaptureStatus captureStatus;
             hipGraph_t graph;
             hipGraphNode_t* deps;
@@ -2028,11 +2155,13 @@ class TestHipCodeGen:
             hipGetDevice(&device);
             hipGetDeviceCount(&count);
             hipSetDevice(device);
+            hipSetValidDevices(validDevices, 2);
             hipGetDeviceProperties(&props, device);
             hipDeviceGetAttribute(
                 &attr, hipDeviceAttributeMaxThreadsPerBlock, device
             );
             hipDeviceGetName(name, 64, device);
+            hipDeviceGetUuid(&uuid, device);
             hipDeviceTotalMem(&total, device);
             hipDeviceComputeCapability(&major, &minor, device);
             hipChooseDevice(&device, &props);
@@ -2092,6 +2221,8 @@ class TestHipCodeGen:
             err = hipDeviceGetAttribute(
                 &attr, hipDeviceAttributeMaxThreadsPerBlock, device
             );
+            err = hipSetValidDevices(validDevices, 2);
+            err = hipDeviceGetUuid(&uuid, device);
             err = hipDeviceGetPCIBusId(pciBusId, 32, device);
             err = hipDeviceSetLimit(hipLimitMallocHeapSize, limitValue);
             err = hipDeviceReset();
@@ -2165,6 +2296,10 @@ class TestHipCodeGen:
         assert "// HIP get current device: output: device" in result
         assert result.count("// HIP get device count: output: count") == 2
         assert "// HIP set device: device" in result
+        assert (
+            result.count("// HIP set valid devices: devices: validDevices, count: 2")
+            == 2
+        )
         assert "// HIP get device properties: props, device: device" in result
         assert (
             result.count(
@@ -2176,6 +2311,7 @@ class TestHipCodeGen:
         assert (
             "// HIP get device name: output: name, length: 64, device: device" in result
         )
+        assert result.count("// HIP get device UUID: output: uuid, device: device") == 2
         assert "// HIP get device total memory: output: total, device: device" in result
         assert (
             "// HIP get device compute capability: major output: major, "
@@ -2260,9 +2396,11 @@ class TestHipCodeGen:
         assert "hipGetDevice(" not in result
         assert "hipGetDeviceCount(" not in result
         assert "hipSetDevice(" not in result
+        assert "hipSetValidDevices(" not in result
         assert "hipGetDeviceProperties(" not in result
         assert "hipDeviceGetAttribute(" not in result
         assert "hipDeviceGetName(" not in result
+        assert "hipDeviceGetUuid(" not in result
         assert "hipDeviceTotalMem(" not in result
         assert "hipDeviceComputeCapability(" not in result
         assert "hipChooseDevice(" not in result
@@ -2588,9 +2726,12 @@ class TestHipCodeGen:
             int driverVersion = 0;
             int runtimeVersion = 0;
             int canAccess = 0;
+            int p2pAttribute = 0;
             int active = 0;
             unsigned int flags = 0;
             unsigned int apiVersion = 0;
+            unsigned int linkType = 0;
+            unsigned int hopCount = 0;
             hipFuncCache_t cacheConfig;
             hipSharedMemConfig sharedConfig;
 
@@ -2600,8 +2741,12 @@ class TestHipCodeGen:
             hipDeviceGet(&device, ordinal);
             hipDeviceGet(&peerDevice, 1);
             hipDeviceCanAccessPeer(&canAccess, device, peerDevice);
+            hipDeviceGetP2PAttribute(
+                &p2pAttribute, hipDevP2PAttrPerformanceRank, device, peerDevice
+            );
             hipDeviceEnablePeerAccess(peerDevice, 0);
             hipDeviceDisablePeerAccess(peerDevice);
+            hipExtGetLinkTypeAndHopCount(device, peerDevice, &linkType, &hopCount);
             hipCtxCreate(&ctx, 0, device);
             hipCtxPushCurrent(ctx);
             hipCtxGetCurrent(&current);
@@ -2622,6 +2767,12 @@ class TestHipCodeGen:
             hipDevicePrimaryCtxRelease(device);
             hipDevicePrimaryCtxReset(device);
             hipError_t err = hipDeviceGet(&device, ordinal);
+            err = hipDeviceGetP2PAttribute(
+                &p2pAttribute, hipDevP2PAttrPerformanceRank, device, peerDevice
+            );
+            err = hipExtGetLinkTypeAndHopCount(
+                device, peerDevice, &linkType, &hopCount
+            );
             err = hipCtxSynchronize();
             err = hipDevicePrimaryCtxGetState(device, &flags, &active);
         }
@@ -2646,8 +2797,24 @@ class TestHipCodeGen:
             "// HIP device can access peer: output: canAccess, device: device, "
             "peer device: peerDevice"
         ) in result
+        assert (
+            result.count(
+                "// HIP get P2P attribute: output: p2pAttribute, "
+                "attribute: hipDevP2PAttrPerformanceRank, source device: device, "
+                "destination device: peerDevice"
+            )
+            == 2
+        )
         assert "// HIP enable peer access: peer device: peerDevice, flags: 0" in result
         assert "// HIP disable peer access: peer device: peerDevice" in result
+        assert (
+            result.count(
+                "// HIP get link type and hop count: device 1: device, "
+                "device 2: peerDevice, link type output: linkType, "
+                "hop count output: hopCount"
+            )
+            == 2
+        )
         assert "// HIP context create: output: ctx, flags: 0, device: device" in result
         assert "// HIP context push current: ctx" in result
         assert "// HIP context get current: output: current" in result
@@ -2689,8 +2856,10 @@ class TestHipCodeGen:
             "hipRuntimeGetVersion",
             "hipDeviceGet",
             "hipDeviceCanAccessPeer",
+            "hipDeviceGetP2PAttribute",
             "hipDeviceEnablePeerAccess",
             "hipDeviceDisablePeerAccess",
+            "hipExtGetLinkTypeAndHopCount",
             "hipCtxCreate",
             "hipCtxDestroy",
             "hipCtxPopCurrent",

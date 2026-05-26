@@ -575,6 +575,34 @@ class HipToCrossGLConverter:
                     f"// HIP memory pool get access: output: {output}, "
                     f"pool: {args[1]}, location: {args[2]}"
                 ]
+        elif name == "hipMemPoolExportToShareableHandle":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory pool export to shareable handle: output: {output}, "
+                    f"pool: {args[1]}, handle type: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "hipMemPoolImportFromShareableHandle":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory pool import from shareable handle: output: {output}, "
+                    f"handle: {args[1]}, handle type: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "hipMemPoolExportPointer":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory pool export pointer: output: {output}, "
+                    f"pointer: {args[1]}"
+                ]
+        elif name == "hipMemPoolImportPointer":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory pool import pointer: output: {output}, "
+                    f"pool: {args[1]}, export data: {args[2]}"
+                ]
         elif name == "hipDeviceGetDefaultMemPool":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
@@ -586,6 +614,60 @@ class HipToCrossGLConverter:
             if len(args) >= 2:
                 return [
                     f"// HIP set device memory pool: device: {args[0]}, pool: {args[1]}"
+                ]
+        elif name == "hipDeviceGetMemPool":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP get device memory pool: output: {output}, "
+                    f"device: {args[1]}"
+                ]
+        elif name == "hipMemPrefetchAsync":
+            if len(args) >= 4:
+                return [
+                    f"// HIP memory prefetch: pointer: {args[0]}, bytes: {args[1]}, "
+                    f"device: {args[2]}, stream: {args[3]}"
+                ]
+        elif name == "hipMemPrefetchAsync_v2":
+            if len(args) >= 5:
+                return [
+                    f"// HIP memory prefetch v2: pointer: {args[0]}, "
+                    f"bytes: {args[1]}, location: {args[2]}, flags: {args[3]}, "
+                    f"stream: {args[4]}"
+                ]
+        elif name == "hipMemAdvise":
+            if len(args) >= 4:
+                return [
+                    f"// HIP memory advise: pointer: {args[0]}, bytes: {args[1]}, "
+                    f"advice: {args[2]}, device: {args[3]}"
+                ]
+        elif name == "hipMemAdvise_v2":
+            if len(args) >= 4:
+                return [
+                    f"// HIP memory advise v2: pointer: {args[0]}, "
+                    f"bytes: {args[1]}, advice: {args[2]}, location: {args[3]}"
+                ]
+        elif name == "hipMemRangeGetAttribute":
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory range get attribute: output: {output}, "
+                    f"output bytes: {args[1]}, attribute: {args[2]}, "
+                    f"pointer: {args[3]}, range bytes: {args[4]}"
+                ]
+        elif name == "hipMemRangeGetAttributes":
+            if len(args) >= 6:
+                return [
+                    f"// HIP memory range get attributes: outputs: {args[0]}, "
+                    f"output sizes: {args[1]}, attributes: {args[2]}, "
+                    f"attribute count: {args[3]}, pointer: {args[4]}, "
+                    f"range bytes: {args[5]}"
+                ]
+        elif name == "hipStreamAttachMemAsync":
+            if len(args) >= 4:
+                return [
+                    f"// HIP stream attach memory: stream: {args[0]}, "
+                    f"pointer: {args[1]}, bytes: {args[2]}, flags: {args[3]}"
                 ]
         elif name == "hipMemGetAllocationGranularity":
             if len(args) >= 3:
@@ -1092,6 +1174,11 @@ class HipToCrossGLConverter:
         elif name == "hipSetDevice":
             if args:
                 return [f"// HIP set device: {args[0]}"]
+        elif name == "hipSetValidDevices":
+            if len(args) >= 2:
+                return [
+                    f"// HIP set valid devices: devices: {args[0]}, count: {args[1]}"
+                ]
         elif name == "hipGetDeviceProperties":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
@@ -1109,6 +1196,10 @@ class HipToCrossGLConverter:
                     f"// HIP get device name: output: {args[0]}, "
                     f"length: {args[1]}, device: {args[2]}"
                 ]
+        elif name == "hipDeviceGetUuid":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP get device UUID: output: {output}, device: {args[1]}"]
         elif name == "hipDeviceTotalMem":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
@@ -1130,6 +1221,15 @@ class HipToCrossGLConverter:
                 output = self.format_runtime_pointer_target(node.args[0])
                 return [
                     f"// HIP choose device: output: {output}, properties: {args[1]}"
+                ]
+        elif name == "hipExtGetLinkTypeAndHopCount":
+            if len(args) >= 4:
+                link_type_output = self.format_runtime_pointer_target(node.args[2])
+                hop_count_output = self.format_runtime_pointer_target(node.args[3])
+                return [
+                    f"// HIP get link type and hop count: device 1: {args[0]}, "
+                    f"device 2: {args[1]}, link type output: {link_type_output}, "
+                    f"hop count output: {hop_count_output}"
                 ]
         elif name == "hipDeviceGetPCIBusId":
             if len(args) >= 3:
@@ -1603,6 +1703,14 @@ class HipToCrossGLConverter:
                 return [
                     f"// HIP device can access peer: output: {output}, "
                     f"device: {args[1]}, peer device: {args[2]}"
+                ]
+        if name == "hipDeviceGetP2PAttribute":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP get P2P attribute: output: {output}, "
+                    f"attribute: {args[1]}, source device: {args[2]}, "
+                    f"destination device: {args[3]}"
                 ]
         if name in {"hipDeviceEnablePeerAccess", "hipDeviceDisablePeerAccess"}:
             if args:
