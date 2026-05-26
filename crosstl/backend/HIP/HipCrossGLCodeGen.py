@@ -799,6 +799,12 @@ class HipToCrossGLConverter:
 
     def visit_kernel_as_compute_shader(self, kernel):
         """Render a HIP kernel as a CrossGL compute shader block."""
+        for attribute in getattr(kernel, "attributes", []) or []:
+            attribute_text = str(attribute)
+            if attribute_text.startswith("__launch_bounds__"):
+                bounds = attribute_text[len("__launch_bounds__") :]
+                self.emit(f"// HIP launch bounds: {bounds}")
+
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 

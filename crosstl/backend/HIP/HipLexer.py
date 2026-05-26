@@ -40,6 +40,7 @@ TOKENS = tuple(
         ("__MANAGED__", r"\b__managed__\b"),
         ("__NOINLINE__", r"\b__noinline__\b"),
         ("__FORCEINLINE__", r"\b__forceinline__\b"),
+        ("__LAUNCH_BOUNDS__", r"\b__launch_bounds__\b"),
         # HIP built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
         ("BLOCKIDX", r"\bblockIdx\b"),
@@ -233,6 +234,7 @@ KEYWORDS = {
     "__managed__": "__MANAGED__",
     "__noinline__": "__NOINLINE__",
     "__forceinline__": "__FORCEINLINE__",
+    "__launch_bounds__": "__LAUNCH_BOUNDS__",
     "threadIdx": "THREADIDX",
     "blockIdx": "BLOCKIDX",
     "gridDim": "GRIDDIM",

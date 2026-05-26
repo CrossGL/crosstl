@@ -163,7 +163,7 @@ class HipParser:
         "ULONGLONG3",
         "ULONGLONG4",
     }
-    RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE"}
+    RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE", "HIPARRAY", "HIPARRAYT"}
 
     def __init__(self, tokens: List[Token]):
         """Initialize the parser with a token stream from ``HipLexer``."""
@@ -209,11 +209,15 @@ class HipParser:
             "__GLOBAL__",
             "__FORCEINLINE__",
             "__NOINLINE__",
+            "__LAUNCH_BOUNDS__",
         }
         while (
             index < len(self.tokens) and self.tokens[index].type in function_qualifiers
         ):
-            index += 1
+            if self.tokens[index].type == "__LAUNCH_BOUNDS__":
+                index = self.skip_launch_bounds_at_pos(index)
+            else:
+                index += 1
 
         index = self.skip_type_at_pos(index)
         if index is None:
@@ -354,7 +358,12 @@ class HipParser:
 
         # Parse device/host/global qualifiers
         if self.match(
-            "__DEVICE__", "__HOST__", "__GLOBAL__", "__FORCEINLINE__", "__NOINLINE__"
+            "__DEVICE__",
+            "__HOST__",
+            "__GLOBAL__",
+            "__FORCEINLINE__",
+            "__NOINLINE__",
+            "__LAUNCH_BOUNDS__",
         ):
             return self.parse_function_with_qualifier()
 
@@ -420,7 +429,7 @@ class HipParser:
         self.parse_template_suffix()
         self.skip_newlines()
 
-        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__"):
+        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__", "__LAUNCH_BOUNDS__"):
             return self.parse_function_with_qualifier()
         if self.match("STRUCT"):
             return self.parse_struct()
@@ -525,12 +534,21 @@ class HipParser:
 
     def parse_function_with_qualifier(self):
         qualifiers = []
+        attributes = []
 
         while self.match(
-            "__DEVICE__", "__HOST__", "__GLOBAL__", "__FORCEINLINE__", "__NOINLINE__"
+            "__DEVICE__",
+            "__HOST__",
+            "__GLOBAL__",
+            "__FORCEINLINE__",
+            "__NOINLINE__",
+            "__LAUNCH_BOUNDS__",
         ):
-            qualifiers.append(self.current_token.value)
-            self.advance()
+            if self.match("__LAUNCH_BOUNDS__"):
+                attributes.append(self.parse_launch_bounds_attribute())
+            else:
+                qualifiers.append(self.current_token.value)
+                self.advance()
 
         return_type = self.parse_type()
         name = self.consume_function_name()
@@ -546,13 +564,42 @@ class HipParser:
         elif self.match("SEMICOLON"):
             self.advance()
 
-        function = FunctionNode(return_type, name, params, body, qualifiers)
+        function = FunctionNode(return_type, name, params, body, qualifiers, attributes)
 
         # __global__ qualifier marks a kernel
         if "__global__" in qualifiers:
-            return KernelNode(return_type, name, params, body)
+            return KernelNode(return_type, name, params, body, attributes)
 
         return function
+
+    def parse_launch_bounds_attribute(self):
+        self.consume("__LAUNCH_BOUNDS__")
+        values = []
+
+        if self.match("LPAREN"):
+            self.advance()
+            depth = 1
+            while self.current_token and depth > 0:
+                if self.match("LPAREN"):
+                    depth += 1
+                    values.append(self.current_token.value)
+                    self.advance()
+                elif self.match("RPAREN"):
+                    depth -= 1
+                    if depth == 0:
+                        self.advance()
+                        break
+                    values.append(self.current_token.value)
+                    self.advance()
+                else:
+                    values.append(self.current_token.value)
+                    self.advance()
+
+        return f"__launch_bounds__({self.format_attribute_tokens(values)})"
+
+    def format_attribute_tokens(self, values):
+        text = "".join(values).strip()
+        return text.replace(",", ", ")
 
     def parse_simple_function(self):
         qualifiers = []
@@ -2292,6 +2339,26 @@ class HipParser:
             and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
         ):
             index += 1
+        return index
+
+    def skip_launch_bounds_at_pos(self, index):
+        index += 1
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return index
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            elif token_type in {"SEMICOLON", "LBRACE", "RBRACE"}:
+                return index
+            index += 1
+
         return index
 
     def skip_template_at_pos(self, index):

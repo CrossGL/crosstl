@@ -35,7 +35,7 @@ class TestHipCodeGen:
         #define HIP_SCALE 2
         __constant__ int kLimit = 64;
         __managed__ float managedValue;
-        __global__ void simple_kernel() {
+        __launch_bounds__(256, 2) __global__ void simple_kernel() {
             __shared__ float shared_data[256];
             int idx = HIP_SCALE;
         }
@@ -55,6 +55,7 @@ class TestHipCodeGen:
         assert "// HIP managed memory: managedValue" in result
         assert "var managedValue: f32;" in result
         assert "// Kernel: simple_kernel" in result
+        assert "// HIP launch bounds: (256, 2)" in result
         assert "var<workgroup> shared_data: array<f32, 256>;" in result
         assert "PreprocessorNode" not in result
         assert "__constant__" not in result
