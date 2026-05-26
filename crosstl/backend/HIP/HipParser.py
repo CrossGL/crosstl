@@ -353,7 +353,9 @@ class HipParser:
             return self.parse_template_prefixed_declaration()
 
         # Parse device/host/global qualifiers
-        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__"):
+        if self.match(
+            "__DEVICE__", "__HOST__", "__GLOBAL__", "__FORCEINLINE__", "__NOINLINE__"
+        ):
             return self.parse_function_with_qualifier()
 
         # Parse struct definitions

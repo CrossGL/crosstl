@@ -131,6 +131,8 @@ MOJO_SCALAR_DTYPES = {
 MOJO_RESOURCE_TYPE_MAPPING = {
     "sampler1D": "Texture1D",
     "sampler1DArray": "Texture1DArray",
+    "sampler1DArrayShadow": "Texture1DArrayShadow",
+    "sampler1DShadow": "Texture1DShadow",
     "sampler2D": "Texture2D",
     "sampler2DArray": "Texture2DArray",
     "sampler2DArrayShadow": "Texture2DArrayShadow",
@@ -170,10 +172,12 @@ MOJO_RESOURCE_TYPE_MAPPING = {
 MOJO_RESOURCE_SAMPLE_COORDS = {
     "Texture1D": "Float32",
     "Texture1DArray": "SIMD[DType.float32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture1DShadow": "SIMD[DType.float32, 2]",
     "Texture2D": "SIMD[DType.float32, 2]",
     "Texture2DArray": "SIMD[DType.float32, 4]",
     "Texture2DArrayShadow": "SIMD[DType.float32, 4]",
-    "Texture2DShadow": "SIMD[DType.float32, 2]",
+    "Texture2DShadow": "SIMD[DType.float32, 4]",
     "Texture3D": "SIMD[DType.float32, 4]",
     "TextureCube": "SIMD[DType.float32, 4]",
     "TextureCubeArray": "SIMD[DType.float32, 4]",
@@ -184,6 +188,8 @@ MOJO_RESOURCE_SAMPLE_COORDS = {
 MOJO_RESOURCE_TEXEL_COORDS = {
     "Texture1D": "Int32",
     "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture1DShadow": "Int32",
     "Texture2D": "SIMD[DType.int32, 2]",
     "Texture2DArray": "SIMD[DType.int32, 4]",
     "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
@@ -222,6 +228,8 @@ MOJO_RESOURCE_TEXEL_COORDS = {
 MOJO_RESOURCE_SIZE_RETURNS = {
     "Texture1D": "Int32",
     "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture1DShadow": "Int32",
     "Texture2D": "SIMD[DType.int32, 2]",
     "Texture2DArray": "SIMD[DType.int32, 4]",
     "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
@@ -2668,29 +2676,34 @@ class MojoCodeGen:
 
     def generate_resource_sample_helper(self, resource_type):
         coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
         code = (
-            f"fn sample(tex: {resource_type}, coord: {coord_type}) -> "
-            "SIMD[DType.float32, 4]:\n"
+            f"fn sample(tex: {resource_type}, coord: {coord_type}) -> {return_type}:\n"
         )
-        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
     def generate_resource_lod_helper(self, resource_type):
         coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_lod(tex: {resource_type}, coord: {coord_type}, "
-            "lod: Float32) -> SIMD[DType.float32, 4]:\n"
+            f"lod: Float32) -> {return_type}:\n"
         )
-        code += "    return SIMD[DType.float32, 4](0.0, 0.0, lod, 1.0)\n\n"
+        if return_type == "SIMD[DType.float32, 4]":
+            code += "    return SIMD[DType.float32, 4](0.0, 0.0, lod, 1.0)\n\n"
+        else:
+            code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
     def generate_resource_grad_helper(self, resource_type):
         coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_grad(tex: {resource_type}, coord: {coord_type}, "
-            f"ddx: {coord_type}, ddy: {coord_type}) -> SIMD[DType.float32, 4]:\n"
+            f"ddx: {coord_type}, ddy: {coord_type}) -> {return_type}:\n"
         )
-        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
     def generate_resource_size_helper(self, resource_type):
@@ -2761,6 +2774,14 @@ class MojoCodeGen:
 
     def is_multisample_resource_type(self, resource_type):
         return "MS" in resource_type
+
+    def is_shadow_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.endswith("Shadow")
+
+    def resource_sample_return_type(self, resource_type):
+        if self.is_shadow_resource_type(resource_type):
+            return "Float32"
+        return "SIMD[DType.float32, 4]"
 
     def image_value_type(self, resource_type):
         if resource_type.startswith("IImage"):
@@ -3328,7 +3349,14 @@ class MojoCodeGen:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "saturate" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"texture", "textureLod", "textureGrad", "texelFetch"}:
+            if func_name in {"texture", "textureLod", "textureGrad"}:
+                args = self.strip_split_sampler_arg(expr.args)
+                if args:
+                    resource_type = self.map_type(self.expression_result_type(args[0]))
+                    if self.is_shadow_resource_type(resource_type):
+                        return "float"
+                return "vec4"
+            if func_name == "texelFetch":
                 return "vec4"
             if func_name == "textureQueryLevels":
                 return "int"

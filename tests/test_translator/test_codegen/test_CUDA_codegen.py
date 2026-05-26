@@ -3116,8 +3116,12 @@ class TestCudaCodeGen:
         """Test CUDA lowers non-multisample resource calls with tracked resource types."""
         source_code = """
         shader Resources {
+            sampler1d lineTex;
+            sampler1darray lineLayers;
             sampler2d tex;
             sampler2darray layers;
+            samplercube cubeTex;
+            samplercubearray cubeArrayTex;
             image1D lineImage;
             image1DArray lineLayerImage;
             image2D colorImage;
@@ -3132,10 +3136,19 @@ class TestCudaCodeGen:
                 sampler2d paramTex,
                 int x,
                 ivec2 pixel,
-                ivec3 pixelLayer
+                ivec3 pixelLayer,
+                ivec4 cubeArrayPixel
             ) {
+                vec4 fetchedLine = texelFetch(lineTex, x, 1);
+                vec4 fetchedLineLayer = texelFetch(lineLayers, pixel, 1);
                 vec4 fetched = texelFetch(paramTex, pixel, 1);
                 vec4 fetchedLayer = texelFetch(layers, pixelLayer, 1);
+                vec4 fetchedCube = texelFetch(cubeTex, pixelLayer, 1);
+                vec4 fetchedCubeArray = texelFetch(
+                    cubeArrayTex,
+                    cubeArrayPixel,
+                    1
+                );
                 vec4 line = imageLoad(lineImage, x);
                 imageStore(lineImage, x, line);
                 vec4 lineLayer = imageLoad(lineLayerImage, pixel);
@@ -3178,10 +3191,25 @@ class TestCudaCodeGen:
         assert "cudaSurfaceObject_t layerImage;" in cuda_code
         assert "cudaSurfaceObject_t counterLine;" in cuda_code
         assert "cudaSurfaceObject_t signedImage;" in cuda_code
+        assert "float4 fetchedLine = tex1D(lineTex, x);" in cuda_code
+        assert (
+            "float4 fetchedLineLayer = tex1DLayered<float4>"
+            "(lineLayers, pixel.x, pixel.y);" in cuda_code
+        )
         assert "float4 fetched = tex2D(paramTex, pixel.x, pixel.y);" in cuda_code
         assert (
             "float4 fetchedLayer = tex2DLayered<float4>"
             "(layers, pixelLayer.x, pixelLayer.y, pixelLayer.z);" in cuda_code
+        )
+        assert (
+            "float4 fetchedCube = /* unsupported CUDA sampled resource call: "
+            "texelFetch on samplerCube */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 fetchedCubeArray = /* unsupported CUDA sampled resource call: "
+            "texelFetch on samplerCubeArray */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
             "float4 line = surf1Dread<float4>(lineImage, x * sizeof(float4));"
@@ -6107,13 +6135,24 @@ class TestCudaCodeGen:
             sampler2d textures[4];
             sampler2dms msTextures[2];
             image2D images[3];
+            image1DArray lineImages[2];
+            imageCubeArray cubeImages[2];
 
-            void queryArrays(sampler2d paramTextures[3], int i) {
+            void queryArrays(
+                sampler2d paramTextures[3],
+                image1DArray paramLineImages[3],
+                imageCubeArray paramCubeImages[2],
+                int i
+            ) {
                 ivec2 texSize = textureSize(textures[1 + 2], 0);
                 int texLevels = textureQueryLevels(textures[1 + 2]);
                 int msSamples = textureSamples(msTextures[i]);
                 ivec2 imageSizeValue = imageSize(images[i]);
+                ivec2 lineImageSize = imageSize(lineImages[i]);
+                ivec3 cubeImageSize = imageSize(cubeImages[i]);
                 ivec2 paramSize = textureSize(paramTextures[i], 0);
+                ivec2 paramLineSize = imageSize(paramLineImages[i]);
+                ivec3 paramCubeSize = imageSize(paramCubeImages[i]);
             }
 
             compute {
@@ -6132,9 +6171,15 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo textures_metadata[4] = {};" in cuda_code
         assert "CglResourceQueryInfo msTextures_metadata[2] = {};" in cuda_code
         assert "CglResourceQueryInfo images_metadata[3] = {};" in cuda_code
+        assert "CglResourceQueryInfo lineImages_metadata[2] = {};" in cuda_code
+        assert "CglResourceQueryInfo cubeImages_metadata[2] = {};" in cuda_code
         assert (
             "__device__ void queryArrays(texture<float4, 2> paramTextures[3], "
-            "CglResourceQueryInfo paramTextures_metadata[3], int i)" in cuda_code
+            "CglResourceQueryInfo paramTextures_metadata[3], "
+            "cudaSurfaceObject_t paramLineImages[3], "
+            "CglResourceQueryInfo paramLineImages_metadata[3], "
+            "cudaSurfaceObject_t paramCubeImages[2], "
+            "CglResourceQueryInfo paramCubeImages_metadata[2], int i)" in cuda_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -6153,12 +6198,30 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
+            "int2 lineImageSize = cgl_imageSize_image1DArray"
+            "(lineImages_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int3 cubeImageSize = cgl_imageSize_imageCubeArray"
+            "(cubeImages_metadata[i]);" in cuda_code
+        )
+        assert (
             "int2 paramSize = cgl_textureSize_sampler2D"
             "(paramTextures_metadata[i], 0);" in cuda_code
+        )
+        assert (
+            "int2 paramLineSize = cgl_imageSize_image1DArray"
+            "(paramLineImages_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int3 paramCubeSize = cgl_imageSize_imageCubeArray"
+            "(paramCubeImages_metadata[i]);" in cuda_code
         )
         assert "cgl_textureSize_sampler2D(textures_metadata, 0)" not in cuda_code
         assert "cgl_textureSamples_sampler2DMS(msTextures_metadata)" not in cuda_code
         assert "cgl_imageSize_image2D(images_metadata)" not in cuda_code
+        assert "cgl_imageSize_image1DArray(lineImages_metadata)" not in cuda_code
+        assert "cgl_imageSize_imageCubeArray(cubeImages_metadata)" not in cuda_code
 
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
         """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
@@ -6166,6 +6229,8 @@ class TestCudaCodeGen:
         shader Resources {
             sampler2d textureGrid[2][3];
             image2D imageGrid[2][4];
+            image1DArray lineGrid[2][3];
+            imageCubeArray cubeGrid[2][3];
 
             void queryArrays(
                 sampler2d dynamicTextures[],
@@ -6173,6 +6238,8 @@ class TestCudaCodeGen:
                 sampler2dms dynamicMsTextures[],
                 sampler2d dynamicGrid[][3],
                 image2D dynamicImageGrid[][4],
+                image1DArray dynamicLineGrid[][3],
+                imageCubeArray dynamicCubeGrid[][3],
                 int layer,
                 int slot
             ) {
@@ -6181,8 +6248,12 @@ class TestCudaCodeGen:
                 int dynamicSamples = textureSamples(dynamicMsTextures[slot]);
                 ivec2 dynamicGridSize = textureSize(dynamicGrid[layer][slot], 0);
                 ivec2 dynamicImageSize = imageSize(dynamicImageGrid[layer][slot]);
+                ivec2 dynamicLineSize = imageSize(dynamicLineGrid[layer][slot]);
+                ivec3 dynamicCubeSize = imageSize(dynamicCubeGrid[layer][slot]);
                 ivec2 gridSize = textureSize(textureGrid[layer][slot], 0);
                 ivec2 imageGridSize = imageSize(imageGrid[layer][slot]);
+                ivec2 lineGridSize = imageSize(lineGrid[layer][slot]);
+                ivec3 cubeGridSize = imageSize(cubeGrid[layer][slot]);
             }
 
             compute {
@@ -6200,6 +6271,8 @@ class TestCudaCodeGen:
 
         assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in cuda_code
         assert "CglResourceQueryInfo imageGrid_metadata[2][4] = {};" in cuda_code
+        assert "CglResourceQueryInfo lineGrid_metadata[2][3] = {};" in cuda_code
+        assert "CglResourceQueryInfo cubeGrid_metadata[2][3] = {};" in cuda_code
         assert (
             "__device__ void queryArrays(texture<float4, 2>* dynamicTextures, "
             "CglResourceQueryInfo* dynamicTextures_metadata, "
@@ -6211,6 +6284,10 @@ class TestCudaCodeGen:
             "CglResourceQueryInfo (*dynamicGrid_metadata)[3], "
             "cudaSurfaceObject_t (*dynamicImageGrid)[4], "
             "CglResourceQueryInfo (*dynamicImageGrid_metadata)[4], "
+            "cudaSurfaceObject_t (*dynamicLineGrid)[3], "
+            "CglResourceQueryInfo (*dynamicLineGrid_metadata)[3], "
+            "cudaSurfaceObject_t (*dynamicCubeGrid)[3], "
+            "CglResourceQueryInfo (*dynamicCubeGrid_metadata)[3], "
             "int layer, int slot)" in cuda_code
         )
         assert (
@@ -6234,12 +6311,28 @@ class TestCudaCodeGen:
             "(dynamicImageGrid_metadata[layer][slot]);" in cuda_code
         )
         assert (
+            "int2 dynamicLineSize = cgl_imageSize_image1DArray"
+            "(dynamicLineGrid_metadata[layer][slot]);" in cuda_code
+        )
+        assert (
+            "int3 dynamicCubeSize = cgl_imageSize_imageCubeArray"
+            "(dynamicCubeGrid_metadata[layer][slot]);" in cuda_code
+        )
+        assert (
             "int2 gridSize = cgl_textureSize_sampler2D"
             "(textureGrid_metadata[layer][slot], 0);" in cuda_code
         )
         assert (
             "int2 imageGridSize = cgl_imageSize_image2D"
             "(imageGrid_metadata[layer][slot]);" in cuda_code
+        )
+        assert (
+            "int2 lineGridSize = cgl_imageSize_image1DArray"
+            "(lineGrid_metadata[layer][slot]);" in cuda_code
+        )
+        assert (
+            "int3 cubeGridSize = cgl_imageSize_imageCubeArray"
+            "(cubeGrid_metadata[layer][slot]);" in cuda_code
         )
         assert "cgl_textureSize_sampler2D(dynamicTextures_metadata, 0)" not in cuda_code
         assert (
@@ -6249,6 +6342,8 @@ class TestCudaCodeGen:
         assert "cgl_textureSize_sampler2D(dynamicGrid_metadata, 0)" not in cuda_code
         assert "cgl_imageSize_image2D(dynamicImageGrid_metadata)" not in cuda_code
         assert "cgl_imageSize_image2D(imageGrid_metadata)" not in cuda_code
+        assert "cgl_imageSize_image1DArray(dynamicLineGrid_metadata)" not in cuda_code
+        assert "cgl_imageSize_imageCubeArray(dynamicCubeGrid_metadata)" not in cuda_code
 
     def test_multisample_resource_builtins_emit_cuda_diagnostics(self):
         """Test CUDA does not silently lower MS resource calls to non-MS functions."""

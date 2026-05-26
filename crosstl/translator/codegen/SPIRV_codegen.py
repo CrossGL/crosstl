@@ -1306,12 +1306,24 @@ class VulkanSPIRVCodeGen:
             "texture",
             "texture2D",
             "textureCube",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
             "textureCompare",
             "textureCompareLod",
             "textureCompareLodOffset",
             "textureCompareGrad",
             "textureCompareGradOffset",
             "textureCompareOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
             "textureGatherCompare",
             "textureGatherCompareOffset",
             "textureLod",
@@ -1577,6 +1589,63 @@ class VulkanSPIRVCodeGen:
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
+
+    def projected_coordinate_axes(self, metadata) -> int:
+        dim = metadata.get("dim", "2D") if metadata else "2D"
+        return {
+            "1D": 1,
+            "Buffer": 1,
+            "2D": 2,
+            "Rect": 2,
+            "3D": 3,
+            "Cube": 3,
+        }.get(dim, 2)
+
+    def project_texture_coordinate(
+        self, function_name: str, coord_id: SpirvId, metadata
+    ) -> Optional[SpirvId]:
+        vector_info = self.vector_component_type_and_count(coord_id.type.base_type)
+        if vector_info is None:
+            self.emit(
+                f"; WARNING: {function_name} requires a projected vector coordinate"
+            )
+            return None
+
+        component_type_name, source_count = vector_info
+        if component_type_name not in {"float", "double"}:
+            self.emit(
+                f"; WARNING: {function_name} requires a floating-point projected coordinate"
+            )
+            return None
+
+        axis_count = self.projected_coordinate_axes(metadata)
+        output_count = axis_count + (1 if metadata and metadata.get("arrayed") else 0)
+        if source_count < output_count + 1:
+            self.emit(
+                f"; WARNING: {function_name} requires a projection component after "
+                "the texture coordinate"
+            )
+            return None
+
+        component_type = self.register_primitive_type(component_type_name)
+        projection = self.composite_extract(coord_id, component_type, source_count - 1)
+        components = []
+        for index in range(axis_count):
+            component = self.composite_extract(coord_id, component_type, index)
+            components.append(
+                self.binary_operation("/", component_type, component, projection)
+            )
+
+        if metadata and metadata.get("arrayed"):
+            components.append(
+                self.composite_extract(coord_id, component_type, axis_count)
+            )
+
+        if len(components) == 1:
+            return components[0]
+
+        result_type = self.register_vector_type(component_type, len(components))
+        return self.composite_construct(result_type, components)
 
     def requires_explicit_lod_sampling(self) -> bool:
         return self.current_execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}
@@ -1978,6 +2047,11 @@ class VulkanSPIRVCodeGen:
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             operand_id = extra_args[0]
             offset_id = extra_args[1] if function_name == "texelFetchOffset" else None
+
+            if metadata.get("dim") == "Cube":
+                self.emit(f"; WARNING: {function_name} is not valid for cube images")
+                result_type = self.resource_access_result_type(metadata)
+                return self.default_value_for_type(result_type)
 
             image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
             if image_id is None:

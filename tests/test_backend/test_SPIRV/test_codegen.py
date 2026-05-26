@@ -1146,7 +1146,7 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
         "std::sync::LazyLock::new(|| Default::default());" in generated_code
     )
     assert (
-        "static PARTICLES: std::sync::LazyLock<RwBuffer<Particles>> = "
+        "static PARTICLES: std::sync::LazyLock<RWStructuredBuffer<Particles>> = "
         "std::sync::LazyLock::new(|| Default::default());" in generated_code
     )
     assert (

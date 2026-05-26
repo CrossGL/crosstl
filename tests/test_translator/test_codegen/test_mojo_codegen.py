@@ -943,6 +943,49 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    sampler2DShadow shadowMap;
+    sampler linearSampler;
+
+    float sampleShadow(
+        sampler2DShadow shadow,
+        sampler state,
+        vec2 uv,
+        float depth
+    ) {
+        return texture(shadow, state, vec3(uv, depth)) +
+            textureLod(shadow, state, vec3(uv, depth), 1.0);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn sample(tex: Texture2DShadow, "
+        "coord: SIMD[DType.float32, 4]) -> Float32:" in generated_code
+    )
+    assert (
+        "fn sample_lod(tex: Texture2DShadow, "
+        "coord: SIMD[DType.float32, 4], lod: Float32) -> Float32:" in generated_code
+    )
+    assert "fn sampleShadow(" in generated_code
+    assert "-> Float32:" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "shadow_sampler_texture_calls.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_integer_image_atomic_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

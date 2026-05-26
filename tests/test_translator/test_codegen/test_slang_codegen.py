@@ -532,6 +532,65 @@ def test_vertex_system_value_builtin_combines_with_position_return_rewrite():
     assert "return float4(x, 0.0, 0.0, 1.0);" in generated_code
 
 
+def test_vertex_draw_metadata_builtins_emit_implicit_slang_parameters():
+    code = """
+    shader main {
+        vertex {
+            void main() {
+                int absoluteVertex = int(gl_VertexID) + gl_BaseVertex;
+                uint instance = gl_InstanceID + gl_BaseInstance;
+                uint draw = gl_DrawID;
+                float x = float(absoluteVertex) + float(instance + draw);
+                gl_Position = vec4(x, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 main(uint gl_VertexID : SV_VertexID, "
+        "uint gl_InstanceID : SV_InstanceID, "
+        "int gl_BaseVertex : SV_StartVertexLocation, "
+        "uint gl_BaseInstance : SV_StartInstanceLocation, "
+        "uint gl_DrawID : SV_DrawID) : SV_Position" in generated_code
+    )
+    assert "int absoluteVertex = int(gl_VertexID) + gl_BaseVertex;" in generated_code
+    assert "uint instance = gl_InstanceID + gl_BaseInstance;" in generated_code
+    assert "uint draw = gl_DrawID;" in generated_code
+    assert "return float4(x, 0.0, 0.0, 1.0);" in generated_code
+
+
+def test_vertex_draw_metadata_uses_existing_semantic_parameter_aliases():
+    code = """
+    shader main {
+        vertex {
+            void main(
+                int baseVertex @ gl_BaseVertex,
+                uint baseInstance @ gl_BaseInstance,
+                uint drawIndex @ gl_DrawID
+            ) {
+                int absoluteVertex = baseVertex + gl_BaseVertex;
+                uint instance = baseInstance + gl_BaseInstance;
+                uint draw = drawIndex + gl_DrawID;
+                gl_Position = vec4(float(absoluteVertex) + float(instance + draw));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "int baseVertex : SV_StartVertexLocation" in generated_code
+    assert "uint baseInstance : SV_StartInstanceLocation" in generated_code
+    assert "uint drawIndex : SV_DrawID" in generated_code
+    assert "int gl_BaseVertex : SV_StartVertexLocation" not in generated_code
+    assert "uint gl_BaseInstance : SV_StartInstanceLocation" not in generated_code
+    assert "uint gl_DrawID : SV_DrawID" not in generated_code
+    assert "int absoluteVertex = baseVertex + baseVertex;" in generated_code
+    assert "uint instance = baseInstance + baseInstance;" in generated_code
+    assert "uint draw = drawIndex + drawIndex;" in generated_code
+
+
 def test_fragment_system_value_builtin_combines_with_color_return_rewrite():
     code = """
     shader main {
@@ -598,6 +657,205 @@ def test_sample_system_value_builtin_uses_existing_semantic_parameter_alias():
     assert "uint gl_SampleID : SV_SampleIndex" not in generated_code
     assert "uint sampleId = sampleIndex;" in generated_code
     assert "gl_SampleID" not in generated_code
+
+
+def test_geometry_stage_builtins_emit_stage_specific_slang_parameters():
+    code = """
+    shader main {
+        geometry {
+            void main() {
+                uint primitive = gl_PrimitiveIDIn;
+                uint invocation = gl_InvocationID;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void main(uint gl_PrimitiveIDIn : SV_PrimitiveID, "
+        "uint gl_InvocationID : SV_GSInstanceID)" in generated_code
+    )
+    assert "uint primitive = gl_PrimitiveIDIn;" in generated_code
+    assert "uint invocation = gl_InvocationID;" in generated_code
+
+
+def test_geometry_invocation_builtin_uses_existing_semantic_parameter_alias():
+    code = """
+    shader main {
+        geometry {
+            void main(uint gsInstance @ gl_InvocationID) {
+                uint invocation = gl_InvocationID;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void main(uint gsInstance : SV_GSInstanceID)" in generated_code
+    assert "uint gl_InvocationID : SV_GSInstanceID" not in generated_code
+    assert "uint invocation = gsInstance;" in generated_code
+
+
+def test_tessellation_control_builtins_emit_hull_slang_parameters():
+    code = """
+    shader main {
+        tessellation_control {
+            void main() {
+                uint controlPoint = gl_InvocationID;
+                uint primitive = gl_PrimitiveID;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void main(uint gl_InvocationID : SV_OutputControlPointID, "
+        "uint gl_PrimitiveID : SV_PrimitiveID)" in generated_code
+    )
+    assert "uint controlPoint = gl_InvocationID;" in generated_code
+    assert "uint primitive = gl_PrimitiveID;" in generated_code
+
+
+def test_tessellation_invocation_builtin_uses_hull_semantic_alias():
+    code = """
+    shader main {
+        tessellation_control {
+            void main(uint controlPoint @ gl_InvocationID) {
+                uint index = gl_InvocationID;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void main(uint controlPoint : SV_OutputControlPointID)" in generated_code
+    assert "uint gl_InvocationID : SV_OutputControlPointID" not in generated_code
+    assert "uint index = controlPoint;" in generated_code
+    assert "SV_GSInstanceID" not in generated_code
+
+
+def test_tessellation_evaluation_builtins_emit_domain_slang_parameters():
+    code = """
+    shader main {
+        tessellation_evaluation {
+            void main() {
+                vec3 coord = gl_TessCoord;
+                uint primitive = gl_PrimitiveID;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void main(float3 gl_TessCoord : SV_DomainLocation, "
+        "uint gl_PrimitiveID : SV_PrimitiveID)" in generated_code
+    )
+    assert "float3 coord = gl_TessCoord;" in generated_code
+    assert "uint primitive = gl_PrimitiveID;" in generated_code
+
+
+def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs():
+    code = """
+    shader main {
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst() {
+                PatchConstants patch;
+                return patch;
+            }
+
+            void main()
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float outer[3] : SV_TessFactor;" in generated_code
+    assert "float inner[1] : SV_InsideTessFactor;" in generated_code
+    assert "PatchConstants HSConst()" in generated_code
+    assert '[patchconstantfunc("HSConst")]' in generated_code
+    assert ": gl_TessLevelOuter" not in generated_code
+    assert ": gl_TessLevelInner" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("attribute", "message"),
+    [
+        ("@patchconstantfunc(Missing)", "does not reference a generated function"),
+        ("@patchconstantfunc(HSConst, Other)", "requires exactly one function name"),
+    ],
+)
+def test_tessellation_patchconstantfunc_references_generated_function(
+    attribute, message
+):
+    code = f"""
+    shader main {{
+        tessellation_control {{
+            PatchConstants HSConst() {{
+                PatchConstants patch;
+                return patch;
+            }}
+
+            void main()
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                {attribute} {{
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    "stage_source",
+    [
+        """
+        tessellation_control {
+            void main() {
+                gl_TessLevelOuter[0] = 1.0;
+            }
+        }
+        """,
+        """
+        tessellation_evaluation {
+            void main() {
+                float outer = gl_TessLevelOuter[0];
+            }
+        }
+        """,
+    ],
+)
+def test_implicit_tessellation_factor_builtins_raise_clear_error(stage_source):
+    code = f"""
+    shader main {{
+        {stage_source}
+    }}
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "gl_TessLevelOuter and gl_TessLevelInner require an explicit "
+            "patch constant function"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_mix_builtin_lowers_to_lerp_without_affecting_resources_or_constructors():
@@ -1299,11 +1557,21 @@ def test_stage_numthreads_attribute_accepts_default_dimensions():
 def test_stage_attributes_lower_to_slang_attributes_not_return_semantics():
     code = """
     shader StageAttributes {
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
         geometry {
             void main() @maxvertexcount(3) {
             }
         }
         tessellation_control {
+            PatchConstants HSConst() {
+                PatchConstants patch;
+                return patch;
+            }
+
             void main()
                 @domain(triangle)
                 @partitioning(fractional_odd)

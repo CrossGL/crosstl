@@ -161,10 +161,10 @@ class RustCodeGen:
             "uimage2DArray": "Image2DArray<Vec4<u32>>",
             "uimage2DMS": "Image2DMS<Vec4<u32>>",
             "uimage2DMSArray": "Image2DMSArray<Vec4<u32>>",
-            "StructuredBuffer": "Buffer",
-            "RWStructuredBuffer": "RwBuffer",
-            "AppendStructuredBuffer": "AppendBuffer",
-            "ConsumeStructuredBuffer": "ConsumeBuffer",
+            "StructuredBuffer": "StructuredBuffer",
+            "RWStructuredBuffer": "RWStructuredBuffer",
+            "AppendStructuredBuffer": "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer": "ConsumeStructuredBuffer",
             "ByteAddressBuffer": "ByteAddressBuffer",
             "RWByteAddressBuffer": "RwByteAddressBuffer",
         }
@@ -205,7 +205,9 @@ class RustCodeGen:
         self.function_map = {
             "texture": "sample",
             "textureLod": "sample_lod",
+            "textureLodOffset": "sample_lod_offset",
             "textureGrad": "sample_grad",
+            "textureGradOffset": "sample_grad_offset",
             "textureOffset": "sample_offset",
             "textureProj": "sample_projected",
             "textureProjLod": "sample_projected_lod",
@@ -3884,7 +3886,7 @@ class RustCodeGen:
                 if bool_mix is not None:
                     return bool_mix
 
-            func_name = self.mapped_function_name(func_name, len(args))
+            func_name = self.mapped_function_name(func_name, len(args), args)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
@@ -3951,27 +3953,65 @@ class RustCodeGen:
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
 
-    def mapped_function_name(self, func_name, arg_count=None):
+    def mapped_function_name(self, func_name, arg_count=None, arguments=None):
         if not isinstance(func_name, str):
             return func_name
+        if arguments is not None:
+            arg_count = len(arguments)
+        has_sampler = self.call_has_explicit_sampler_argument(arguments)
         if func_name == "textureSize":
             return "texture_size" if arg_count == 1 else "texture_size_lod"
+        sampler_texture_map = {
+            "texture": "sample_sampler",
+            "textureLod": "sample_lod_sampler",
+            "textureLodOffset": "sample_lod_offset_sampler",
+            "textureGrad": "sample_grad_sampler",
+            "textureGradOffset": "sample_grad_offset_sampler",
+            "textureOffset": "sample_offset_sampler",
+            "textureProj": "sample_projected_sampler",
+            "textureProjLod": "sample_projected_lod_sampler",
+            "textureProjLodOffset": "sample_projected_lod_offset_sampler",
+            "textureProjGrad": "sample_projected_grad_sampler",
+            "textureProjGradOffset": "sample_projected_grad_offset_sampler",
+            "textureProjOffset": "sample_projected_offset_sampler",
+            "textureQueryLod": "texture_query_lod_sampler",
+        }
+        if has_sampler and func_name in sampler_texture_map:
+            return sampler_texture_map[func_name]
         if func_name == "textureGather":
+            if has_sampler:
+                return (
+                    "texture_gather_component_sampler"
+                    if arg_count and arg_count >= 4
+                    else "texture_gather_sampler"
+                )
             return (
                 "texture_gather_component"
                 if arg_count and arg_count >= 3
                 else "texture_gather"
             )
         if func_name == "textureGatherOffset":
+            if has_sampler:
+                return (
+                    "texture_gather_offset_component_sampler"
+                    if arg_count and arg_count >= 5
+                    else "texture_gather_offset_sampler"
+                )
             return (
                 "texture_gather_offset_component"
                 if arg_count and arg_count >= 4
                 else "texture_gather_offset"
             )
         if func_name == "textureGatherOffsets":
+            if has_sampler:
+                return (
+                    "texture_gather_offsets_component_sampler"
+                    if arg_count in {5, 8}
+                    else "texture_gather_offsets_sampler"
+                )
             return (
                 "texture_gather_offsets_component"
-                if arg_count and arg_count >= 4
+                if arg_count in {4, 7}
                 else "texture_gather_offsets"
             )
         compare_sampler_thresholds = {
@@ -3999,9 +4039,22 @@ class RustCodeGen:
         sampler_mapping = compare_sampler_thresholds.get(func_name)
         if sampler_mapping is not None:
             threshold, sampler_name = sampler_mapping
-            if arg_count and arg_count >= threshold:
+            if has_sampler or (arg_count and arg_count >= threshold):
                 return sampler_name
         return self.function_map.get(func_name, func_name)
+
+    def call_has_explicit_sampler_argument(self, arguments):
+        if not arguments or len(arguments) < 2:
+            return False
+        return self.is_sampler_type(self.expression_result_type(arguments[1]))
+
+    def is_sampler_type(self, type_name):
+        if type_name is None:
+            return False
+        type_name = str(type_name)
+        return (
+            type_name in {"sampler", "Sampler"} or self.map_type(type_name) == "Sampler"
+        )
 
     def generate_qualified_generic_trait_method_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
@@ -5225,28 +5278,48 @@ class RustCodeGen:
         if not isinstance(func_name, str):
             return None
 
-        mapped_name = self.mapped_function_name(func_name, len(arguments))
+        mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
 
         if mapped_name in {
             "sample",
+            "sample_sampler",
             "sample_lod",
+            "sample_lod_sampler",
+            "sample_lod_offset",
+            "sample_lod_offset_sampler",
             "sample_grad",
+            "sample_grad_sampler",
+            "sample_grad_offset",
+            "sample_grad_offset_sampler",
             "sample_offset",
+            "sample_offset_sampler",
             "sample_projected",
+            "sample_projected_sampler",
             "sample_projected_lod",
+            "sample_projected_lod_sampler",
             "sample_projected_grad",
+            "sample_projected_grad_sampler",
             "sample_projected_offset",
+            "sample_projected_offset_sampler",
             "sample_projected_lod_offset",
+            "sample_projected_lod_offset_sampler",
             "sample_projected_grad_offset",
+            "sample_projected_grad_offset_sampler",
             "texel_fetch",
             "texel_fetch_offset",
             "texture_gather",
+            "texture_gather_sampler",
             "texture_gather_component",
+            "texture_gather_component_sampler",
             "texture_gather_offset",
+            "texture_gather_offset_sampler",
             "texture_gather_offset_component",
+            "texture_gather_offset_component_sampler",
             "texture_gather_offsets",
+            "texture_gather_offsets_sampler",
             "texture_gather_offsets_component",
+            "texture_gather_offsets_component_sampler",
         }:
             return "vec4"
 
@@ -5256,7 +5329,7 @@ class RustCodeGen:
         if mapped_name in {"texture_query_levels", "texture_samples"}:
             return "int"
 
-        if mapped_name == "texture_query_lod":
+        if mapped_name in {"texture_query_lod", "texture_query_lod_sampler"}:
             return "vec2"
 
         if mapped_name.startswith("texture_compare"):

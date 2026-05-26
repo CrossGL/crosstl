@@ -1272,6 +1272,8 @@ class TestHipParser:
         float* get_data(float* data) { return data; }
         const float* get_const_data(const float* data) { return data; }
         static inline unsigned int helper(unsigned int x) { return x; }
+        __forceinline__ __device__ float fast_add(float a, float b) { return a + b; }
+        __noinline__ __device__ float slow_sub(float a, float b) { return a - b; }
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -1286,6 +1288,12 @@ class TestHipParser:
         assert ast.statements[3].return_type == "unsigned int"
         assert "static" in ast.statements[3].qualifiers
         assert "inline" in ast.statements[3].qualifiers
+        assert ast.statements[4].name == "fast_add"
+        assert "__forceinline__" in ast.statements[4].qualifiers
+        assert "__device__" in ast.statements[4].qualifiers
+        assert ast.statements[5].name == "slow_sub"
+        assert "__noinline__" in ast.statements[5].qualifiers
+        assert "__device__" in ast.statements[5].qualifiers
 
     def test_template_prefixed_kernel_parsing(self):
         """Test C++ template-prefixed HIP kernels"""

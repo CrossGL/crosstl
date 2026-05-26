@@ -323,6 +323,7 @@ class MetalCodeGen:
         self.gl_position = False
         self.char_mapper = CharTypeMapper()
         self.texture_variables = []
+        self.acceleration_structure_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -538,6 +539,12 @@ class MetalCodeGen:
             "sampler2DArrayShadow": "depth2d_array<float>",
             "samplerCubeShadow": "depthcube<float>",
             "samplerCubeArrayShadow": "depthcube_array<float>",
+            "accelerationStructureEXT": "instance_acceleration_structure",
+            "RaytracingAccelerationStructure": "instance_acceleration_structure",
+            "AccelerationStructure": "instance_acceleration_structure",
+            "acceleration_structure": "instance_acceleration_structure",
+            "instance_acceleration_structure": "instance_acceleration_structure",
+            "primitive_acceleration_structure": "primitive_acceleration_structure",
             "iimage1D": "texture1d<int, access::read_write>",
             "iimage1DArray": "texture1d_array<int, access::read_write>",
             "iimage2D": "texture2d<int, access::read_write>",
@@ -689,6 +696,7 @@ class MetalCodeGen:
         self.validate_supported_stage_types(ast, target_stage)
 
         self.texture_variables = []
+        self.acceleration_structure_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -934,6 +942,8 @@ class MetalCodeGen:
         if not any("metal_stdlib" in line for line in pre_lines):
             code += "#include <metal_stdlib>\n"
         code += "using namespace metal;\n"
+        if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
+            code += "using namespace metal::raytracing;\n"
         code += "\n"
         code += generate_enum_constants(
             self, self.plain_enums + self.struct_payload_enums
@@ -1105,6 +1115,32 @@ class MetalCodeGen:
                 code += self.unsupported_glsl_buffer_block_variable_placeholder(
                     "Metal", vtype, var_name
                 )
+                continue
+
+            if self.is_acceleration_structure_type(vtype):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
+                mapped_type = self.map_resource_type_with_format(vtype, node)
+                self.acceleration_structure_variables.append(
+                    (node, binding, mapped_type, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
                 continue
 
             if self.is_structured_buffer_type(vtype):
@@ -2181,6 +2217,19 @@ class MetalCodeGen:
                     texture_type, texture_variable.name, array_size
                 )
                 resource_params.append(f"{declaration} [[texture({i})]]")
+        if self.acceleration_structure_variables:
+            for (
+                acceleration_structure_variable,
+                i,
+                acceleration_structure_type,
+                array_size,
+            ) in self.acceleration_structure_variables:
+                declaration = self.format_resource_parameter(
+                    acceleration_structure_type,
+                    acceleration_structure_variable.name,
+                    array_size,
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.structured_buffer_variables:
             for (
                 buffer_variable,
@@ -2249,6 +2298,14 @@ class MetalCodeGen:
         for texture_variable, _, _, _ in self.texture_variables:
             if getattr(texture_variable, "name", None):
                 names.add(texture_variable.name)
+        for (
+            acceleration_structure_variable,
+            _,
+            _,
+            _,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None):
+                names.add(acceleration_structure_variable.name)
         for buffer_variable, _, _, _ in self.structured_buffer_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
@@ -2293,6 +2350,22 @@ class MetalCodeGen:
                 resource_params.append(
                     self.format_resource_parameter(
                         texture_type, texture_name, array_size
+                    )
+                )
+        for (
+            acceleration_structure_variable,
+            acceleration_structure_type,
+            array_size,
+        ) in self.required_function_acceleration_structures(func_name):
+            acceleration_structure_name = getattr(
+                acceleration_structure_variable, "name", None
+            )
+            if acceleration_structure_name:
+                resource_params.append(
+                    self.format_resource_parameter(
+                        acceleration_structure_type,
+                        acceleration_structure_name,
+                        array_size,
                     )
                 )
         for (
@@ -3274,8 +3347,7 @@ class MetalCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, RayTracingOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            return self.generate_ray_tracing_op_expression(expr)
         elif isinstance(expr, MeshOpNode):
             mesh_call = self.generate_mesh_op_expression(expr)
             if mesh_call is not None:
@@ -3639,6 +3711,67 @@ class MetalCodeGen:
             "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
         }.get(func_name)
 
+    def generate_ray_tracing_op_expression(self, expr):
+        rendered_args = [self.generate_expression(arg) for arg in expr.arguments]
+        if expr.operation == "TraceRay":
+            trace_ray = self.generate_metal_trace_ray(rendered_args)
+            if trace_ray is not None:
+                return trace_ray
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "TraceRay",
+                "expected acceleration structure, flags, mask, SBT offsets, "
+                "origin, tmin, direction, tmax, and payload location",
+            )
+
+        unsupported_reasons = {
+            "ReportHit": (
+                "intersection acceptance is expressed through the Metal intersection return value"
+            ),
+            "CallShader": "Metal callable dispatch requires visible function tables",
+            "AcceptHitAndEndSearch": (
+                "Metal hit acceptance is controlled by intersection results"
+            ),
+            "IgnoreHit": "Metal does not expose a direct ignore-intersection intrinsic",
+        }
+        reason = unsupported_reasons.get(expr.operation)
+        if reason is not None:
+            return self.unsupported_metal_ray_tracing_intrinsic(expr.operation, reason)
+
+        return f"{expr.operation}({', '.join(rendered_args)})"
+
+    def generate_metal_trace_ray(self, args):
+        if len(args) != 11:
+            return None
+
+        acceleration_structure = args[0]
+        origin = args[6]
+        min_distance = args[7]
+        direction = args[8]
+        max_distance = args[9]
+        ray_name = self.next_metal_temp_variable("ray")
+        intersector_name = self.next_metal_temp_variable("intersector")
+        intersection_name = self.next_metal_temp_variable("intersection")
+
+        return "\n".join(
+            [
+                f"ray {ray_name}",
+                f"{ray_name}.origin = {origin}",
+                f"{ray_name}.direction = {direction}",
+                f"{ray_name}.min_distance = {min_distance}",
+                f"{ray_name}.max_distance = {max_distance}",
+                f"intersector<triangle_data, instancing> {intersector_name}",
+                (
+                    "intersection_result<triangle_data, instancing> "
+                    f"{intersection_name} = {intersector_name}.intersect("
+                    f"{ray_name}, {acceleration_structure})"
+                ),
+                f"(void){intersection_name}",
+            ]
+        )
+
+    def unsupported_metal_ray_tracing_intrinsic(self, operation, reason):
+        return f"/* unsupported Metal ray tracing intrinsic: {operation} - {reason} */"
+
     def generate_atomic_function_call(self, func_name, args):
         if func_name in self.user_function_names:
             return None
@@ -3979,53 +4112,67 @@ class MetalCodeGen:
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) == "sampler"
 
-    def is_resource_parameter_type(self, vtype):
-        return self.is_structured_buffer_type(vtype) or self.resource_base_type(
-            vtype
-        ) in {
-            "sampler",
-            "sampler1D",
-            "sampler1DArray",
-            "sampler2D",
-            "sampler3D",
-            "samplerCube",
-            "sampler2DArray",
-            "samplerCubeArray",
-            "sampler2DMS",
-            "sampler2DMSArray",
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-            "samplerCubeShadow",
-            "samplerCubeArrayShadow",
-            "iimage1D",
-            "iimage1DArray",
-            "iimage2D",
-            "iimage3D",
-            "iimage2DArray",
-            "iimage2DMS",
-            "iimage2DMSArray",
-            "uimage1D",
-            "uimage1DArray",
-            "uimage2D",
-            "uimage3D",
-            "uimage2DArray",
-            "uimage2DMS",
-            "uimage2DMSArray",
-            "image1D",
-            "image1DArray",
-            "image2D",
-            "image3D",
-            "imageCube",
-            "image2DArray",
-            "image2DMS",
-            "image2DMSArray",
+    def is_acceleration_structure_type(self, vtype):
+        return self.resource_base_type(vtype) in {
+            "accelerationStructureEXT",
+            "RaytracingAccelerationStructure",
+            "AccelerationStructure",
+            "acceleration_structure",
+            "instance_acceleration_structure",
+            "primitive_acceleration_structure",
         }
+
+    def is_resource_parameter_type(self, vtype):
+        return (
+            self.is_structured_buffer_type(vtype)
+            or self.is_acceleration_structure_type(vtype)
+            or self.resource_base_type(vtype)
+            in {
+                "sampler",
+                "sampler1D",
+                "sampler1DArray",
+                "sampler2D",
+                "sampler3D",
+                "samplerCube",
+                "sampler2DArray",
+                "samplerCubeArray",
+                "sampler2DMS",
+                "sampler2DMSArray",
+                "sampler2DShadow",
+                "sampler2DArrayShadow",
+                "samplerCubeShadow",
+                "samplerCubeArrayShadow",
+                "iimage1D",
+                "iimage1DArray",
+                "iimage2D",
+                "iimage3D",
+                "iimage2DArray",
+                "iimage2DMS",
+                "iimage2DMSArray",
+                "uimage1D",
+                "uimage1DArray",
+                "uimage2D",
+                "uimage3D",
+                "uimage2DArray",
+                "uimage2DMS",
+                "uimage2DMSArray",
+                "image1D",
+                "image1DArray",
+                "image2D",
+                "image3D",
+                "imageCube",
+                "image2DArray",
+                "image2DMS",
+                "image2DMSArray",
+            }
+        )
 
     def is_texture_or_image_resource_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
             and not self.is_sampler_type(vtype)
             and not self.is_structured_buffer_type(vtype)
+            and not self.is_acceleration_structure_type(vtype)
         )
 
     def is_integer_coordinate_type(self, vtype):
@@ -4181,6 +4328,10 @@ class MetalCodeGen:
             namespace = "sampler"
             attribute_names = {"binding", "sampler"}
             prefixes = ("s",)
+        elif self.is_acceleration_structure_type(raw_param_type):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
         elif self.is_structured_buffer_type(raw_param_type):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
@@ -4268,6 +4419,20 @@ class MetalCodeGen:
                 self.global_resource_shape(texture_variable)[1],
                 getattr(texture_variable, "name", "<anonymous>"),
             )
+        for (
+            acceleration_structure_variable,
+            binding,
+            _,
+            _,
+        ) in self.acceleration_structure_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(acceleration_structure_variable)[1],
+                getattr(acceleration_structure_variable, "name", "<anonymous>"),
+            )
         for buffer_variable, binding, _, _ in self.structured_buffer_variables:
             self.reserve_resource_binding_range(
                 used_bindings,
@@ -4329,6 +4494,11 @@ class MetalCodeGen:
                 node, {"binding", "sampler"}, ("s",)
             )
             return f" [[sampler({binding})]]" if binding is not None else ""
+        if self.is_acceleration_structure_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         if self.is_structured_buffer_type(raw_param_type):
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "buffer"}, ("b", "u", "t")
@@ -4673,6 +4843,34 @@ class MetalCodeGen:
             ast, target_stage, stage_entry_types
         )
         return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
+
+    def uses_metal_raytracing_namespace(self, ast, global_vars, functions):
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) in {
+                "ray_generation",
+                "ray_intersection",
+                "ray_any_hit",
+                "ray_closest_hit",
+                "ray_miss",
+                "ray_callable",
+                "intersection",
+                "anyhit",
+                "closesthit",
+                "miss",
+                "callable",
+            }:
+                return True
+
+        for variable in global_vars:
+            vtype, _ = self.global_resource_shape(variable)
+            if self.is_acceleration_structure_type(vtype):
+                return True
+
+        for func in functions:
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if isinstance(node, (RayTracingOpNode, RayQueryOpNode)):
+                    return True
+        return False
 
     def metal_mesh_stage_attribute(self, shader_type, func, execution_config=None):
         stage_keyword = "mesh" if shader_type == "mesh" else "object"
@@ -5159,6 +5357,7 @@ class MetalCodeGen:
                 local_names.add(node.name)
 
         texture_names = self.global_texture_names()
+        acceleration_structure_names = self.global_acceleration_structure_names()
         buffer_names = (
             self.global_structured_buffer_names()
             | self.global_glsl_buffer_block_names()
@@ -5174,6 +5373,7 @@ class MetalCodeGen:
                     and name not in local_names
                     and (
                         name in texture_names
+                        or name in acceleration_structure_names
                         or name in buffer_names
                         or name in sampler_names
                     )
@@ -5290,6 +5490,15 @@ class MetalCodeGen:
             if getattr(texture_variable, "name", None)
         }
 
+    def global_acceleration_structure_names(self):
+        return {
+            acceleration_structure_variable.name
+            for acceleration_structure_variable, _, _, _ in (
+                self.acceleration_structure_variables
+            )
+            if getattr(acceleration_structure_variable, "name", None)
+        }
+
     def global_structured_buffer_names(self):
         return {
             buffer_variable.name
@@ -5336,6 +5545,23 @@ class MetalCodeGen:
             (texture_variable, texture_type, array_size)
             for texture_variable, _, texture_type, array_size in self.texture_variables
             if getattr(texture_variable, "name", None) in dependencies
+        ]
+
+    def required_function_acceleration_structures(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (
+                acceleration_structure_variable,
+                acceleration_structure_type,
+                array_size,
+            )
+            for (
+                acceleration_structure_variable,
+                _,
+                acceleration_structure_type,
+                array_size,
+            ) in self.acceleration_structure_variables
+            if getattr(acceleration_structure_variable, "name", None) in dependencies
         ]
 
     def required_function_samplers(self, func_name):
@@ -6663,6 +6889,10 @@ class MetalCodeGen:
         elif self.is_glsl_buffer_block_variable(node, vtype):
             return None
         elif self.is_structured_buffer_type(vtype):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_acceleration_structure_type(vtype):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
             prefixes = ("b", "u", "t")

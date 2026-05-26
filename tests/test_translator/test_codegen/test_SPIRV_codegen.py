@@ -3815,6 +3815,41 @@ class TestVulkanSPIRVCodeGen:
         assert "TextureFetchOffset" not in spv_code
         assert "OpFunctionCall" not in spv_code
 
+    def test_cube_texel_fetches_emit_diagnostics(self):
+        source_code = """
+        shader Resources {
+            samplerCube cubeMap;
+            samplerCubeArray cubeArrayMap;
+
+            compute {
+                void main() {
+                    ivec3 cubeCoord = ivec3(1, 2, 3);
+                    ivec4 cubeArrayCoord = ivec4(1, 2, 3, 0);
+                    vec4 cubeValue = texelFetch(cubeMap, cubeCoord, 0);
+                    vec4 cubeArrayValue = texelFetchOffset(
+                        cubeArrayMap,
+                        cubeArrayCoord,
+                        0,
+                        ivec3(1, 0, 0)
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("WARNING: texelFetch is not valid for cube images") == 1
+        assert (
+            spv_code.count("WARNING: texelFetchOffset is not valid for cube images")
+            == 1
+        )
+        assert "OpImageFetch" not in spv_code
+        assert "TextureFetch" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+
     def test_sampled_operations_ignore_explicit_sampler_operands(self):
         source_code = """
         shader Resources {

@@ -2852,6 +2852,103 @@ def test_ray_callable_data_semantic_uses_ray_data_address_space():
     assert "Payload data" not in generated
 
 
+def test_metal_acceleration_structure_globals_lower_to_buffer_parameters():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(2);
+        ray_generation {
+            void main() { }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "using namespace metal::raytracing;" in generated
+    assert (
+        "kernel void kernel_main("
+        "instance_acceleration_structure topLevelAS [[buffer(2)]])"
+    ) in generated
+    assert "accelerationStructureEXT topLevelAS;" not in generated
+    assert "instance_acceleration_structure topLevelAS;" not in generated
+
+
+def test_metal_trace_ray_full_signature_lowers_to_intersector_query():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+        ray_generation {
+            void main() {
+                TraceRay(
+                    topLevelAS,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "using namespace metal::raytracing;" in generated
+    assert "instance_acceleration_structure topLevelAS [[buffer(0)]]" in generated
+    assert "ray __crossgl_ray_0;" in generated
+    assert "__crossgl_ray_0.origin = float3(0.0);" in generated
+    assert "__crossgl_ray_0.direction = float3(0.0, 0.0, 1.0);" in generated
+    assert "__crossgl_ray_0.min_distance = 0.001;" in generated
+    assert "__crossgl_ray_0.max_distance = 1000.0;" in generated
+    assert (
+        "intersector<triangle_data, instancing> __crossgl_intersector_1;" in generated
+    )
+    assert (
+        "intersection_result<triangle_data, instancing> __crossgl_intersection_2 = "
+        "__crossgl_intersector_1.intersect(__crossgl_ray_0, topLevelAS);"
+    ) in generated
+    assert "(void)__crossgl_intersection_2;" in generated
+    assert "TraceRay" not in generated
+
+
+def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics():
+    code = """
+    shader rt {
+        ray_any_hit {
+            void main() {
+                IgnoreHit();
+                AcceptHitAndEndSearch();
+            }
+        }
+        ray_intersection {
+            bool main() @triangle {
+                ReportHit(1.0, 0);
+                return true;
+            }
+        }
+        ray_callable {
+            void main() {
+                CallShader(0, 1);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "unsupported Metal ray tracing intrinsic: IgnoreHit" in generated
+    assert "unsupported Metal ray tracing intrinsic: AcceptHitAndEndSearch" in generated
+    assert "unsupported Metal ray tracing intrinsic: ReportHit" in generated
+    assert "unsupported Metal ray tracing intrinsic: CallShader" in generated
+    assert "IgnoreHit();" not in generated
+    assert "AcceptHitAndEndSearch();" not in generated
+    assert "ReportHit(" not in generated
+    assert "CallShader(" not in generated
+
+
 def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
     code = """
     shader rt {
@@ -3844,7 +3941,8 @@ def test_metal_raytrace_and_mesh_intrinsics():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "TraceRay" in generated
+    assert "unsupported Metal ray tracing intrinsic: TraceRay" in generated
+    assert "TraceRay();" not in generated
     assert "SetMeshOutputCounts" in generated
 
 

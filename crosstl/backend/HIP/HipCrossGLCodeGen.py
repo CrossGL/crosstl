@@ -100,16 +100,23 @@ class HipToCrossGLConverter:
         "cudaTextureTypeCubemapLayered": "samplerCubeArray",
     }
     HIP_SURFACE_TYPE_MAPPING = {
+        "1": "image1D",
         "2": "image2D",
         "3": "image3D",
+        "hipSurfaceType1D": "image1D",
+        "hipSurfaceType1DLayered": "image1DArray",
         "hipSurfaceType2D": "image2D",
         "hipSurfaceType2DLayered": "image2DArray",
         "hipSurfaceType3D": "image3D",
         "hipSurfaceTypeCubemap": "imageCube",
+        "hipSurfaceTypeCubemapLayered": "imageCubeArray",
+        "cudaSurfaceType1D": "image1D",
+        "cudaSurfaceType1DLayered": "image1DArray",
         "cudaSurfaceType2D": "image2D",
         "cudaSurfaceType2DLayered": "image2DArray",
         "cudaSurfaceType3D": "image3D",
         "cudaSurfaceTypeCubemap": "imageCube",
+        "cudaSurfaceTypeCubemapLayered": "imageCubeArray",
     }
     HIP_TEXTURE_CALL_TYPE_HINTS = {
         "tex1D": "sampler1D",
@@ -143,6 +150,8 @@ class HipToCrossGLConverter:
         "surf2DLayeredwrite": "image2DArray",
         "surfCubemapread": "imageCube",
         "surfCubemapwrite": "imageCube",
+        "surfCubemapLayeredread": "imageCubeArray",
+        "surfCubemapLayeredwrite": "imageCubeArray",
     }
 
     def __init__(self):
@@ -447,6 +456,14 @@ class HipToCrossGLConverter:
                 target = self.format_runtime_pointer_target(node.args[0])
                 size = self.visit(node.args[1])
                 return [f"// HIP memory allocate: {target}, bytes: {size}"]
+        elif name == "hipMallocPitch":
+            if len(args) >= 4:
+                target = self.format_runtime_pointer_target(node.args[0])
+                pitch = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP pitched memory allocate: {target}, pitch: {pitch}, "
+                    f"width: {args[2]}, height: {args[3]}"
+                ]
         elif name in {"hipFree", "hipHostFree"}:
             if args:
                 return [f"// HIP memory free: {args[0]}"]
@@ -458,6 +475,42 @@ class HipToCrossGLConverter:
                 )
                 if len(args) >= 5:
                     comment += f", stream: {args[4]}"
+                return [comment]
+        elif name in {"hipMemcpy2D", "hipMemcpy2DAsync"}:
+            if len(args) >= 7:
+                comment = (
+                    f"// HIP 2D memory copy: {args[2]} -> {args[0]}, "
+                    f"dst pitch: {args[1]}, src pitch: {args[3]}, "
+                    f"width: {args[4]}, height: {args[5]}, kind: {args[6]}"
+                )
+                if len(args) >= 8:
+                    comment += f", stream: {args[7]}"
+                return [comment]
+        elif name in {"hipMemcpyToSymbol", "hipMemcpyToSymbolAsync"}:
+            if len(args) >= 3:
+                comment = (
+                    f"// HIP symbol copy to: {args[0]}, source: {args[1]}, "
+                    f"bytes: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", offset: {args[3]}"
+                if len(args) >= 5:
+                    comment += f", kind: {args[4]}"
+                if len(args) >= 6:
+                    comment += f", stream: {args[5]}"
+                return [comment]
+        elif name in {"hipMemcpyFromSymbol", "hipMemcpyFromSymbolAsync"}:
+            if len(args) >= 3:
+                comment = (
+                    f"// HIP symbol copy from: {args[1]}, destination: {args[0]}, "
+                    f"bytes: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", offset: {args[3]}"
+                if len(args) >= 5:
+                    comment += f", kind: {args[4]}"
+                if len(args) >= 6:
+                    comment += f", stream: {args[5]}"
                 return [comment]
         elif name in {"hipMemset", "hipMemsetAsync"}:
             if len(args) >= 3:
@@ -538,7 +591,38 @@ class HipToCrossGLConverter:
             return ["// HIP get last error"]
         elif name == "hipPeekAtLastError":
             return ["// HIP peek at last error"]
+        elif name == "hipGetDevice":
+            if args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP get current device: output: {output}"]
+        elif name == "hipGetDeviceCount":
+            if args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP get device count: output: {output}"]
+        elif name == "hipSetDevice":
+            if args:
+                return [f"// HIP set device: {args[0]}"]
+        elif name == "hipGetDeviceProperties":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP get device properties: {output}, device: {args[1]}"]
+        elif name == "hipMemGetInfo":
+            if len(args) >= 2:
+                free_output = self.format_runtime_pointer_target(node.args[0])
+                total_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP memory info: free output: {free_output}, "
+                    f"total output: {total_output}"
+                ]
 
+        return None
+
+    def format_hip_runtime_expression_call(self, node, args):
+        name = node.name
+        if name == "hipGetErrorString" and args:
+            return f'/* HIP error string: {args[0]} */ ""'
+        if name == "hipGetErrorName" and args:
+            return f'/* HIP error name: {args[0]} */ ""'
         return None
 
     def format_runtime_pointer_target(self, arg):
@@ -1002,6 +1086,10 @@ class HipToCrossGLConverter:
 
         if self.is_user_defined_function(func_name):
             return f"{func_name}({args_str})"
+
+        runtime_expression = self.format_hip_runtime_expression_call(node, args)
+        if runtime_expression is not None:
+            return runtime_expression
 
         resource_call = self.format_hip_resource_call(func_name, args)
         if resource_call is not None:

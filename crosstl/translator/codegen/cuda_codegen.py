@@ -1938,9 +1938,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
                 )
+            if texture_type in {"samplerCube", "samplerCubeArray"}:
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
 
             texture_name = args[0]
             coord = args[1]
+            if texture_type == "sampler1D":
+                return f"tex1D({texture_name}, {coord})"
+            if texture_type == "sampler1DArray":
+                return (
+                    f"tex1DLayered<float4>({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')})"
+                )
             if texture_type == "sampler2D":
                 return (
                     f"tex2D({texture_name}, "

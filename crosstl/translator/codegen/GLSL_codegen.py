@@ -3696,7 +3696,11 @@ class GLSLCodeGen:
                 emitted.append(qualifier)
 
         for qualifier in qualifiers:
-            normalized = qualifier[5:] if qualifier.startswith("glsl_") else qualifier
+            normalized = (
+                qualifier[len("glsl_") :]
+                if qualifier.startswith("glsl_")
+                else qualifier
+            )
             normalized = normalized.replace("-", "_")
             if normalized in {"perprimitive", "perprimitiveext"}:
                 add("perprimitiveEXT")

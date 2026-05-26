@@ -3367,6 +3367,171 @@ def test_directx_set_mesh_output_counts_requires_mesh_outputs():
         HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
 
 
+def test_directx_set_mesh_output_counts_validates_control_flow_placement():
+    loop_code = """
+    shader MeshOutputCountInLoop {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                for (int i = 0; i < 1; i++) {
+                    SetMeshOutputCounts(3, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="loop control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(loop_code), "mesh")
+
+    thread_varying_branch_code = """
+    shader MeshOutputCountInThreadVaryingBranch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint groupIndex @ SV_GroupIndex,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (groupIndex == 0u) {
+                    SetMeshOutputCounts(3, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(thread_varying_branch_code), "mesh"
+        )
+
+    uniform_branch_code = """
+    shader MeshOutputCountInUniformBranch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (true) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uniform_branch_code), "mesh"
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated
+
+
+def test_directx_mesh_output_writes_validate_order_and_indices():
+    write_before_count_code = """
+    shader MeshOutputWriteBeforeCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                SetMeshOutputCounts(3, 1);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(write_before_count_code), "mesh"
+        )
+
+    component_index_write_code = """
+    shader MeshOutputPartialIndexWrite {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                tris[0].x = 0u;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="indices output array.*whole"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(component_index_write_code), "mesh"
+        )
+
+
+def test_directx_mesh_output_writes_validate_literal_bounds():
+    declared_bound_code = """
+    shader MeshOutputWriteDeclaredBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[3].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*declared array size"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(declared_bound_code), "mesh"
+        )
+
+    set_count_bound_code = """
+    shader MeshOutputWriteSetCountBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(2, 1);
+                verts[2].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*numVertices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(set_count_bound_code), "mesh"
+        )
+
+
 def test_directx_mesh_output_signature_validates_struct_semantics():
     missing_position_code = """
     shader MeshMissingPosition {

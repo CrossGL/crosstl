@@ -488,6 +488,11 @@ mod gpu {
         }
     }
 
+    pub type StructuredBuffer<T> = Buffer<T>;
+    pub type RWStructuredBuffer<T> = RwBuffer<T>;
+    pub type AppendStructuredBuffer<T> = AppendBuffer<T>;
+    pub type ConsumeStructuredBuffer<T> = ConsumeBuffer<T>;
+
     #[derive(Debug, Clone, Copy, Default)]
     pub struct ByteAddressBuffer;
 
@@ -2959,13 +2964,19 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert "static COUNTER_LAYERS: std::sync::LazyLock<Image2DArray<Vec4<u32>>>" in (
         generated_code
     )
-    assert "static VALUES: std::sync::LazyLock<RwBuffer<i32>>" in generated_code
-    assert "static WEIGHTS: std::sync::LazyLock<Buffer<f32>>" in generated_code
-    assert "static APPEND_VALUES: std::sync::LazyLock<AppendBuffer<u32>>" in (
+    assert "static VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>" in (
         generated_code
     )
-    assert "static CONSUME_VALUES: std::sync::LazyLock<ConsumeBuffer<u32>>" in (
+    assert "static WEIGHTS: std::sync::LazyLock<StructuredBuffer<f32>>" in (
         generated_code
+    )
+    assert (
+        "static APPEND_VALUES: std::sync::LazyLock<AppendStructuredBuffer<u32>>"
+        in generated_code
+    )
+    assert (
+        "static CONSUME_VALUES: std::sync::LazyLock<ConsumeStructuredBuffer<u32>>"
+        in generated_code
     )
     assert "static RAW_BYTES: std::sync::LazyLock<ByteAddressBuffer>" in generated_code
     assert "static RAW_OUT: std::sync::LazyLock<RwByteAddressBuffer>" in generated_code
@@ -3023,8 +3034,8 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     )
     assert "image2D" not in generated_code
     assert "uimage2D" not in generated_code
-    assert "RWStructuredBuffer" not in generated_code
-    assert "StructuredBuffer" not in generated_code
+    assert "RwBuffer" not in generated_code
+    assert "std::sync::LazyLock<Buffer<f32>>" not in generated_code
     assert "imageLoad" not in generated_code
     assert "imageStore" not in generated_code
     assert "imageAtomicAdd" not in generated_code

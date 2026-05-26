@@ -89,7 +89,12 @@ class SlangCodeGen:
             "gl_CullDistance": "SV_CullDistance",
             "gl_VertexID": "SV_VertexID",
             "gl_InstanceID": "SV_InstanceID",
+            "gl_BaseVertex": "SV_StartVertexLocation",
+            "gl_BaseInstance": "SV_StartInstanceLocation",
+            "gl_DrawID": "SV_DrawID",
             "gl_PrimitiveID": "SV_PrimitiveID",
+            "gl_TessLevelOuter": "SV_TessFactor",
+            "gl_TessLevelInner": "SV_InsideTessFactor",
             "gl_Layer": "SV_RenderTargetArrayIndex",
             "gl_ViewportIndex": "SV_ViewportArrayIndex",
             "gl_FragCoord": "SV_Position",
@@ -669,6 +674,31 @@ class SlangCodeGen:
                 f"'{partitioning}' must be one of: {valid_values}"
             )
 
+    def validate_slang_patch_constant_function(self, func, stage_name):
+        if self.slang_shader_stage_name(stage_name) != "hull":
+            return
+
+        arguments = self.slang_stage_attribute_arguments(func, "patchconstantfunc")
+        if not arguments:
+            return
+        if len(arguments) != 1:
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc requires "
+                "exactly one function name"
+            )
+
+        function_name = self.slang_stage_attribute_value_to_string(arguments[0])
+        if not function_name:
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc requires "
+                "a function name"
+            )
+        if function_name not in self.user_function_names:
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc "
+                f"'{function_name}' does not reference a generated function"
+            )
+
     def validate_slang_numthreads(self, func, stage_name):
         if not self.slang_stage_uses_numthreads(stage_name):
             return
@@ -702,8 +732,40 @@ class SlangCodeGen:
         self.validate_slang_tessellation_output_topology(func, stage_name)
         self.validate_slang_tessellation_domain_topology(func, stage_name)
         self.validate_slang_tessellation_partitioning(func, stage_name)
+        self.validate_slang_patch_constant_function(func, stage_name)
         self.validate_slang_mesh_output_topology(func, stage_name)
         self.validate_slang_numthreads(func, stage_name)
+
+    def validate_slang_stage_body_builtins(self, body_statements, stage_name, params):
+        shader_stage = self.slang_shader_stage_name(stage_name)
+        if shader_stage not in {"hull", "domain"}:
+            return
+
+        unsupported_tess_factor_builtins = {
+            "gl_TessLevelOuter",
+            "gl_TessLevelInner",
+        }
+        declared_names = {
+            getattr(param, "name", None)
+            for param in params or []
+            if getattr(param, "name", None)
+        }
+        for node in self.walk_ast(body_statements):
+            if isinstance(node, VariableNode):
+                declared_names.add(node.name)
+
+        for node in self.walk_ast(body_statements):
+            if not isinstance(node, IdentifierNode):
+                continue
+            if node.name not in unsupported_tess_factor_builtins:
+                continue
+            if node.name in declared_names:
+                continue
+            raise ValueError(
+                "Slang tessellation factor built-ins gl_TessLevelOuter and "
+                "gl_TessLevelInner require an explicit patch constant function "
+                "return value using SV_TessFactor and SV_InsideTessFactor"
+            )
 
     def generate_slang_stage_numthreads(self, func, stage_name, execution_config=None):
         if not self.slang_stage_uses_numthreads(stage_name):
@@ -784,18 +846,40 @@ class SlangCodeGen:
         attr_name = str(attr_name).lower()
         return attr_name == "format" or attr_name in self.supported_image_formats()
 
-    def map_semantic(self, semantic):
+    def stage_semantic_map(self, shader_type):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage == "geometry":
+            return {
+                "gl_PrimitiveIDIn": "SV_PrimitiveID",
+                "gl_InvocationID": "SV_GSInstanceID",
+            }
+        if shader_stage == "hull":
+            return {
+                "gl_InvocationID": "SV_OutputControlPointID",
+                "gl_PrimitiveID": "SV_PrimitiveID",
+            }
+        if shader_stage == "domain":
+            return {
+                "gl_TessCoord": "SV_DomainLocation",
+                "gl_PrimitiveID": "SV_PrimitiveID",
+            }
+        return {}
+
+    def map_semantic(self, semantic, shader_type=None):
         if semantic is None:
             return None
         semantic_name = str(semantic)
+        stage_semantic = self.stage_semantic_map(shader_type).get(semantic_name)
+        if stage_semantic:
+            return stage_semantic
         if semantic_name.startswith("gl_FragColor"):
             target_index = semantic_name[len("gl_FragColor") :]
             if target_index.isdigit():
                 return f"SV_Target{target_index}"
         return self.semantic_map.get(semantic_name, semantic_name)
 
-    def semantic_suffix(self, semantic):
-        mapped_semantic = self.map_semantic(semantic)
+    def semantic_suffix(self, semantic, shader_type=None):
+        mapped_semantic = self.map_semantic(semantic, shader_type)
         return f" : {mapped_semantic}" if mapped_semantic else ""
 
     def generate_stage(self, stage_type, stage):
@@ -989,9 +1073,13 @@ class SlangCodeGen:
             semantic = builtin_return_rewrite["semantic"]
 
         self.current_function_return_type = ret_type_name
-        semantic_str = self.semantic_suffix(semantic)
+        semantic_str = self.semantic_suffix(semantic, shader_type)
 
         param_list = getattr(node, "parameters", getattr(node, "params", []))
+        if shader_type:
+            self.validate_slang_stage_body_builtins(
+                body_statements, shader_type, param_list
+            )
         params = []
         if param_list:
             if param_list and hasattr(param_list[0], "name"):
@@ -1016,7 +1104,9 @@ class SlangCodeGen:
                     )
                     params.append(
                         declaration
-                        + self.semantic_suffix(self.semantic_from_node(param))
+                        + self.semantic_suffix(
+                            self.semantic_from_node(param), shader_type
+                        )
                     )
             else:
                 for param_type, param_name in param_list:
@@ -1105,7 +1195,7 @@ class SlangCodeGen:
             if getattr(param, "name", None)
         }
         existing_semantics = {
-            self.map_semantic(self.semantic_from_node(param))
+            self.map_semantic(self.semantic_from_node(param), shader_type)
             for param in param_list or []
             if self.semantic_from_node(param)
         }
@@ -1146,7 +1236,9 @@ class SlangCodeGen:
             param_name = getattr(param, "name", None)
             semantic = self.semantic_from_node(param)
             if param_name and semantic:
-                semantic_parameters[self.map_semantic(semantic)] = param_name
+                semantic_parameters[self.map_semantic(semantic, shader_type)] = (
+                    param_name
+                )
 
         for node in self.walk_ast(body_statements):
             if isinstance(node, VariableNode):
@@ -1160,7 +1252,9 @@ class SlangCodeGen:
                 continue
 
             _param_type, semantic = candidates[node.name]
-            existing_param_name = semantic_parameters.get(self.map_semantic(semantic))
+            existing_param_name = semantic_parameters.get(
+                self.map_semantic(semantic, shader_type)
+            )
             if existing_param_name and existing_param_name != node.name:
                 aliases[node.name] = existing_param_name
         return aliases
@@ -1179,6 +1273,9 @@ class SlangCodeGen:
             return {
                 "gl_VertexID": ("uint", "SV_VertexID"),
                 "gl_InstanceID": ("uint", "SV_InstanceID"),
+                "gl_BaseVertex": ("int", "SV_StartVertexLocation"),
+                "gl_BaseInstance": ("uint", "SV_StartInstanceLocation"),
+                "gl_DrawID": ("uint", "SV_DrawID"),
             }
         if shader_stage == "fragment":
             return {
@@ -1188,6 +1285,21 @@ class SlangCodeGen:
                 "gl_SampleID": ("uint", "SV_SampleIndex"),
                 "gl_Layer": ("uint", "SV_RenderTargetArrayIndex"),
                 "gl_ViewportIndex": ("uint", "SV_ViewportArrayIndex"),
+            }
+        if shader_stage == "geometry":
+            return {
+                "gl_PrimitiveIDIn": ("uint", "SV_PrimitiveID"),
+                "gl_InvocationID": ("uint", "SV_GSInstanceID"),
+            }
+        if shader_stage == "hull":
+            return {
+                "gl_InvocationID": ("uint", "SV_OutputControlPointID"),
+                "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
+            }
+        if shader_stage == "domain":
+            return {
+                "gl_TessCoord": ("vec3", "SV_DomainLocation"),
+                "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
             }
         return {}
 

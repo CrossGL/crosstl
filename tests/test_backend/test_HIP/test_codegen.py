@@ -67,6 +67,12 @@ class TestHipCodeGen:
         __device__ float add(float a, float b) {
             return a + b;
         }
+        __forceinline__ __device__ float fast_add(float a, float b) {
+            return a + b;
+        }
+        __noinline__ __device__ float slow_sub(float a, float b) {
+            return a - b;
+        }
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -78,6 +84,10 @@ class TestHipCodeGen:
 
         assert "// HIP to CrossGL conversion" in result
         assert "// Function: add" in result
+        assert "// Function: fast_add" in result
+        assert "// Function: slow_sub" in result
+        assert "f32 fast_add(f32 a, f32 b)" in result
+        assert "f32 slow_sub(f32 a, f32 b)" in result
 
     def test_device_function_body_emitted_when_kernel_calls_it(self):
         """Test device helpers are emitted when kernels call them."""
@@ -156,6 +166,18 @@ class TestHipCodeGen:
         assert (
             codegen.convert_hip_type_to_crossgl("surface<void, hipSurfaceType3D>")
             == "image3D"
+        )
+        assert (
+            codegen.convert_hip_type_to_crossgl(
+                "surface<void, hipSurfaceType1DLayered>"
+            )
+            == "image1DArray"
+        )
+        assert (
+            codegen.convert_hip_type_to_crossgl(
+                "surface<void, hipSurfaceTypeCubemapLayered>"
+            )
+            == "imageCubeArray"
         )
 
     def test_function_conversion(self):
@@ -561,7 +583,12 @@ class TestHipCodeGen:
             hipTextureObject_t ambiguous;
             hipSurfaceObject_t surf;
             texture<float4, 2> legacyTex;
+            texture<float4, hipTextureTypeCubemap> cubeTex;
+            texture<float4, hipTextureTypeCubemapLayered> cubeLayerTex;
             surface<void, 2> legacySurf;
+            surface<void, hipSurfaceType3D> volumeSurface;
+            surface<void, hipSurfaceTypeCubemap> cubeSurface;
+            surface<void, hipSurfaceTypeCubemapLayered> cubeLayerSurface;
             float2 uv = make_float2(0.25f, 0.75f);
             float3 uvw = make_float3(0.25f, 0.75f, 0.5f);
             int2 pixel = make_int2(1, 2);
@@ -580,6 +607,19 @@ class TestHipCodeGen:
             float4 sampledLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);
             float4 sampledGrad = tex2DGrad<float4>(tex, uv, uv, uv);
             float4 legacySample = tex2D<float4>(legacyTex, uv);
+            float4 cubeSample = texCubemap<float4>(
+                cubeTex,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+            float4 cubeLayerSample = texCubemapLayered<float4>(
+                cubeLayerTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                pixel.x
+            );
             float4 loaded = surf2Dread<float4>(
                 surf,
                 pixel.x * sizeof(float4),
@@ -592,6 +632,24 @@ class TestHipCodeGen:
             );
             float4 paramLoaded = surf3Dread<float4>(
                 paramVolume,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                0
+            );
+            float4 volumeLoaded = surf3Dread<float4>(
+                volumeSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                0
+            );
+            float4 cubeLoaded = surfCubemapread<float4>(
+                cubeSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                0
+            );
+            float4 cubeLayerLoaded = surfCubemapLayeredread<float4>(
+                cubeLayerSurface,
                 pixel.x * sizeof(float4),
                 pixel.y,
                 0
@@ -629,6 +687,11 @@ class TestHipCodeGen:
         assert "var surf: image2D;" in result
         assert "var legacyTex: sampler2D;" in result
         assert "var legacySurf: image2D;" in result
+        assert "var cubeTex: samplerCube;" in result
+        assert "var cubeLayerTex: samplerCubeArray;" in result
+        assert "var volumeSurface: image3D;" in result
+        assert "var cubeSurface: imageCube;" in result
+        assert "var cubeLayerSurface: imageCubeArray;" in result
         assert "var sampled: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in result
         assert "var arraySample: vec4<f32> = texture(textures[1], uv);" in result
         assert "var paramSample: vec4<f32> = texture(paramTex, uv);" in result
@@ -646,12 +709,32 @@ class TestHipCodeGen:
         assert "var sampledGrad: vec4<f32> = textureGrad(tex, uv, uv, uv);" in result
         assert "var legacySample: vec4<f32> = texture(legacyTex, uv);" in result
         assert (
+            "var cubeSample: vec4<f32> = texture("
+            "cubeTex, vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
+        assert (
+            "var cubeLayerSample: vec4<f32> = texture("
+            "cubeLayerTex, vec4<f32>(uvw.x, uvw.y, uvw.z, pixel.x));" in result
+        )
+        assert (
             "var loaded: vec4<f32> = imageLoad(surf, vec2<i32>(pixel.x, pixel.y));"
             in result
         )
         assert (
             "var paramLoaded: vec4<f32> = imageLoad("
             "paramVolume, vec3<i32>(pixel.x, pixel.y, 0));" in result
+        )
+        assert (
+            "var volumeLoaded: vec4<f32> = imageLoad("
+            "volumeSurface, vec3<i32>(pixel.x, pixel.y, 0));" in result
+        )
+        assert (
+            "var cubeLoaded: vec4<f32> = imageLoad("
+            "cubeSurface, vec3<i32>(pixel.x, pixel.y, 0));" in result
+        )
+        assert (
+            "var cubeLayerLoaded: vec4<f32> = imageLoad("
+            "cubeLayerSurface, vec3<i32>(pixel.x, pixel.y, 0));" in result
         )
         assert (
             "var legacyLoaded: vec4<f32> = imageLoad("
@@ -987,12 +1070,34 @@ class TestHipCodeGen:
         code = """
         void host(float* h, int n) {
             float* d;
+            float* d2;
+            size_t pitch;
+            size_t freeMem;
+            size_t totalMem;
+            float symbol;
             hipMalloc((void**)&d, n * sizeof(float));
+            hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
             hipMemcpy(d, h, n * sizeof(float), hipMemcpyHostToDevice);
+            hipMemcpy2D(
+                d2, pitch, h, n * sizeof(float), n * sizeof(float), 4,
+                hipMemcpyHostToDevice
+            );
+            hipMemcpy2DAsync(
+                d2, pitch, h, n * sizeof(float), n * sizeof(float), 4,
+                hipMemcpyHostToDevice, 0
+            );
+            hipMemcpyToSymbol(
+                symbol, h, n * sizeof(float), 0, hipMemcpyHostToDevice
+            );
+            hipMemcpyFromSymbol(
+                h, symbol, n * sizeof(float), 0, hipMemcpyDeviceToHost
+            );
+            hipMemGetInfo(&freeMem, &totalMem);
             hipMemset(d, 0, n * sizeof(float));
             hipDeviceSynchronize();
             hipFree(d);
             hipError_t err = hipMalloc((void**)&d, n * sizeof(float));
+            err = hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
             if (err != hipSuccess) { return; }
             err = hipDeviceSynchronize();
         }
@@ -1009,9 +1114,37 @@ class TestHipCodeGen:
             result.count("// HIP memory allocate: d, bytes: (n * sizeof(float))") == 2
         )
         assert (
+            result.count(
+                "// HIP pitched memory allocate: d2, pitch: pitch, "
+                "width: (n * sizeof(float)), height: 4"
+            )
+            == 2
+        )
+        assert (
             "// HIP memory copy: h -> d, bytes: (n * sizeof(float)), "
             "kind: hipMemcpyHostToDevice"
         ) in result
+        assert (
+            "// HIP 2D memory copy: h -> d2, dst pitch: pitch, "
+            "src pitch: (n * sizeof(float)), width: (n * sizeof(float)), "
+            "height: 4, kind: hipMemcpyHostToDevice"
+        ) in result
+        assert (
+            "// HIP 2D memory copy: h -> d2, dst pitch: pitch, "
+            "src pitch: (n * sizeof(float)), width: (n * sizeof(float)), "
+            "height: 4, kind: hipMemcpyHostToDevice, stream: 0"
+        ) in result
+        assert (
+            "// HIP symbol copy to: symbol, source: h, bytes: (n * sizeof(float)), "
+            "offset: 0, kind: hipMemcpyHostToDevice"
+        ) in result
+        assert (
+            "// HIP symbol copy from: symbol, destination: h, "
+            "bytes: (n * sizeof(float)), offset: 0, kind: hipMemcpyDeviceToHost"
+        ) in result
+        assert (
+            "// HIP memory info: free output: freeMem, total output: totalMem" in result
+        )
         assert "// HIP memory set: d, value: 0, bytes: (n * sizeof(float))" in result
         assert "// HIP device synchronize" in result
         assert "// HIP memory free: d" in result
@@ -1020,6 +1153,12 @@ class TestHipCodeGen:
         assert "if ((err != hipSuccess))" in result
         assert "err = hipSuccess;" in result
         assert "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
+        assert "hipMallocPitch(" not in result
+        assert "hipMemcpy2D(" not in result
+        assert "hipMemcpy2DAsync(" not in result
+        assert "hipMemcpyToSymbol(" not in result
+        assert "hipMemcpyFromSymbol(" not in result
+        assert "hipMemGetInfo(" not in result
         assert "err = hipDeviceSynchronize();" not in result
 
     def test_hip_runtime_memset_async_conversion(self):
@@ -1056,6 +1195,8 @@ class TestHipCodeGen:
             hipGetLastError();
             hipError_t err = hipGetLastError();
             err = hipPeekAtLastError();
+            const char* message = hipGetErrorString(err);
+            const char* name = hipGetErrorName(err);
         }
         """
         lexer = HipLexer(code)
@@ -1070,8 +1211,12 @@ class TestHipCodeGen:
         assert "// HIP peek at last error" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "err = hipSuccess;" in result
+        assert 'var message: ptr<i8> = /* HIP error string: err */ "";' in result
+        assert 'var name: ptr<i8> = /* HIP error name: err */ "";' in result
         assert "hipGetLastError(" not in result
         assert "hipPeekAtLastError(" not in result
+        assert "hipGetErrorString(" not in result
+        assert "hipGetErrorName(" not in result
 
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
@@ -1106,6 +1251,13 @@ class TestHipCodeGen:
             hipEvent_t start;
             hipEvent_t stop;
             float ms;
+            int device = 0;
+            int count = 0;
+            hipDeviceProp_t props;
+            hipGetDevice(&device);
+            hipGetDeviceCount(&count);
+            hipSetDevice(device);
+            hipGetDeviceProperties(&props, device);
             hipStreamCreate(&stream);
             hipStreamCreateWithFlags(&stream, hipStreamNonBlocking);
             hipEventCreate(&start);
@@ -1118,6 +1270,7 @@ class TestHipCodeGen:
             hipEventDestroy(start);
             hipStreamDestroy(stream);
             hipError_t err = hipEventRecord(stop, stream);
+            err = hipGetDeviceCount(&count);
         }
         """
         lexer = HipLexer(code)
@@ -1140,9 +1293,18 @@ class TestHipCodeGen:
         assert "// HIP event destroy: start" in result
         assert "// HIP stream destroy: stream" in result
         assert "// HIP event record: stop, stream: stream" in result
+        assert "// HIP get current device: output: device" in result
+        assert result.count("// HIP get device count: output: count") == 2
+        assert "// HIP set device: device" in result
+        assert "// HIP get device properties: props, device: device" in result
         assert "var err: hipError_t = hipSuccess;" in result
+        assert "err = hipSuccess;" in result
         assert "var err: hipError_t = hipEventRecord(stop, stream);" not in result
         assert "hipStreamCreateWithFlags(" not in result
+        assert "hipGetDevice(" not in result
+        assert "hipGetDeviceCount(" not in result
+        assert "hipSetDevice(" not in result
+        assert "hipGetDeviceProperties(" not in result
 
     def test_hip_runtime_stream_create_with_flags_status_conversion(self):
         """Test hipStreamCreateWithFlags status expressions lower to success"""
