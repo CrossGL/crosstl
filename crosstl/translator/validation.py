@@ -172,7 +172,10 @@ SINGLE_VALUE_METADATA_NAMES = frozenset(
         "format",
         "index",
         "location",
+        "align",
+        "offset",
         "packoffset",
+        "sampler",
         "set",
         "texture",
         "uav",
@@ -293,6 +296,45 @@ STAGE_LAYOUT_EXCLUSIVE_ENTRY_GROUPS = (
     ),
     frozenset({"cw", "ccw"}),
 )
+
+FUNCTION_STAGE_LAYOUT_FLAG_ALIASES = {
+    "domain": {
+        "tri": "triangles",
+        "triangle": "triangles",
+        "triangles": "triangles",
+        "quad": "quads",
+        "quads": "quads",
+        "isoline": "isolines",
+        "isolines": "isolines",
+    },
+    "partitioning": {
+        "integer": "equal_spacing",
+        "equal": "equal_spacing",
+        "equal_spacing": "equal_spacing",
+        "fractional_even": "fractional_even_spacing",
+        "fractional_even_spacing": "fractional_even_spacing",
+        "fractional_odd": "fractional_odd_spacing",
+        "fractional_odd_spacing": "fractional_odd_spacing",
+    },
+}
+
+FUNCTION_STAGE_OUTPUT_TOPOLOGY_ALIASES = {
+    "point": ("points",),
+    "points": ("points",),
+    "line": ("lines",),
+    "lines": ("lines",),
+    "line_strip": ("line_strip",),
+    "triangle": ("triangles",),
+    "triangles": ("triangles",),
+    "triangle_cw": ("triangles", "cw"),
+    "triangle_ccw": ("triangles", "ccw"),
+}
+
+FUNCTION_STAGE_LAYOUT_VALUE_ENTRIES = {
+    "outputcontrolpoints": ("out", ("vertices", "outputcontrolpoints")),
+    "maxvertexcount": ("out", ("max_vertices", "maxvertexcount")),
+    "maxprimitivecount": ("out", ("max_primitives", "maxprimitivecount")),
+}
 
 IMAGE_RESOURCE_INTRINSIC_NAMES = {
     "imageLoad",
@@ -973,6 +1015,8 @@ def validate_stage_layout_metadata(stage):
                     f"{name}={layout_value} vs numthreads[{index}]={function_value}"
                 )
 
+    validate_function_stage_layout_metadata(stage)
+
 
 def _node_metadata_names(node):
     names = {
@@ -1059,6 +1103,110 @@ def _metadata_attribute_phrase(metadata):
     return ", ".join(formatted_metadata)
 
 
+def validate_function_stage_layout_metadata(stage):
+    """Validate equivalent function and stage layout metadata agree."""
+    function = getattr(stage, "entry_point", None)
+    if function is None:
+        return
+
+    layout_entries = _stage_layout_entries_by_direction(stage)
+    layout_names = _stage_layout_names_by_direction(stage)
+
+    for attr in getattr(function, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        attr_value = _first_attribute_metadata_value(attr)
+        if attr_value is None:
+            continue
+
+        if attr_name in FUNCTION_STAGE_LAYOUT_FLAG_ALIASES:
+            canonical_entry = FUNCTION_STAGE_LAYOUT_FLAG_ALIASES[attr_name].get(
+                _normalized_metadata_name(attr_value)
+            )
+            if canonical_entry is not None:
+                _validate_function_stage_layout_flag(
+                    layout_names,
+                    "in",
+                    canonical_entry,
+                    attr_name,
+                    attr_value,
+                    stage,
+                )
+            continue
+
+        if attr_name == "outputtopology":
+            canonical_entries = FUNCTION_STAGE_OUTPUT_TOPOLOGY_ALIASES.get(
+                _normalized_metadata_name(attr_value), ()
+            )
+            for canonical_entry in canonical_entries:
+                _validate_function_stage_layout_flag(
+                    layout_names,
+                    "in",
+                    canonical_entry,
+                    attr_name,
+                    attr_value,
+                    stage,
+                )
+            continue
+
+        value_entry = FUNCTION_STAGE_LAYOUT_VALUE_ENTRIES.get(attr_name)
+        if value_entry is None:
+            continue
+
+        direction, entry_names = value_entry
+        function_value = attr_value
+        for entry_name in entry_names:
+            key = (direction, entry_name)
+            if key not in layout_entries:
+                continue
+            layout_value = layout_entries[key]
+            if layout_value != function_value:
+                context = _stage_layout_context(stage, direction)
+                raise ValueError(
+                    f"Conflicting stage/function metadata on {context}: "
+                    f"layout {entry_name}={layout_value} vs "
+                    f"{attr_name}={function_value}"
+                )
+
+
+def _validate_function_stage_layout_flag(
+    layout_names, direction, canonical_entry, attr_name, attr_value, stage
+):
+    direction_layout_names = layout_names.get(direction, set())
+    for group in STAGE_LAYOUT_EXCLUSIVE_ENTRY_GROUPS:
+        if canonical_entry not in group:
+            continue
+        conflicts = sorted((direction_layout_names & group) - {canonical_entry})
+        if conflicts:
+            context = _stage_layout_context(stage, direction)
+            raise ValueError(
+                f"Conflicting stage/function metadata on {context}: "
+                f"layout {', '.join(conflicts)} vs {attr_name}({attr_value})"
+            )
+
+
+def _stage_layout_entries_by_direction(stage):
+    entries = {}
+    for layout in getattr(stage, "layout_qualifiers", []) or []:
+        direction = _normalized_layout_direction(getattr(layout, "direction", None))
+        for entry in getattr(layout, "entries", []) or []:
+            entry_name = _normalized_metadata_name(getattr(entry, "name", None))
+            if entry_name:
+                entries[(direction, entry_name)] = _stage_layout_entry_value(entry)
+    return entries
+
+
+def _stage_layout_names_by_direction(stage):
+    names = {}
+    for layout in getattr(stage, "layout_qualifiers", []) or []:
+        direction = _normalized_layout_direction(getattr(layout, "direction", None))
+        direction_names = names.setdefault(direction, set())
+        for entry in getattr(layout, "entries", []) or []:
+            entry_name = _normalized_metadata_name(getattr(entry, "name", None))
+            if entry_name:
+                direction_names.add(entry_name)
+    return names
+
+
 def _normalized_metadata_name(name):
     if name is None:
         return None
@@ -1088,6 +1236,13 @@ def _attribute_metadata_value(attr):
     if not arguments:
         return None
     return expression_debug_name(arguments[0])
+
+
+def _first_attribute_metadata_value(attr):
+    value = _attribute_metadata_value(attr)
+    if value == "":
+        return None
+    return value
 
 
 def _attribute_metadata_values(attr):

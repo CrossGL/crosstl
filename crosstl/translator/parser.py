@@ -1554,8 +1554,7 @@ class Parser:
         qualifiers = self.parse_variable_qualifiers()
 
         var_type = self.parse_type()
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_binding_identifier()
 
         while self.current_token[
             0
@@ -1656,11 +1655,11 @@ class Parser:
 
             self.advance_over_pointer_suffix()
 
-            if self.current_token[0] != "IDENTIFIER":
+            if not self.current_token_is_identifier_like():
                 return False
 
             self.current_token[1]
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
 
             next_token = self.current_token[0]
 
@@ -2385,6 +2384,11 @@ class Parser:
 
         self.eat(token_type)
         return token_value
+
+    def current_token_is_identifier_like(self):
+        """Return whether the current token can name a binding."""
+        _token_type, token_value = self.current_token
+        return isinstance(token_value, str) and token_value.isidentifier()
 
     def parse_if_statement(self):
         """Parse an if/else statement chain."""

@@ -358,6 +358,28 @@ shader SpirvGlslBufferBlockValidation {
 """
 
 
+SPIRV_RESOURCE_MEMORY_QUALIFIER_COMPUTE_SHADER = """
+shader SpirvResourceMemoryQualifierValidation {
+    image2D inputImage @rgba32f @readonly @coherent;
+    image2D outputImage @rgba32f @writeonly;
+    RWStructuredBuffer<float> coherentValues @binding(2) @coherent;
+    StructuredBuffer<float> readOnlyValues @binding(3);
+    RWStructuredBuffer<float> writeOnlyValues @binding(4) @writeonly;
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            vec4 texel = imageLoad(inputImage, pixel);
+            imageStore(outputImage, pixel, texel);
+            float value = buffer_load(readOnlyValues, 0u);
+            buffer_store(writeOnlyValues, 1u, value + texel.x);
+            buffer_store(coherentValues, 2u, value);
+        }
+    }
+}
+"""
+
+
 SPIRV_IMAGE_ATOMIC_FORWARDING_COMPUTE_SHADER = """
 shader SpirvImageAtomicForwardingValidation {
     uimage2D counters @r32ui;
@@ -1417,6 +1439,62 @@ shader MetalRayTracingHelperValidation {
     ray_generation {
         void main() {
             shoot(vec3(0.0), vec3(0.0, 0.0, 1.0));
+        }
+    }
+}
+"""
+
+
+METAL_RAY_TRACING_INTERSECTION_TABLE_TRACE_SHADER = """
+shader MetalRayTracingIntersectionTableTraceValidation {
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    void shoot(vec3 origin, vec3 direction) {
+        TraceRay(
+            topLevelAS,
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            origin,
+            0.001,
+            direction,
+            1000.0,
+            0
+        );
+    }
+
+    ray_generation {
+        void main() {
+            shoot(vec3(0.0), vec3(0.0, 0.0, 1.0));
+        }
+    }
+}
+"""
+
+
+METAL_RAY_TRACING_PRIMITIVE_ACCELERATION_SHADER = """
+shader MetalRayTracingPrimitiveAccelerationValidation {
+    primitive_acceleration_structure primitiveAS @binding(0);
+    intersection_function_table<triangle_data> intersectionFunctions @binding(1);
+
+    ray_generation {
+        void main() {
+            TraceRay(
+                primitiveAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                0
+            );
         }
     }
 }
@@ -2547,6 +2625,16 @@ def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools(
     )
 
 
+def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "resource_memory_qualifier_compute",
+        SPIRV_RESOURCE_MEMORY_QUALIFIER_COMPUTE_SHADER,
+    )
+
+
 def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools(
     tmp_path,
 ):
@@ -3216,6 +3304,68 @@ def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
     code = MetalCodeGen().generate(
         crosstl.translator.parse(METAL_RAY_TRACING_HELPER_SHADER)
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_tracing_intersection_table_trace.metal"
+    output = tmp_path / "ray_tracing_intersection_table_trace.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_TRACING_INTERSECTION_TABLE_TRACE_SHADER)
+    )
+    assert "intersect(__crossgl_ray_0, topLevelAS, 255, intersectionFunctions)" in (
+        code
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_tracing_primitive_acceleration.metal"
+    output = tmp_path / "ray_tracing_primitive_acceleration.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_TRACING_PRIMITIVE_ACCELERATION_SHADER)
+    )
+    assert "intersect(__crossgl_ray_0, primitiveAS, intersectionFunctions)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

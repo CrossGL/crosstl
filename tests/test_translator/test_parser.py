@@ -1588,6 +1588,92 @@ def test_conflicting_cbuffer_member_packoffset_values_fail_validation():
         parse_code(tokenize_code(code))
 
 
+def test_duplicate_matching_metal_and_layout_metadata_values_are_allowed():
+    code = """
+    shader MatchingMetalAndLayoutMetadata {
+        sampler linearSampler [[sampler(0)]] @sampler(0);
+        float weights[4] [[buffer(1)]] @buffer(1);
+
+        cbuffer Camera {
+            layout(offset = 128) vec4 tint @offset(128) @align(16) @align(16);
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    sampler_var, weights = ast.global_variables
+    tint = ast.cbuffers[0].members[0]
+
+    assert [attr.name for attr in sampler_var.attributes] == ["sampler", "sampler"]
+    assert [attr.arguments[0].value for attr in sampler_var.attributes] == [0, 0]
+    assert [attr.name for attr in weights.attributes] == ["buffer", "buffer"]
+    assert [attr.arguments[0].value for attr in weights.attributes] == [1, 1]
+    assert [attr.name for attr in tint.attributes] == [
+        "offset",
+        "offset",
+        "align",
+        "align",
+    ]
+    assert [attr.arguments[0].value for attr in tint.attributes] == [
+        128,
+        128,
+        16,
+        16,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "sampler linearSampler [[sampler(0)]] @sampler(1);",
+            "Conflicting sampler metadata",
+        ),
+        (
+            "float weights[4] [[buffer(1)]] @buffer(2);",
+            "Conflicting buffer metadata",
+        ),
+    ],
+)
+def test_conflicting_metal_resource_metadata_values_fail_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingMetalResourceMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("member", "message"),
+    [
+        (
+            "layout(offset = 128) vec4 tint @offset(256);",
+            "Conflicting offset metadata",
+        ),
+        (
+            "vec4 tint @align(16) @align(32);",
+            "Conflicting align metadata",
+        ),
+    ],
+)
+def test_conflicting_layout_member_metadata_values_fail_validation(member, message):
+    code = f"""
+    shader ConflictingLayoutMemberMetadata {{
+        cbuffer Camera {{
+            {member}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 def test_conflicting_matrix_layout_metadata_fails_validation():
     code = """
     shader ConflictingMatrixLayout {
@@ -2017,6 +2103,117 @@ def test_conflicting_layout_and_function_threadgroup_size_metadata_fails_validat
             "local_size_x=8.*numthreads\\[0\\]=16"
         ),
     ):
+        parse_code(tokenize_code(code))
+
+
+def test_matching_layout_and_function_tessellation_metadata_values_are_allowed():
+    code = """
+    shader MatchingTessellationMetadata {
+        tessellation_control {
+            layout(vertices = 3) out;
+            [outputcontrolpoints(3)]
+            void main() {
+            }
+        }
+
+        tessellation_evaluation {
+            layout(triangles, fractional_odd_spacing, cw) in;
+            [domain("tri"), partitioning("fractional_odd")]
+            [outputtopology("triangle_cw")]
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    control_stage = ast.stages[ShaderStage.TESSELLATION_CONTROL]
+    evaluation_stage = ast.stages[ShaderStage.TESSELLATION_EVALUATION]
+
+    assert [attr.name for attr in control_stage.entry_point.attributes] == [
+        "outputcontrolpoints"
+    ]
+    assert [attr.name for attr in evaluation_stage.entry_point.attributes] == [
+        "domain",
+        "partitioning",
+        "outputtopology",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            tessellation_evaluation {
+                layout(quads) in;
+                [domain("tri")]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout quads.*domain\\(tri\\)",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(equal_spacing) in;
+                [partitioning("fractional_odd")]
+                void main() {
+                }
+            }
+            """,
+            (
+                "Conflicting stage/function metadata.*layout equal_spacing.*"
+                "partitioning\\(fractional_odd\\)"
+            ),
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(ccw) in;
+                [outputtopology("triangle_cw")]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout ccw.*outputtopology",
+        ),
+        (
+            """
+            tessellation_control {
+                layout(vertices = 3) out;
+                [outputcontrolpoints(4)]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout vertices=3.*outputcontrolpoints=4",
+        ),
+        (
+            """
+            geometry {
+                layout(max_vertices = 3) out;
+                [maxvertexcount(4)]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout max_vertices=3.*maxvertexcount=4",
+        ),
+    ],
+)
+def test_conflicting_layout_and_function_stage_metadata_fails_validation(
+    stage_source, message
+):
+    code = f"""
+    shader ConflictingStageFunctionMetadata {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
         parse_code(tokenize_code(code))
 
 
@@ -3144,6 +3341,25 @@ def test_hlsl_tessellation_and_ray_stage_aliases_parse_to_canonical_stages():
     assert ast.stages[ShaderStage.RAY_ANY_HIT].entry_point.name == "AnyHitMain"
     assert ast.stages[ShaderStage.RAY_MISS].entry_point.name == "MissMain"
     assert ast.stages[ShaderStage.RAY_CALLABLE].entry_point.name == "CallableMain"
+
+
+def test_stage_body_allows_keyword_like_binding_names():
+    code = """
+    shader KeywordBindings {
+        ray_closest_hit {
+            void main() {
+                uint geometry = gl_GeometryIndexEXT;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    body = ast.stages[ShaderStage.RAY_CLOSEST_HIT].entry_point.body.statements
+
+    assert len(body) == 1
+    assert isinstance(body[0], VariableNode)
+    assert body[0].name == "geometry"
 
 
 def test_wave_intrinsic_parses_to_node():
